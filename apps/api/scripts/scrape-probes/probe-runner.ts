@@ -43,18 +43,21 @@ export function detectAntiBotSignals(
   status: number,
 ): AntiBotSignals {
   const lower = html.toLowerCase();
+  const captchaPage =
+    /<form[^>]+captcha|id=["']captcha|class=["'][^"']*captcha-form|g-recaptcha|h-captcha|cf-challenge-form/i.test(
+      html,
+    ) ||
+    lower.includes("validatecaptcha") ||
+    lower.includes("robot check") ||
+    lower.includes("verify you are human");
   return {
-    captcha:
-      lower.includes("captcha") ||
-      lower.includes("recaptcha") ||
-      lower.includes("hcaptcha") ||
-      lower.includes("challenge-platform"),
+    captcha: captchaPage,
     forbidden403: status === 403,
     empty: html.trim().length < 500,
     blocked:
       lower.includes("access denied") ||
       lower.includes("request blocked") ||
-      lower.includes("unusual traffic"),
+      lower.includes("unusual traffic from your computer"),
     cloudflare:
       lower.includes("cloudflare") &&
       (lower.includes("checking your browser") || lower.includes("cf-browser-verification")),
@@ -167,15 +170,52 @@ export function mergeFields(
   return merged;
 }
 
+const LOW_QUALITY_IMAGE_RE =
+  /favicon|sprite|logo|nav-sprite|mlogo|placeholder|1x1\.|data:image/i;
+const LOW_QUALITY_TITLE_RE =
+  /^(amazon\.in\s*:|flipkart\.com|myntra|ajio|shein|newme\s*-)/i;
+
+export function isProductImageUrl(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  return !LOW_QUALITY_IMAGE_RE.test(url);
+}
+
+export function isProductTitle(title: string | undefined): boolean {
+  if (!title || title.trim().length < 4) return false;
+  return !LOW_QUALITY_TITLE_RE.test(title.trim());
+}
+
+export function isProductPageUrl(url: string | undefined): boolean {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  return /\/(product|dp|p\/itm|buy)\//i.test(url);
+}
+
 export function isExtractionComplete(fields: FieldsExtracted): boolean {
-  return Boolean(fields.title && fields.images.length > 0 && fields.url);
+  const productImages = fields.images.filter(isProductImageUrl);
+  return Boolean(
+    isProductTitle(fields.title) &&
+      productImages.length > 0 &&
+      isProductPageUrl(fields.url),
+  );
+}
+
+export function parseEmbeddedProductNames(html: string): string[] {
+  return allMatches(html, /"name"\s*:\s*"([^"]{8,120})"/g).filter(
+    (name) => !/^(easy return|free shipping|cod available|no returns|size exchange)$/i.test(name),
+  );
 }
 
 export async function withPlaywright<T>(
   fn: (page: import("playwright").Page) => Promise<T>,
 ): Promise<T> {
+  if (process.env.SKIP_PLAYWRIGHT === "1") {
+    throw new Error("Playwright skipped (SKIP_PLAYWRIGHT=1)");
+  }
   const { chromium } = await import("playwright");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    channel: process.env.PLAYWRIGHT_CHANNEL,
+  });
   try {
     const context = await browser.newContext({
       userAgent: DEFAULT_HEADERS["User-Agent"],
@@ -213,19 +253,30 @@ export function buildResult(
   catalogEstimate?: ProbeResult["catalogEstimate"],
 ): ProbeResult {
   const antiBotSignals = detectAntiBotSignals(html, status);
+  const productImages = fields.images.filter(isProductImageUrl);
+  const normalized: FieldsExtracted = {
+    ...fields,
+    images: productImages.length > 0 ? productImages : fields.images,
+  };
   const blocked =
     antiBotSignals.captcha ||
     antiBotSignals.forbidden403 ||
     antiBotSignals.blocked ||
     antiBotSignals.cloudflare;
-  const success = isExtractionComplete(fields) && !blocked;
+  const success = isExtractionComplete(normalized) && !blocked;
   return {
     site,
     success,
     method,
     latencyMs,
-    fieldsExtracted: fields,
-    error: error ?? (blocked ? "Anti-bot or access block detected" : undefined),
+    fieldsExtracted: normalized,
+    error:
+      error ??
+      (blocked
+        ? "Anti-bot or access block detected"
+        : success
+          ? undefined
+          : "Incomplete product fields (title, product URL, or image)"),
     antiBotSignals,
     catalogEstimate,
   };

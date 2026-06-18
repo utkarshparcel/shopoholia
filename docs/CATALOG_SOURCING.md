@@ -208,14 +208,14 @@ Successful probes also write `tmp/scrape-probes/{site}-catalog-sample.jsonl` (on
 
 | Site | Feasible? | Method | Blockers | Est. full catalog | Recommended path |
 |------|-----------|--------|----------|-------------------|------------------|
-| **Newme** | _TBD_ | _fetch/playwright_ | _e.g. robots, CF_ | _~3–6h for ~6k SKUs_ | Partnership feed or polite one-time export |
-| **Shein** | _TBD_ | _fetch/playwright_ | _anti-bot_ | _Weeks DIY; hours via dataset_ | **Bright Data dataset (~$250/100k)** |
-| **Myntra** | _TBD_ | _fetch/playwright_ | _403, no API_ | _Not viable_ | Affiliate deep links (Cuelinks) |
-| **Ajio** | _TBD_ | _fetch/playwright_ | _SPA, bot checks_ | _Days+ with proxies_ | Affiliate networks |
-| **Amazon IN** | _TBD_ | _fetch/playwright_ | _CAPTCHA, ToS_ | _Hours via API_ | **Amazon Creators / PA-API** |
-| **Flipkart** | _TBD_ | _fetch/playwright_ | _bot blocks_ | _Hours via API_ | **Flipkart Affiliate API** |
+| **Newme** | **Yes** | fetch | — | ~3–6h for ~6k SKUs @ 1 req/2s | SSR shop HTML has product names + images; partnership feed still preferred |
+| **Shein** | **No** | fetch → playwright | 403 / anti-bot; Playwright needed | Weeks DIY; hours via dataset | **Bright Data dataset (~$250/100k)** |
+| **Myntra** | **No** | fetch | CSR listing grid; category URL only | Not viable at scale | Affiliate deep links (Cuelinks) |
+| **Ajio** | **No** | fetch → playwright | React SPA; needs browser | Days+ with proxies | Affiliate networks |
+| **Amazon IN** | **Partial** | fetch | Search page title only; use PA-API | Hours via API | **Amazon Creators / PA-API** |
+| **Flipkart** | **Partial** | fetch | `unusual traffic` in HTML; page title generic | Hours via API | **Flipkart Affiliate API** |
 
-_Last run: _TBD__ — update this table from `tmp/scrape-probes/*-result.json` after each probe session.
+_Last run: 2026-06-18 — from `tmp/scrape-probes/*-result.json`. Re-run after `pnpm --filter @worn/api scrape-probes` to refresh._
 
 ---
 

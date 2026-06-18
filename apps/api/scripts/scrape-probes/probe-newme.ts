@@ -7,7 +7,9 @@ import {
   buildResult,
   fetchPage,
   firstMatch,
+  isExtractionComplete,
   mergeFields,
+  parseEmbeddedProductNames,
   parseJsonLdProduct,
   parseOgTags,
   playwrightFetch,
@@ -23,18 +25,16 @@ export async function probeNewme(): Promise<ProbeResult> {
 
   try {
     const shop = await fetchPage(shopUrl);
-    let fields = mergeFields(
-      parseOgTags(shop.html),
-      extractNewmeListingCards(shop.html),
-    );
+    const productUrl = findFirstProductLink(shop.html);
+    const embeddedNames = parseEmbeddedProductNames(shop.html);
+    let fields = mergeFields(extractNewmeShop(shop.html, embeddedNames, productUrl));
 
     let method: "fetch" | "playwright" = "fetch";
     let totalLatency = shop.latencyMs;
     let lastHtml = shop.html;
     let lastStatus = shop.status;
 
-    const productUrl = fields.url ?? findFirstProductLink(shop.html);
-    if (productUrl && (!fields.title || fields.images.length === 0)) {
+    if (productUrl && !isExtractionComplete(fields)) {
       await sleep(INTER_REQUEST_DELAY_MS);
       const product = await fetchPage(productUrl);
       totalLatency += product.latencyMs;
@@ -49,20 +49,43 @@ export async function probeNewme(): Promise<ProbeResult> {
     }
 
     if (!isExtractionComplete(fields)) {
-      await sleep(INTER_REQUEST_DELAY_MS);
-      const pw = await playwrightFetch(productUrl ?? shopUrl, 4000);
-      method = "playwright";
-      totalLatency += pw.latencyMs;
-      lastHtml = pw.html;
-      lastStatus = pw.status;
-      fields = mergeFields(
-        fields,
-        parseJsonLdProduct(pw.html),
-        parseOgTags(pw.html),
-        extractNewmeListingCards(pw.html),
-        extractNewmeProduct(pw.html, productUrl ?? shopUrl),
-      );
-      if (!fields.url) fields.url = productUrl ?? findFirstProductLink(pw.html);
+      try {
+        await sleep(INTER_REQUEST_DELAY_MS);
+        const pw = await playwrightFetch(productUrl ?? shopUrl, 4000);
+        method = "playwright";
+        totalLatency += pw.latencyMs;
+        lastHtml = pw.html;
+        lastStatus = pw.status;
+        fields = mergeFields(
+          fields,
+          parseJsonLdProduct(pw.html),
+          parseOgTags(pw.html),
+          extractNewmeShop(pw.html, parseEmbeddedProductNames(pw.html), productUrl),
+          extractNewmeProduct(pw.html, productUrl ?? findFirstProductLink(pw.html) ?? shopUrl),
+        );
+      } catch (pwErr) {
+        const message = pwErr instanceof Error ? pwErr.message : String(pwErr);
+        if (!isExtractionComplete(fields)) {
+          const result = buildResult(
+            SITE,
+            method,
+            totalLatency,
+            lastHtml,
+            lastStatus,
+            fields,
+            message.includes("SIGSEGV") || message.includes("browser has been closed")
+              ? `Playwright unavailable in environment: ${message.slice(0, 120)}`
+              : message,
+            {
+              skuCountHint: "~5.4k–6.5k (270 shop pages)",
+              fullCatalogHours: "~3–6h @ 1 req/2s fetch (SSR shop HTML)",
+              notes: "Shop page SSR includes product names + image URLs; product pages need fetch",
+            },
+          );
+          await saveProbeOutputs(result, "newme");
+          return result;
+        }
+      }
     }
 
     const result = buildResult(
@@ -75,8 +98,8 @@ export async function probeNewme(): Promise<ProbeResult> {
       undefined,
       {
         skuCountHint: "~5.4k–6.5k (270 shop pages)",
-        fullCatalogHours: "~3–6h @ 1 req/2s, no blocks",
-        notes: "Shop pagination works; sitemap has no product URLs",
+        fullCatalogHours: "~3–6h @ 1 req/2s fetch (SSR shop HTML)",
+        notes: "Shop page SSR includes product names + image URLs",
       },
     );
     await saveProbeOutputs(result, "newme");
@@ -96,38 +119,28 @@ export async function probeNewme(): Promise<ProbeResult> {
   }
 }
 
-function isExtractionComplete(fields: {
-  title?: string;
-  images: string[];
-  url?: string;
-}): boolean {
-  return Boolean(fields.title && fields.images.length > 0 && fields.url);
-}
-
 function findFirstProductLink(html: string): string | undefined {
   const rel = firstMatch(html, /href=["'](\/product\/[^"'?#]+)["']/i);
   if (rel) return `https://newme.asia${rel}`;
-  const abs = firstMatch(html, /href=["'](https:\/\/newme\.asia\/product\/[^"'?#]+)["']/i);
-  return abs;
+  return firstMatch(html, /href=["'](https:\/\/newme\.asia\/product\/[^"'?#]+)["']/i);
 }
 
-function extractNewmeListingCards(html: string): Partial<{
-  title?: string;
-  price?: string;
-  images: string[];
-  url?: string;
-}> {
-  const url = findFirstProductLink(html);
-  const title =
-    firstMatch(html, /alt=["']([^"']+)["'][^>]*class=["'][^"']*product/i) ??
-    firstMatch(html, /class=["'][^"']*product[^"']*["'][^>]*alt=["']([^"']+)["']/i);
-  const images = allMatches(html, /src=["'](https:\/\/[^"']*newme[^"']*\.(?:jpg|jpeg|png|webp)[^"']*)["']/i).slice(
-    0,
-    3,
-  );
+function extractNewmeShop(
+  html: string,
+  embeddedNames: string[],
+  productUrl?: string,
+): Partial<{ title?: string; price?: string; images: string[]; url?: string }> {
+  const url = productUrl ?? findFirstProductLink(html);
+  const title = embeddedNames[0];
+  const images = allMatches(
+    html,
+    /https:\/\/assets\.newme\.asia\/[^"'\s]+\.(?:webp|jpg|jpeg|png)/gi,
+  )
+    .filter((img) => !/\d+x\d+/.test(img) || /-533x800|-650x975|-683x1025/.test(img))
+    .slice(0, 3);
   const price =
-    firstMatch(html, /₹\s*([\d,]+(?:\.\d+)?)/) ??
-    firstMatch(html, /"price"\s*:\s*"?([\d.]+)"?/);
+    firstMatch(html, /"price"\s*:\s*"?([\d.]+)"?/) ??
+    firstMatch(html, /₹\s*([\d,]+(?:\.\d+)?)/);
   return { title, price, images, url };
 }
 
@@ -136,15 +149,17 @@ function extractNewmeProduct(
   url: string,
 ): Partial<{ title?: string; price?: string; images: string[]; url?: string }> {
   const title =
-    firstMatch(html, /<h1[^>]*>([^<]+)<\/h1>/i) ??
-    firstMatch(html, /"name"\s*:\s*"([^"]+)"/);
+    firstMatch(html, /"name"\s*:\s*"([^"]{8,120})"/) ??
+    firstMatch(html, /<h1[^>]*>([^<]+)<\/h1>/i);
   const price =
-    firstMatch(html, /₹\s*([\d,]+(?:\.\d+)?)/) ??
-    firstMatch(html, /"price"\s*:\s*"?([\d.]+)"?/);
+    firstMatch(html, /"price"\s*:\s*"?([\d.]+)"?/) ??
+    firstMatch(html, /₹\s*([\d,]+(?:\.\d+)?)/);
   const images = allMatches(
     html,
-    /(?:src|content)=["'](https:\/\/[^"']*(?:assets\.newme|cdn)[^"']*\.(?:jpg|jpeg|png|webp)[^"']*)["']/i,
-  ).slice(0, 5);
+    /https:\/\/assets\.newme\.asia\/[^"'\s]+\.(?:webp|jpg|jpeg|png)/gi,
+  )
+    .filter((img) => /-533x800|-650x975|-683x1025|\.webp$/i.test(img))
+    .slice(0, 5);
   return { title, price, images, url };
 }
 

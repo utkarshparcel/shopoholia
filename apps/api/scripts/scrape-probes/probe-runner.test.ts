@@ -18,6 +18,14 @@ describe("detectAntiBotSignals", () => {
     expect(signals.captcha).toBe(false);
   });
 
+  it("does not flag captcha word in unrelated bundles", () => {
+    const signals = detectAntiBotSignals(
+      '<script>var captchaModule=false;//recaptcha stub</script><div>Products</div>',
+      200,
+    );
+    expect(signals.captcha).toBe(false);
+  });
+
   it("flags 403 and empty responses", () => {
     const signals = detectAntiBotSignals("", 403);
     expect(signals.forbidden403).toBe(true);
@@ -52,12 +60,25 @@ describe("parseOgTags", () => {
 describe("mergeFields and isExtractionComplete", () => {
   it("merges partial extractions", () => {
     const merged = mergeFields(
-      { title: "A", images: [] },
-      { images: ["https://img/1.jpg"], url: "https://x" },
+      { title: "Black Solid One Shoulder Top", images: [] },
+      {
+        images: ["https://assets.newme.asia/example.webp"],
+        url: "https://newme.asia/product/black-solid-one-shoulder-top",
+      },
     );
-    expect(merged.title).toBe("A");
-    expect(merged.url).toBe("https://x");
+    expect(merged.title).toBe("Black Solid One Shoulder Top");
+    expect(merged.url).toBe("https://newme.asia/product/black-solid-one-shoulder-top");
     expect(isExtractionComplete(merged)).toBe(true);
+  });
+
+  it("rejects homepage-level extractions", () => {
+    expect(
+      isExtractionComplete({
+        title: "NEWME - Freshest Fashion Fastest",
+        images: ["/assets/icons/favicon.png"],
+        url: "https://newme.asia/",
+      }),
+    ).toBe(false);
   });
 });
 

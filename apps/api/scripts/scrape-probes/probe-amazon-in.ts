@@ -132,7 +132,9 @@ function extractAmazonCards(html: string): Partial<{
   const images = allMatches(
     html,
     /src=["'](https:\/\/[^"']*(?:images-amazon|media-amazon)[^"']*\.(?:jpg|jpeg|png|webp)[^"']*)["']/i,
-  ).slice(0, 3);
+  )
+    .filter((img) => !/sprite|nav-|gno\/sprites/i.test(img))
+    .slice(0, 3);
   const price =
     firstMatch(html, /₹\s*([\d,]+(?:\.\d+)?)/) ??
     firstMatch(html, /class=["']a-price-whole["'][^>]*>([\d,]+)</i);
