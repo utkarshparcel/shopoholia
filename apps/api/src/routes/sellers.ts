@@ -66,7 +66,7 @@ export const sellersRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const parts = request.files();
+      const parts = request.parts();
       const productImageKeys: string[] = [];
       let title = "";
       let category = "";
@@ -91,7 +91,9 @@ export const sellersRoutes: FastifyPluginAsyncZod = async (app) => {
           continue;
         }
 
-        const value = part.value as string;
+        if (part.type !== "field") continue;
+
+        const value = String(part.value);
         switch (part.fieldname) {
           case "title":
             title = value;
