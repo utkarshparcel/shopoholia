@@ -1,8 +1,8 @@
 import { jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { pushEventStatusEnum } from "./enums";
-import { orders } from "./orders";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { pushEventStatusEnum } from "./enums.js";
+import { orders } from "./orders.js";
+import { users } from "./users.js";
 
 export const pushEvents = pgTable(
   "push_events",

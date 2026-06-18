@@ -37,17 +37,48 @@ pnpm install
 # Start local infrastructure (PostgreSQL 16 + Redis 7)
 docker compose -f infra/docker-compose.yml up -d
 
+# Apply Drizzle migrations (requires DATABASE_URL in .env)
+cp .env.example .env   # first time only
+pnpm --filter @worn/db db:migrate
+
+# Optional: seed catalog into Postgres (50 listings)
+pnpm --filter @worn/api seed:postgres
+
 # Build shared packages
 pnpm build
 
-# Terminal 1 — API (in-memory deps + beta timers by default)
+# Terminal 1 — API
+# Without DATABASE_URL: in-memory repos + mock R2 (default for quick start / CI)
 pnpm dev:api
+
+# With Postgres:
+# DATABASE_URL=postgresql://worn:worn@localhost:5432/worn pnpm dev:api
 
 # Terminal 2 — Expo mobile app
 pnpm --filter @worn/mobile start
 ```
 
 Copy `.env.example` to `.env` at the repo root when wiring Postgres-backed API or observability. Sentry is env-gated and no-ops without a DSN.
+
+### Postgres-backed API
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | For Postgres mode | e.g. `postgresql://worn:worn@localhost:5432/worn` |
+
+When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, and push events. OTP codes and refresh tokens stay in-memory (no DB tables yet). Without `DATABASE_URL`, all repos use in-memory storage (CI default).
+
+### Cloudflare R2 storage
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `R2_ACCOUNT_ID` | For real R2 | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | For real R2 | R2 API token access key |
+| `R2_SECRET_ACCESS_KEY` | For real R2 | R2 API token secret |
+| `R2_BUCKET_NAME` | For real R2 | Target bucket |
+| `R2_PUBLIC_URL` | Optional | Public bucket URL; skips presigned URLs when set |
+
+When all four required `R2_*` vars are set, uploads use the S3-compatible R2 client. Otherwise the API uses an in-memory mock store.
 
 ### Local service URLs
 
@@ -136,6 +167,8 @@ Set env vars for submit (`APPLE_ID`, `ASC_APP_ID`, `APPLE_TEAM_ID`, `GOOGLE_SERV
 | `pnpm build`     | Build all packages and apps          |
 | `pnpm test`      | Run all workspace tests              |
 | `pnpm --filter @worn/api render-spike` | FASHN try-on spike (needs `FASHN_API_KEY`) |
+| `pnpm --filter @worn/api seed:postgres` | Insert `buildSeedListings(50)` into Postgres |
+| `pnpm --filter @worn/db db:migrate` | Apply Drizzle migrations |
 | `pnpm lint`      | Lint across the monorepo             |
 | `pnpm typecheck` | Type-check across the monorepo       |
 

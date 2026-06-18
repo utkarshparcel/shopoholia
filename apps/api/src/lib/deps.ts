@@ -1,7 +1,8 @@
 import type { RenderProvider } from "@worn/shared";
 import type { Repositories } from "./repositories/types.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
-import { createMockStorage, type StorageClient } from "./storage/r2.js";
+import { createPostgresRepositoriesFromUrl } from "./repositories/postgres.js";
+import { createStorageFromEnv, type StorageClient } from "./storage/r2.js";
 import { createRenderProvider } from "./render/provider.js";
 import { createDevOtpService, type OtpService } from "./auth/otp.js";
 import {
@@ -27,9 +28,24 @@ export type AppDeps = {
   push: PushService;
 };
 
+function createRepositories(): Repositories {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (databaseUrl) {
+    return createPostgresRepositoriesFromUrl(databaseUrl);
+  }
+  return createMemoryRepositories();
+}
+
+async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
+  const page = await repos.listListings({ limit: 1 });
+  if (page.items.length === 0) {
+    await seedCatalog(repos, storage);
+  }
+}
+
 export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promise<AppDeps> {
-  const repos = overrides.repos ?? createMemoryRepositories();
-  const storage = overrides.storage ?? createMockStorage();
+  const repos = overrides.repos ?? createRepositories();
+  const storage = overrides.storage ?? createStorageFromEnv();
   const renderProvider =
     overrides.renderProvider ??
     createRenderProvider({
@@ -44,7 +60,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
   if (overrides.jobQueue) {
     const otp = overrides.otp ?? createDevOtpService(repos);
     if (!overrides.repos) {
-      await seedCatalog(repos, storage);
+      await maybeSeedCatalog(repos, storage);
     }
     return {
       repos,
@@ -79,7 +95,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
   const otp = overrides.otp ?? createDevOtpService(repos);
 
   if (!overrides.repos) {
-    await seedCatalog(repos, storage);
+    await maybeSeedCatalog(repos, storage);
   }
 
   return { repos, storage, renderProvider, jobQueue, otp, push };

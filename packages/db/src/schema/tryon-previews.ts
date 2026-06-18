@@ -1,7 +1,7 @@
 import { integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { listingVariants } from "./listing-variants";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { listingVariants } from "./listing-variants.js";
+import { users } from "./users.js";
 
 export const tryonPreviews = pgTable(
   "tryon_previews",

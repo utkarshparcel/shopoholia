@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMockStorage } from "./r2.js";
+import { createMockStorage, hasR2Config } from "./r2.js";
 
 describe("createMockStorage", () => {
   it("stores and signs objects", async () => {
@@ -26,5 +26,19 @@ describe("createMockStorage", () => {
     await storage.put({ key: "b", body: Buffer.from("y"), contentType: "image/jpeg" });
     await storage.deleteMany(["a", "b"]);
     await expect(storage.getSignedUrl("a")).rejects.toThrow();
+  });
+});
+
+describe("hasR2Config", () => {
+  it("requires all R2 env vars", () => {
+    expect(hasR2Config({})).toBe(false);
+    expect(
+      hasR2Config({
+        R2_ACCOUNT_ID: "acc",
+        R2_ACCESS_KEY_ID: "key",
+        R2_SECRET_ACCESS_KEY: "secret",
+        R2_BUCKET_NAME: "bucket",
+      }),
+    ).toBe(true);
   });
 });

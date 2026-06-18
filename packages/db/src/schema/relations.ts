@@ -1,18 +1,18 @@
 import { relations } from "drizzle-orm";
-import { avatars } from "./avatars";
-import { cartItems } from "./cart-items";
-import { carts } from "./carts";
-import { coinLedger } from "./coin-ledger";
-import { iapReceipts } from "./iap-receipts";
-import { listingVariants } from "./listing-variants";
-import { listings } from "./listings";
-import { sellers } from "./sellers";
-import { orderItems } from "./order-items";
-import { orders } from "./orders";
-import { pushEvents } from "./push-events";
-import { renders } from "./renders";
-import { tryonPreviews } from "./tryon-previews";
-import { users } from "./users";
+import { avatars } from "./avatars.js";
+import { cartItems } from "./cart-items.js";
+import { carts } from "./carts.js";
+import { coinLedger } from "./coin-ledger.js";
+import { iapReceipts } from "./iap-receipts.js";
+import { listingVariants } from "./listing-variants.js";
+import { listings } from "./listings.js";
+import { sellers } from "./sellers.js";
+import { orderItems } from "./order-items.js";
+import { orders } from "./orders.js";
+import { pushEvents } from "./push-events.js";
+import { renders } from "./renders.js";
+import { tryonPreviews } from "./tryon-previews.js";
+import { users } from "./users.js";
 
 export const usersRelations = relations(users, ({ one, many }) => ({
   seller: one(sellers, {

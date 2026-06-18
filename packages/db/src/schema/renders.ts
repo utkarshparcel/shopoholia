@@ -1,10 +1,10 @@
 import { boolean, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
+import { id, timestamps } from "./columns.js";
 import {
   renderScenarioEnum,
   renderStatusEnum,
-} from "./enums";
-import { orderItems } from "./order-items";
+} from "./enums.js";
+import { orderItems } from "./order-items.js";
 
 export const renders = pgTable("renders", {
   id: id(),

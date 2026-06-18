@@ -1,6 +1,6 @@
 import { pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { listings } from "./listings";
+import { id, timestamps } from "./columns.js";
+import { listings } from "./listings.js";
 
 export const listingVariants = pgTable("listing_variants", {
   id: id(),

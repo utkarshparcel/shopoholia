@@ -1,7 +1,7 @@
 import { jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { avatarStatusEnum } from "./enums";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { avatarStatusEnum } from "./enums.js";
+import { users } from "./users.js";
 
 export const avatars = pgTable("avatars", {
   id: id(),

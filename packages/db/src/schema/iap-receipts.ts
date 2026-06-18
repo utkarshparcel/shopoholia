@@ -1,6 +1,6 @@
 import { integer, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { users } from "./users.js";
 
 export const iapReceipts = pgTable("iap_receipts", {
   id: id(),

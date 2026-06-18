@@ -1,6 +1,6 @@
 import { pgTable, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { users } from "./users.js";
 
 export const carts = pgTable("carts", {
   id: id(),

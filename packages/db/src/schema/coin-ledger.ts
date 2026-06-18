@@ -1,7 +1,7 @@
 import { integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { coinLedgerTypeEnum } from "./enums";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { coinLedgerTypeEnum } from "./enums.js";
+import { users } from "./users.js";
 
 export const coinLedger = pgTable("coin_ledger", {
   id: id(),

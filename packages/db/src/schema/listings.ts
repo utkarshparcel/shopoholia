@@ -4,9 +4,9 @@ import {
   text,
   uuid,
 } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { listingStatusEnum } from "./enums";
-import { sellers } from "./sellers";
+import { id, timestamps } from "./columns.js";
+import { listingStatusEnum } from "./enums.js";
+import { sellers } from "./sellers.js";
 
 export const listings = pgTable("listings", {
   id: id(),

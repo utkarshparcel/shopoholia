@@ -1,7 +1,7 @@
 import { pgTable, text, uuid } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { sellerStatusEnum } from "./enums";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { sellerStatusEnum } from "./enums.js";
+import { users } from "./users.js";
 
 export const sellers = pgTable("sellers", {
   id: id(),

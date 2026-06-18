@@ -6,9 +6,9 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { orderStateEnum, orderTierEnum } from "./enums";
-import { users } from "./users";
+import { id, timestamps } from "./columns.js";
+import { orderStateEnum, orderTierEnum } from "./enums.js";
+import { users } from "./users.js";
 
 export type OrderStateEta = Partial<Record<string, string>>;
 

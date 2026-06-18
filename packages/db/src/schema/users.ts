@@ -4,8 +4,8 @@ import {
   pgTable,
   text,
 } from "drizzle-orm/pg-core";
-import { id, timestamps } from "./columns";
-import { avatarStatusEnum } from "./enums";
+import { id, timestamps } from "./columns.js";
+import { avatarStatusEnum } from "./enums.js";
 
 export const users = pgTable("users", {
   id: id(),
