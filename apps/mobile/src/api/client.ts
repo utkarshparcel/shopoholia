@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import type { OrderState } from '@worn/shared';
 
 const API_URL =
   (Constants.expoConfig?.extra?.apiUrl as string | undefined) ??
@@ -191,10 +192,10 @@ export type CoinTransaction = {
 export type OrderSummary = {
   id: string;
   tier: 'EXPRESS' | 'STANDARD' | 'SLOW_BURN';
-  state: string;
+  state: OrderState;
   coinTotal: number;
   placedAt: string;
-  stateEta?: Record<string, string | undefined>;
+  stateEta?: Partial<Record<OrderState, string>>;
 };
 
 export async function fetchCoinBalance(accessToken: string) {

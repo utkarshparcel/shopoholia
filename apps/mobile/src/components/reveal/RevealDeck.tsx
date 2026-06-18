@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     backgroundColor: 'rgba(15,14,12,0.55)',
     justifyContent: 'center',
