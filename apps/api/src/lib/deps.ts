@@ -56,27 +56,21 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
     };
   }
 
-  let jobQueue!: JobQueue;
-
-  const deliveredRenderHandler = createDeliveredRenderHandler({
-    repos,
-    enqueueRender: async (job) => jobQueue.enqueueRender(job),
-  });
-
-  const orderTransitionHandler = createOrderTransitionHandler({
-    repos,
-    push,
-    onDelivered: async (orderId) => {
-      await jobQueue.enqueueDeliveredRender({ orderId });
-    },
-  });
-
-  jobQueue = createMemoryJobQueue(
+  const jobQueue = createMemoryJobQueue(
     {
       avatar: avatarHandler,
       tryon: tryonHandler,
-      orderTransition: orderTransitionHandler,
-      deliveredRender: deliveredRenderHandler,
+      orderTransition: createOrderTransitionHandler({
+        repos,
+        push,
+        onDelivered: async (orderId) => {
+          await jobQueue.enqueueDeliveredRender({ orderId });
+        },
+      }),
+      deliveredRender: createDeliveredRenderHandler({
+        repos,
+        enqueueRender: async (job) => jobQueue.enqueueRender(job),
+      }),
       render: renderHandler,
     },
     { autoProcess: process.env.NODE_ENV !== "test", repos },

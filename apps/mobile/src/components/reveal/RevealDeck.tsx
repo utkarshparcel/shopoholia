@@ -33,8 +33,6 @@ import {
   textMuted,
   trackingLabel,
   wornGoldTint,
-  wornInk,
-  wornMuted,
   wornPaper,
   wornWarm,
 } from '@/src/theme/tokens';
