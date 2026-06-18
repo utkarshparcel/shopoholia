@@ -1,0 +1,29 @@
+{
+  "name": "@worn/db",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.38.4",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "drizzle-kit": "^0.30.4",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}

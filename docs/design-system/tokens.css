@@ -1,0 +1,94 @@
+/* ============================================================
+   WORN — Design Tokens  (v0.1)
+   Premium editorial e-commerce · light · warm-paper base · gold accent
+   Single source of truth. Mirror these names in the Expo app theme.ts.
+   ============================================================ */
+
+:root {
+  /* ── Brand palette ─────────────────────────────────────── */
+  --worn-ink:        #0f0e0c;   /* primary text · dark CTAs            */
+  --worn-ink-soft:   #2a2722;   /* body copy                          */
+  --worn-paper:      #faf8f5;   /* app background                     */
+  --worn-surface:    #ffffff;   /* cards · sheets                     */
+  --worn-warm:       #f0ece4;   /* muted fills                        */
+  --worn-warm-deep:  #e8e1d6;   /* hover / pressed warm               */
+  --worn-rule:       #e0dbd2;   /* borders · dividers                 */
+  --worn-muted:      #888078;   /* secondary text · meta              */
+
+  /* gold accent */
+  --worn-gold:       #c8a87a;
+  --worn-gold-deep:  #9c7a4e;   /* accent text on light · links       */
+  --worn-gold-tint:  #fdf7ee;   /* selected / highlight background     */
+
+  /* ── Semantic ──────────────────────────────────────────── */
+  --worn-sale:       #d64e2a;   /* sale price · alerts                */
+  --worn-success:    #3a7d5c;   /* in stock · confirmations           */
+  --worn-coin:       #c8a87a;   /* coin currency (== gold)            */
+  --worn-coin-deep:  #9c7a4e;
+
+  /* ── Role aliases — use THESE in components ────────────── */
+  --bg:          var(--worn-paper);
+  --surface:     var(--worn-surface);
+  --text:        var(--worn-ink);
+  --text-body:   var(--worn-ink-soft);
+  --text-muted:  var(--worn-muted);
+  --border:      var(--worn-rule);
+  --accent:      var(--worn-gold-deep);
+  --accent-soft: var(--worn-gold);
+  --accent-bg:   var(--worn-gold-tint);
+  --price:       var(--worn-ink);
+  --sale:        var(--worn-sale);
+  --success:     var(--worn-success);
+
+  /* ── Type families ─────────────────────────────────────── */
+  --font-display: 'DM Serif Display', Georgia, 'Times New Roman', serif;
+  --font-sans:    'DM Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono:    'DM Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* ── Type scale (mobile-first) ─────────────────────────── */
+  --fs-display-xl: 48px;  --lh-display-xl: 1.00;   /* hero · reveal title   */
+  --fs-display-l:  34px;  --lh-display-l:  1.08;   /* screen / section title*/
+  --fs-display-m:  24px;  --lh-display-m:  1.15;   /* editorial product name*/
+  --fs-title:      18px;  --lh-title:      1.30;   /* card / row title      */
+  --fs-body-l:     16px;  --lh-body-l:     1.60;   /* lead body             */
+  --fs-body:       14px;  --lh-body:       1.55;   /* default body          */
+  --fs-caption:    13px;  --lh-caption:    1.50;   /* secondary             */
+  --fs-micro:      11px;  --lh-micro:      1.40;   /* mono micro-label      */
+
+  --tracking-label: 0.18em;   /* DM Mono uppercase labels  */
+  --tracking-wide:  0.10em;
+  --tracking-tight: -0.02em;  /* DM Serif display          */
+
+  --weight-light: 300;
+  --weight-reg:   400;
+  --weight-med:   500;
+  --weight-semi:  600;
+
+  /* ── Spacing (4px base) ────────────────────────────────── */
+  --space-0:  0;     --space-1: 4px;   --space-2: 8px;   --space-3: 12px;
+  --space-4:  16px;  --space-5: 20px;  --space-6: 24px;  --space-8: 32px;
+  --space-10: 40px;  --space-12: 48px; --space-16: 64px;
+
+  /* ── Radius ────────────────────────────────────────────── */
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-card: 12px;
+  --radius-lg:   16px;
+  --radius-pill: 999px;
+
+  /* ── Elevation (light: soft, warm-neutral) ─────────────── */
+  --shadow-sm:    0 1px 2px rgba(15,14,12,0.06);
+  --shadow-card:  0 2px 8px rgba(15,14,12,0.06), 0 1px 2px rgba(15,14,12,0.04);
+  --shadow-pop:   0 8px 24px rgba(15,14,12,0.12);
+  --shadow-sheet: 0 -8px 32px rgba(15,14,12,0.14);
+
+  /* ── Motion ────────────────────────────────────────────── */
+  --dur-fast: 150ms;  --dur: 250ms;  --dur-slow: 400ms;
+  --ease-out:    cubic-bezier(0.20, 0.80, 0.20, 1.00);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1.00);
+
+  /* ── Layout ────────────────────────────────────────────── */
+  --tap-target: 44px;    /* min touch target            */
+  --container:  430px;   /* mobile design width          */
+  --z-nav: 100;  --z-sheet: 200;  --z-toast: 300;
+}

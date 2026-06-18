@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WORN — Design System v0.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text-body);
+    font-family: var(--font-sans); font-size: var(--fs-body-l); line-height: var(--lh-body-l);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px 140px; }
+
+  /* ── cover ── */
+  .cover { padding: 72px 0 48px; border-bottom: 1px solid var(--border); margin-bottom: 64px; position: relative; overflow: hidden; }
+  .cover::before { content:''; position:absolute; top:-160px; right:-120px; width:420px; height:420px; border-radius:50%;
+    background: radial-gradient(circle, #efdcc0 0%, transparent 70%); pointer-events:none; }
+  .wordmark { font-family: var(--font-display); font-size: 15px; letter-spacing: .3em; text-transform: uppercase; color: var(--accent); }
+  .cover h1 { font-family: var(--font-display); font-size: clamp(48px, 8vw, 84px); line-height: .95; letter-spacing: var(--tracking-tight); margin: 28px 0 18px; color: var(--text); }
+  .cover h1 em { font-style: italic; color: var(--accent); }
+  .cover p { max-width: 560px; font-weight: var(--weight-light); font-size: 19px; color: var(--text-muted); line-height: 1.5; }
+  .cover .meta { font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--text-muted); margin-top: 28px; }
+
+  /* ── sticky toc ── */
+  .toc { position: sticky; top: 0; z-index: var(--z-nav); background: rgba(250,248,245,.86); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border); margin: 0 -24px 56px; padding: 12px 24px; display: flex; gap: 22px; flex-wrap: wrap; }
+  .toc a { font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: var(--tracking-wide); text-transform: uppercase;
+    color: var(--text-muted); text-decoration: none; transition: color var(--dur-fast) var(--ease-out); }
+  .toc a:hover { color: var(--text); }
+
+  /* ── section + block scaffolding ── */
+  .sec { margin-bottom: 88px; }
+  .kicker { font-family: var(--font-mono); font-size: 10px; letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--accent-soft); display: block; margin-bottom: 12px; }
+  .sec > h2 { font-family: var(--font-display); font-size: var(--fs-display-l); line-height: var(--lh-display-l); letter-spacing: var(--tracking-tight); color: var(--text); margin-bottom: 10px; }
+  .sec > .lede { max-width: 620px; color: var(--text-muted); margin-bottom: 36px; }
+
+  .block { margin-bottom: 44px; }
+  .block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .block-head h3 { font-family: var(--font-sans); font-size: var(--fs-body); font-weight: var(--weight-semi); letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--text); }
+  .note { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--text-muted); }
+
+  .stage { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 32px; box-shadow: var(--shadow-card); }
+  .stage--warm { background: var(--worn-warm); }
+  .row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  .row + .row { margin-top: 20px; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .caption { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); margin-top: 8px; }
+
+  /* phone frame for screen-level components */
+  .phone { width: 390px; max-width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 28px; box-shadow: var(--shadow-pop); overflow: hidden; }
+  .phone-pad { padding: 20px; }
+
+  /* placeholder imagery (warm editorial) */
+  .ph { position: relative; border-radius: var(--radius-card); overflow: hidden; background: linear-gradient(135deg, #e9ddca, #d8c3a6 55%, #c9b291); }
+  .ph--rose { background: linear-gradient(135deg, #ecd9d2, #d9b9ad 60%, #c9a394); }
+  .ph--sand { background: linear-gradient(135deg, #efe6d4, #ddcca9 60%, #cdb88f); }
+  .ph--olive{ background: linear-gradient(135deg, #e2e2cf, #c4c2a0 60%, #aaa886); }
+  .ph--dusk { background: linear-gradient(160deg, #d8cfc4, #b9a894 55%, #9c8b78); }
+  .ph-tag { position: absolute; bottom: 10px; left: 10px; font-family: var(--font-mono); font-size: 9px; letter-spacing: .15em; text-transform: uppercase; color: rgba(255,255,255,.92); background: rgba(15,14,12,.35); padding: 3px 8px; border-radius: var(--radius-pill); backdrop-filter: blur(4px); }
+
+  /* icons */
+  .ico { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .ico-sm { width: 16px; height: 16px; }
+
+  /* coin glyph */
+  .coin { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; vertical-align: -2px;
+    background: radial-gradient(circle at 34% 30%, #f0dcbb, #c8a87a 58%, #9c7a4e); box-shadow: inset 0 0 0 1px rgba(156,122,78,.5); }
+  .coin::after { content:''; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.45); }
+  .coin-lg { width: 22px; height: 22px; } .coin-lg::after { width: 9px; height: 9px; }
+
+  /* ===========================================================
+     COMPONENT STYLES
+     =========================================================== */
+
+  /* —— section header pattern —— */
+  .sh-kicker { font-family: var(--font-mono); font-size: 10px; letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--accent-soft); }
+  .sh-title  { font-family: var(--font-display); font-size: var(--fs-display-m); letter-spacing: var(--tracking-tight); color: var(--text); margin-top: 8px; }
+
+  /* —— buttons —— */
+  .btn { font-family: var(--font-sans); font-weight: var(--weight-semi); font-size: var(--fs-body); letter-spacing: .01em;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--tap-target);
+    padding: 0 22px; border-radius: var(--radius-md); border: 1px solid transparent; cursor: pointer;
+    transition: transform var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+  .btn:active { transform: scale(.98); }
+  .btn-primary { background: var(--worn-ink); color: var(--worn-paper); }
+  .btn-primary:hover { background: #221f1a; }
+  .btn-accent { background: var(--accent); color: #fff; }
+  .btn-accent:hover { background: #876841; }
+  .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--worn-muted); }
+  .btn-ghost { background: transparent; color: var(--accent); }
+  .btn-ghost:hover { background: var(--accent-bg); }
+  .btn-sm { min-height: 34px; padding: 0 14px; font-size: var(--fs-caption); }
+  .btn-lg { min-height: 52px; padding: 0 28px; font-size: var(--fs-body-l); }
+  .btn-block { display: flex; width: 100%; }
+  .btn[disabled] { opacity: .4; cursor: not-allowed; }
+  .btn-icon { min-height: 44px; width: 44px; padding: 0; border-radius: 50%; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+  .btn-icon:hover { border-color: var(--worn-muted); }
+
+  /* —— chips & tags —— */
+  .chip { font-family: var(--font-sans); font-size: var(--fs-caption); font-weight: var(--weight-med); display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer;
+    transition: all var(--dur-fast) var(--ease-out); }
+  .chip:hover { border-color: var(--worn-muted); }
+  .chip.is-active { background: var(--accent-bg); border-color: var(--accent-soft); color: var(--accent); }
+  .tag { font-family: var(--font-mono); font-size: 9px; letter-spacing: .15em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--radius-pill); }
+  .tag-new   { background: var(--worn-ink); color: var(--worn-paper); }
+  .tag-trend { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent-soft); }
+  .tag-low   { background: #fdece7; color: var(--sale); }
+  .tag-onyou { background: rgba(255,255,255,.9); color: var(--accent); border: 1px solid var(--accent-soft); backdrop-filter: blur(4px); }
+  /* delivery tiers */
+  .tier { font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--radius-pill); }
+  .tier-express { background: #fff0e0; color: #9c6c2a; border: 1px solid #e8d0a8; }
+  .tier-standard{ background: var(--worn-warm); color: var(--text-muted); border: 1px solid var(--border); }
+  .tier-slow    { background: #f0e8ff; color: #6a3d9a; border: 1px solid #d4b8f0; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* —— form controls —— */
+  .field-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; display: block; }
+  .seg { display: inline-flex; gap: 8px; }
+  .seg button { font-family: var(--font-sans); font-size: var(--fs-body); font-weight: var(--weight-med); min-width: 44px; min-height: 40px; padding: 0 12px;
+    border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; transition: all var(--dur-fast) var(--ease-out); }
+  .seg button.is-active { background: var(--worn-ink); color: var(--worn-paper); border-color: var(--worn-ink); }
+  .seg button:not(.is-active):hover { border-color: var(--worn-muted); }
+  .swatches { display: inline-flex; gap: 10px; }
+  .sw { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); cursor: pointer; position: relative; }
+  .sw.is-active { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+  .search { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 0 16px; min-height: 46px; color: var(--text-muted); }
+  .search input { border: 0; outline: 0; background: transparent; font-family: var(--font-sans); font-size: var(--fs-body-l); color: var(--text); width: 100%; }
+  .stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); }
+  .stepper button { width: 40px; height: 40px; border: 0; background: transparent; color: var(--text); font-size: 18px; cursor: pointer; }
+  .stepper span { min-width: 28px; text-align: center; font-weight: var(--weight-med); }
+  /* delivery speed radio cards */
+  .speed { display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+  .speed-card { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: pointer; transition: all var(--dur-fast) var(--ease-out); }
+  .speed-card.is-active { border-color: var(--accent-soft); background: var(--accent-bg); }
+  .speed-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; display: grid; place-items: center; }
+  .speed-card.is-active .speed-radio { border-color: var(--accent); }
+  .speed-card.is-active .speed-radio::after { content:''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .speed-main { flex: 1; }
+  .speed-main b { font-weight: var(--weight-semi); color: var(--text); }
+  .speed-main small { display: block; color: var(--text-muted); font-size: var(--fs-caption); }
+  .speed-price { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text); white-space: nowrap; }
+
+  /* —— listing card —— */
+  .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .lcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--shadow-sm); transition: box-shadow var(--dur) var(--ease-out); }
+  .lcard:hover { box-shadow: var(--shadow-card); }
+  .lcard .media { position: relative; aspect-ratio: 3/4; }
+  .lcard .media .ph { position: absolute; inset: 0; border-radius: 0; }
+  .lcard .heart { position: absolute; top: 10px; right: 10px; width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.88); display: grid; place-items: center; color: var(--text); backdrop-filter: blur(4px); cursor: pointer; }
+  .lcard .heart:hover { color: var(--sale); }
+  .lcard .badges { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; }
+  .lcard .body { padding: 12px 14px 14px; }
+  .lcard .brand { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .lcard .title { font-family: var(--font-sans); font-size: var(--fs-body); font-weight: var(--weight-med); color: var(--text); margin: 3px 0 10px; }
+  .lcard .price-row { display: flex; align-items: center; justify-content: space-between; }
+  .lcard .price { font-weight: var(--weight-semi); color: var(--price); display: inline-flex; align-items: center; gap: 6px; }
+  .lcard .real { font-size: var(--fs-caption); color: var(--text-muted); margin-left: 8px; }
+  .quick-add { width: 36px; height: 36px; border-radius: 50%; background: var(--worn-ink); color: var(--worn-paper); border: 0; display: grid; place-items: center; cursor: pointer; transition: transform var(--dur-fast) var(--ease-spring); }
+  .quick-add:hover { transform: scale(1.08); }
+  /* feed variant */
+  .feed-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; max-width: 360px; box-shadow: var(--shadow-card); }
+  .feed-card .media { position: relative; aspect-ratio: 4/5; }
+  .feed-card .media .ph { position: absolute; inset: 0; border-radius: 0; }
+  .feed-card .overlay { position: absolute; left: 12px; bottom: 12px; right: 12px; display: flex; align-items: flex-end; justify-content: space-between; }
+  .feed-card .meta-pill { background: rgba(255,255,255,.92); border-radius: var(--radius-md); padding: 8px 12px; backdrop-filter: blur(6px); }
+  .feed-card .meta-pill .brand { font-family: var(--font-mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); }
+  .feed-card .meta-pill .title { font-weight: var(--weight-med); font-size: var(--fs-caption); color: var(--text); }
+
+  /* —— coin wallet —— */
+  .balance { display: inline-flex; align-items: center; gap: 8px; background: var(--worn-ink); color: var(--worn-paper); border-radius: var(--radius-pill); padding: 8px 14px; font-weight: var(--weight-semi); }
+  .balance .add { width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.16); display: grid; place-items: center; }
+  .bundle-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 520px; }
+  .bundle { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px 14px; text-align: center; background: var(--surface); position: relative; }
+  .bundle.is-best { border-color: var(--accent-soft); background: var(--accent-bg); }
+  .bundle .pop { position: absolute; top: -9px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono); font-size: 8px; letter-spacing: .12em; text-transform: uppercase; background: var(--accent); color: #fff; padding: 2px 8px; border-radius: var(--radius-pill); }
+  .bundle .amt { font-family: var(--font-display); font-size: 28px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+  .bundle .bonus { font-size: var(--fs-caption); color: var(--success); margin: 2px 0 12px; }
+  .bundle .cost { font-family: var(--font-mono); font-size: var(--fs-body); color: var(--text); }
+  .ledger { max-width: 460px; }
+  .ledger-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .ledger-row:last-child { border: 0; }
+  .ledger-ico { width: 36px; height: 36px; border-radius: 50%; background: var(--worn-warm); display: grid; place-items: center; color: var(--text-muted); }
+  .ledger-main { flex: 1; }
+  .ledger-main b { font-weight: var(--weight-med); color: var(--text); font-size: var(--fs-body); }
+  .ledger-main small { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .delta { font-weight: var(--weight-semi); display: inline-flex; align-items: center; gap: 5px; }
+  .delta.plus { color: var(--success); }
+  .delta.minus { color: var(--text-muted); }
+
+  /* —— order tracker —— */
+  .tracker { max-width: 380px; }
+  .tracker-head { background: var(--worn-ink); color: var(--worn-paper); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 22px; }
+  .tracker-head .lbl { font-family: var(--font-mono); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; opacity: .7; }
+  .tracker-head .eta { font-family: var(--font-display); font-size: 30px; margin-top: 4px; }
+  .tl { position: relative; padding-left: 6px; }
+  .tl-step { display: flex; gap: 16px; position: relative; padding-bottom: 22px; }
+  .tl-step::before { content:''; position: absolute; left: 9px; top: 22px; bottom: -2px; width: 2px; background: var(--border); }
+  .tl-step:last-child::before { display: none; }
+  .tl-step.done::before, .tl-step.current::before { background: var(--accent-soft); }
+  .tl-dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); background: var(--surface); flex-shrink: 0; display: grid; place-items: center; position: relative; z-index: 1; }
+  .tl-step.done .tl-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tl-step.current .tl-dot { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-bg); }
+  .tl-step.current .tl-dot::after { content:''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .tl-body b { font-weight: var(--weight-med); color: var(--text); }
+  .tl-step.todo .tl-body b { color: var(--text-muted); }
+  .tl-body small { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+
+  /* —— reveal deck —— */
+  .reveal { display: flex; gap: 20px; flex-wrap: wrap; }
+  .render { width: 230px; }
+  .render .frame { position: relative; aspect-ratio: 3/4; border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-pop); }
+  .render .frame .ph { position: absolute; inset: 0; border-radius: 0; }
+  .render .scn { position: absolute; top: 12px; left: 12px; font-family: var(--font-mono); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: #fff; background: rgba(15,14,12,.4); padding: 4px 9px; border-radius: var(--radius-pill); backdrop-filter: blur(4px); }
+  .render.locked .frame .ph { filter: blur(14px) brightness(.92); transform: scale(1.1); }
+  .render .lock-ovl { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(15,14,12,.18); }
+  .render .lock-ovl .lock-pill { background: rgba(255,255,255,.94); border-radius: var(--radius-pill); padding: 9px 14px; display: inline-flex; align-items: center; gap: 7px; font-weight: var(--weight-semi); font-size: var(--fs-caption); color: var(--text); }
+  .dots { display: flex; gap: 6px; justify-content: center; margin: 14px 0; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
+  .dots i.on { width: 18px; border-radius: var(--radius-pill); background: var(--accent); }
+  .reveal-actions { display: flex; gap: 10px; justify-content: center; }
+
+  /* —— paywall sheet —— */
+  .sheet { width: 390px; max-width: 100%; background: var(--surface); border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--shadow-sheet); padding: 8px 22px 26px; border: 1px solid var(--border); }
+  .grabber { width: 40px; height: 4px; border-radius: var(--radius-pill); background: var(--border); margin: 8px auto 18px; }
+  .sheet h4 { font-family: var(--font-display); font-size: var(--fs-display-m); color: var(--text); }
+  .sheet .sub { color: var(--text-muted); font-size: var(--fs-body); margin: 4px 0 18px; }
+  .thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px; }
+  .thumbs .ph { aspect-ratio: 3/4; }
+  .thumbs .ph.blur { filter: blur(6px) brightness(.95); }
+
+  /* —— bottom nav —— */
+  .nav { display: flex; align-items: center; justify-content: space-around; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 6px 12px; max-width: 390px; box-shadow: var(--shadow-sm); border-radius: 0 0 28px 28px; }
+  .nav-item { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-muted); cursor: pointer; position: relative; flex: 1; }
+  .nav-item span { font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+  .nav-item.is-active { color: var(--accent); }
+  .nav-item .badge { position: absolute; top: -4px; right: 50%; transform: translateX(16px); background: var(--sale); color: #fff; font-size: 9px; font-weight: 600; min-width: 16px; height: 16px; border-radius: var(--radius-pill); display: grid; place-items: center; padding: 0 4px; }
+
+  /* —— foundation displays —— */
+  .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .swatch .chipc { height: 64px; border-radius: var(--radius-md); border: 1px solid var(--border); }
+  .swatch .nm { font-weight: var(--weight-med); font-size: var(--fs-caption); margin-top: 8px; color: var(--text); }
+  .swatch .hx { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .swatch .tk { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+
+  .type-row { display: flex; align-items: baseline; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+  .type-row:last-child { border: 0; }
+  .type-row .specimen { flex: 1; color: var(--text); }
+  .type-row .ts-meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); text-align: right; min-width: 180px; line-height: 1.6; }
+
+  .scale-row { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+  .scale-bar { height: 16px; background: var(--accent-soft); border-radius: var(--radius-sm); }
+  .scale-row .lab { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); min-width: 120px; }
+
+  .radius-row, .elev-row { display: flex; gap: 20px; flex-wrap: wrap; }
+  .radius-box { width: 90px; height: 70px; background: var(--worn-warm); border: 1px solid var(--border); display: grid; place-items: end center; padding-bottom: 6px; }
+  .radius-box span, .elev-box span { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); }
+  .elev-box { width: 120px; height: 80px; background: var(--surface); border-radius: var(--radius-md); display: grid; place-items: end center; padding-bottom: 8px; }
+
+  .motion-chip { font-family: var(--font-mono); font-size: var(--fs-caption); color: var(--text); background: var(--worn-warm); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; }
+  .ease-demo { width: 100%; max-width: 420px; height: 8px; background: var(--border); border-radius: var(--radius-pill); position: relative; margin-top: 10px; }
+  .ease-demo i { position: absolute; top: -6px; left: 0; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); animation: slide 2.4s var(--ease-spring) infinite alternate; }
+  @keyframes slide { to { left: calc(100% - 20px); } }
+
+  @media (max-width: 560px) { .wrap { padding: 0 16px 100px; } .bundle-row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<!-- icon sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-9.5-9C1 8 3 4.5 6.5 4.5c2 0 3.2 1 5.5 3.3 2.3-2.3 3.5-3.3 5.5-3.3C21 4.5 23 8 21.5 12 19.5 16.4 12 21 12 21z"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M12 3v13M8 7l4-4 4 4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13M7 12l5 5 5-5M4 21h16"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="1.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></symbol>
+  <symbol id="i-bag" viewBox="0 0 24 24"><path d="M6 8h12l1 12H5L6 8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8" cy="10" r="1.6"/><path d="M21 16l-5-5-7 7"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.5 2.9 1-6.1L3 9.5l6.1-.9z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></symbol>
+</defs></svg>
+
+<div class="wrap">
+
+  <!-- COVER -->
+  <header class="cover">
+    <span class="wordmark">WORN</span>
+    <h1>Design <em>system</em></h1>
+    <p>The component language for WORN — premium editorial commerce, built for the see → desire → commit → wait → reveal loop.</p>
+    <div class="meta">v0.1 · Foundations + Core Kit · Light theme</div>
+  </header>
+
+  <!-- TOC -->
+  <nav class="toc">
+    <a href="#color">Color</a>
+    <a href="#type">Type</a>
+    <a href="#scale">Scale</a>
+    <a href="#elevation">Elevation</a>
+    <a href="#buttons">Buttons</a>
+    <a href="#chips">Chips</a>
+    <a href="#forms">Forms</a>
+    <a href="#listing">Listing</a>
+    <a href="#wallet">Wallet</a>
+    <a href="#tracker">Tracker</a>
+    <a href="#reveal">Reveal</a>
+    <a href="#paywall">Paywall</a>
+    <a href="#nav">Nav</a>
+  </nav>
+
+  <!-- ============ 01 FOUNDATIONS ============ -->
+  <section class="sec">
+    <span class="kicker">01 — Foundations</span>
+    <h2>The token layer.</h2>
+    <p class="lede">Every value below is a CSS variable in <code>tokens.css</code> and maps 1:1 to the app theme. Components only ever reference role aliases (<code>--accent</code>, <code>--surface</code>, …), never raw hex.</p>
+
+    <!-- COLOR -->
+    <div class="block" id="color">
+      <div class="block-head"><h3>Color</h3><span class="note">neutrals · gold · semantic</span></div>
+      <div class="stage">
+        <p class="field-label">Neutrals</p>
+        <div class="swatch-grid" style="margin-bottom:28px">
+          <div class="swatch"><div class="chipc" style="background:#0f0e0c"></div><div class="nm">Ink</div><div class="hx">#0f0e0c</div><div class="tk">--worn-ink</div></div>
+          <div class="swatch"><div class="chipc" style="background:#2a2722"></div><div class="nm">Ink Soft</div><div class="hx">#2a2722</div><div class="tk">--worn-ink-soft</div></div>
+          <div class="swatch"><div class="chipc" style="background:#faf8f5"></div><div class="nm">Paper</div><div class="hx">#faf8f5</div><div class="tk">--worn-paper</div></div>
+          <div class="swatch"><div class="chipc" style="background:#ffffff"></div><div class="nm">Surface</div><div class="hx">#ffffff</div><div class="tk">--worn-surface</div></div>
+          <div class="swatch"><div class="chipc" style="background:#f0ece4"></div><div class="nm">Warm</div><div class="hx">#f0ece4</div><div class="tk">--worn-warm</div></div>
+          <div class="swatch"><div class="chipc" style="background:#e0dbd2"></div><div class="nm">Rule</div><div class="hx">#e0dbd2</div><div class="tk">--worn-rule</div></div>
+          <div class="swatch"><div class="chipc" style="background:#888078"></div><div class="nm">Muted</div><div class="hx">#888078</div><div class="tk">--worn-muted</div></div>
+        </div>
+        <p class="field-label">Gold accent</p>
+        <div class="swatch-grid" style="margin-bottom:28px">
+          <div class="swatch"><div class="chipc" style="background:#c8a87a"></div><div class="nm">Gold</div><div class="hx">#c8a87a</div><div class="tk">--worn-gold</div></div>
+          <div class="swatch"><div class="chipc" style="background:#9c7a4e"></div><div class="nm">Gold Deep</div><div class="hx">#9c7a4e</div><div class="tk">--worn-gold-deep</div></div>
+          <div class="swatch"><div class="chipc" style="background:#fdf7ee"></div><div class="nm">Gold Tint</div><div class="hx">#fdf7ee</div><div class="tk">--worn-gold-tint</div></div>
+        </div>
+        <p class="field-label">Semantic</p>
+        <div class="swatch-grid">
+          <div class="swatch"><div class="chipc" style="background:#d64e2a"></div><div class="nm">Sale / Alert</div><div class="hx">#d64e2a</div><div class="tk">--worn-sale</div></div>
+          <div class="swatch"><div class="chipc" style="background:#3a7d5c"></div><div class="nm">Success</div><div class="hx">#3a7d5c</div><div class="tk">--worn-success</div></div>
+          <div class="swatch"><div class="chipc" style="background:radial-gradient(circle at 34% 30%,#f0dcbb,#c8a87a 58%,#9c7a4e)"></div><div class="nm">Coin</div><div class="hx">gold</div><div class="tk">--worn-coin</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TYPE -->
+    <div class="block" id="type">
+      <div class="block-head"><h3>Typography</h3><span class="note">DM Serif Display · DM Sans · DM Mono</span></div>
+      <div class="stage">
+        <div class="type-row"><div class="specimen" style="font-family:var(--font-display);font-size:var(--fs-display-xl);line-height:1;letter-spacing:var(--tracking-tight)">Your haul arrived</div><div class="ts-meta">Display XL · 48px<br>DM Serif Display<br>--fs-display-xl<br>hero · reveal</div></div>
+        <div class="type-row"><div class="specimen" style="font-family:var(--font-display);font-size:var(--fs-display-l);letter-spacing:var(--tracking-tight)">Six surfaces, one loop</div><div class="ts-meta">Display L · 34px<br>DM Serif Display<br>--fs-display-l<br>screen title</div></div>
+        <div class="type-row"><div class="specimen" style="font-family:var(--font-display);font-size:var(--fs-display-m)">Wool flannel overshirt</div><div class="ts-meta">Display M · 24px<br>DM Serif Display<br>--fs-display-m<br>editorial product</div></div>
+        <div class="type-row"><div class="specimen" style="font-size:var(--fs-title);font-weight:600">Add to cart</div><div class="ts-meta">Title · 18px<br>DM Sans 600<br>--fs-title</div></div>
+        <div class="type-row"><div class="specimen" style="font-size:var(--fs-body-l)">The order flow is the product. Pick a size, choose your delivery speed, and let the anticipation cook.</div><div class="ts-meta">Body L · 16px<br>DM Sans 400<br>--fs-body-l</div></div>
+        <div class="type-row"><div class="specimen" style="font-size:var(--fs-body)">Default body copy for descriptions, rows, and supporting text throughout the app.</div><div class="ts-meta">Body · 14px<br>DM Sans 400<br>--fs-body</div></div>
+        <div class="type-row"><div class="specimen" style="font-family:var(--font-mono);font-size:var(--fs-micro);letter-spacing:var(--tracking-label);text-transform:uppercase">Out for delivery · 01</div><div class="ts-meta">Micro label · 11px<br>DM Mono · 0.18em<br>--fs-micro<br>kickers · meta</div></div>
+      </div>
+    </div>
+
+    <!-- SCALE -->
+    <div class="block" id="scale">
+      <div class="block-head"><h3>Spacing &amp; radius</h3><span class="note">4px base</span></div>
+      <div class="stage">
+        <p class="field-label">Spacing scale</p>
+        <div style="margin-bottom:24px">
+          <div class="scale-row"><span class="lab">--space-1 · 4</span><div class="scale-bar" style="width:4px"></div></div>
+          <div class="scale-row"><span class="lab">--space-2 · 8</span><div class="scale-bar" style="width:8px"></div></div>
+          <div class="scale-row"><span class="lab">--space-3 · 12</span><div class="scale-bar" style="width:12px"></div></div>
+          <div class="scale-row"><span class="lab">--space-4 · 16</span><div class="scale-bar" style="width:16px"></div></div>
+          <div class="scale-row"><span class="lab">--space-6 · 24</span><div class="scale-bar" style="width:24px"></div></div>
+          <div class="scale-row"><span class="lab">--space-8 · 32</span><div class="scale-bar" style="width:32px"></div></div>
+          <div class="scale-row"><span class="lab">--space-12 · 48</span><div class="scale-bar" style="width:48px"></div></div>
+          <div class="scale-row"><span class="lab">--space-16 · 64</span><div class="scale-bar" style="width:64px"></div></div>
+        </div>
+        <p class="field-label">Radius</p>
+        <div class="radius-row">
+          <div class="radius-box" style="border-radius:var(--radius-sm)"><span>sm · 6</span></div>
+          <div class="radius-box" style="border-radius:var(--radius-md)"><span>md · 10</span></div>
+          <div class="radius-box" style="border-radius:var(--radius-card)"><span>card · 12</span></div>
+          <div class="radius-box" style="border-radius:var(--radius-lg)"><span>lg · 16</span></div>
+          <div class="radius-box" style="border-radius:var(--radius-pill);width:120px"><span>pill · 999</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ELEVATION + MOTION -->
+    <div class="block" id="elevation">
+      <div class="block-head"><h3>Elevation &amp; motion</h3><span class="note">soft warm-neutral shadows</span></div>
+      <div class="stage stage--warm">
+        <div class="elev-row" style="margin-bottom:30px">
+          <div class="elev-box" style="box-shadow:var(--shadow-sm)"><span>--shadow-sm</span></div>
+          <div class="elev-box" style="box-shadow:var(--shadow-card)"><span>--shadow-card</span></div>
+          <div class="elev-box" style="box-shadow:var(--shadow-pop)"><span>--shadow-pop</span></div>
+          <div class="elev-box" style="box-shadow:var(--shadow-sheet)"><span>--shadow-sheet</span></div>
+        </div>
+        <div class="row">
+          <span class="motion-chip">--dur-fast · 150ms</span>
+          <span class="motion-chip">--dur · 250ms</span>
+          <span class="motion-chip">--dur-slow · 400ms</span>
+          <span class="motion-chip">--ease-out</span>
+          <span class="motion-chip">--ease-spring · reveal swipe</span>
+        </div>
+        <div class="ease-demo"><i></i></div>
+        <p class="caption">ease-spring drives the reveal swipe physics &amp; quick-add pop</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 02 COMPONENTS ============ -->
+  <section class="sec">
+    <span class="kicker">02 — Components</span>
+    <h2>The core kit.</h2>
+    <p class="lede">Ten building blocks that compose every WORN screen. Commerce-conventional structure, WORN editorial skin.</p>
+
+    <!-- section header -->
+    <div class="block">
+      <div class="block-head"><h3>Section header</h3><span class="note">mono kicker + serif title</span></div>
+      <div class="stage">
+        <span class="sh-kicker">New this week</span>
+        <div class="sh-title">Quiet luxury, loud renders</div>
+      </div>
+    </div>
+
+    <!-- BUTTONS -->
+    <div class="block" id="buttons">
+      <div class="block-head"><h3>Buttons</h3><span class="note">primary · accent · secondary · ghost · coin · icon</span></div>
+      <div class="stage">
+        <div class="row">
+          <button class="btn btn-primary">Add to cart</button>
+          <button class="btn btn-accent">Checkout</button>
+          <button class="btn btn-secondary">Wishlist</button>
+          <button class="btn btn-ghost">Buy the real thing</button>
+          <button class="btn btn-icon" aria-label="wishlist"><svg class="ico"><use href="#i-heart"/></svg></button>
+          <button class="btn btn-icon" aria-label="share"><svg class="ico"><use href="#i-share"/></svg></button>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary btn-sm">Small</button>
+          <button class="btn btn-primary">Medium</button>
+          <button class="btn btn-primary btn-lg">Large</button>
+          <button class="btn btn-accent" disabled>Disabled</button>
+          <button class="btn btn-accent"><span class="coin"></span> Buy · 240</button>
+        </div>
+        <div class="row" style="display:block;max-width:360px">
+          <button class="btn btn-accent btn-block btn-lg">Place order · <span class="coin" style="margin:0 4px"></span> 240</button>
+          <p class="caption">btn-block · sticky checkout CTA</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHIPS -->
+    <div class="block" id="chips">
+      <div class="block-head"><h3>Chips &amp; tags</h3><span class="note">filters · product tags · delivery tiers</span></div>
+      <div class="stage">
+        <p class="field-label">Filter chips</p>
+        <div class="row" style="margin-bottom:24px">
+          <button class="chip is-active">All</button>
+          <button class="chip">Outerwear</button>
+          <button class="chip">Knitwear</button>
+          <button class="chip">Denim</button>
+          <button class="chip">Footwear</button>
+          <button class="chip"><svg class="ico ico-sm"><use href="#i-spark"/></svg> On you</button>
+        </div>
+        <p class="field-label">Product tags</p>
+        <div class="row" style="margin-bottom:24px">
+          <span class="tag tag-new">New</span>
+          <span class="tag tag-trend">Trending</span>
+          <span class="tag tag-low">Low stock</span>
+          <span class="tag tag-onyou">On you</span>
+        </div>
+        <p class="field-label">Delivery tiers</p>
+        <div class="row">
+          <span class="tier tier-express"><span class="dot"></span> Express · 2h</span>
+          <span class="tier tier-standard"><span class="dot"></span> Standard · overnight</span>
+          <span class="tier tier-slow"><span class="dot"></span> Slow Burn · 48h</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- FORMS -->
+    <div class="block" id="forms">
+      <div class="block-head"><h3>Form controls</h3><span class="note">search · size · color · qty · delivery speed</span></div>
+      <div class="stage">
+        <div class="search" style="max-width:420px;margin-bottom:26px">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <input placeholder="Search brands, pieces, vibes…">
+        </div>
+        <div class="row" style="gap:48px;align-items:flex-start;margin-bottom:26px">
+          <div>
+            <span class="field-label">Size</span>
+            <div class="seg">
+              <button>XS</button><button class="is-active">S</button><button>M</button><button>L</button><button>XL</button>
+            </div>
+          </div>
+          <div>
+            <span class="field-label">Color</span>
+            <div class="swatches">
+              <span class="sw is-active" style="background:#0f0e0c"></span>
+              <span class="sw" style="background:#c8a87a"></span>
+              <span class="sw" style="background:#9aa089"></span>
+              <span class="sw" style="background:#c9a394"></span>
+            </div>
+          </div>
+          <div>
+            <span class="field-label">Quantity</span>
+            <div class="stepper"><button>−</button><span>1</span><button>+</button></div>
+          </div>
+        </div>
+        <span class="field-label">Delivery speed</span>
+        <div class="speed">
+          <label class="speed-card is-active"><span class="speed-radio"></span><span class="speed-main"><b>Express</b><small>Reveal in ~2 hours</small></span><span class="speed-price"><span class="coin"></span> 40</span></label>
+          <label class="speed-card"><span class="speed-radio"></span><span class="speed-main"><b>Standard</b><small>Overnight reveal</small></span><span class="speed-price">Free</span></label>
+          <label class="speed-card"><span class="speed-radio"></span><span class="speed-main"><b>Slow Burn</b><small>48 hours · max anticipation</small></span><span class="speed-price"><span class="delta plus">+10</span></span></label>
+        </div>
+      </div>
+    </div>
+
+    <!-- LISTING -->
+    <div class="block" id="listing">
+      <div class="block-head"><h3>Listing card</h3><span class="note">grid (2-up) + feed (full-bleed)</span></div>
+      <div class="stage">
+        <div class="row" style="align-items:flex-start;gap:32px">
+          <div style="flex:1;min-width:300px;max-width:420px">
+            <p class="field-label">Grid variant</p>
+            <div class="card-grid">
+              <div class="lcard">
+                <div class="media"><div class="ph ph--sand"></div>
+                  <div class="badges"><span class="tag tag-onyou">On you</span></div>
+                  <div class="heart"><svg class="ico ico-sm"><use href="#i-heart"/></svg></div>
+                </div>
+                <div class="body">
+                  <div class="brand">Lemaire</div>
+                  <div class="title">Croissant leather bag</div>
+                  <div class="price-row"><span class="price"><span class="coin"></span> 320</span><button class="quick-add"><svg class="ico ico-sm"><use href="#i-plus"/></svg></button></div>
+                </div>
+              </div>
+              <div class="lcard">
+                <div class="media"><div class="ph ph--olive"></div>
+                  <div class="badges"><span class="tag tag-new">New</span></div>
+                  <div class="heart"><svg class="ico ico-sm"><use href="#i-heart"/></svg></div>
+                </div>
+                <div class="body">
+                  <div class="brand">Our Legacy</div>
+                  <div class="title">Box flannel overshirt</div>
+                  <div class="price-row"><span class="price"><span class="coin"></span> 180</span><button class="quick-add"><svg class="ico ico-sm"><use href="#i-plus"/></svg></button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="flex:0 0 260px">
+            <p class="field-label">Feed variant</p>
+            <div class="feed-card">
+              <div class="media"><div class="ph ph--rose"></div>
+                <div class="badges" style="position:absolute;top:12px;left:12px"><span class="tag tag-trend">Trending</span></div>
+                <div class="overlay">
+                  <div class="meta-pill"><div class="brand">Toteme</div><div class="title">Signature wool scarf</div></div>
+                  <button class="btn btn-accent btn-sm"><span class="coin"></span> 90</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WALLET -->
+    <div class="block" id="wallet">
+      <div class="block-head"><h3>Coin wallet</h3><span class="note">balance · bundles (IAP) · ledger</span></div>
+      <div class="stage">
+        <div class="row" style="margin-bottom:26px">
+          <span class="balance"><span class="coin coin-lg"></span> 1,240 <span class="add"><svg class="ico ico-sm"><use href="#i-plus"/></svg></span></span>
+          <span class="price" style="font-size:var(--fs-body)"><span class="coin"></span> 240 <span class="real">≈ ₹200</span></span>
+        </div>
+        <p class="field-label">Coin bundles</p>
+        <div class="bundle-row" style="margin-bottom:30px">
+          <div class="bundle"><div class="amt"><span class="coin coin-lg"></span>500</div><div class="bonus">&nbsp;</div><div class="cost">₹399</div></div>
+          <div class="bundle is-best"><div class="pop">Best value</div><div class="amt"><span class="coin coin-lg"></span>1,300</div><div class="bonus">+30% bonus</div><div class="cost">₹899</div></div>
+          <div class="bundle"><div class="amt"><span class="coin coin-lg"></span>3,000</div><div class="bonus">+50% bonus</div><div class="cost">₹1,799</div></div>
+        </div>
+        <p class="field-label">Ledger</p>
+        <div class="ledger">
+          <div class="ledger-row"><span class="ledger-ico"><svg class="ico ico-sm"><use href="#i-spark"/></svg></span><span class="ledger-main"><b>Daily streak · day 4</b><small>Today · 09:12</small></span><span class="delta plus">+15 <span class="coin"></span></span></div>
+          <div class="ledger-row"><span class="ledger-ico"><svg class="ico ico-sm"><use href="#i-bag"/></svg></span><span class="ledger-main"><b>Order · Lemaire bag</b><small>Yesterday · 21:40</small></span><span class="delta minus">−320 <span class="coin"></span></span></div>
+          <div class="ledger-row"><span class="ledger-ico"><svg class="ico ico-sm"><use href="#i-lock"/></svg></span><span class="ledger-main"><b>Unlocked 6 reveal photos</b><small>Yesterday · 23:55</small></span><span class="delta minus">−120 <span class="coin"></span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TRACKER -->
+    <div class="block" id="tracker">
+      <div class="block-head"><h3>Order tracker</h3><span class="note">state machine · countdown</span></div>
+      <div class="stage">
+        <div class="tracker">
+          <div class="tracker-head">
+            <div class="lbl">Express · arriving in</div>
+            <div class="eta">1h 12m</div>
+          </div>
+          <div class="tl">
+            <div class="tl-step done"><span class="tl-dot"><svg class="ico ico-sm"><use href="#i-check"/></svg></span><div class="tl-body"><b>Processing</b><small>09:40</small></div></div>
+            <div class="tl-step done"><span class="tl-dot"><svg class="ico ico-sm"><use href="#i-check"/></svg></span><div class="tl-body"><b>Packed</b><small>10:05</small></div></div>
+            <div class="tl-step current"><span class="tl-dot"></span><div class="tl-body"><b>Out for delivery</b><small>Now · 11:08</small></div></div>
+            <div class="tl-step todo"><span class="tl-dot"></span><div class="tl-body"><b>Arriving soon</b><small>~12:00</small></div></div>
+            <div class="tl-step todo"><span class="tl-dot"></span><div class="tl-body"><b>Delivered</b><small>~12:20</small></div></div>
+            <div class="tl-step todo"><span class="tl-dot"></span><div class="tl-body"><b>Reveal ready</b><small>your haul, rendered</small></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REVEAL -->
+    <div class="block" id="reveal">
+      <div class="block-head"><h3>Reveal deck</h3><span class="note">free render · locked render · swipe + actions</span></div>
+      <div class="stage stage--warm">
+        <div class="reveal">
+          <div class="render">
+            <div class="frame"><div class="ph ph--dusk"></div><span class="scn">Golden hour</span></div>
+          </div>
+          <div class="render locked">
+            <div class="frame"><div class="ph ph--rose"></div><span class="scn">Editorial</span>
+              <div class="lock-ovl"><span class="lock-pill"><svg class="ico ico-sm"><use href="#i-lock"/></svg> Unlock 6 · <span class="coin"></span> 120</span></div>
+            </div>
+          </div>
+          <div style="flex:1;min-width:200px;align-self:center">
+            <div class="dots"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="reveal-actions">
+              <button class="btn btn-icon"><svg class="ico"><use href="#i-download"/></svg></button>
+              <button class="btn btn-icon"><svg class="ico"><use href="#i-share"/></svg></button>
+              <button class="btn btn-secondary btn-sm"><svg class="ico ico-sm"><use href="#i-image"/></svg> Add to Lookbook</button>
+            </div>
+            <p class="caption" style="text-align:center">2 free · 6 paywalled · variable quality = variable reward</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYWALL -->
+    <div class="block" id="paywall">
+      <div class="block-head"><h3>Paywall sheet</h3><span class="note">bottom sheet · unlock</span></div>
+      <div class="stage stage--warm" style="display:flex;justify-content:center">
+        <div class="sheet">
+          <div class="grabber"></div>
+          <h4>Unlock your full haul</h4>
+          <p class="sub">6 more renders across street, studio, night &amp; editorial scenes.</p>
+          <div class="thumbs">
+            <div class="ph ph--sand blur"></div><div class="ph ph--olive blur"></div><div class="ph ph--rose blur"></div><div class="ph ph--dusk blur"></div>
+          </div>
+          <button class="btn btn-accent btn-block btn-lg">Unlock all · <span class="coin" style="margin:0 4px"></span> 120</button>
+          <button class="btn btn-ghost btn-block" style="margin-top:8px">Buy more coins</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NAV -->
+    <div class="block" id="nav">
+      <div class="block-head"><h3>Bottom nav</h3><span class="note">tab bar · cart badge</span></div>
+      <div class="stage stage--warm" style="display:flex;justify-content:center">
+        <div class="nav">
+          <div class="nav-item is-active"><svg class="ico"><use href="#i-grid"/></svg><span>Feed</span></div>
+          <div class="nav-item"><svg class="ico"><use href="#i-image"/></svg><span>Lookbook</span></div>
+          <div class="nav-item"><svg class="ico"><use href="#i-bag"/></svg><span class="badge">3</span><span>Cart</span></div>
+          <div class="nav-item"><svg class="ico"><use href="#i-user"/></svg><span>Profile</span></div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <footer style="border-top:1px solid var(--border);padding-top:32px;color:var(--text-muted);font-family:var(--font-mono);font-size:var(--fs-micro);letter-spacing:.08em;text-transform:uppercase">
+    WORN — Design System v0.1 · Foundations + Core Kit · tokens.css is the source of truth
+  </footer>
+
+</div>
+</body>
+</html>

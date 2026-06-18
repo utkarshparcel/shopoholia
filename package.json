@@ -1,0 +1,19 @@
+{
+  "name": "worn",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev:api": "pnpm --filter @worn/api dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.29.0",
+    "eslint": "^9.29.0",
+    "turbo": "^2.5.4",
+    "typescript-eslint": "^8.34.1"
+  }
+}
