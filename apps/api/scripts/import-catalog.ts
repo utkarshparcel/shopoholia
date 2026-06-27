@@ -20,7 +20,7 @@ import type {
   Repositories,
 } from "../src/lib/repositories/types.js";
 
-const CatalogSourceSchema = z.enum(["shein", "newme"]);
+const CatalogSourceSchema = z.enum(["shein", "newme", "amazon", "flipkart", "synthetic"]);
 
 const CatalogImportRowSchema = z.object({
   title: z.string().min(1),
@@ -86,7 +86,14 @@ function stableId(source: string, title: string, affiliateUrl: string): string {
 
 function defaultCoinPrice(row: CatalogImportRow, index: number): number {
   if (row.coin_price) return row.coin_price;
-  const base = row.source === "shein" ? 26 : 30;
+  const base =
+    row.source === "shein"
+      ? 26
+      : row.source === "newme"
+        ? 30
+        : row.source === "synthetic"
+          ? 24
+          : 28;
   return base + (index % 12) * 2;
 }
 
@@ -245,7 +252,9 @@ async function main() {
   );
 }
 
-void main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

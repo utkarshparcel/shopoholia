@@ -53,6 +53,7 @@ android/
 # Misc
 .cache/
 tmp/
+tmp/catalog/
 temp/
 *.local
 

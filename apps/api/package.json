@@ -14,6 +14,9 @@
     "seed": "tsx scripts/seed-listings.ts",
     "seed:postgres": "tsx scripts/seed-postgres.ts",
     "import-catalog": "tsx scripts/import-catalog.ts",
+    "scrape-newme": "tsx scripts/scrape-newme-catalog.ts",
+    "scrape-shein": "tsx scripts/scrape-shein-catalog.ts",
+    "build-dataset": "tsx scripts/build-catalog-dataset.ts",
     "scrape-probes": "tsx scripts/scrape-probes/run-all.ts",
     "render-spike": "tsx scripts/render-spike.ts"
   },

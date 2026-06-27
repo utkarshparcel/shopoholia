@@ -123,7 +123,7 @@ title,category,tags,image_urls,affiliate_url,source,coin_price,size,color
 Shein Crop Top,Tops,trending|crop,https://img.shein.com/a.jpg,https://shein.com/...,shein,32,S,Black
 ```
 
-`source` must be `shein` or `newme`. Optional: `coin_price`, `size`, `color`.
+`source` must be `shein`, `newme`, `amazon`, `flipkart`, or `synthetic`. Optional: `coin_price`, `size`, `color`.
 
 ### Sample data
 
@@ -141,6 +141,47 @@ DATABASE_URL=postgres://... pnpm --filter @worn/api import-catalog -- --file /pa
 # Cap batch size
 pnpm --filter @worn/api import-catalog -- --file shein.jsonl --limit 1000
 ```
+
+### Build 100k dataset (scrapers + merge)
+
+> **Legal:** Scrapers are internal R&D tools with 2s rate limits. Output lives in `tmp/catalog/` (gitignored). Prefer Bright Data for Shein scale.
+
+```bash
+# 1. Newme full catalog (~5–6k SKUs, ~3–6h @ 2s/req)
+pnpm --filter @worn/api scrape-newme
+
+# Validate with a small batch first
+pnpm --filter @worn/api scrape-newme -- --limit 20
+
+# Resume overnight full catalog (~3–6h, auto-checkpoint every product)
+pnpm --filter @worn/api scrape-newme
+
+# 2. Shein Playwright attempt (likely blocked; writes failure report)
+pnpm --filter @worn/api scrape-shein -- --limit 100
+
+# 3. Merge sources + optional synthetic backfill to --target 100000
+pnpm --filter @worn/api build-dataset
+
+# Custom target / no synthetic padding
+pnpm --filter @worn/api build-dataset -- --target 10000 --no-synthetic
+
+# 4. Import merged file
+pnpm --filter @worn/api import-catalog -- --file tmp/catalog/merged-100k.jsonl --dry-run
+DATABASE_URL=postgres://... pnpm --filter @worn/api import-catalog -- --file tmp/catalog/merged-100k.jsonl
+```
+
+**Outputs:**
+
+| File | Description |
+|------|-------------|
+| `tmp/catalog/newme.jsonl` | Newme scraper rows (~6k max) |
+| `tmp/catalog/shein.jsonl` | Shein scraper rows (if any) |
+| `tmp/catalog/merged-100k.jsonl` | Unified import-catalog JSONL |
+| `tmp/catalog/manifest.json` | Honest source breakdown + gap to 100k |
+| `tmp/catalog/*.checkpoint.json` | Resume state for scrapers |
+| `tmp/catalog/shein-scrape-report.json` | Shein blockers + recommendation |
+
+**Hitting 100k honestly:** Newme caps at ~6k. DIY Shein scrape is blocked (403). Add `tmp/catalog/shein.jsonl` from **Bright Data** (~$250/100k), plus optional `amazon.jsonl` / `flipkart.jsonl` from affiliate APIs, then re-run `build-dataset --no-synthetic`.
 
 ### What the importer does
 
