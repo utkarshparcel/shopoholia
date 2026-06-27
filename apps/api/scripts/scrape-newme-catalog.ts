@@ -106,7 +106,8 @@ export async function runNewmeCatalogScraper(options: Options): Promise<{
   let pagesScanned = 0;
   let totalPages = options.maxPages ?? 270;
 
-  const firstPageUrl = `${SHOP_BASE}?page=${options.startPage}`;
+  const firstPageUrl =
+    options.startPage <= 1 ? SHOP_BASE : `${SHOP_BASE}?page=${options.startPage}`;
   const first = await fetchPage(firstPageUrl);
   totalPages = options.maxPages ?? parseNewmeTotalPages(first.html);
   console.log(`Newme shop: detected ~${totalPages} pages`);
@@ -118,7 +119,8 @@ export async function runNewmeCatalogScraper(options: Options): Promise<{
       continue;
     }
 
-    const pageUrl = page === options.startPage ? firstPageUrl : `${SHOP_BASE}?page=${page}`;
+    const pageUrl =
+      page <= 1 ? SHOP_BASE : page === options.startPage ? firstPageUrl : `${SHOP_BASE}?page=${page}`;
     const { html } = page === options.startPage ? first : await fetchPage(pageUrl);
     const productUrls = findNewmeProductLinks(html);
     pagesScanned += 1;

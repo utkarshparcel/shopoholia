@@ -118,7 +118,10 @@ export function parseNewmeTotalPages(html: string): number {
   if (ofMatch) return Number.parseInt(ofMatch, 10);
   const pageLinks = allMatches(html, /[?&]page=(\d+)/gi);
   const nums = pageLinks.map((p) => Number.parseInt(p, 10)).filter((n) => Number.isFinite(n));
-  return nums.length > 0 ? Math.max(...nums) : 270;
+  const maxFromLinks = nums.length > 0 ? Math.max(...nums) : 0;
+  // ?page=1 shop URLs often only self-reference page=1; fall back to known catalog size.
+  if (maxFromLinks <= 1) return 270;
+  return maxFromLinks;
 }
 
 export function extractNewmeCategory(html: string): string {
