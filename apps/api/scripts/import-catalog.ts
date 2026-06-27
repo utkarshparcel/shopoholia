@@ -8,7 +8,7 @@
  *
  * Requires DATABASE_URL for Postgres; without it, inserts into in-memory repos (dev only).
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { z } from "zod";
@@ -73,19 +73,6 @@ Options:
   }
 
   return { file, dryRun, limit, startSortOrder };
-}
-
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 48);
-}
-
-function stableId(source: string, title: string, affiliateUrl: string): string {
-  const digest = createHash("sha256").update(`${source}:${title}:${affiliateUrl}`).digest("hex");
-  return digest.slice(0, 32);
 }
 
 function defaultCoinPrice(row: CatalogImportRow, index: number): number {
@@ -181,8 +168,6 @@ export function mapRowToRecords(
 ): { listing: ListingRecord; variant: ListingVariantRecord } {
   const listingId = randomUUID();
   const variantId = randomUUID();
-  const slug = slugify(row.title);
-  const keyBase = `catalog/${row.source}/${stableId(row.source, row.title, row.affiliate_url)}/${slug}`;
   const now = new Date();
 
   const listing: ListingRecord = {
@@ -192,8 +177,8 @@ export function mapRowToRecords(
     category: row.category,
     tags: [`src:${row.source}`, ...row.tags],
     coinPrice: defaultCoinPrice(row, index),
-    productImageKeys: row.image_urls.map((_, i) => `${keyBase}/product-${i}.jpg`),
-    houseModelRenderKey: `${keyBase}/house-model.jpg`,
+    productImageKeys: [...row.image_urls],
+    houseModelRenderKey: row.image_urls[0]!,
     affiliateUrl: row.affiliate_url,
     status: "ACTIVE",
     sortOrder,
@@ -205,7 +190,7 @@ export function mapRowToRecords(
     listingId,
     size: row.size ?? "M",
     color: row.color ?? "Default",
-    garmentImageKey: `${keyBase}/garment.jpg`,
+    garmentImageKey: row.image_urls[0]!,
   };
 
   return { listing, variant };
@@ -252,7 +237,7 @@ async function main() {
   await repos.seedListings(listings, variants);
   console.log(`Inserted ${listings.length} listing(s) and ${variants.length} variant(s).`);
   console.log(
-    "Note: image keys are placeholders. Mirror image_urls to R2 at those keys before serving feed images.",
+    "Note: image_urls are stored as-is for dev feed images until mirrored to R2.",
   );
 }
 

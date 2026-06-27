@@ -1,6 +1,21 @@
 import type { ListingRecord, ListingVariantRecord, Repositories } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+/** R2 keys are signed; catalog imports may store source image URLs until mirrored. */
+export async function resolveImageUrl(
+  key: string,
+  storage: StorageClient,
+): Promise<string> {
+  if (isHttpUrl(key)) {
+    return key;
+  }
+  return storage.getSignedUrl(key);
+}
+
 async function sellerNameForListing(
   listing: ListingRecord,
   repos: Repositories,
@@ -20,7 +35,7 @@ export async function listingCardDto(
     title: listing.title,
     category: listing.category,
     coinPrice: listing.coinPrice,
-    houseModelImageUrl: await storage.getSignedUrl(listing.houseModelRenderKey),
+    houseModelImageUrl: await resolveImageUrl(listing.houseModelRenderKey, storage),
     sellerId: listing.sellerId,
     sellerName: await sellerNameForListing(listing, repos),
     affiliateUrl: listing.affiliateUrl,
@@ -39,7 +54,7 @@ export async function listingDetailDto(
       id: variant.id,
       size: variant.size,
       color: variant.color,
-      garmentImageUrl: await storage.getSignedUrl(variant.garmentImageKey),
+      garmentImageUrl: await resolveImageUrl(variant.garmentImageKey, storage),
     })),
   );
 

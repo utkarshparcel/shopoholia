@@ -44,6 +44,11 @@ pnpm --filter @worn/db db:migrate
 # Optional: seed catalog into Postgres (50 listings)
 pnpm --filter @worn/api seed:postgres
 
+# Optional: import external catalog JSONL (Shein/Newme samples in apps/api/scripts/)
+# Re-running import-catalog inserts duplicate rows — truncate listings first or use a fresh DB.
+# DATABASE_URL=postgresql://worn:worn@localhost:5432/worn \
+#   pnpm --filter @worn/api import-catalog -- --file scripts/sample-catalog.jsonl
+
 # Build shared packages
 pnpm build
 
@@ -168,6 +173,7 @@ Set env vars for submit (`APPLE_ID`, `ASC_APP_ID`, `APPLE_TEAM_ID`, `GOOGLE_SERV
 | `pnpm test`      | Run all workspace tests              |
 | `pnpm --filter @worn/api render-spike` | FASHN try-on spike (needs `FASHN_API_KEY`) |
 | `pnpm --filter @worn/api seed:postgres` | Insert `buildSeedListings(50)` into Postgres |
+| `pnpm --filter @worn/api import-catalog` | Import JSONL/CSV catalog rows into Postgres (not idempotent — truncate before re-import) |
 | `pnpm --filter @worn/db db:migrate` | Apply Drizzle migrations |
 | `pnpm lint`      | Lint across the monorepo             |
 | `pnpm typecheck` | Type-check across the monorepo       |
