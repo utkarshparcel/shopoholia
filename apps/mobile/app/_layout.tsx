@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 
+import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { trackEvent } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
@@ -18,6 +19,11 @@ export default function RootLayout() {
       installTracked.current = true;
       trackEvent('install');
     }
+    void ensureDevAuth().catch((error: unknown) => {
+      if (__DEV__) {
+        console.warn('[dev-auth]', error instanceof Error ? error.message : error);
+      }
+    });
   }, []);
 
   return (

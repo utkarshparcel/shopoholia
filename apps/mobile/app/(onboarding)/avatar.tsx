@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getAvatar, sendOtp, uploadAvatar, verifyOtp } from '@/src/api/client';
+import { getAvatar, uploadAvatar } from '@/src/api/client';
 import { Button, SectionHeader } from '@/src/components/ui';
+import { ensureDevAuth } from '@/src/lib/devAuth';
 import { trackEvent } from '@/src/lib/analytics';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -22,14 +23,11 @@ import {
   radiusLg,
 } from '@/src/theme/tokens';
 
-const DEV_PHONE = '919876543210';
-const DEV_OTP = '123456';
-
 type AvatarStatus = 'NONE' | 'PROCESSING' | 'READY' | 'FAILED';
 
 export default function AvatarOnboardingScreen() {
   const insets = useSafeAreaInsets();
-  const { accessToken, setSession, coinBalance } = useSessionStore();
+  const { accessToken, coinBalance } = useSessionStore();
   const [status, setStatus] = useState<AvatarStatus>('NONE');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,17 +39,11 @@ export default function AvatarOnboardingScreen() {
       setAuthReady(true);
       return accessToken;
     }
-    await sendOtp(DEV_PHONE);
-    const tokens = await verifyOtp(DEV_PHONE, DEV_OTP);
-    setSession({
-      phone: DEV_PHONE,
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      coinBalance: tokens.coinBalance ?? 0,
-    });
+    const token = await ensureDevAuth();
+    if (!token) throw new Error('Dev auth is unavailable');
     setAuthReady(true);
-    return tokens.accessToken;
-  }, [accessToken, setSession]);
+    return token;
+  }, [accessToken]);
 
   const refreshStatus = useCallback(
     async (token: string) => {

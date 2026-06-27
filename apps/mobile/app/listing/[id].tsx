@@ -105,13 +105,16 @@ export default function ListingDetailScreen() {
               <Button
                 label={tryon.isPending ? 'Trying on…' : 'Try on me'}
                 onPress={() => {
-                  void tryon.mutateAsync().then((result) => {
-                    if (result.status === 'PROCESSING') {
-                      setTimeout(() => {
-                        void tryon.mutateAsync();
-                      }, 400);
-                    }
-                  });
+                  void tryon
+                    .mutateAsync()
+                    .then((result) => {
+                      if (result.status === 'PROCESSING') {
+                        setTimeout(() => {
+                          void tryon.mutateAsync().catch(() => undefined);
+                        }, 400);
+                      }
+                    })
+                    .catch(() => undefined);
                 }}
                 variant="secondary"
               />
@@ -120,7 +123,7 @@ export default function ListingDetailScreen() {
                 label={addMutation.isPending ? 'Adding…' : 'Add to haul'}
                 onPress={() => {
                   if (!selectedVariant) return;
-                  void addMutation.mutateAsync({ variantId: selectedVariant.id });
+                  void addMutation.mutateAsync({ variantId: selectedVariant.id }).catch(() => undefined);
                 }}
               />
             </View>
