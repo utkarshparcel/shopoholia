@@ -43,6 +43,10 @@ type ImportOptions = {
   startSortOrder: number;
 };
 
+function filterArgv(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function parseArgs(argv: string[]): ImportOptions {
   let file = "scripts/sample-catalog.jsonl";
   let dryRun = false;
@@ -216,7 +220,7 @@ function createRepositories(): Repositories {
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseArgs(filterArgv(process.argv.slice(2)));
   const content = await readFile(options.file, "utf8");
   const rows = parseCatalogFile(content, basename(options.file));
   const slice = options.limit ? rows.slice(0, options.limit) : rows;

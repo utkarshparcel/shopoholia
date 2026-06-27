@@ -144,6 +144,9 @@ pnpm --filter @worn/api import-catalog -- --file shein.jsonl --limit 1000
 
 ### Build 100k dataset (scrapers + merge)
 
+
+> **Pagination note (Jun 2026):** Newme shop listing is Next.js CSR — plain `fetch` only returns page 1 products (~30) in `__NEXT_DATA__` even when `?page=N` is set. The scraper still walks shop pages for link discovery; **full ~9k catalog requires Playwright** (or a licensed feed). After a proof batch (`--limit 100`), re-run without `--limit` only after Playwright pagination is wired — otherwise you will re-scan duplicate pages.
+
 > **Legal:** Scrapers are internal R&D tools with 2s rate limits. Output lives in `tmp/catalog/` (gitignored). Prefer Bright Data for Shein scale.
 
 ```bash

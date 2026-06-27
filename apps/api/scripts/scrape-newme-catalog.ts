@@ -42,6 +42,10 @@ type Options = {
   maxPages?: number;
 };
 
+function filterArgv(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function parseArgs(argv: string[]): Options {
   let limit: number | undefined;
   let dryRun = false;
@@ -167,7 +171,7 @@ export async function runNewmeCatalogScraper(options: Options): Promise<{
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseArgs(filterArgv(process.argv.slice(2)));
   console.log("LEGAL: Internal R&D scraper — not for production without legal review.\n");
 
   if (options.dryRun && options.limit === undefined) {

@@ -60,6 +60,10 @@ function defaultOptions(overrides: Partial<BuildOptions> = {}): BuildOptions {
   };
 }
 
+function filterArgv(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function parseArgs(argv: string[]): BuildOptions {
   const options = defaultOptions();
   for (let i = 0; i < argv.length; i += 1) {
@@ -254,7 +258,7 @@ export async function buildCatalogDataset(options: BuildOptions): Promise<Manife
 }
 
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseArgs(filterArgv(process.argv.slice(2)));
   console.log("LEGAL: Dataset builder — synthetic rows are tagged source=synthetic.\n");
 
   const manifest = await buildCatalogDataset(options);
