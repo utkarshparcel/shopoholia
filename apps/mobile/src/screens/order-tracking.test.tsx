@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import OrderTrackingScreen from './[id]';
+import OrderTrackingScreen from '@/app/order/[id]';
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), push: vi.fn() }),

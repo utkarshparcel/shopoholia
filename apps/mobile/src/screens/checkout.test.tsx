@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import CheckoutScreen from './checkout';
+import CheckoutScreen from '@/app/checkout';
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), replace: vi.fn(), push: vi.fn() }),
