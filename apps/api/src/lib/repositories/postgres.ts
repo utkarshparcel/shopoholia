@@ -488,33 +488,40 @@ export function createPostgresRepositories(db: Db): Repositories {
     async seedListings(seedListings, seedVariants) {
       if (seedListings.length === 0) return;
 
-      await db.insert(listings).values(
-        seedListings.map((listing) => ({
-          id: listing.id,
-          sellerId: listing.sellerId,
-          title: listing.title,
-          category: listing.category,
-          tags: listing.tags,
-          coinPrice: listing.coinPrice,
-          productImageKeys: listing.productImageKeys,
-          houseModelRenderKey: listing.houseModelRenderKey,
-          affiliateUrl: listing.affiliateUrl,
-          status: listing.status,
-          sortOrder: listing.sortOrder,
-          createdAt: listing.createdAt,
-        })),
-      );
-
-      if (seedVariants.length > 0) {
-        await db.insert(listingVariants).values(
-          seedVariants.map((variant) => ({
-            id: variant.id,
-            listingId: variant.listingId,
-            size: variant.size,
-            color: variant.color,
-            garmentImageKey: variant.garmentImageKey,
+      const batchSize = 500;
+      for (let i = 0; i < seedListings.length; i += batchSize) {
+        const listingBatch = seedListings.slice(i, i + batchSize);
+        await db.insert(listings).values(
+          listingBatch.map((listing) => ({
+            id: listing.id,
+            sellerId: listing.sellerId,
+            title: listing.title,
+            category: listing.category,
+            tags: listing.tags,
+            coinPrice: listing.coinPrice,
+            productImageKeys: listing.productImageKeys,
+            houseModelRenderKey: listing.houseModelRenderKey,
+            affiliateUrl: listing.affiliateUrl,
+            status: listing.status,
+            sortOrder: listing.sortOrder,
+            createdAt: listing.createdAt,
           })),
         );
+      }
+
+      if (seedVariants.length > 0) {
+        for (let i = 0; i < seedVariants.length; i += batchSize) {
+          const variantBatch = seedVariants.slice(i, i + batchSize);
+          await db.insert(listingVariants).values(
+            variantBatch.map((variant) => ({
+              id: variant.id,
+              listingId: variant.listingId,
+              size: variant.size,
+              color: variant.color,
+              garmentImageKey: variant.garmentImageKey,
+            })),
+          );
+        }
       }
     },
 
