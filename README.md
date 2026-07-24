@@ -94,9 +94,18 @@ When all four required `R2_*` vars are set, uploads use the S3-compatible R2 cli
 | Redis      | `redis://localhost:6379`                         |
 | Mobile API | `apps/mobile/app.json` → `extra.apiUrl`        |
 
-### Dev auth
+### Auth (Google — no SMS)
 
-Phone OTP is stubbed in dev: use `919876543210` / `123456` on the avatar onboarding screen (auto-login).
+Primary sign-in is **Google OAuth** (`POST /auth/google`). No Twilio/MSG91 spend.
+
+1. Create OAuth client IDs in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Web + iOS/Android as needed).
+2. Set API env: `GOOGLE_CLIENT_IDS=webClientId,iosClientId,androidClientId`
+3. Set mobile env:
+   - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=...` (required for Expo Go / web)
+   - optional `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` / `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
+4. Run migration `0004_google_auth` (nullable phone + email/google_sub).
+
+Phone OTP remains available for local tooling only. Optional auto OTP login: `EXPO_PUBLIC_DEV_AUTO_AUTH=1` (defaults off). Login screen also has **Dev continue** in `__DEV__`.
 
 ### Run tests
 

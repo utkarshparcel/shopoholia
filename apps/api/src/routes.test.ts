@@ -48,7 +48,7 @@ async function buildTestDeps() {
   );
 
   const otp = createDevOtpService(repos);
-  await seedCatalog(repos, storage, 50);
+  await seedCatalog(repos, storage, 50, { preferScraped: false });
   return { repos, storage, renderProvider, jobQueue, otp, push };
 }
 
@@ -140,6 +140,37 @@ describe("auth", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it("signs in with Google ID token and grants onboarding coins", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/google",
+      payload: { idToken: "test-google:sub-1:user@worn.app:Worn User" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.isNewUser).toBe(true);
+    expect(body.coinBalance).toBe(ONBOARDING_COIN_GRANT);
+    expect(body.accessToken).toBeTruthy();
+
+    const again = await app.inject({
+      method: "POST",
+      url: "/auth/google",
+      payload: { idToken: "test-google:sub-1:user@worn.app:Worn User" },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().isNewUser).toBe(false);
+  });
+
+  it("rejects invalid Google ID token", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/google",
+      payload: { idToken: "not-a-real-google-token-at-all" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
   it("refreshes tokens", async () => {
     await app.inject({ method: "POST", url: "/auth/otp", payload: { phone: "919876543210" } });
     const verify = await app.inject({
@@ -204,7 +235,7 @@ describe("avatar", () => {
     expect(status.statusCode).toBe(200);
     const body = status.json();
     expect(body.status).toBe("READY");
-    expect(body.referencePreviewUrl).toContain("references/");
+    expect(body.referencePreviewUrl).toContain("references");
   });
 
   it("rejects empty upload", async () => {
@@ -260,7 +291,8 @@ describe("feed", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.items).toHaveLength(20);
-    expect(body.items[0].houseModelImageUrl).toContain("house-models/");
+    expect(body.items[0].houseModelImageUrl).toContain("house-models");
+    expect(body.items[0].houseModelImageUrl).toContain("picsum.photos");
     expect(body.nextCursor).toBeTruthy();
   });
 
@@ -291,7 +323,7 @@ describe("feed", () => {
 
   it("includes affiliate URLs on seeded listings", async () => {
     const res = await app.inject({ method: "GET", url: "/feed?limit=1" });
-    expect(res.json().items[0].affiliateUrl).toContain("affiliate.worn.example");
+    expect(res.json().items[0].affiliateUrl).toMatch(/^https?:\/\//);
   });
 });
 
@@ -482,7 +514,7 @@ describe("tryon", () => {
     });
     expect(ready.statusCode).toBe(200);
     expect(ready.json().status).toBe("READY");
-    expect(ready.json().previewUrl).toContain("tryon/");
+    expect(ready.json().previewUrl).toContain("tryon");
   });
 });
 
@@ -918,9 +950,14 @@ describe("seed catalog", () => {
   it("seeds 50 listings with variants", async () => {
     const repos = createMemoryRepositories();
     const storage = createMockStorage();
-    const { listings, variants } = await seedCatalog(repos, storage, 50);
+    const { listings, variants } = await seedCatalog(repos, storage, 50, {
+      preferScraped: false,
+    });
     expect(listings).toHaveLength(50);
     expect(variants.length).toBeGreaterThan(100);
-    expect(listings[0]?.affiliateUrl).toContain("affiliate.worn.example");
+    expect(listings[0]?.affiliateUrl).toMatch(/^https?:\/\//);
+    expect(listings[0]?.realPrice).toMatch(/^₹/);
+    expect(listings[0]?.affiliateLinks).toBeDefined();
+    expect(listings[0]?.affiliateLinks!.length).toBeGreaterThan(0);
   });
 });

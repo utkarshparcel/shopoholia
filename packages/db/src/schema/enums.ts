@@ -58,7 +58,15 @@ export const coinLedgerTypeEnum = pgEnum("coin_ledger_type", [
   "EARN_STREAK",
   "EARN_SHARE",
   "EARN_OPTIN",
+  "EARN_REFERRAL",
+  "EARN_CASHBACK",
   "REFUND",
+]);
+
+export const cashbackStatusEnum = pgEnum("cashback_status", [
+  "PENDING",
+  "CONFIRMED",
+  "REJECTED",
 ]);
 
 export const pushEventStatusEnum = pgEnum("push_event_status", [

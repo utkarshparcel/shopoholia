@@ -1,5 +1,6 @@
 import {
   integer,
+  jsonb,
   pgTable,
   text,
   uuid,
@@ -15,9 +16,11 @@ export const listings = pgTable("listings", {
   category: text("category").notNull(),
   tags: text("tags").array().notNull().default([]),
   coinPrice: integer("coin_price").notNull(),
+  realPrice: text("real_price"),
   productImageKeys: text("product_image_keys").array().notNull().default([]),
   houseModelRenderKey: text("house_model_render_key"),
   affiliateUrl: text("affiliate_url"),
+  affiliateLinks: jsonb("affiliate_links"),
   status: listingStatusEnum("status").notNull().default("ACTIVE"),
   sortOrder: integer("sort_order").notNull().default(0),
   ...timestamps,

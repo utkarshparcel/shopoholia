@@ -11,6 +11,9 @@ export const ANALYTICS_EVENTS = [
   "reveal_rated",
   "unlock",
   "share",
+  "affiliate_click",
+  "iap_purchase",
+  "generate_render",
 ] as const;
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[number];

@@ -4,12 +4,19 @@ export type AvatarStatus = "NONE" | "PROCESSING" | "READY" | "FAILED";
 
 export type UserRecord = {
   id: string;
-  phone: string;
+  phone: string | null;
+  email: string | null;
+  googleSub: string | null;
   displayName: string | null;
   avatarStatus: AvatarStatus;
   coinBalanceCache: number;
   consentFlags: Record<string, boolean>;
   pushToken: string | null;
+  referralCode: string | null;
+  referredBy: string | null;
+  streakCount: number;
+  lastStreakClaimAt: Date | null;
+  styleProfile: { tags: string[]; answers: Record<string, string> } | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -69,6 +76,12 @@ export type SellerRecord = {
   updatedAt: Date;
 };
 
+export type AffiliateLinkRecord = {
+  url: string;
+  label: string;
+  platform: "flipkart" | "amazon" | "myntra" | "ajio" | "nykaa" | "other";
+};
+
 export type ListingRecord = {
   id: string;
   sellerId: string | null;
@@ -76,9 +89,11 @@ export type ListingRecord = {
   category: string;
   tags: string[];
   coinPrice: number;
+  realPrice: string | null;
   productImageKeys: string[];
   houseModelRenderKey: string;
   affiliateUrl: string | null;
+  affiliateLinks: AffiliateLinkRecord[] | null;
   status: ListingStatus;
   sortOrder: number;
   createdAt: Date;
@@ -189,9 +204,11 @@ export type CreateSellerListingInput = {
   category: string;
   tags: string[];
   coinPrice: number;
+  realPrice?: string | null;
   productImageKeys: string[];
   houseModelRenderKey: string;
   affiliateUrl: string | null;
+  affiliateLinks?: AffiliateLinkRecord[] | null;
   variant: {
     size: string;
     color: string;
@@ -231,8 +248,27 @@ export type CreateOrderInput = {
 export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
+  findUserByGoogleSub(googleSub: string): Promise<UserRecord | null>;
+  findUserByEmail(email: string): Promise<UserRecord | null>;
+  findUserByReferralCode(code: string): Promise<UserRecord | null>;
   createUser(phone: string): Promise<{ user: UserRecord; isNew: boolean }>;
+  findOrCreateGoogleUser(input: {
+    googleSub: string;
+    email: string;
+    displayName?: string | null;
+  }): Promise<{ user: UserRecord; isNew: boolean }>;
   updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord>;
+  applyReferralCode(userId: string, referralCode: string): Promise<UserRecord | null>;
+  countReferrals(referrerId: string): Promise<number>;
+
+  claimStreak(userId: string): Promise<{ streakCount: number; coinsGranted: number; balanceAfter: number }>;
+  getStreakStatus(userId: string): Promise<{ streakCount: number; lastClaimedAt: Date | null; todayClaimed: boolean }>;
+
+  saveStyleProfile(userId: string, profile: { tags: string[]; answers: Record<string, string> }): Promise<void>;
+
+  recordCashbackEvent(input: { userId: string; listingId: string; platform: string; clickId: string }): Promise<void>;
+  listCashbackEvents(userId: string): Promise<Array<{ id: string; listingId: string | null; platform: string; coinsEarned: number; status: string; createdAt: Date }>>;
+  confirmCashback(clickId: string, status: "CONFIRMED" | "REJECTED"): Promise<void>;
 
   findAvatarByUserId(userId: string): Promise<AvatarRecord | null>;
   upsertAvatar(
@@ -244,6 +280,20 @@ export interface Repositories {
   grantCoins(input: GrantCoinsInput): Promise<{ balanceAfter: number }>;
   spendCoins(input: GrantCoinsInput): Promise<{ balanceAfter: number }>;
   listCoinTransactions(input: ListCoinTransactionsInput): Promise<ListCoinTransactionsResult>;
+  findCoinSpendByRef(
+    userId: string,
+    refType: string,
+    refId: string,
+  ): Promise<CoinLedgerRecord | null>;
+  countReferralCoinsEarned(referrerId: string): Promise<number>;
+  findIapReceipt(eventId: string): Promise<{ userId: string; coinsGranted: number } | null>;
+  recordIapReceipt(input: {
+    eventId: string;
+    userId: string;
+    productId: string;
+    coinsGranted: number;
+    rawPayload?: Record<string, unknown>;
+  }): Promise<void>;
   findOrderByIdempotencyKey(key: string): Promise<OrderRecord | null>;
 
   saveOtp(phone: string, code: string, expiresAt: Date): Promise<void>;
@@ -257,6 +307,8 @@ export interface Repositories {
     listings: ListingRecord[],
     variants: ListingVariantRecord[],
   ): Promise<void>;
+  /** Wipe catalog listings/variants (and cascaded cart/tryon rows). Dev/reseed only. */
+  clearCatalog(): Promise<void>;
   listListings(input: ListListingsInput): Promise<ListListingsResult>;
   findListingById(id: string): Promise<ListingRecord | null>;
   findVariantsByListingId(listingId: string): Promise<ListingVariantRecord[]>;
@@ -295,7 +347,7 @@ export interface Repositories {
     orderId: string,
     state: OrderState,
     patch?: Partial<Pick<OrderRecord, "stateEta" | "revealReadyAt">>,
-  ): Promise<OrderRecord | null>;
+  ): Promise<OrderRecord | null>
 
   listOrderItemsByOrderId(orderId: string): Promise<OrderItemRecord[]>;
   findOrderItemById(id: string): Promise<OrderItemRecord | null>;
@@ -309,7 +361,20 @@ export interface Repositories {
   updateRender(
     id: string,
     patch: Partial<Pick<RenderRecord, "imageKey" | "unlocked" | "provider" | "status" | "costMicros">>,
-  ): Promise<RenderRecord | null>;
+  ): Promise<RenderRecord | null>
+
+  findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
+  findListingsByIds(ids: string[]): Promise<ListingRecord[]>;
+  findSellersByIds(ids: string[]): Promise<SellerRecord[]>;
+  loadDataForVariantIds(
+    listingIds: string[],
+  ): Promise<{ variantMap: Map<string, any>; listingMap: Map<string, any>; sellerMap: Map<string, any> }>;
+
+  recordRevealRating(input: {
+    orderId: string;
+    userId: string;
+    rating: string;
+  }): Promise<void>
 
   recordPushEvent(
     input: Omit<PushEventRecord, "id" | "createdAt">,

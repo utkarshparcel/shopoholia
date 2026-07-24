@@ -19,6 +19,9 @@ describe("analytics schemas", () => {
       "reveal_rated",
       "unlock",
       "share",
+      "affiliate_click",
+      "iap_purchase",
+      "generate_render",
     ]);
   });
 

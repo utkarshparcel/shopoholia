@@ -18,6 +18,7 @@ import {
 import { createMemoryJobQueue, type JobQueue } from "./jobs/queue.js";
 import { createStubPushService, type PushService } from "./push/stub.js";
 import { seedCatalog } from "./seed/catalog.js";
+import { isRealProductImageUrl } from "./seed/scraped.js";
 
 export type AppDeps = {
   repos: Repositories;
@@ -36,11 +37,27 @@ function createRepositories(): Repositories {
   return createMemoryRepositories();
 }
 
-async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
-  const page = await repos.listListings({ limit: 1 });
-  if (page.items.length === 0) {
-    await seedCatalog(repos, storage);
+function catalogNeedsRealImages(items: { houseModelRenderKey: string }[]): boolean {
+  if (items.length === 0) return true;
+  if (items.some((item) => /picsum\.photos/i.test(item.houseModelRenderKey))) {
+    return true;
   }
+  return items.every(
+    (item) =>
+      item.houseModelRenderKey.startsWith("house-models/") ||
+      !isRealProductImageUrl(item.houseModelRenderKey),
+  );
+}
+
+async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
+  const page = await repos.listListings({ limit: 50 });
+  if (!catalogNeedsRealImages(page.items)) return;
+
+  if (page.items.length > 0) {
+    await repos.clearCatalog();
+  }
+  // Always prefer scraped product images when (re)seeding.
+  await seedCatalog(repos, storage, 10_000, { preferScraped: true });
 }
 
 export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promise<AppDeps> {

@@ -2,14 +2,37 @@ import { randomUUID } from "node:crypto";
 import { buildSeedListings } from "@worn/shared";
 import type { Repositories, ListingRecord, ListingVariantRecord } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
+import { seedScrapedCatalog } from "./scraped.js";
 
 const PLACEHOLDER_JPEG = Buffer.from("worn-seed-image");
 
+export type SeedCatalogOptions = {
+  /** Prefer scraped product photos with real CDN URLs (default true for app boot). */
+  preferScraped?: boolean;
+  /** Cap scraped rows when preferScraped is on. */
+  scrapedLimit?: number;
+  env?: Record<string, string | undefined>;
+};
+
+/**
+ * Seed listings. By default prefers the scraped catalog (real image URLs).
+ * Pass preferScraped: false for deterministic synthetic fixtures (tests).
+ */
 export async function seedCatalog(
   repos: Repositories,
   storage: StorageClient,
   count = 50,
+  options: SeedCatalogOptions = {},
 ): Promise<{ listings: ListingRecord[]; variants: ListingVariantRecord[] }> {
+  const preferScraped = options.preferScraped !== false;
+  if (preferScraped) {
+    const scraped = await seedScrapedCatalog(repos, {
+      limit: options.scrapedLimit ?? count,
+      env: options.env,
+    });
+    if (scraped) return { listings: scraped.listings, variants: scraped.variants };
+  }
+
   const seedData = buildSeedListings(count);
   const listings: ListingRecord[] = [];
   const variants: ListingVariantRecord[] = [];
@@ -33,9 +56,11 @@ export async function seedCatalog(
       category: seed.category,
       tags: seed.tags,
       coinPrice: seed.coinPrice,
+      realPrice: seed.realPrice ?? null,
       productImageKeys: [houseModelRenderKey],
       houseModelRenderKey,
-      affiliateUrl: `https://affiliate.worn.example/items/${listingId}`,
+      affiliateUrl: seed.affiliateLinks?.[0]?.url ?? null,
+      affiliateLinks: seed.affiliateLinks ?? null,
       status: "ACTIVE",
       sortOrder: i,
       createdAt: now,

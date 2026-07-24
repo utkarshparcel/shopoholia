@@ -128,7 +128,7 @@ export function createStorageFromEnv(
   return createMockStorage();
 }
 
-export function createMockStorage(baseUrl = "https://r2.mock.worn.test"): StorageClient {
+export function createMockStorage(baseUrl = "https://picsum.photos"): StorageClient {
   const objects = new Map<string, StorageObject>();
 
   return {
@@ -137,10 +137,10 @@ export function createMockStorage(baseUrl = "https://r2.mock.worn.test"): Storag
       return { key: object.key };
     },
     async getSignedUrl(key) {
-      if (!objects.has(key)) {
-        throw new Error(`Object not found: ${key}`);
-      }
-      return `${baseUrl}/${key}?sig=mock`;
+      // Local/dev: return a deterministic public placeholder so the app isn't blank
+      // without real R2. Seed includes the storage key for stable per-listing images.
+      const seed = key.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "worn";
+      return `${baseUrl}/seed/${seed}/720/960`;
     },
     async delete(key) {
       objects.delete(key);

@@ -48,3 +48,17 @@ export const UnlockResponseSchema = z.object({
 });
 
 export type UnlockResponse = z.infer<typeof UnlockResponseSchema>;
+
+export const GenerateRenderBodySchema = z.object({
+  orderItemIds: z.array(z.string().uuid()).min(1),
+  scenario: RenderScenarioSchema,
+});
+
+export const GenerateRenderResponseSchema = z.object({
+  renders: z.array(RenderCardSchema),
+  coinsSpent: z.number().int().nonnegative(),
+  isCombine: z.boolean().optional(),
+});
+
+export type GenerateRenderBody = z.infer<typeof GenerateRenderBodySchema>;
+export type GenerateRenderResponse = z.infer<typeof GenerateRenderResponseSchema>;

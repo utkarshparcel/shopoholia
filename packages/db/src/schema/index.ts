@@ -1,4 +1,5 @@
 export * from "./avatars.js";
+export * from "./cashback-events.js";
 export * from "./cart-items.js";
 export * from "./carts.js";
 export * from "./coin-ledger.js";

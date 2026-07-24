@@ -43,6 +43,20 @@ export async function verifyOtp(phone: string, otp: string) {
   }>(res);
 }
 
+export async function signInWithGoogle(idToken: string) {
+  const res = await fetch(`${API_URL}/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken }),
+  });
+  return parseJson<{
+    accessToken: string;
+    refreshToken: string;
+    isNewUser?: boolean;
+    coinBalance?: number;
+  }>(res);
+}
+
 export async function getAvatar(accessToken: string) {
   const res = await fetch(`${API_URL}/avatar`, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -74,16 +88,24 @@ export async function uploadAvatar(accessToken: string, imageUri: string, fileNa
 
 export { API_URL };
 
+export type AffiliateLink = {
+  url: string;
+  label: string;
+  platform: 'flipkart' | 'amazon' | 'myntra' | 'ajio' | 'nykaa' | 'other';
+};
+
 export type FeedPage = {
   items: Array<{
     id: string;
     title: string;
     category: string;
     coinPrice: number;
+    realPrice?: string | null;
     houseModelImageUrl: string;
     sellerId?: string | null;
     sellerName?: string | null;
     affiliateUrl?: string | null;
+    affiliateLinks?: AffiliateLink[] | null;
   }>;
   nextCursor: string | null;
 };
@@ -181,6 +203,18 @@ export type CoinBalanceResponse = {
   balance: number;
 };
 
+export type IapValidateResponse = {
+  success: true;
+  coinsGranted: number;
+  balanceAfter: number;
+};
+
+export type GenerateRenderResponse = {
+  renders: RenderCard[];
+  coinsSpent: number;
+  isCombine?: boolean;
+};
+
 export type CoinTransaction = {
   id: string;
   delta: number;
@@ -275,6 +309,39 @@ export async function unlockRenders(
   return parseJson<{ renders: RenderCard[]; coinsSpent: number }>(res);
 }
 
+export async function validateIap(
+  accessToken: string,
+  productId: string,
+  receipt: string,
+) {
+  const res = await fetch(`${API_URL}/coins/iap/validate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ productId, receipt }),
+  });
+  return parseJson<IapValidateResponse>(res);
+}
+
+export async function generateRenders(
+  accessToken: string,
+  orderId: string,
+  orderItemIds: string[],
+  scenario: string,
+) {
+  const res = await fetch(`${API_URL}/orders/${orderId}/reveal/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ orderItemIds, scenario }),
+  });
+  return parseJson<GenerateRenderResponse>(res);
+}
+
 export async function submitRevealRating(
   accessToken: string,
   orderId: string,
@@ -289,4 +356,103 @@ export async function submitRevealRating(
     body: JSON.stringify({ rating }),
   });
   return parseJson<{ orderId: string; rating: string; recorded: true }>(res);
+}
+
+export async function getMyReferral(accessToken: string) {
+  const res = await fetch(`${API_URL}/referrals/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{ referralCode: string; referredCount: number; earnedCoins: number }>(res);
+}
+
+export async function applyReferral(accessToken: string, code: string) {
+  const res = await fetch(`${API_URL}/referrals/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ referralCode: code }),
+  });
+  return parseJson<{ applied: true; referrerName: string | null }>(res);
+}
+
+export async function getStreak(accessToken: string) {
+  const res = await fetch(`${API_URL}/streaks/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{
+    currentStreak: number;
+    lastClaimedAt: string | null;
+    todayClaimed: boolean;
+    nextRewardCoins: number;
+    nextRewardDay: number;
+  }>(res);
+}
+
+export async function claimStreak(accessToken: string) {
+  const res = await fetch(`${API_URL}/streaks/claim`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{
+    claimed: true;
+    coinsGranted: number;
+    currentStreak: number;
+    balanceAfter: number;
+  }>(res);
+}
+
+export async function getStyleQuiz(accessToken: string) {
+  const res = await fetch(`${API_URL}/style-quiz`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{
+    questions: Array<{
+      id: string;
+      question: string;
+      options: Array<{ id: string; label: string; tags?: string[] }>;
+    }>;
+  }>(res);
+}
+
+export async function submitStyleQuiz(
+  accessToken: string,
+  answers: Array<{ questionId: string; optionId: string }>,
+) {
+  const res = await fetch(`${API_URL}/style-quiz`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ answers }),
+  });
+  return parseJson<{ saved: true; profileTags: string[] }>(res);
+}
+
+export async function getCashback(accessToken: string) {
+  const res = await fetch(`${API_URL}/cashback/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{
+    events: Array<{
+      id: string;
+      listingId: string | null;
+      platform: string;
+      coinsEarned: number;
+      status: 'PENDING' | 'CONFIRMED' | 'REJECTED';
+      createdAt: string;
+    }>;
+    totalEarned: number;
+  }>(res);
+}
+
+export async function recordAffiliateClick(
+  accessToken: string,
+  listingId: string,
+  platform: string,
+) {
+  const clickId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const res = await fetch(`${API_URL}/cashback/click`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ listingId, platform, clickId }),
+  });
+  if (res.ok) return clickId;
+  return null;
 }

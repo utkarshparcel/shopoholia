@@ -2,11 +2,15 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { authRoutes } from "./auth.js";
 import { avatarRoutes } from "./avatar.js";
 import { cartRoutes } from "./cart.js";
+import { cashbackRoutes } from "./cashback.js";
 import { coinsRoutes } from "./coins.js";
 import { feedRoutes } from "./feed.js";
 import { ordersRoutes } from "./orders.js";
+import { referralRoutes } from "./referrals.js";
 import { revealRoutes } from "./reveal.js";
 import { sellersRoutes } from "./sellers.js";
+import { streaksRoutes } from "./streaks.js";
+import { styleQuizRoutes } from "./style-quiz.js";
 import { webhooksRoutes } from "./webhooks.js";
 
 export const apiRoutes: FastifyPluginAsyncZod = async (app) => {
@@ -18,5 +22,9 @@ export const apiRoutes: FastifyPluginAsyncZod = async (app) => {
   await app.register(coinsRoutes);
   await app.register(revealRoutes);
   await app.register(sellersRoutes);
+  await app.register(referralRoutes);
+  await app.register(streaksRoutes);
+  await app.register(styleQuizRoutes);
+  await app.register(cashbackRoutes);
   await app.register(webhooksRoutes);
 };

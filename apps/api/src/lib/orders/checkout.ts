@@ -1,4 +1,4 @@
-import type { DeliveryTier } from "@worn/shared";
+import { REFERRAL_REWARD_COINS, type DeliveryTier } from "@worn/shared";
 import type { Repositories } from "../repositories/types.js";
 import { buildStateEta } from "./state-machine.js";
 import type { JobQueue } from "../jobs/queue.js";
@@ -28,14 +28,21 @@ export async function checkoutOrder(deps: CheckoutDeps, input: CheckoutInput) {
     throw new CheckoutError("EMPTY_CART", "Add items to your haul before checkout");
   }
 
+  const variantIds = rows.map((r) => r.listingVariantId);
+  const variants = await deps.repos.findVariantsByIds(variantIds);
+  const variantMap = new Map(variants.map((v) => [v.id, v]));
+  const listingIds = Array.from(new Set(variants.map((v) => v.listingId)));
+  const listings = await deps.repos.findListingsByIds(listingIds);
+  const listingMap = new Map(listings.map((l) => [l.id, l]));
+
   const items = [];
   let coinTotal = 0;
   for (const row of rows) {
-    const variant = await deps.repos.findVariantById(row.listingVariantId);
+    const variant = variantMap.get(row.listingVariantId);
     if (!variant) {
       throw new CheckoutError("INVALID_CART", "Cart contains an unavailable item");
     }
-    const listing = await deps.repos.findListingById(variant.listingId);
+    const listing = listingMap.get(variant.listingId);
     if (!listing || listing.status !== "ACTIVE") {
       throw new CheckoutError("INVALID_CART", "Cart contains an unavailable item");
     }
@@ -74,6 +81,21 @@ export async function checkoutOrder(deps: CheckoutDeps, input: CheckoutInput) {
 
   await deps.repos.clearCart(cart.id);
   await deps.jobQueue.scheduleOrderLadder(order.id);
+
+  const user = await deps.repos.findUserById(input.userId);
+  if (user?.referredBy) {
+    const existingOrders = await deps.repos.listOrdersByUserId(input.userId);
+    if (existingOrders.length === 1) {
+      await deps.repos.grantCoins({
+        userId: user.referredBy,
+        delta: REFERRAL_REWARD_COINS,
+        type: "EARN_REFERRAL",
+        refType: "order",
+        refId: order.id,
+      });
+    }
+  }
+
   await deps.push.send({
     userId: input.userId,
     orderId: order.id,

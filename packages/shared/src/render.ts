@@ -15,6 +15,7 @@ export type TryOnInput = {
 export type TryOnResult = {
   imageKey: string;
   costMicros: number;
+  imageBytes?: Uint8Array;
 };
 
 export type RenderScenario =
@@ -42,6 +43,7 @@ export type ScenarioPassInput = {
 export type ScenarioPassResult = {
   imageKey: string;
   costMicros: number;
+  imageBytes?: Uint8Array;
 };
 
 /** Provider abstraction for FASHN / ComfyUI render pipelines. */

@@ -39,11 +39,13 @@ vi.mock('react-native', () => ({
     onPress,
     style,
     disabled,
+    accessibilityLabel,
     ...props
   }: React.PropsWithChildren<{
     onPress?: () => void;
     style?: unknown;
     disabled?: boolean;
+    accessibilityLabel?: string;
     children?: React.ReactNode | ((state: { pressed: boolean }) => React.ReactNode);
   }>) => {
     const resolvedStyle = typeof style === 'function' ? style({ pressed: false }) : style;
@@ -56,6 +58,7 @@ vi.mock('react-native', () => ({
       {
         ...props,
         type: 'button',
+        'aria-label': accessibilityLabel,
         style: resolvedStyle,
         onClick: disabled ? undefined : onPress,
         disabled,
@@ -65,8 +68,18 @@ vi.mock('react-native', () => ({
   },
   Image: createComponent('img'),
   ActivityIndicator: createComponent('div'),
+  PanResponder: {
+    create: () => ({
+      panHandlers: {},
+    }),
+  },
   StyleSheet: {
     create: <T extends Record<string, unknown>>(styles: T) => styles,
     absoluteFill: {},
+  },
+  Platform: {
+    OS: 'ios' as const,
+    select: <T,>(spec: { web?: T; default?: T; ios?: T; android?: T; native?: T }) =>
+      spec.ios ?? spec.native ?? spec.default,
   },
 }));

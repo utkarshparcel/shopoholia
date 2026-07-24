@@ -5,6 +5,8 @@
  * Change tokens.css first, then propagate here 1:1.
  */
 
+import { Platform } from 'react-native';
+
 // ── Brand palette ───────────────────────────────────────
 export const wornInk = '#0f0e0c' as const;
 export const wornInkSoft = '#2a2722' as const;
@@ -189,38 +191,66 @@ export const radius = {
   pill: radiusPill,
 } as const;
 
-// ── Elevation (light: soft, warm-neutral) ───────────────
-export const shadowSm = {
-  shadowColor: '#0f0e0c',
-  shadowOffset: { width: 0, height: 1 },
-  shadowOpacity: 0.06,
-  shadowRadius: 2,
-  elevation: 1,
-} as const;
+// Soft elevation helpers — keep native shadow* for iOS/Android; boxShadow on web.
+function elevationStyle(
+  native: {
+    shadowColor: string;
+    shadowOffset: { width: number; height: number };
+    shadowOpacity: number;
+    shadowRadius: number;
+    elevation: number;
+  },
+  webBoxShadow: string,
+) {
+  if (Platform.OS === 'web') {
+    return { boxShadow: webBoxShadow } as const;
+  }
+  return native;
+}
 
-export const shadowCard = {
-  shadowColor: '#0f0e0c',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.06,
-  shadowRadius: 8,
-  elevation: 3,
-} as const;
+export const shadowSm = elevationStyle(
+  {
+    shadowColor: '#0f0e0c',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  '0 1px 2px rgba(15, 14, 12, 0.06)',
+);
 
-export const shadowPop = {
-  shadowColor: '#0f0e0c',
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.12,
-  shadowRadius: 24,
-  elevation: 8,
-} as const;
+export const shadowCard = elevationStyle(
+  {
+    shadowColor: '#0f0e0c',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  '0 2px 8px rgba(15, 14, 12, 0.06)',
+);
 
-export const shadowSheet = {
-  shadowColor: '#0f0e0c',
-  shadowOffset: { width: 0, height: -8 },
-  shadowOpacity: 0.14,
-  shadowRadius: 32,
-  elevation: 12,
-} as const;
+export const shadowPop = elevationStyle(
+  {
+    shadowColor: '#0f0e0c',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  '0 8px 24px rgba(15, 14, 12, 0.12)',
+);
+
+export const shadowSheet = elevationStyle(
+  {
+    shadowColor: '#0f0e0c',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 32,
+    elevation: 12,
+  },
+  '0 -8px 32px rgba(15, 14, 12, 0.14)',
+);
 
 export const shadows = {
   sm: shadowSm,

@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
 import {
   avatars,
   cartItems,
   carts,
+  cashbackEvents,
   coinLedger,
   createDb,
+  iapReceipts,
   listingVariants,
   listings,
   orderItems,
@@ -18,6 +21,7 @@ import {
   type Db,
 } from "@worn/db";
 import type {
+  AffiliateLinkRecord,
   AvatarRecord,
   AvatarStatus,
   CartItemRecord,
@@ -64,15 +68,37 @@ function now() {
   return new Date();
 }
 
+function generateReferralCode(userId: string): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
+  }
+  let code = "";
+  let n = Math.abs(hash);
+  for (let i = 0; i < 6; i++) {
+    code += chars[n % chars.length]!;
+    n = Math.floor(n / chars.length);
+  }
+  return code;
+}
+
 function mapUser(row: UserRow): UserRecord {
   return {
     id: row.id,
-    phone: row.phone,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+    googleSub: row.googleSub ?? null,
     displayName: row.displayName,
     avatarStatus: row.avatarStatus as AvatarStatus,
     coinBalanceCache: row.coinBalanceCache,
     consentFlags: row.consentFlags,
     pushToken: row.pushToken,
+    referralCode: row.referralCode ?? null,
+    referredBy: row.referredBy ?? null,
+    streakCount: row.streakCount ?? 0,
+    lastStreakClaimAt: row.lastStreakClaimAt ?? null,
+    styleProfile: row.styleProfile ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -112,9 +138,11 @@ function mapListing(row: ListingRow): ListingRecord {
     category: row.category,
     tags: row.tags,
     coinPrice: row.coinPrice,
+    realPrice: row.realPrice ?? null,
     productImageKeys: row.productImageKeys,
     houseModelRenderKey: row.houseModelRenderKey ?? "",
     affiliateUrl: row.affiliateUrl,
+    affiliateLinks: row.affiliateLinks as AffiliateLinkRecord[] | null ?? null,
     status: row.status as ListingStatus,
     sortOrder: row.sortOrder,
     createdAt: row.createdAt,
@@ -267,21 +295,86 @@ export function createPostgresRepositories(db: Db): Repositories {
       return row ? mapUser(row) : null;
     },
 
+    async findUserByGoogleSub(googleSub) {
+      const [row] = await db.select().from(users).where(eq(users.googleSub, googleSub)).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
+    async findUserByEmail(email) {
+      const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
     async createUser(phone) {
       const existing = await repos.findUserByPhone(phone);
       if (existing) {
+        if (!existing.referralCode) {
+          const code = generateReferralCode(existing.id);
+          const updated = await repos.updateUser(existing.id, { referralCode: code });
+          return { user: updated, isNew: false };
+        }
         return { user: existing, isNew: false };
       }
+
+      const userId = randomUUID();
+      const referralCode = generateReferralCode(userId);
 
       const [row] = await db
         .insert(users)
         .values({
+          id: userId,
           phone,
+          email: null,
+          googleSub: null,
           displayName: null,
           avatarStatus: "NONE",
           coinBalanceCache: 0,
           consentFlags: {},
           pushToken: null,
+          referralCode,
+        })
+        .returning();
+
+      return { user: mapUser(row!), isNew: true };
+    },
+
+    async findOrCreateGoogleUser({ googleSub, email, displayName }) {
+      const existingGoogle = await repos.findUserByGoogleSub(googleSub);
+      if (existingGoogle) {
+        if (!existingGoogle.referralCode) {
+          const code = generateReferralCode(existingGoogle.id);
+          const updated = await repos.updateUser(existingGoogle.id, { referralCode: code });
+          return { user: updated, isNew: false };
+        }
+        return { user: existingGoogle, isNew: false };
+      }
+
+      const existingEmail = await repos.findUserByEmail(email);
+      if (existingEmail) {
+        const updated = await repos.updateUser(existingEmail.id, {
+          googleSub,
+          email: email.toLowerCase(),
+          displayName: displayName ?? existingEmail.displayName,
+          referralCode: existingEmail.referralCode ?? generateReferralCode(existingEmail.id),
+        });
+        return { user: updated, isNew: false };
+      }
+
+      const userId = randomUUID();
+      const referralCode = generateReferralCode(userId);
+      const [row] = await db
+        .insert(users)
+        .values({
+          id: userId,
+          phone: null,
+          email: email.toLowerCase(),
+          googleSub,
+          displayName: displayName ?? null,
+          avatarStatus: "NONE",
+          coinBalanceCache: 0,
+          consentFlags: {},
+          pushToken: null,
+          referralCode,
         })
         .returning();
 
@@ -295,17 +388,156 @@ export function createPostgresRepositories(db: Db): Repositories {
       const [row] = await db
         .update(users)
         .set({
+          phone: patch.phone !== undefined ? patch.phone : existing.phone,
+          email: patch.email !== undefined ? patch.email : existing.email,
+          googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
           displayName: patch.displayName ?? existing.displayName,
           avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
           coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,
           consentFlags: patch.consentFlags ?? existing.consentFlags,
           pushToken: patch.pushToken ?? existing.pushToken,
+          referralCode: patch.referralCode ?? existing.referralCode,
+          referredBy: patch.referredBy ?? existing.referredBy,
+          streakCount: patch.streakCount ?? existing.streakCount,
+          lastStreakClaimAt: patch.lastStreakClaimAt ?? existing.lastStreakClaimAt,
+          styleProfile: patch.styleProfile ?? existing.styleProfile,
           updatedAt: now(),
         })
         .where(eq(users.id, id))
         .returning();
 
       return mapUser(row!);
+    },
+
+    async findUserByReferralCode(code) {
+      const [row] = await db.select().from(users).where(eq(users.referralCode, code)).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
+    async applyReferralCode(userId, referralCode) {
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user || user.referredBy) return null;
+      const [referrer] = await db.select().from(users).where(eq(users.referralCode, referralCode)).limit(1);
+      if (!referrer || referrer.id === userId) return null;
+      const [row] = await db
+        .update(users)
+        .set({ referredBy: referrer.id, updatedAt: now() })
+        .where(eq(users.id, userId))
+        .returning();
+      return mapUser(row!);
+    },
+
+    async countReferrals(referrerId) {
+      const [result] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(users)
+        .where(eq(users.referredBy, referrerId));
+      return result?.count ?? 0;
+    },
+
+    async claimStreak(userId) {
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user) throw new Error(`User not found: ${userId}`);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
+      if (last) {
+        last.setHours(0, 0, 0, 0);
+        if (last.getTime() === today.getTime()) {
+          return { streakCount: user.streakCount ?? 0, coinsGranted: 0, balanceAfter: user.coinBalanceCache };
+        }
+      }
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isConsecutive = last && last.getTime() === yesterday.getTime();
+      const newStreak = isConsecutive ? (user.streakCount ?? 0) + 1 : 1;
+      const coinsGranted = streakRewardForDay(newStreak);
+      const { balanceAfter } = await repos.grantCoins({
+        userId,
+        delta: coinsGranted,
+        type: "EARN_STREAK",
+        refType: "streak",
+        refId: `day-${newStreak}`,
+      });
+      await db
+        .update(users)
+        .set({ streakCount: newStreak, lastStreakClaimAt: today, coinBalanceCache: balanceAfter, updatedAt: now() })
+        .where(eq(users.id, userId));
+      return { streakCount: newStreak, coinsGranted, balanceAfter };
+    },
+
+    async getStreakStatus(userId) {
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false };
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
+      if (last) last.setHours(0, 0, 0, 0);
+      const todayClaimed = last !== null && last.getTime() === today.getTime();
+      return { streakCount: user.streakCount ?? 0, lastClaimedAt: user.lastStreakClaimAt ?? null, todayClaimed };
+    },
+
+    async saveStyleProfile(userId, profile) {
+      await db
+        .update(users)
+        .set({ styleProfile: profile, updatedAt: now() })
+        .where(eq(users.id, userId));
+    },
+
+    async recordCashbackEvent(input) {
+      await db.insert(cashbackEvents).values({
+        id: randomUUID(),
+        userId: input.userId,
+        listingId: input.listingId,
+        platform: input.platform,
+        clickId: input.clickId,
+        coinsEarned: 0,
+        status: "PENDING",
+      }).onConflictDoNothing();
+    },
+
+    async listCashbackEvents(userId) {
+      const rows = await db
+        .select()
+        .from(cashbackEvents)
+        .where(eq(cashbackEvents.userId, userId))
+        .orderBy(desc(cashbackEvents.createdAt));
+      return rows.map((r) => ({
+        id: r.id,
+        listingId: r.listingId,
+        platform: r.platform,
+        coinsEarned: r.coinsEarned,
+        status: r.status,
+        createdAt: r.createdAt,
+      }));
+    },
+
+    async confirmCashback(clickId, status) {
+      const [event] = await db
+        .select()
+        .from(cashbackEvents)
+        .where(eq(cashbackEvents.clickId, clickId))
+        .limit(1);
+      if (!event || event.status === "CONFIRMED" || event.status === "REJECTED") return;
+
+      if (status === "CONFIRMED") {
+        await repos.grantCoins({
+          userId: event.userId,
+          delta: AFFILIATE_CASHBACK_COINS,
+          type: "EARN_CASHBACK",
+          refType: "cashback",
+          refId: clickId,
+        });
+        await db
+          .update(cashbackEvents)
+          .set({ status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS })
+          .where(eq(cashbackEvents.clickId, clickId));
+      } else {
+        await db
+          .update(cashbackEvents)
+          .set({ status: "REJECTED" })
+          .where(eq(cashbackEvents.clickId, clickId));
+      }
     },
 
     async findAvatarByUserId(userId) {
@@ -451,6 +683,56 @@ export function createPostgresRepositories(db: Db): Repositories {
       return row ? mapOrder(row) : null;
     },
 
+    async findCoinSpendByRef(userId, refType, refId) {
+      const [row] = await db
+        .select()
+        .from(coinLedger)
+        .where(
+          and(
+            eq(coinLedger.userId, userId),
+            eq(coinLedger.type, "SPEND_UNLOCK"),
+            eq(coinLedger.refType, refType),
+            eq(coinLedger.refId, refId),
+          ),
+        )
+        .orderBy(desc(coinLedger.createdAt))
+        .limit(1);
+
+      return row ? mapCoinLedger(row) : null;
+    },
+
+    async countReferralCoinsEarned(referrerId) {
+      const [result] = await db
+        .select({ total: sql<number>`coalesce(sum(${coinLedger.delta}), 0)::int` })
+        .from(coinLedger)
+        .where(and(eq(coinLedger.userId, referrerId), eq(coinLedger.type, "EARN_REFERRAL")));
+
+      return result?.total ?? 0;
+    },
+
+    async findIapReceipt(eventId) {
+      const [row] = await db
+        .select({
+          userId: iapReceipts.userId,
+          coinsGranted: iapReceipts.coinsGranted,
+        })
+        .from(iapReceipts)
+        .where(eq(iapReceipts.revenuecatEventId, eventId))
+        .limit(1);
+
+      return row ?? null;
+    },
+
+    async recordIapReceipt(input) {
+      await db.insert(iapReceipts).values({
+        revenuecatEventId: input.eventId,
+        userId: input.userId,
+        productId: input.productId,
+        coinsGranted: input.coinsGranted,
+        rawPayload: input.rawPayload ?? {},
+      });
+    },
+
     async saveOtp(phone, code, expiresAt) {
       otps.set(phone, { phone, code, expiresAt });
     },
@@ -523,6 +805,11 @@ export function createPostgresRepositories(db: Db): Repositories {
           );
         }
       }
+    },
+
+    async clearCatalog() {
+      // CASCADE clears cart_items / tryon_previews that reference variants.
+      await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
     },
 
     async listListings({ cursor, limit, sellerId }): Promise<ListListingsResult> {
@@ -606,6 +893,43 @@ export function createPostgresRepositories(db: Db): Repositories {
     async findSellerById(id) {
       const [row] = await db.select().from(sellers).where(eq(sellers.id, id)).limit(1);
       return row ? mapSeller(row) : null;
+    },
+
+    async findVariantsByIds(ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.select().from(listingVariants).where(inArray(listingVariants.id, ids));
+      return rows.map(mapListingVariant);
+    },
+
+    async findListingsByIds(ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.select().from(listings).where(inArray(listings.id, ids));
+      return rows.map(mapListing);
+    },
+
+    async findSellersByIds(ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.select().from(sellers).where(inArray(sellers.id, ids));
+      return rows.map(mapSeller);
+    },
+
+    async loadDataForVariantIds(listingIds) {
+      const variantMap = new Map<string, any>();
+      const listingMap = new Map<string, any>();
+      const sellerMap = new Map<string, any>();
+
+      if (listingIds.length === 0) return { variantMap, listingMap, sellerMap };
+
+      const variantRows = await db.select().from(listingVariants).where(inArray(listingVariants.listingId, listingIds));
+      const listingRows = await db.select().from(listings).where(inArray(listings.id, listingIds));
+      const sellerIds = Array.from(new Set(listingRows.map((l: any) => l.sellerId).filter(Boolean)));
+      const sellerRows = sellerIds.length > 0 ? await db.select().from(sellers).where(inArray(sellers.id, sellerIds)) : [];
+
+      for (const v of variantRows) variantMap.set(v.id, mapListingVariant(v));
+      for (const l of listingRows) listingMap.set(l.id, mapListing(l));
+      for (const s of sellerRows) sellerMap.set(s.id, mapSeller(s));
+
+      return { variantMap, listingMap, sellerMap };
     },
 
     async createSellerListing(input: CreateSellerListingInput) {
@@ -922,6 +1246,22 @@ export function createPostgresRepositories(db: Db): Repositories {
         .returning();
 
       return mapRender(row!);
+    },
+
+    async recordRevealRating(input) {
+      const [existing] = await db
+        .select()
+        .from(orders)
+        .where(eq(orders.id, input.orderId))
+        .limit(1);
+      if (!existing) return;
+      await db
+        .update(orders)
+        .set({
+          stateEta: { ...existing.stateEta, rating: input.rating },
+          updatedAt: now(),
+        })
+        .where(eq(orders.id, input.orderId));
     },
 
     async recordPushEvent(input) {

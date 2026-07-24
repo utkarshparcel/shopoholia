@@ -6,7 +6,7 @@ import { bg } from '@/src/theme/tokens';
 
 const NAV_ITEMS: BottomNavItem[] = [
   { key: 'feed', label: 'Feed', icon: '▦' },
-  { key: 'lookbook', label: 'Lookbook', icon: '◫' },
+  { key: 'lookbook', label: 'Lookbook', icon: '◈' },
   { key: 'profile', label: 'Profile', icon: '○' },
 ];
 

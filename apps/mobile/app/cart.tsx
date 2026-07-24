@@ -15,16 +15,25 @@ import { useCart } from '@/src/hooks/catalog';
 import {
   bg,
   border,
+  fontDisplay,
+  fontMono,
+  fontSans,
   fontSansMedium,
   fontSansSemiBold,
   fsBody,
+  fsBodyL,
   fsCaption,
+  fsDisplayM,
+  fsMicro,
   radiusCard,
   space4,
   space6,
+  space10,
   surface,
   text,
+  textBody,
   textMuted,
+  trackingTight,
   wornInk,
 } from '@/src/theme/tokens';
 
@@ -32,6 +41,10 @@ export default function CartScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { query, removeMutation } = useCart();
+
+  const data = query.data;
+  const coinTotal = data?.coinTotal ?? 0;
+  const isEmpty = !query.isLoading && (!data || data.items.length === 0);
 
   return (
     <ScrollView
@@ -51,19 +64,36 @@ export default function CartScreen() {
 
       {query.isLoading ? (
         <ActivityIndicator color={wornInk} style={styles.loader} />
-      ) : query.data && query.data.items.length > 0 ? (
+      ) : isEmpty ? (
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIcon}>
+            <Text style={styles.emptyIconText}>⊞</Text>
+          </View>
+          <Text style={styles.emptyTitle}>Your haul is empty</Text>
+          <Text style={styles.emptyBody}>
+            Browse the feed and tap + to add pieces to your cart.
+          </Text>
+          <Button
+            label="Browse feed"
+            onPress={() => router.push('/(tabs)/feed')}
+            variant="primary"
+            block
+          />
+        </View>
+      ) : (
         <>
-          {query.data.items.map((item) => (
+          {data!.items.map((item) => (
             <View key={item.variantId} style={styles.item}>
               <Image source={{ uri: item.imageUrl }} style={styles.thumb} />
               <View style={styles.itemBody}>
-                <Text style={styles.itemTitle}>{item.title}</Text>
+                <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
                 <Text style={styles.itemMeta}>
-                  {item.size} · {item.color} · Qty {item.quantity}
+                  {item.size} · {item.color}
                 </Text>
                 <View style={styles.priceRow}>
                   <CoinIcon />
                   <Text style={styles.price}>{item.coinPriceSnapshot * item.quantity}</Text>
+                  <Text style={styles.qty}>×{item.quantity}</Text>
                 </View>
               </View>
               <Pressable
@@ -71,7 +101,7 @@ export default function CartScreen() {
                 onPress={() => void removeMutation.mutateAsync(item.variantId)}
                 style={styles.remove}
               >
-                <Text style={styles.removeText}>Remove</Text>
+                <Text style={styles.removeText}>✕</Text>
               </Pressable>
             </View>
           ))}
@@ -80,18 +110,16 @@ export default function CartScreen() {
             <Text style={styles.totalLabel}>Haul total</Text>
             <View style={styles.priceRow}>
               <CoinIcon />
-              <Text style={styles.totalValue}>{query.data.coinTotal}</Text>
+              <Text style={styles.totalValue}>{coinTotal}</Text>
             </View>
             <Button
               block
-              disabled={!query.data || query.data.coinTotal <= 0}
+              disabled={coinTotal <= 0}
               label="Checkout"
               onPress={() => router.push('/checkout')}
             />
           </View>
         </>
-      ) : (
-        <Text style={styles.empty}>Your haul is empty. Browse the feed to add pieces.</Text>
       )}
     </ScrollView>
   );
@@ -107,11 +135,38 @@ const styles = StyleSheet.create({
     fontFamily: fontSansMedium,
     fontSize: fsBody,
   },
-  empty: {
+  emptyBody: {
     color: textMuted,
-    fontFamily: fontSansMedium,
+    fontFamily: fontSans,
     fontSize: fsBody,
-    paddingHorizontal: space4,
+    lineHeight: 22,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyIcon: {
+    alignItems: 'center',
+    backgroundColor: '#f0ece4',
+    borderRadius: 40,
+    height: 80,
+    justifyContent: 'center',
+    marginBottom: space4,
+    width: 80,
+  },
+  emptyIconText: {
+    color: '#888078',
+    fontSize: 32,
+  },
+  emptyState: {
+    alignItems: 'center',
+    gap: 12,
+    marginTop: space10,
+    paddingHorizontal: space6,
+  },
+  emptyTitle: {
+    color: text,
+    fontFamily: fontDisplay,
+    fontSize: fsDisplayM,
+    letterSpacing: fsDisplayM * trackingTight,
   },
   header: {
     paddingHorizontal: space4,
@@ -124,7 +179,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 12,
+    marginBottom: 10,
     marginHorizontal: space4,
     padding: 12,
   },
@@ -133,9 +188,11 @@ const styles = StyleSheet.create({
   },
   itemMeta: {
     color: textMuted,
-    fontFamily: fontSansMedium,
-    fontSize: fsCaption,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: 0.8,
     marginTop: 2,
+    textTransform: 'uppercase',
   },
   itemTitle: {
     color: text,
@@ -156,13 +213,23 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 6,
   },
+  qty: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+  },
   remove: {
-    padding: 8,
+    alignItems: 'center',
+    backgroundColor: '#f0ece4',
+    borderRadius: 16,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
   },
   removeText: {
     color: textMuted,
-    fontFamily: fontSansMedium,
-    fontSize: fsCaption,
+    fontSize: 14,
+    fontWeight: '600',
   },
   screen: {
     backgroundColor: bg,
@@ -180,19 +247,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 12,
     marginHorizontal: space4,
-    marginTop: space4,
+    marginTop: space6,
     padding: space4,
   },
   totalLabel: {
     color: textMuted,
-    fontFamily: fontSansMedium,
-    fontSize: fsCaption,
-    letterSpacing: 1,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
   totalValue: {
     color: text,
     fontFamily: fontSansSemiBold,
-    fontSize: 24,
+    fontSize: 28,
   },
 });

@@ -13,6 +13,7 @@ import {
   VerifyRequestSchema,
   TokenResponseSchema,
   RefreshRequestSchema,
+  GoogleAuthRequestSchema,
 } from "./schemas/auth.js";
 import {
   AvatarStatusSchema,
@@ -72,6 +73,12 @@ describe("auth schemas", () => {
 
   it("validates refresh request", () => {
     expect(RefreshRequestSchema.parse({ refreshToken: "token" }).refreshToken).toBe("token");
+  });
+
+  it("validates google auth request", () => {
+    expect(
+      GoogleAuthRequestSchema.parse({ idToken: "a".repeat(40) }).idToken,
+    ).toHaveLength(40);
   });
 });
 

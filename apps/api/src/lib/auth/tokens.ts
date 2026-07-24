@@ -10,9 +10,9 @@ export async function issueTokens(
   app: FastifyInstance,
   repos: Repositories,
   userId: string,
-  phone: string,
+  identity: string,
 ) {
-  const accessToken = await app.jwt.sign({ sub: userId, phone }, { expiresIn: "15m" });
+  const accessToken = await app.jwt.sign({ sub: userId, phone: identity }, { expiresIn: "15m" });
   const refreshToken = randomUUID();
   await repos.saveRefreshToken({
     token: refreshToken,
@@ -20,6 +20,10 @@ export async function issueTokens(
     expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
   });
   return { accessToken, refreshToken };
+}
+
+function identityForUser(user: { phone: string | null; email: string | null; id: string }) {
+  return user.phone ?? user.email ?? user.id;
 }
 
 export async function verifyAndLogin(
@@ -45,7 +49,29 @@ export async function verifyAndLogin(
     coinBalance = grant.balanceAfter;
   }
 
-  const tokens = await issueTokens(app, repos, user.id, phone);
+  const tokens = await issueTokens(app, repos, user.id, identityForUser(user));
+  return { ...tokens, isNewUser: isNew, coinBalance };
+}
+
+export async function loginWithGoogleProfile(
+  app: FastifyInstance,
+  repos: Repositories,
+  profile: { googleSub: string; email: string; displayName?: string | null },
+) {
+  const { user, isNew } = await repos.findOrCreateGoogleUser(profile);
+  let coinBalance = await repos.getCoinBalance(user.id);
+
+  if (isNew) {
+    const grant = await repos.grantCoins({
+      userId: user.id,
+      delta: ONBOARDING_COIN_GRANT,
+      type: "GRANT",
+      refType: "onboarding",
+    });
+    coinBalance = grant.balanceAfter;
+  }
+
+  const tokens = await issueTokens(app, repos, user.id, identityForUser(user));
   return { ...tokens, isNewUser: isNew, coinBalance };
 }
 
@@ -61,5 +87,5 @@ export async function refreshAccessToken(
   if (!user) return null;
 
   await repos.deleteRefreshToken(refreshToken);
-  return issueTokens(app, repos, user.id, user.phone);
+  return issueTokens(app, repos, user.id, identityForUser(user));
 }

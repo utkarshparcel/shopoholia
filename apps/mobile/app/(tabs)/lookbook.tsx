@@ -1,11 +1,50 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useMemo } from 'react';
+import {
+  FlatList,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SectionHeader } from '@/src/components/ui';
-import { bg, fontDisplay, fsDisplayM, space4, space6, text, textMuted, trackingTight } from '@/src/theme/tokens';
+import { Button, ListingCard, SectionHeader } from '@/src/components/ui';
+import type { PlaceholderTone } from '@/src/components/ui';
+import { useFeed } from '@/src/hooks/catalog';
+import { useLookbookStore } from '@/src/stores/lookbook';
+import {
+  bg,
+  fontDisplay,
+  fontMono,
+  fontSans,
+  fsBody,
+  fsDisplayM,
+  fsMicro,
+  space4,
+  space6,
+  text,
+  textMuted,
+  trackingTight,
+} from '@/src/theme/tokens';
+
+const TONES: PlaceholderTone[] = ['dusk', 'rose', 'sand', 'olive', 'warm'];
 
 export default function LookbookScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const feed = useFeed(20);
+  const savedIds = useLookbookStore((s) => s.savedIds);
+  const toggleSave = useLookbookStore((s) => s.toggle);
+
+  const items = useMemo(
+    () => feed.data?.pages.flatMap((page) => page.items) ?? [],
+    [feed.data],
+  );
+
+  const savedItems = useMemo(
+    () => items.filter((item) => savedIds.has(item.id)),
+    [items, savedIds],
+  );
 
   return (
     <View
@@ -15,14 +54,53 @@ export default function LookbookScreen() {
       ]}
     >
       <View style={styles.content}>
-        <SectionHeader kicker="Coming soon" title="Your lookbook" />
-        <View style={styles.placeholder}>
-          <Text style={styles.placeholderTitle}>Saved looks</Text>
-          <Text style={styles.placeholderBody}>
-            Build editorial outfits from pieces you love. This screen is a placeholder for the
-            lookbook experience.
-          </Text>
-        </View>
+        <SectionHeader kicker="Inspiration" title="Your lookbook" />
+
+        {savedItems.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Text style={styles.emptyIconText}>◫</Text>
+            </View>
+            <Text style={styles.emptyTitle}>Start saving looks</Text>
+            <Text style={styles.emptyBody}>
+              Tap the heart on any piece in Today’s edit to save it here.
+            </Text>
+            <Button
+              label="Browse the edit"
+              onPress={() => router.push('/(tabs)/feed')}
+              variant="primary"
+              block
+            />
+          </View>
+        ) : (
+          <FlatList
+            data={savedItems}
+            keyExtractor={(item) => item.id}
+            numColumns={2}
+            columnWrapperStyle={styles.row}
+            ListHeaderComponent={
+              <Text style={styles.count}>{savedItems.length} saved pieces</Text>
+            }
+            renderItem={({ item, index }) => (
+              <View style={styles.gridItem}>
+                <ListingCard
+                  brand={item.sellerName ?? item.title.split(' ')[0] ?? 'WORN'}
+                  coinPrice={item.coinPrice}
+                  favorited
+                  imageUrl={item.houseModelImageUrl}
+                  onFavorite={() => toggleSave(item.id)}
+                  onPress={() => router.push(`/listing/${item.id}`)}
+                  realPrice={item.realPrice}
+                  title={item.title}
+                  tone={TONES[index % TONES.length]}
+                />
+              </View>
+            )}
+            windowSize={7}
+            maxToRenderPerBatch={6}
+            removeClippedSubviews
+          />
+        )}
       </View>
     </View>
   );
@@ -33,29 +111,55 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: space4,
   },
-  placeholder: {
-    alignItems: 'center',
-    borderColor: '#e0dbd2',
-    borderRadius: 16,
-    borderStyle: 'dashed',
-    borderWidth: 1,
-    flex: 1,
-    justifyContent: 'center',
-    marginTop: space4,
-    padding: space6,
-  },
-  placeholderBody: {
+  count: {
     color: textMuted,
-    fontSize: 14,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: 1.2,
+    marginBottom: space4,
+    textTransform: 'uppercase',
+  },
+  emptyBody: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsBody,
     lineHeight: 22,
+    marginBottom: space6,
     marginTop: 8,
     textAlign: 'center',
   },
-  placeholderTitle: {
+  emptyIcon: {
+    alignItems: 'center',
+    backgroundColor: '#f0ece4',
+    borderRadius: 40,
+    height: 80,
+    justifyContent: 'center',
+    marginBottom: space4,
+    width: 80,
+  },
+  emptyIconText: {
+    color: '#888078',
+    fontSize: 32,
+  },
+  emptyState: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: space6,
+  },
+  emptyTitle: {
     color: text,
     fontFamily: fontDisplay,
     fontSize: fsDisplayM,
     letterSpacing: fsDisplayM * trackingTight,
+  },
+  gridItem: {
+    flex: 1,
+    maxWidth: '50%',
+  },
+  row: {
+    gap: space4,
+    marginBottom: space4,
   },
   screen: {
     backgroundColor: bg,

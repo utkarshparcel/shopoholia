@@ -57,11 +57,47 @@ export const TIER_TIMINGS_BETA: Record<DeliveryTier, TierTimings> = {
 
 export const ONBOARDING_COIN_GRANT = 500;
 
+export const REFERRAL_REWARD_COINS = 100;
+export const REFERRAL_GRANT_ON = "FIRST_ORDER" as const;
+
+export const STREAK_REWARDS: Record<number, number> = {
+  1: 10,
+  3: 25,
+  7: 50,
+  14: 75,
+  30: 100,
+};
+
+export function streakRewardForDay(day: number): number {
+  const thresholds = Object.keys(STREAK_REWARDS).map(Number).sort((a, b) => b - a);
+  for (const t of thresholds) {
+    if (day >= t) return STREAK_REWARDS[t]!;
+  }
+  return STREAK_REWARDS[1]!;
+}
+
+export const AFFILIATE_CASHBACK_COINS = 25;
+
 export const FREE_REVEAL_RENDERS_PER_ITEM = 2;
 
 export const REVEAL_UNLOCK_COST_COINS = 50;
+export const REVEAL_GENERATE_COST_COINS = 50;
+export const REVEAL_COMBINE_COST_COINS = 75;
 
 export const RUSH_TO_EXPRESS_COST_COINS = 25;
+
+export const COIN_PACKS = [
+  { id: "coins_small", label: "Starter Pack", price: "₹99", coins: 100 },
+  { id: "coins_medium", label: "Style Pack", price: "₹299", coins: 350 },
+  { id: "coins_large", label: "Premium Pack", price: "₹499", coins: 650, popular: true },
+  { id: "coins_xl", label: "Ultimate Pack", price: "₹999", coins: 1500, bestValue: true },
+] as const;
+
+export type CoinPack = (typeof COIN_PACKS)[number];
+
+export function coinPackById(id: string): CoinPack | undefined {
+  return COIN_PACKS.find((p) => p.id === id);
+}
 
 export type EconomyMode = "beta" | "prod";
 

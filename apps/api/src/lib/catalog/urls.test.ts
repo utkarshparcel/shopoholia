@@ -17,6 +17,7 @@ describe("resolveImageUrl", () => {
       contentType: "image/jpeg",
     });
     const signed = await resolveImageUrl("house-models/1.jpg", storage);
-    expect(signed).toContain("house-models/1.jpg");
+    expect(signed).toContain("house-models-1-jpg");
+    expect(signed).toContain("picsum.photos");
   });
 });

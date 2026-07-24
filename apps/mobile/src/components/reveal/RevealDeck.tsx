@@ -1,6 +1,14 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+  Animated as RNAnimated,
+  Image,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -110,6 +118,7 @@ function RenderCardView({
 export function RevealDeck({ renders, onUnlock, unlockingId }: RevealDeckProps) {
   const [index, setIndex] = useState(0);
   const translateX = useSharedValue(0);
+  const startXRef = useRef(0);
 
   const goNext = useCallback(() => {
     setIndex((current) => Math.min(current + 1, renders.length - 1));
@@ -129,30 +138,40 @@ export function RevealDeck({ renders, onUnlock, unlockingId }: RevealDeckProps) 
     translateX.value = 0;
   };
 
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_e, gestureState) =>
+        Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5,
+      onPanResponderGrant: () => {
+        startXRef.current = translateX.value;
+      },
+      onPanResponderMove: (_e, gestureState) => {
+        translateX.value = startXRef.current + gestureState.dx;
+      },
+      onPanResponderRelease: (_e, gestureState) => {
+        if (gestureState.dx < -SWIPE_THRESHOLD) {
+          translateX.value = withSpring(-240, {}, () => runOnJS(onSwipeEnd)('left'));
+          return;
+        }
+        if (gestureState.dx > SWIPE_THRESHOLD) {
+          translateX.value = withSpring(240, {}, () => runOnJS(onSwipeEnd)('right'));
+          return;
+        }
+        translateX.value = withSpring(0);
+      },
+      onPanResponderTerminate: () => {
+        translateX.value = withSpring(0);
+      },
+    }),
+  ).current;
+
   const card = renders[index];
   if (!card) return null;
 
   return (
     <View style={styles.deck}>
-      <Animated.View
-        style={animatedStyle}
-        onResponderMove={(e) => {
-          translateX.value = e.nativeEvent.pageX - e.nativeEvent.locationX;
-        }}
-        onResponderRelease={(e) => {
-          const dx = e.nativeEvent.pageX - e.nativeEvent.locationX;
-          if (dx < -SWIPE_THRESHOLD) {
-            translateX.value = withSpring(-240, {}, () => runOnJS(onSwipeEnd)('left'));
-            return;
-          }
-          if (dx > SWIPE_THRESHOLD) {
-            translateX.value = withSpring(240, {}, () => runOnJS(onSwipeEnd)('right'));
-            return;
-          }
-          translateX.value = withSpring(0);
-        }}
-        onStartShouldSetResponder={() => true}
-      >
+      <Animated.View style={animatedStyle} {...panResponder.panHandlers}>
         <RenderCardView
           card={card}
           onUnlock={onUnlock}

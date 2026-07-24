@@ -15,7 +15,7 @@ describe('ListingCard', () => {
   it('handles quick add and favorite', () => {
     const onQuickAdd = vi.fn();
     const onFavorite = vi.fn();
-    const { container } = render(
+    render(
       <ListingCard
         brand="WORN"
         coinPrice={80}
@@ -24,9 +24,8 @@ describe('ListingCard', () => {
         title="Silk Dress"
       />,
     );
-    const buttons = container.querySelectorAll('button');
-    fireEvent.click(buttons[0]);
-    fireEvent.click(buttons[1]);
+    fireEvent.click(screen.getByLabelText('Save to lookbook'));
+    fireEvent.click(screen.getByLabelText('Add to haul'));
     expect(onFavorite).toHaveBeenCalled();
     expect(onQuickAdd).toHaveBeenCalled();
   });

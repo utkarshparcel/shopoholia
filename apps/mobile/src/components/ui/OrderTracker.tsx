@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, type ViewProps } from 'react-native';
+import { Platform, StyleSheet, Text, View, type ViewProps } from 'react-native';
 
 import {
   accent,
@@ -117,10 +117,15 @@ const styles = StyleSheet.create({
   },
   dotCurrent: {
     borderColor: accent,
-    shadowColor: accentBg,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
+    ...Platform.select({
+      web: { boxShadow: `0 0 8px ${accentBg}` },
+      default: {
+        shadowColor: accentBg,
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 1,
+        shadowRadius: 4,
+      },
+    }),
   },
   dotDone: {
     backgroundColor: accent,

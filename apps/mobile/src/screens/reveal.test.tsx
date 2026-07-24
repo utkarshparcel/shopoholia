@@ -1,7 +1,14 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 
 import RevealScreen from '@/app/reveal/[orderId]';
+
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function Wrapper({ children }: { children: ReactNode }) {
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), push: vi.fn() }),
@@ -37,6 +44,11 @@ vi.mock('@/src/hooks/reveal', () => ({
     },
   }),
   useUnlockRenders: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useGenerateRenders: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock('@/src/hooks/orders', () => ({
+  useCoinBalance: () => ({ data: { balance: 500 } }),
 }));
 
 vi.mock('@/src/stores/session', () => ({
@@ -66,23 +78,23 @@ vi.mock('react-native-reanimated', () => ({
 
 describe('RevealScreen', () => {
   it('renders swipe deck with free and locked cards', () => {
-    render(<RevealScreen />);
+    render(<RevealScreen />, { wrapper: Wrapper });
     expect(screen.getByText('Your haul, on you')).toBeTruthy();
     expect(screen.getByText('STUDIO')).toBeTruthy();
     expect(screen.getByText('1 / 2')).toBeTruthy();
-    expect(screen.getByText('Download')).toBeTruthy();
-    expect(screen.getByText('Share')).toBeTruthy();
+    expect(screen.getByText('Share look')).toBeTruthy();
+    expect(screen.getByText('Shop again')).toBeTruthy();
   });
 
   it('shows unlock CTA when navigating to locked card', () => {
-    render(<RevealScreen />);
+    render(<RevealScreen />, { wrapper: Wrapper });
     fireEvent.click(screen.getByText('→'));
     expect(screen.getByText('Locked look')).toBeTruthy();
     expect(screen.getByText('Unlock · 50 coins')).toBeTruthy();
   });
 
   it('renders reveal satisfaction survey', () => {
-    render(<RevealScreen />);
+    render(<RevealScreen />, { wrapper: Wrapper });
     expect(screen.getByText('How did the reveal feel?')).toBeTruthy();
     expect(screen.getByText('Loved it')).toBeTruthy();
     expect(screen.getByText('OK')).toBeTruthy();

@@ -1,12 +1,53 @@
-import { router } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useMemo } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, SectionHeader } from '@/src/components/ui';
-import { bg, fontSansMedium, space4, space6, textMuted } from '@/src/theme/tokens';
+import { Button, Chip, ListingCard, SectionHeader } from '@/src/components/ui';
+import type { PlaceholderTone } from '@/src/components/ui';
+import { useFeed } from '@/src/hooks/catalog';
+import { useSessionStore } from '@/src/stores/session';
+import {
+  bg,
+  border,
+  fontDisplay,
+  fontMono,
+  fontSans,
+  fontSansMedium,
+  fontSansSemiBold,
+  fsBody,
+  fsCaption,
+  fsDisplayM,
+  fsMicro,
+  radiusCard,
+  space4,
+  space6,
+  surface,
+  text,
+  textBody,
+  textMuted,
+  trackingTight,
+  wornInk,
+} from '@/src/theme/tokens';
+
+const TONES: PlaceholderTone[] = ['dusk', 'rose', 'sand', 'olive', 'warm'];
 
 export default function SellerListScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const feed = useFeed(50);
+
+  const items = useMemo(
+    () => feed.data?.pages.flatMap((page) => page.items) ?? [],
+    [feed.data],
+  );
 
   return (
     <View
@@ -15,28 +56,85 @@ export default function SellerListScreen() {
         { paddingTop: insets.top + space6, paddingBottom: insets.bottom + space6 },
       ]}
     >
-      <View style={styles.content}>
-        <SectionHeader kicker="Seller tools" title="List a piece" />
-        <Text style={styles.copy}>
-          Phase II placeholder — upload product photos, set coin price, and publish to the feed.
-          Full listing flow ships next.
-        </Text>
-        <Button label="Back to feed" variant="secondary" block onPress={() => router.back()} />
+      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+        <Text style={styles.backText}>← Back</Text>
+      </Pressable>
+
+      <View style={styles.header}>
+        <SectionHeader kicker="Browse stores" title="Seller listings" />
       </View>
+
+      {feed.isLoading ? (
+        <ActivityIndicator color={wornInk} style={styles.loader} />
+      ) : (
+        <FlatList
+          data={items.filter((i) => i.sellerName)}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.row}
+          contentContainerStyle={{ paddingHorizontal: space4 }}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyBody}>
+                No seller listings yet. Become a seller to list your pieces.
+              </Text>
+            </View>
+          }
+          renderItem={({ item, index }) => (
+            <View style={styles.gridItem}>
+              <ListingCard
+                brand={item.sellerName ?? 'WORN'}
+                coinPrice={item.coinPrice}
+                imageUrl={item.houseModelImageUrl}
+                onPress={() => router.push(`/listing/${item.id}`)}
+                realPrice={item.realPrice}
+                title={item.title}
+                tone={TONES[index % TONES.length]}
+                tag="Store"
+              />
+            </View>
+          )}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    gap: space6,
+  back: {
+    marginBottom: space4,
     paddingHorizontal: space4,
   },
-  copy: {
+  backText: {
     color: textMuted,
     fontFamily: fontSansMedium,
-    fontSize: 15,
+    fontSize: fsBody,
+  },
+  emptyBody: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsBody,
     lineHeight: 22,
+    textAlign: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: space6,
+  },
+  gridItem: {
+    flex: 1,
+    maxWidth: '50%',
+  },
+  header: {
+    paddingHorizontal: space4,
+    marginBottom: space4,
+  },
+  loader: {
+    marginTop: space6,
+  },
+  row: {
+    gap: space4,
+    marginBottom: space4,
   },
   screen: {
     backgroundColor: bg,

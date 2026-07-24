@@ -32,13 +32,22 @@ export async function buildServer(options: BuildServerOptions = {}) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin: process.env.NODE_ENV === "production"
+      ? (process.env.CORS_ORIGIN ?? "https://shopoholia.app")
+      : true,
+  });
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024 },
   });
-  await app.register(jwt, {
-    secret: process.env.JWT_SECRET ?? "dev-only-change-me",
-  });
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JWT_SECRET must be set in production");
+    }
+    app.log.warn("JWT_SECRET not set — using dev fallback. Do not deploy.");
+  }
+  await app.register(jwt, { secret: jwtSecret ?? "dev-only-change-me" });
   await app.register(depsPlugin(deps));
 
   app.get(

@@ -1,15 +1,25 @@
 import { z } from "zod";
 
+export const AffiliateLinkSchema = z.object({
+  url: z.string().url(),
+  label: z.string(),
+  platform: z.enum(["flipkart", "amazon", "myntra", "ajio", "nykaa", "other"]),
+});
+
 export const ListingCardSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
   category: z.string(),
   coinPrice: z.number().int().nonnegative(),
+  realPrice: z.string().nullable().optional(),
   houseModelImageUrl: z.string().url(),
   sellerId: z.string().uuid().nullable().optional(),
   sellerName: z.string().nullable().optional(),
   affiliateUrl: z.string().url().nullable().optional(),
+  affiliateLinks: z.array(AffiliateLinkSchema).nullable().optional(),
 });
+
+export type AffiliateLink = z.infer<typeof AffiliateLinkSchema>;
 
 export const FeedQuerySchema = z.object({
   cursor: z.string().optional(),

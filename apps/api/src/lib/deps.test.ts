@@ -16,7 +16,9 @@ describe("createDefaultDeps", () => {
     expect(deps.otp.sendOtp).toBeTypeOf("function");
 
     const page = await deps.repos.listListings({ limit: 50 });
-    expect(page.items).toHaveLength(50);
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(page.items[0]?.houseModelRenderKey).toMatch(/^https?:\/\//);
+    expect(page.items[0]?.houseModelRenderKey).not.toContain("picsum.photos");
   });
 
   it("accepts overrides", async () => {

@@ -8,6 +8,7 @@ export type RenderProviderDeps = {
   apiKey?: string;
   resolveImage?: (key: string) => Promise<string>;
   fetchImpl?: FashnFetch;
+  downloadImage?: (url: string) => Promise<Uint8Array>;
 };
 
 export function createMockRenderProvider(): RenderProvider {
@@ -24,12 +25,14 @@ export function createMockRenderProvider(): RenderProvider {
       return {
         imageKey: `tryon/${modelImageKey}__${garmentImageKey}.jpg`,
         costMicros: TRYON_COST_MICROS,
+        imageBytes: new Uint8Array(Buffer.from(`mock-tryon:${modelImageKey}`)),
       };
     },
     async scenarioPass({ tryOnImageKey, scenario }) {
       return {
         imageKey: `reveal/${scenario.toLowerCase()}/${tryOnImageKey}`,
         costMicros: SCENARIO_COST_MICROS,
+        imageBytes: new Uint8Array(Buffer.from(`mock-reveal:${scenario}`)),
       };
     },
   };
@@ -37,7 +40,7 @@ export function createMockRenderProvider(): RenderProvider {
 
 export function createFashnRenderProvider(
   apiKey?: string,
-  deps: Pick<RenderProviderDeps, "resolveImage" | "fetchImpl"> = {},
+  deps: Pick<RenderProviderDeps, "resolveImage" | "fetchImpl" | "downloadImage"> = {},
 ): RenderProvider {
   if (!apiKey) {
     return createMockRenderProvider();
@@ -62,13 +65,36 @@ export function createFashnRenderProvider(
         resolve(garmentImageKey),
       ]);
 
-      const result = await client.tryOnMax({ modelImage, productImage });
+      const fashnResult = await client.tryOnMax({ modelImage, productImage });
+      let imageBytes: Uint8Array | undefined;
+      try {
+        imageBytes = await client.downloadFromUrl(fashnResult.outputUrl);
+      } catch {}
+
       return {
-        imageKey: `tryon/fashn/${result.predictionId}.jpg`,
-        costMicros: creditsToMicros(result.creditsUsed),
+        imageKey: `tryon/fashn/${fashnResult.predictionId}.jpg`,
+        costMicros: creditsToMicros(fashnResult.creditsUsed),
+        imageBytes,
       };
     },
-    scenarioPass: (input) => mock.scenarioPass(input),
+    async scenarioPass(input) {
+      const download = deps.downloadImage;
+      if (download) {
+        try {
+          const result = await mock.scenarioPass(input);
+          let imageBytes: Uint8Array | undefined;
+
+          if (input.tryOnImageKey.startsWith('tryon/fashn/')) {
+            const baseUrl = 'https://cdn.fashn.ai';
+            const url = `${baseUrl}/${input.tryOnImageKey.replace(/^tryon\/fashn\//, '')}`;
+            imageBytes = await download(url);
+          }
+
+          return { ...result, imageBytes };
+        } catch {}
+      }
+      return mock.scenarioPass(input);
+    },
   };
 }
 

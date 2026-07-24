@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
- * Seeds 50 listings with variants into memory (dev) or Postgres (future).
- * Today: runs catalog seed against in-memory repos for local smoke checks.
+ * Seeds catalog into memory (dev) or Postgres.
+ * Prefers scraped product images when available.
  */
 import { createDefaultDeps } from "../src/lib/deps.js";
 
@@ -13,6 +13,7 @@ async function main() {
   if (first) {
     const variants = await deps.repos.findVariantsByListingId(first.id);
     console.log(`Example: "${first.title}" with ${variants.length} variant(s).`);
+    console.log(`Image: ${first.houseModelRenderKey}`);
   }
 }
 

@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View, type ViewProps } from 'react-native';
 
-import { fontDisplay, fontMono, fsDisplayM, text, trackingTight } from '@/src/theme/tokens';
+import { fontDisplay, fontMono, fsDisplayM, accent, text, trackingTight } from '@/src/theme/tokens';
 
 export type SectionHeaderProps = ViewProps & {
   kicker: string;
@@ -21,7 +21,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   kicker: {
-    color: '#c8a87a',
+    color: accent,
     fontFamily: fontMono,
     fontSize: 10,
     letterSpacing: 1.8,

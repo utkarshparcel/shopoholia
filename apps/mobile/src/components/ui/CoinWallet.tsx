@@ -20,11 +20,18 @@ export function CoinWallet({ balance, onAdd, style, ...props }: CoinWalletProps)
       <View style={styles.balance}>
         <CoinIcon size="lg" />
         <Text style={styles.amount}>{balance.toLocaleString()}</Text>
-        <Pressable accessibilityRole="button" onPress={onAdd} style={styles.add}>
-          <Text style={styles.addIcon}>+</Text>
-        </Pressable>
+        {onAdd ? (
+          <Pressable
+            accessibilityLabel="Get more coins"
+            accessibilityRole="button"
+            onPress={onAdd}
+            style={styles.add}
+          >
+            <Text style={styles.addIcon}>+</Text>
+          </Pressable>
+        ) : null}
       </View>
-      <Text style={styles.hint}>Tap + to top up your coin balance</Text>
+      {onAdd ? <Text style={styles.hint}>Tap + to top up your coin balance</Text> : null}
     </View>
   );
 }

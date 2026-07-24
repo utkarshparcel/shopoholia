@@ -7,6 +7,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { listingCardDto } from "../lib/catalog/urls.js";
+import { loadDataForCart } from "../lib/repositories/loader.js";
 import type { AppDeps } from "../lib/deps.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
@@ -14,15 +15,31 @@ const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 async function buildCartResponse(deps: AppDeps, userId: string) {
   const cart = await deps.repos.getOrCreateCart(userId);
   const rows = await deps.repos.getCartItems(cart.id);
-  const items = [];
+  const items: Array<{
+    variantId: string;
+    listingId: string;
+    title: string;
+    size: string;
+    color: string;
+    coinPriceSnapshot: number;
+    quantity: number;
+    imageUrl: string;
+  }> = [];
+
+  if (rows.length === 0) {
+    return { items, coinTotal: 0 };
+  }
+
+  const variantIds = rows.map((r) => r.listingVariantId);
+  const { variantMap, listingMap, sellerMap } = await loadDataForCart(deps.repos, variantIds);
 
   for (const row of rows) {
-    const variant = await deps.repos.findVariantById(row.listingVariantId);
+    const variant = variantMap.get(row.listingVariantId);
     if (!variant) continue;
-    const listing = await deps.repos.findListingById(variant.listingId);
+    const listing = listingMap.get(variant.listingId);
     if (!listing) continue;
 
-    const card = await listingCardDto(listing, deps.storage, deps.repos);
+    const card = await listingCardDto(listing, deps.storage, deps.repos, sellerMap);
     items.push({
       variantId: variant.id,
       listingId: listing.id,

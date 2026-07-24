@@ -1,15 +1,19 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View, type ViewProps } from 'react-native';
 
 import {
+  accentSoft,
   border,
   fontMono,
   fontSansMedium,
   fontSansSemiBold,
   fsBody,
   fsCaption,
+  fsMicro,
   price,
   radiusCard,
+  sale,
   shadowSm,
   surface,
   text,
@@ -25,11 +29,12 @@ export type ListingCardProps = ViewProps & {
   brand: string;
   title: string;
   coinPrice: number;
-  realPrice?: string;
+  realPrice?: string | null;
   imageUrl?: string;
   variant?: ListingCardVariant;
   tone?: PlaceholderTone;
   tag?: string;
+  favorited?: boolean;
   onPress?: () => void;
   onQuickAdd?: () => void;
   onFavorite?: () => void;
@@ -52,6 +57,7 @@ export function ListingCard({
   variant = 'grid',
   tone = 'warm',
   tag,
+  favorited = false,
   onPress,
   onQuickAdd,
   onFavorite,
@@ -59,12 +65,24 @@ export function ListingCard({
   ...props
 }: ListingCardProps) {
   const isFeed = variant === 'feed';
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = Boolean(imageUrl) && !imageFailed;
 
-  const card = (
+  return (
     <View style={[styles.card, isFeed && styles.feedCard, shadowSm, style]} {...props}>
-      <View style={[styles.media, isFeed && styles.feedMedia]}>
-        {imageUrl ? (
-          <Image accessibilityIgnoresInvertColors source={{ uri: imageUrl }} style={StyleSheet.absoluteFill} />
+      <Pressable
+        accessibilityRole={onPress ? 'button' : undefined}
+        disabled={!onPress}
+        onPress={onPress}
+        style={[styles.media, isFeed && styles.feedMedia]}
+      >
+        {showImage ? (
+          <Image
+            accessibilityIgnoresInvertColors
+            onError={() => setImageFailed(true)}
+            source={{ uri: imageUrl }}
+            style={StyleSheet.absoluteFill}
+          />
         ) : (
           <LinearGradient
             colors={gradients[tone]}
@@ -80,51 +98,56 @@ export function ListingCard({
             </View>
           </View>
         ) : null}
-        <Pressable accessibilityRole="button" onPress={onFavorite} style={styles.heart}>
-          <Text style={styles.heartIcon}>♡</Text>
-        </Pressable>
         {isFeed ? (
-          <View style={styles.feedOverlay}>
+          <View style={styles.feedOverlay} pointerEvents="none">
             <View style={styles.metaPill}>
               <Text style={styles.brand}>{brandName}</Text>
               <Text style={styles.feedTitle}>{title}</Text>
             </View>
           </View>
         ) : null}
-      </View>
+      </Pressable>
+      {onFavorite ? (
+        <Pressable
+          accessibilityLabel={favorited ? 'Remove from lookbook' : 'Save to lookbook'}
+          accessibilityRole="button"
+          onPress={onFavorite}
+          style={styles.heart}
+        >
+          <Text style={[styles.heartIcon, favorited && styles.heartIconActive]}>
+            {favorited ? '♥' : '♡'}
+          </Text>
+        </Pressable>
+      ) : null}
       {!isFeed ? (
         <View style={styles.body}>
-          <Text style={styles.brand}>{brandName}</Text>
-          <Text style={styles.title}>{title}</Text>
+          <Pressable disabled={!onPress} onPress={onPress}>
+            <Text style={styles.brand}>{brandName}</Text>
+            <Text style={styles.title}>{title}</Text>
+          </Pressable>
           <View style={styles.priceRow}>
-            <View style={styles.priceGroup}>
+            <Pressable disabled={!onPress} onPress={onPress} style={styles.priceGroup}>
               <Text style={styles.price}>
-                <CoinGlyph /> {coinPrice}
+                <Text style={styles.coin}>◎</Text> {coinPrice}{' '}
+                <Text style={styles.coinUnit}>coins</Text>
               </Text>
-              {realPrice ? <Text style={styles.real}>{realPrice}</Text> : null}
-            </View>
-            <Pressable accessibilityRole="button" onPress={onQuickAdd} style={styles.quickAdd}>
-              <Text style={styles.quickAddIcon}>+</Text>
+              {realPrice ? <Text style={styles.realLabel}>{realPrice}</Text> : null}
             </Pressable>
+            {onQuickAdd ? (
+              <Pressable
+                accessibilityLabel="Add to haul"
+                accessibilityRole="button"
+                onPress={onQuickAdd}
+                style={styles.quickAdd}
+              >
+                <Text style={styles.quickAddIcon}>+</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       ) : null}
     </View>
   );
-
-  if (onPress) {
-    return (
-      <Pressable accessibilityRole="button" onPress={onPress}>
-        {card}
-      </Pressable>
-    );
-  }
-
-  return card;
-}
-
-function CoinGlyph() {
-  return <Text style={styles.coin}>◎</Text>;
 }
 
 const styles = StyleSheet.create({
@@ -153,8 +176,13 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   coin: {
-    color: '#c8a87a',
+    color: accentSoft,
     fontSize: 12,
+  },
+  coinUnit: {
+    color: textMuted,
+    fontFamily: fontSansMedium,
+    fontSize: fsMicro,
   },
   feedCard: {
     borderRadius: 16,
@@ -186,10 +214,14 @@ const styles = StyleSheet.create({
     right: 10,
     top: 10,
     width: 34,
+    zIndex: 2,
   },
   heartIcon: {
     color: text,
     fontSize: 16,
+  },
+  heartIconActive: {
+    color: sale,
   },
   media: {
     aspectRatio: 3 / 4,
@@ -202,16 +234,15 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   price: {
-    alignItems: 'center',
     color: price,
-    flexDirection: 'row',
     fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    gap: 6,
   },
   priceGroup: {
-    alignItems: 'center',
+    alignItems: 'baseline',
     flexDirection: 'row',
+    flexShrink: 1,
+    flexWrap: 'wrap',
     gap: 8,
   },
   priceRow: {
@@ -234,8 +265,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 22,
   },
-  real: {
+  realLabel: {
     color: textMuted,
+    fontFamily: fontSansMedium,
     fontSize: fsCaption,
   },
   tag: {

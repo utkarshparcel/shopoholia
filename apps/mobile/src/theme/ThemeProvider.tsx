@@ -15,7 +15,6 @@ import {
   DMSerifDisplay_400Regular_Italic,
   useFonts as useDMSerif,
 } from '@expo-google-fonts/dm-serif-display';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as SplashScreen from 'expo-splash-screen';
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { View } from 'react-native';
@@ -23,8 +22,6 @@ import { View } from 'react-native';
 import { bg, theme, type Theme } from './index';
 
 SplashScreen.preventAutoHideAsync();
-
-const queryClient = new QueryClient();
 
 const ThemeContext = createContext<Theme>(theme);
 
@@ -65,8 +62,6 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
-    </QueryClientProvider>
+    <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
   );
 }

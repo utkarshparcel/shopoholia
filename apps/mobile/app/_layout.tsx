@@ -37,6 +37,7 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="(auth)/login" />
           <Stack.Screen name="listing/[id]" />
           <Stack.Screen name="cart" options={{ presentation: 'modal' }} />
           <Stack.Screen name="checkout" options={{ presentation: 'modal' }} />
@@ -44,6 +45,11 @@ export default function RootLayout() {
           <Stack.Screen name="reveal/[orderId]" options={{ presentation: 'fullScreenModal' }} />
           <Stack.Screen name="(onboarding)/avatar" options={{ presentation: 'modal' }} />
           <Stack.Screen name="seller/list" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="coins/buy" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="cashback" />
+          <Stack.Screen name="referral" />
+          <Stack.Screen name="streaks" />
+          <Stack.Screen name="style-quiz" />
         </Stack>
       </ThemeProvider>
     </QueryClientProvider>

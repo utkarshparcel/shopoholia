@@ -25,9 +25,14 @@ const RATINGS: Array<{ id: RevealRating; label: string }> = [
 type RevealSatisfactionSurveyProps = {
   orderId: string;
   onRate?: (rating: RevealRating) => void | Promise<void>;
+  onContinue?: () => void;
 };
 
-export function RevealSatisfactionSurvey({ orderId, onRate }: RevealSatisfactionSurveyProps) {
+export function RevealSatisfactionSurvey({
+  orderId,
+  onRate,
+  onContinue,
+}: RevealSatisfactionSurveyProps) {
   const [selected, setSelected] = useState<RevealRating | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -59,12 +64,23 @@ export function RevealSatisfactionSurvey({ orderId, onRate }: RevealSatisfaction
           />
         ))}
       </View>
-      {selected ? <Text style={styles.thanks}>Thanks — noted.</Text> : null}
+      {selected ? (
+        <View style={styles.after}>
+          <Text style={styles.thanks}>Thanks — noted.</Text>
+          {onContinue ? (
+            <Button label="Start your next haul" onPress={onContinue} variant="primary" block />
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  after: {
+    gap: space4,
+    marginTop: space4,
+  },
   chip: {
     flex: 1,
   },
@@ -83,7 +99,6 @@ const styles = StyleSheet.create({
     color: text,
     fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    marginTop: space4,
     textAlign: 'center',
   },
   title: {

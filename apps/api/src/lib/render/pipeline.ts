@@ -7,6 +7,7 @@ import type { Repositories } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
 import { pushCopyForState, type PushService } from "../push/stub.js";
 import { isValidTransition } from "../orders/state-machine.js";
+import { downloadImage } from "./download.js";
 
 export async function seedOrderRenders(repos: Repositories, orderId: string) {
   const existing = await repos.findRendersByOrderId(orderId);
@@ -96,41 +97,99 @@ export async function processRenderJob(
   const order = await deps.repos.findOrderById(orderId);
   if (!order) return;
 
-  const variant = await deps.repos.findVariantById(item.listingVariantId);
-  if (!variant) return;
-
   const avatar = await deps.repos.findAvatarByUserId(order.userId);
   const modelImageKey = avatar?.referenceImageKey ?? "references/house-model.jpg";
 
   await deps.repos.updateRender(renderId, { status: "RUNNING" });
 
   try {
+    const isCombined = render.provider.startsWith("combined:");
+    let finalImageKey: string;
+    let costMicros = 0;
+
+    if (isCombined) {
+      const itemIds = render.provider.slice("combined:".length).split(",");
+      let currentModelKey = modelImageKey;
+
+      for (const orderItemId of itemIds) {
+        const orderItem = await deps.repos.findOrderItemById(orderItemId);
+        if (!orderItem) continue;
+
+        const variant = await deps.repos.findVariantById(orderItem.listingVariantId);
+        if (!variant) continue;
+
     const tryOn = await deps.renderProvider.tryOn({
-      modelImageKey,
+      modelImageKey: currentModelKey,
       garmentImageKey: variant.garmentImageKey,
     });
 
-    await deps.storage.put({
-      key: tryOn.imageKey,
-      body: Buffer.from(`mock-tryon:${render.scenario}`),
-      contentType: "image/jpeg",
-    });
+    if (tryOn.imageBytes) {
+      await deps.storage.put({
+        key: tryOn.imageKey,
+        body: Buffer.from(tryOn.imageBytes),
+        contentType: "image/jpeg",
+      });
+    }
 
-    const styled = await deps.renderProvider.scenarioPass({
-      tryOnImageKey: tryOn.imageKey,
-      scenario: render.scenario,
-    });
+    currentModelKey = tryOn.imageKey;
+    costMicros += tryOn.costMicros;
+      }
 
-    await deps.storage.put({
-      key: styled.imageKey,
-      body: Buffer.from(`mock-reveal:${render.scenario}`),
-      contentType: "image/jpeg",
-    });
+      const styled = await deps.renderProvider.scenarioPass({
+        tryOnImageKey: currentModelKey,
+        scenario: render.scenario,
+      });
 
-    const costMicros = tryOn.costMicros + styled.costMicros;
+      if (styled.imageBytes) {
+        await deps.storage.put({
+          key: styled.imageKey,
+          body: Buffer.from(styled.imageBytes),
+          contentType: "image/jpeg",
+        });
+      }
+
+      finalImageKey = styled.imageKey;
+      costMicros += styled.costMicros;
+    } else {
+      const variant = await deps.repos.findVariantById(item.listingVariantId);
+      if (!variant) {
+        await deps.repos.updateRender(renderId, { status: "FAILED" });
+        return;
+      }
+
+      const tryOn = await deps.renderProvider.tryOn({
+        modelImageKey,
+        garmentImageKey: variant.garmentImageKey,
+      });
+
+      if (tryOn.imageBytes) {
+        await deps.storage.put({
+          key: tryOn.imageKey,
+          body: Buffer.from(tryOn.imageBytes),
+          contentType: "image/jpeg",
+        });
+      }
+
+      const styled = await deps.renderProvider.scenarioPass({
+        tryOnImageKey: tryOn.imageKey,
+        scenario: render.scenario,
+      });
+
+      if (styled.imageBytes) {
+        await deps.storage.put({
+          key: styled.imageKey,
+          body: Buffer.from(styled.imageBytes),
+          contentType: "image/jpeg",
+        });
+      }
+
+      finalImageKey = styled.imageKey;
+      costMicros = tryOn.costMicros + styled.costMicros;
+    }
+
     await deps.repos.updateRender(renderId, {
       status: "DONE",
-      imageKey: styled.imageKey,
+      imageKey: finalImageKey,
       provider: deps.renderProvider.name,
       costMicros,
     });

@@ -19,6 +19,12 @@ export const VerifyRequestSchema = z.object({
 
 export type VerifyRequest = z.infer<typeof VerifyRequestSchema>;
 
+export const GoogleAuthRequestSchema = z.object({
+  idToken: z.string().min(20),
+});
+
+export type GoogleAuthRequest = z.infer<typeof GoogleAuthRequestSchema>;
+
 export const TokenResponseSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string(),
