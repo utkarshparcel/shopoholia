@@ -1,0 +1,32 @@
+{
+  "name": "@worn/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./env": {
+      "types": "./src/env.ts",
+      "default": "./src/env.ts"
+    },
+    "./eslint": {
+      "default": "./eslint.config.js"
+    },
+    "./typescript/base": "./typescript/base.json",
+    "./typescript/node": "./typescript/node.json",
+    "./typescript/react-native": "./typescript/react-native.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.29.0",
+    "@types/node": "^22.15.32",
+    "eslint": "^9.29.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.34.1"
+  }
+}

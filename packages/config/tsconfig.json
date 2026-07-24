@@ -1,0 +1,9 @@
+{
+  "extends": "./typescript/base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "eslint.config.js"]
+}

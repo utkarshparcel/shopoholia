@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WORN — Product Spec v1.0</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --ink: #0f0e0c;
+    --paper: #faf8f5;
+    --warm-mid: #f0ece4;
+    --accent: #c8a87a;
+    --accent-deep: #9c7a4e;
+    --muted: #888078;
+    --rule: #e0dbd2;
+    --alert: #d64e2a;
+    --green: #3a7d5c;
+    --col-width: 680px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+
+  /* ── COVER ── */
+  .cover {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 56px 64px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -120px; right: -120px;
+    width: 480px; height: 480px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #e8d5b8 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .cover-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .wordmark {
+    font-family: 'DM Serif Display', serif;
+    font-size: 15px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+  }
+
+  .doc-meta {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  .cover-hero {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 80px 0 60px;
+  }
+
+  .cover-eyebrow {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+
+  .cover-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: clamp(64px, 10vw, 120px);
+    line-height: 0.92;
+    letter-spacing: -0.02em;
+    margin-bottom: 32px;
+  }
+
+  .cover-title em {
+    font-style: italic;
+    color: var(--accent-deep);
+  }
+
+  .cover-tagline {
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--muted);
+    max-width: 520px;
+    line-height: 1.5;
+  }
+
+  .cover-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-top: 40px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .cover-bottom-text {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .cover-toc {
+    display: flex;
+    gap: 32px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .cover-toc a {
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .cover-toc a:hover { color: var(--ink); }
+
+  /* ── LAYOUT ── */
+  .page {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 80px 48px;
+  }
+
+  .section {
+    margin-bottom: 80px;
+    padding-bottom: 80px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .section:last-child { border-bottom: none; }
+
+  /* ── SECTION HEADERS ── */
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 42px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin-bottom: 28px;
+  }
+
+  h3 {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 40px 0 16px;
+  }
+
+  h4 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    margin-bottom: 10px;
+    color: var(--ink);
+  }
+
+  p {
+    margin-bottom: 16px;
+    color: #2a2722;
+    max-width: 620px;
+  }
+
+  strong { font-weight: 600; color: var(--ink); }
+
+  /* ── PULL QUOTE ── */
+  .pull {
+    border-left: 3px solid var(--accent);
+    padding: 20px 28px;
+    margin: 36px 0;
+    background: var(--warm-mid);
+    border-radius: 0 8px 8px 0;
+  }
+
+  .pull p {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    line-height: 1.4;
+    color: var(--ink);
+    max-width: 100%;
+    margin: 0;
+  }
+
+  /* ── FEATURE GRID ── */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 32px 0;
+  }
+
+  .feature-cell {
+    background: var(--paper);
+    padding: 28px 24px;
+  }
+
+  .feature-cell .label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .feature-cell h4 {
+    font-size: 17px;
+    margin-bottom: 8px;
+  }
+
+  .feature-cell p {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  /* ── FLOW STEPS ── */
+  .flow {
+    margin: 32px 0;
+    position: relative;
+  }
+
+  .flow-step {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 0;
+    position: relative;
+  }
+
+  .flow-step::before {
+    content: '';
+    position: absolute;
+    left: 19px;
+    top: 40px;
+    bottom: -1px;
+    width: 1px;
+    background: var(--rule);
+  }
+  .flow-step:last-child::before { display: none; }
+
+  .flow-num {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--warm-mid);
+    border: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: var(--accent-deep);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .flow-content {
+    padding: 8px 0 32px;
+    flex: 1;
+  }
+
+  .flow-content h4 {
+    font-size: 18px;
+    margin-bottom: 6px;
+  }
+
+  .flow-content p {
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 100%;
+    margin: 0;
+  }
+
+  .flow-content .chip {
+    display: inline-block;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 100px;
+    margin-top: 10px;
+    margin-right: 6px;
+  }
+
+  .chip-dopamine { background: #fff0e0; color: #9c6c2a; border: 1px solid #e8d0a8; }
+  .chip-wait { background: #f0e8ff; color: #6a3d9a; border: 1px solid #d4b8f0; }
+  .chip-reveal { background: #e8f5ee; color: #2a6644; border: 1px solid #a8d8bc; }
+  .chip-monetize { background: #ffe8e8; color: #9a2a2a; border: 1px solid #f0b8b8; }
+  .chip-system { background: var(--warm-mid); color: var(--muted); border: 1px solid var(--rule); }
+
+  /* ── COMPARISON TABLE ── */
+  .compare {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 28px 0;
+    font-size: 14px;
+  }
+
+  .compare th {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+    background: var(--warm-mid);
+  }
+
+  .compare td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+
+  .compare tr:last-child td { border-bottom: none; }
+
+  .check { color: var(--green); font-weight: 600; }
+  .cross { color: var(--muted); }
+  .worn-col { background: #fdf7ee; }
+
+  /* ── MONETIZATION BLOCK ── */
+  .mono-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin: 28px 0;
+  }
+
+  .mono-card {
+    background: var(--warm-mid);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 24px 20px;
+  }
+
+  .mono-card .big {
+    font-family: 'DM Serif Display', serif;
+    font-size: 32px;
+    color: var(--accent-deep);
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .mono-card .label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+    display: block;
+  }
+
+  .mono-card p {
+    font-size: 13px;
+    color: var(--muted);
+    max-width: 100%;
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  /* ── RISK TABLE ── */
+  .risk-row {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 0;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 28px 0;
+  }
+
+  .risk-label {
+    background: var(--warm-mid);
+    padding: 20px 20px;
+    border-right: 1px solid var(--rule);
+  }
+
+  .risk-label h4 {
+    font-size: 13px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    margin: 0 0 4px;
+    color: var(--ink);
+  }
+
+  .risk-label .badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+  .badge-high { background: #ffe8e8; color: var(--alert); }
+  .badge-med { background: #fff3e0; color: #9a6800; }
+  .badge-low { background: #e8f5ee; color: var(--green); }
+
+  .risk-body {
+    padding: 20px 24px;
+  }
+
+  .risk-body p {
+    font-size: 14px;
+    margin: 0 0 8px;
+    max-width: 100%;
+  }
+
+  .risk-body .mitigation {
+    font-size: 13px;
+    color: var(--green);
+    font-style: italic;
+  }
+
+  /* ── PHASE TIMELINE ── */
+  .timeline {
+    margin: 32px 0;
+  }
+
+  .phase {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 24px;
+    margin-bottom: 28px;
+    align-items: start;
+  }
+
+  .phase-meta {
+    text-align: right;
+    padding-top: 4px;
+  }
+
+  .phase-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .phase-duration {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .phase-body {
+    border-left: 1px solid var(--rule);
+    padding-left: 24px;
+  }
+
+  .phase-body h4 {
+    font-size: 18px;
+    margin-bottom: 8px;
+  }
+
+  .phase-body p {
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 100%;
+    margin: 0;
+  }
+
+  /* ── TECH STACK ── */
+  .stack-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 28px 0;
+  }
+
+  .stack-card {
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .stack-card h4 {
+    font-size: 13px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    color: var(--accent-deep);
+    margin-bottom: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .stack-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13px;
+  }
+  .stack-item:last-child { border-bottom: none; }
+
+  .stack-item .why {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+    max-width: 180px;
+  }
+
+  /* ── FOOTER ── */
+  .doc-footer {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 48px 64px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .doc-footer .wordmark {
+    color: var(--accent);
+  }
+
+  .doc-footer .note {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: #666;
+    text-align: right;
+  }
+
+  @media (max-width: 640px) {
+    .cover { padding: 32px 24px; }
+    .page { padding: 48px 24px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .mono-row { grid-template-columns: 1fr; }
+    .stack-grid { grid-template-columns: 1fr; }
+    .risk-row { grid-template-columns: 1fr; }
+    .phase { grid-template-columns: 60px 1fr; }
+    .cover-toc { display: none; }
+    .doc-footer { flex-direction: column; gap: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-top">
+    <span class="wordmark">WORN</span>
+    <div class="doc-meta">
+      Product Spec v1.0<br>
+      June 2026<br>
+      Confidential
+    </div>
+  </div>
+
+  <div class="cover-hero">
+    <span class="cover-eyebrow">Fashion · AI · Dopamine Design</span>
+    <h1 class="cover-title">The shop<em>ping</em><br>without the<br>shop.</h1>
+    <p class="cover-tagline">A fashion marketplace where the thrill of buying is the product. No delivery. No returns. Just the full arc — browse, desire, cart, wait, unbox — ending in AI photos of you in everything you "bought."</p>
+  </div>
+
+  <div class="cover-bottom">
+    <span class="cover-bottom-text">Consumer · Mobile-first · B2C + B2B2C</span>
+    <nav class="cover-toc">
+      <a href="#insight">Insight</a>
+      <a href="#product">Product</a>
+      <a href="#flow">User Flow</a>
+      <a href="#monetization">Revenue</a>
+      <a href="#tech">Tech</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+  </div>
+</div>
+
+<!-- BODY -->
+<div class="page">
+
+  <!-- 01 CORE INSIGHT -->
+  <div class="section" id="insight">
+    <span class="section-label">01 — Core Insight</span>
+    <h2>The dopamine was never in the delivery.</h2>
+
+    <p>Online shopping's pleasure is in the <strong>anticipation loop</strong> — browsing, imagining yourself in it, building the cart, checking out, waiting for the tracker. The package arriving is frequently a letdown. Returns are proof: reality disappoints the fantasy.</p>
+
+    <p>Every existing solution tries to improve the reality (better try-on, accurate sizing, faster delivery). WORN does the opposite. It <strong>perfects the fantasy</strong> and strips out the reality entirely.</p>
+
+    <div class="pull">
+      <p>"The order flow is the product. The delivery notification is the product. The reveal is the reward."</p>
+    </div>
+
+    <h3>What nobody has built</h3>
+
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>Google Doppl / FitRoom</th>
+          <th>Depop / ASOS</th>
+          <th class="worn-col">WORN</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>AI try-on with your photo</td>
+          <td class="check">✓</td>
+          <td class="cross">—</td>
+          <td class="worn-col check">✓</td>
+        </tr>
+        <tr>
+          <td>Real marketplace listings</td>
+          <td class="cross">—</td>
+          <td class="check">✓</td>
+          <td class="worn-col check">✓</td>
+        </tr>
+        <tr>
+          <td>Full order + tracking arc</td>
+          <td class="cross">—</td>
+          <td class="check">✓</td>
+          <td class="worn-col check">✓ (simulated)</td>
+        </tr>
+        <tr>
+          <td>Post-"delivery" photo reward</td>
+          <td class="cross">—</td>
+          <td class="cross">—</td>
+          <td class="worn-col check">✓ Core mechanic</td>
+        </tr>
+        <tr>
+          <td>Buyer becomes listing model</td>
+          <td class="cross">—</td>
+          <td class="cross">—</td>
+          <td class="worn-col check">✓ Opt-in</td>
+        </tr>
+        <tr>
+          <td>Nothing actually ships</td>
+          <td class="cross">—</td>
+          <td class="cross">—</td>
+          <td class="worn-col check">✓ By design</td>
+        </tr>
+        <tr>
+          <td>Real-purchase bridge</td>
+          <td class="check">✓</td>
+          <td class="check">✓</td>
+          <td class="worn-col check">✓ Optional affiliate</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 02 PRODUCT -->
+  <div class="section" id="product">
+    <span class="section-label">02 — Product</span>
+    <h2>Six surfaces, one loop.</h2>
+
+    <p>WORN is built around a single repeating cycle: <strong>see → desire → commit → wait → reveal</strong>. Every surface serves that loop. Nothing exists that doesn't deepen the arc.</p>
+
+    <div class="feature-grid">
+      <div class="feature-cell">
+        <span class="label">Surface 01</span>
+        <h4>Avatar Onboarding</h4>
+        <p>Upload 2–3 photos. The app builds your persistent fashion avatar — body shape, skin tone, hair, usual poses. This is your model profile. Every item you browse renders on you, not a stock body.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Surface 02</span>
+        <h4>The Feed</h4>
+        <p>A TikTok-paced vertical scroll of listings — from indie sellers, brands, and UGC creators. Every item auto-renders a try-on preview using your avatar. You're the model in every listing you see.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Surface 03</span>
+        <h4>The Cart & Checkout</h4>
+        <p>Feels exactly like real ecomm. Pick size, color, "delivery" speed. Express (2 hrs), Standard (overnight), Slow Burn (48 hrs). Pay with WORN Coins. The deliberate wait is engineered into the UX.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Surface 04</span>
+        <h4>Order Tracking</h4>
+        <p>Branded tracking page. "Processing → Packed → Out for delivery → Arriving today." Status updates push to notification. The arc takes real time. Instant would kill the dopamine — the wait is the design.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Surface 05</span>
+        <h4>The Delivery Reveal</h4>
+        <p>Notification: "Your haul arrived." Opens to a cinematic lookbook — AI renders of you in the item across 6+ scenarios: studio, street, golden hour, editorial, night. 2 free. Rest paywalled. The unboxing is photos.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Surface 06</span>
+        <h4>The Lookbook</h4>
+        <p>Your profile is a growing editorial archive of every "haul." Shareable. Social. Becomes a visual identity over time. Sellers can request to feature your renders in their listing. You earn coins.</p>
+      </div>
+    </div>
+
+    <h3>The Coin Economy</h3>
+    <p>WORN runs on an in-app currency that keeps the commerce feeling real without real money changing hands per-item. Coins are earned through engagement and purchased in bundles.</p>
+
+    <div class="feature-grid">
+      <div class="feature-cell">
+        <span class="label">Earn</span>
+        <h4>Coin Faucets</h4>
+        <p>Daily login streak, sharing a lookbook post, opting your renders into a seller's listing, completing your avatar profile, inviting a friend, reviewing a "haul."</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Spend</span>
+        <h4>Coin Sinks</h4>
+        <p>"Buying" items from the feed. Unlocking paywalled lookbook photos. Rushing an order to Express. Purchasing premium editorial render packs (cinematic, film grain, Parisian, etc.).</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 03 USER FLOW -->
+  <div class="section" id="flow">
+    <span class="section-label">03 — User Flow</span>
+    <h2>The full arc, beat by beat.</h2>
+
+    <div class="flow">
+
+      <div class="flow-step">
+        <div class="flow-num">1</div>
+        <div class="flow-content">
+          <h4>Onboarding — Build your avatar</h4>
+          <p>User uploads 2–3 photos (front-facing, good lighting). AI extracts body shape, skin tone, proportions. No account needed to browse, but avatar required to "buy." Low friction entry, meaningful commitment to purchase.</p>
+          <span class="chip chip-system">One-time setup</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">2</div>
+        <div class="flow-content">
+          <h4>Browse the Feed</h4>
+          <p>Vertical scroll. Each listing card shows the item on the user's avatar via real-time try-on rendering. User sees themselves in everything. Browsing itself becomes addictive — this is the primary pull loop.</p>
+          <span class="chip chip-dopamine">Dopamine loop starts</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">3</div>
+        <div class="flow-content">
+          <h4>Add to Cart / Wishlist</h4>
+          <p>Item detail page shows expanded try-on renders (3 poses, 2 settings). Sizing info, seller details, coin price. User adds to cart or wishlists. Cart view shows total "haul" rendered together as an outfit.</p>
+          <span class="chip chip-dopamine">Desire peaks</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">4</div>
+        <div class="flow-content">
+          <h4>Checkout</h4>
+          <p>Full ecomm checkout flow. Select delivery speed (Express 2hr / Standard overnight / Slow Burn 48hr). Pay with coins. Order confirmation screen with estimated reveal time. Push notification opt-in prompted here.</p>
+          <span class="chip chip-dopamine">Commitment made</span>
+          <span class="chip chip-monetize">Coin spend</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">5</div>
+        <div class="flow-content">
+          <h4>The Wait</h4>
+          <p>Order tracking page updates on a real timer. Milestones fire push notifications: "Your order is being prepared," "Out for delivery," "Arriving in 1 hour." The wait is mandatory — even Express is 2 hours minimum. The anticipation is the product.</p>
+          <span class="chip chip-wait">Engineered anticipation</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">6</div>
+        <div class="flow-content">
+          <h4>The Reveal</h4>
+          <p>Push notification: "Your haul is here." Tap opens a cinematic reveal — dramatic swipe-through of AI renders. First 2 photos free, remaining 4–8 paywalled behind a coin unlock. Renders include: studio white, golden hour street, editorial dark, candid crop. Users can download, share, or add to their Lookbook.</p>
+          <span class="chip chip-reveal">Core reward moment</span>
+          <span class="chip chip-monetize">Paywall unlock</span>
+        </div>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-num">7</div>
+        <div class="flow-content">
+          <h4>Post-Reveal Loops</h4>
+          <p>User can: share renders to Instagram/TikTok (with WORN watermark), opt renders into the seller's listing for coins, leave a "style review," or tap "Buy the real thing" to hit an affiliate link. The loop restarts when they share — friends see them looking incredible and open the app.</p>
+          <span class="chip chip-dopamine">Viral loop</span>
+          <span class="chip chip-monetize">Affiliate revenue</span>
+        </div>
+      </div>
+
+    </div>
+
+    <h3>Seller Flow</h3>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="flow-num">A</div>
+        <div class="flow-content">
+          <h4>List a Product</h4>
+          <p>Seller uploads product photos (flat-lay or on-model). Sets coin price, category, tags. WORN auto-generates AI try-on capability for the item — the seller's listing now has an unlimited virtual model pool (all WORN users).</p>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-num">B</div>
+        <div class="flow-content">
+          <h4>Listing Goes Live</h4>
+          <p>Item enters the feed. WORN clips a listing fee (coins → real revenue on the platform side). Seller gets exposure to the full user base — with try-on renders that make their product look incredible on real body types.</p>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-num">C</div>
+        <div class="flow-content">
+          <h4>User Renders as Marketing</h4>
+          <p>When buyers opt-in to sharing their renders, the seller's listing accumulates real human-face try-on photos from the community. The listing improves over time with genuine social proof, zero photoshoot cost.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 04 MONETIZATION -->
+  <div class="section" id="monetization">
+    <span class="section-label">04 — Monetization</span>
+    <h2>Three revenue streams. None rely on selling clothes.</h2>
+
+    <div class="mono-row">
+      <div class="mono-card">
+        <div class="big">IAP</div>
+        <span class="label">Coin Bundles</span>
+        <p>Users buy coin packs to "shop" more, unlock lookbook photos, rush orders, or buy premium render styles. Freemium entry, IAP for depth. Primary user-side revenue.</p>
+      </div>
+      <div class="mono-card">
+        <div class="big">B2B</div>
+        <span class="label">Seller Listings</span>
+        <p>Brands and indie sellers pay to list. Free tier (limited impressions), paid plans for feed boost, analytics, and access to aggregate style data. Secondary but high-margin.</p>
+      </div>
+      <div class="mono-card">
+        <div class="big">Aff.</div>
+        <span class="label">Affiliate Bridge</span>
+        <p>"Buy the real thing" CTA on every deliver reveal. Affiliate redirect to the actual product. Commission on real purchases without WORN handling logistics. Zero ops overhead.</p>
+      </div>
+    </div>
+
+    <h3>Unit Economics Logic</h3>
+    <p>The core bet: a user who spends ₹200 on coins to "buy" a ₹4,000 outfit and unlock their lookbook photos is a user who might have never bought the outfit at all. The spend-to-value ratio is radically better than real fashion ecomm — no returns, no inventory, no logistics margin erosion.</p>
+    <p>The seller side is equally clean: a brand pays ₹500/month for premium listing access, gets AI-rendered product photos on real bodies at scale, and a community of potential buyers who are already emotionally invested in wearing their product. Cost-per-impression collapses.</p>
+
+    <div class="pull">
+      <p>"WORN clips both sides — users pay for the fantasy, brands pay for the distribution. The clothes never move and the margins never erode."</p>
+    </div>
+  </div>
+
+  <!-- 05 PSYCHOLOGY & EDGE -->
+  <div class="section">
+    <span class="section-label">05 — Psychology</span>
+    <h2>Why the wait is non-negotiable.</h2>
+
+    <p>The temptation in product development is to make everything instant. Do not. The <strong>anticipation interval is the emotional core</strong> of WORN's dopamine mechanic. Here is why each timing choice is made deliberately:</p>
+
+    <div class="feature-grid">
+      <div class="feature-cell">
+        <span class="label">Impulse kill</span>
+        <h4>No instant delivery</h4>
+        <p>Even "Express" is 2 hours. This mirrors real same-day delivery psychologically — fast but not free. The user's anticipation has to cook. Instant would flatten the reveal moment entirely.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Commitment device</span>
+        <h4>Coins, not free</h4>
+        <p>Even though coins cost less than real clothes, the spending act triggers loss aversion. Paid items feel more valuable. The reveal hits harder when something was given up for it.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Variable reward</span>
+        <h4>Render quality varies</h4>
+        <p>Not every render is equally good — lighting, pose, garment complexity all vary. Some lookbook drops are stunning, some are serviceable. Unpredictability deepens the pull-to-open behavior.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Social amplifier</span>
+        <h4>Lookbook is shareable identity</h4>
+        <p>The renders aren't just keepsakes — they're the best photos most users will have of themselves in fashion-forward contexts. They will share them. Every share is a cold acquisition ad.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 06 TECH STACK -->
+  <div class="section" id="tech">
+    <span class="section-label">06 — Tech Stack</span>
+    <h2>What this is built on.</h2>
+
+    <p>The infrastructure is a React Native / Expo mobile app backed by a Node.js API, with the AI rendering pipeline as the core differentiator. The render pipeline is the product's moat — everything else is table-stakes ecomm plumbing.</p>
+
+    <div class="stack-grid">
+      <div class="stack-card">
+        <h4>Frontend</h4>
+        <div class="stack-item">
+          <span>React Native / Expo</span>
+          <span class="why">iOS + Android from one codebase</span>
+        </div>
+        <div class="stack-item">
+          <span>Expo Router</span>
+          <span class="why">File-based navigation</span>
+        </div>
+        <div class="stack-item">
+          <span>Reanimated 3</span>
+          <span class="why">Reveal animation, swipe physics</span>
+        </div>
+        <div class="stack-item">
+          <span>Zustand</span>
+          <span class="why">Cart, order, avatar state</span>
+        </div>
+        <div class="stack-item">
+          <span>TanStack Query</span>
+          <span class="why">Feed, order tracking polling</span>
+        </div>
+      </div>
+
+      <div class="stack-card">
+        <h4>Backend</h4>
+        <div class="stack-item">
+          <span>Node.js / Fastify</span>
+          <span class="why">API layer, high throughput</span>
+        </div>
+        <div class="stack-item">
+          <span>PostgreSQL</span>
+          <span class="why">Users, listings, orders, coins</span>
+        </div>
+        <div class="stack-item">
+          <span>Redis</span>
+          <span class="why">Order state machine, timers</span>
+        </div>
+        <div class="stack-item">
+          <span>BullMQ</span>
+          <span class="why">Render job queue, timer triggers</span>
+        </div>
+        <div class="stack-item">
+          <span>Cloudflare R2</span>
+          <span class="why">Avatar + render image storage</span>
+        </div>
+      </div>
+
+      <div class="stack-card">
+        <h4>AI Rendering Pipeline</h4>
+        <div class="stack-item">
+          <span>FASHN.ai API</span>
+          <span class="why">Primary try-on (feed previews)</span>
+        </div>
+        <div class="stack-item">
+          <span>Kling / Higgsfield</span>
+          <span class="why">Lookbook editorial renders</span>
+        </div>
+        <div class="stack-item">
+          <span>ComfyUI (self-hosted)</span>
+          <span class="why">Custom render styles, batch jobs</span>
+        </div>
+        <div class="stack-item">
+          <span>BullMQ + Redis</span>
+          <span class="why">Render job orchestration</span>
+        </div>
+      </div>
+
+      <div class="stack-card">
+        <h4>Infra & Payments</h4>
+        <div class="stack-item">
+          <span>Hetzner / Railway</span>
+          <span class="why">API hosting</span>
+        </div>
+        <div class="stack-item">
+          <span>RevenueCat</span>
+          <span class="why">IAP coin bundles, iOS + Android</span>
+        </div>
+        <div class="stack-item">
+          <span>Razorpay / Stripe</span>
+          <span class="why">Seller subscription payments</span>
+        </div>
+        <div class="stack-item">
+          <span>Firebase / Expo Push</span>
+          <span class="why">Order status notifications</span>
+        </div>
+      </div>
+    </div>
+
+    <h3>The Order State Machine</h3>
+    <p>The "delivery" timing is implemented as a Redis-backed state machine with BullMQ delayed jobs. On checkout, an order is created in state <code>PROCESSING</code>. BullMQ schedules state transitions at real intervals — the durations are tunable per delivery tier. Each transition fires a push notification and updates the tracking page in real time via polling or WebSocket.</p>
+
+    <div class="feature-grid">
+      <div class="feature-cell">
+        <span class="label">States</span>
+        <h4>Order States</h4>
+        <p>PENDING → PROCESSING → PACKED → OUT_FOR_DELIVERY → ARRIVING_SOON → DELIVERED → REVEAL_READY</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Timings (Express)</span>
+        <h4>2-Hour Arc</h4>
+        <p>PROCESSING: 5 min. PACKED: 20 min. OUT_FOR_DELIVERY: 60 min. ARRIVING_SOON: 90 min. DELIVERED: 120 min. Then render job triggers immediately.</p>
+      </div>
+    </div>
+
+    <h3>Render Pipeline Logic</h3>
+    <p>When an order hits <code>DELIVERED</code>, BullMQ fires a render job per item in the order. Each job hits the FASHN.ai (or self-hosted ComfyUI) endpoint with the user's stored avatar embeddings and the item's product images. The job generates 6–8 render variants across preset "scenarios" (studio, street, editorial, etc.). Results are stored in R2, metadata written to Postgres. When all renders complete, order state transitions to <code>REVEAL_READY</code> and a push notification fires.</p>
+  </div>
+
+  <!-- 07 RISKS -->
+  <div class="section">
+    <span class="section-label">07 — Risks & Mitigations</span>
+    <h2>What could go wrong.</h2>
+
+    <div class="risk-row">
+      <div class="risk-label">
+        <h4>Render quality</h4>
+        <span class="badge badge-high">High</span>
+      </div>
+      <div class="risk-body">
+        <p>If AI try-on renders look uncanny or inaccurate, the fantasy collapses. The product only works if users feel genuinely flattered by their lookbook photos.</p>
+        <p class="mitigation">→ Use FASHN.ai for feed previews (fast, good enough), reserve higher-quality multi-step pipeline (ComfyUI + upscaler) for the Reveal renders. Quality bar for Reveal must be high — this is the moment that sells the app.</p>
+      </div>
+    </div>
+
+    <div class="risk-row">
+      <div class="risk-label">
+        <h4>Perception: "fake shopping"</h4>
+        <span class="badge badge-med">Medium</span>
+      </div>
+      <div class="risk-body">
+        <p>Users might feel deceived when they realize nothing ships. The "fake" framing could damage trust or feel cynical.</p>
+        <p class="mitigation">→ Be transparent from day one. WORN's premise is explicitly "the shopping experience, not the shopping outcome." Frame it as entertainment and self-expression, not a substitute for real retail. The onboarding states this clearly and proudly.</p>
+      </div>
+    </div>
+
+    <div class="risk-row">
+      <div class="risk-label">
+        <h4>Avatar photo privacy</h4>
+        <span class="badge badge-high">High</span>
+      </div>
+      <div class="risk-body">
+        <p>Users uploading photos of themselves for AI rendering is a significant trust and legal surface. Misuse (deepfakes, data brokers) would be catastrophic for the brand.</p>
+        <p class="mitigation">→ On-device embedding extraction where possible. No raw photo storage beyond initial processing. Explicit, granular consent for render opt-in to seller listings. GDPR/DPDP compliant deletion flow. Clearly stated: your renders are yours.</p>
+      </div>
+    </div>
+
+    <div class="risk-row">
+      <div class="risk-label">
+        <h4>Coin economy balance</h4>
+        <span class="badge badge-med">Medium</span>
+      </div>
+      <div class="risk-body">
+        <p>If earning coins is too easy, nobody buys IAP. If it's too hard, users churn before experiencing the reveal.</p>
+        <p class="mitigation">→ New users get a generous coin grant in onboarding (enough for 2-3 orders). Earning is front-loaded early, then tapers to push toward IAP. A/B test the earn/spend curve aggressively in the first 3 months.</p>
+      </div>
+    </div>
+
+    <div class="risk-row">
+      <div class="risk-label">
+        <h4>Render cost at scale</h4>
+        <span class="badge badge-med">Medium</span>
+      </div>
+      <div class="risk-body">
+        <p>AI rendering APIs cost money per generation. At scale, render cost per order could exceed coin revenue per order.</p>
+        <p class="mitigation">→ Feed previews use cheap fast-tier API. Full reveal renders are batched off-peak using BullMQ. Self-hosted ComfyUI on GPU box is the endgame once volume justifies it. Pricing model calibrated so paywall unlock covers render cost.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 08 ROADMAP -->
+  <div class="section" id="roadmap">
+    <span class="section-label">08 — Roadmap</span>
+    <h2>How this gets built.</h2>
+
+    <div class="timeline">
+
+      <div class="phase">
+        <div class="phase-meta">
+          <div class="phase-num">I</div>
+          <div class="phase-duration">6 weeks</div>
+        </div>
+        <div class="phase-body">
+          <h4>Core Loop MVP</h4>
+          <p>Avatar onboarding → static feed (50 seeded listings) → checkout flow with coin economy → simulated order tracking → reveal screen with FASHN.ai renders. No real seller onboarding yet. Validate that the reveal moment lands emotionally. Ship to 50 beta users.</p>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-meta">
+          <div class="phase-num">II</div>
+          <div class="phase-duration">6 weeks</div>
+        </div>
+        <div class="phase-body">
+          <h4>Seller Onboarding + Feed Growth</h4>
+          <p>Seller listing tool (photo upload, pricing, coin floor). Feed algorithm (recency + avatar affinity). Lookbook profile page. Social sharing with WORN watermark. Affiliate "Buy Real" CTA. IAP coin bundles via RevenueCat.</p>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-meta">
+          <div class="phase-num">III</div>
+          <div class="phase-duration">8 weeks</div>
+        </div>
+        <div class="phase-body">
+          <h4>Retention & Monetization Deepening</h4>
+          <p>Daily coin streak. Buyer-becomes-model opt-in. Premium render packs (editorial styles, cinematic, analog film). Seller analytics dashboard. Push notification personalization. A/B test coin economy. Target: D30 retention above 25%.</p>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-meta">
+          <div class="phase-num">IV</div>
+          <div class="phase-duration">Ongoing</div>
+        </div>
+        <div class="phase-body">
+          <h4>Scale & Differentiation</h4>
+          <p>Self-hosted render pipeline (ComfyUI GPU cluster) to reduce per-render cost. Brand partnerships for exclusive "collections" available only on WORN. Video renders (short clips of you walking in the outfit). Style persona engine from order history.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 09 OPEN QUESTIONS -->
+  <div class="section">
+    <span class="section-label">09 — Open Questions</span>
+    <h2>What we don't know yet.</h2>
+
+    <div class="feature-grid">
+      <div class="feature-cell">
+        <span class="label">Product</span>
+        <h4>Optimal wait duration</h4>
+        <p>Is 2 hours the right floor for Express? Does longer anticipation increase reveal satisfaction, or does it increase drop-off? Needs to be A/B tested in beta.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Product</span>
+        <h4>Paywall split</h4>
+        <p>2 free / 6 paywalled is the starting hypothesis. Do more free renders reduce IAP? Or do they increase it by setting quality expectations? Unclear without data.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Growth</span>
+        <h4>Primary acquisition channel</h4>
+        <p>Shared lookbook renders are the organic hypothesis. But is the demographic that shares fashion content also the demographic that enjoys the "game" layer? May need to separate.</p>
+      </div>
+      <div class="feature-cell">
+        <span class="label">Legal</span>
+        <h4>Avatar likeness rights</h4>
+        <p>When a user's renders appear in a seller's listing, is there a licensing model needed? Does it vary by jurisdiction? Requires legal review before seller marketplace launch.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- FOOTER -->
+<div class="doc-footer">
+  <span class="wordmark">WORN</span>
+  <div class="note">
+    Product Spec v1.0 — June 2026<br>
+    Confidential. Do not distribute.
+  </div>
+</div>
+
+</body>
+</html>

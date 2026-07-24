@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm turbo run build --filter=@worn/shared --filter=@worn/api
+
+      - name: Lint
+        run: pnpm turbo run lint --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
+
+      - name: Typecheck
+        run: pnpm turbo run typecheck --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
+
+      - name: Test
+        run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
