@@ -10,30 +10,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, Chip, ListingCard, SectionHeader } from '@/src/components/ui';
+import { ListingCard, SectionHeader } from '@/src/components/ui';
 import type { PlaceholderTone } from '@/src/components/ui';
 import { useFeed } from '@/src/hooks/catalog';
-import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
-  border,
-  fontDisplay,
-  fontMono,
   fontSans,
   fontSansMedium,
-  fontSansSemiBold,
   fsBody,
-  fsCaption,
-  fsDisplayM,
-  fsMicro,
-  radiusCard,
   space4,
   space6,
-  surface,
-  text,
-  textBody,
   textMuted,
-  trackingTight,
   wornInk,
 } from '@/src/theme/tokens';
 

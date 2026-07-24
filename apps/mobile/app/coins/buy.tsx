@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, SectionHeader } from '@/src/components/ui';
 import { validateIap } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import { useCoinBalance } from '@/src/hooks/orders';

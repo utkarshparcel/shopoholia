@@ -1,5 +1,4 @@
 import {
-  FREE_RENDER_SCENARIOS,
   GenerateRenderBodySchema,
   GenerateRenderResponseSchema,
   RevealRatingBodySchema,
@@ -10,7 +9,6 @@ import {
   REVEAL_UNLOCK_COST_COINS,
   REVEAL_GENERATE_COST_COINS,
   REVEAL_COMBINE_COST_COINS,
-  type RenderScenario,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";

@@ -914,15 +914,21 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async loadDataForVariantIds(listingIds) {
-      const variantMap = new Map<string, any>();
-      const listingMap = new Map<string, any>();
-      const sellerMap = new Map<string, any>();
+      const variantMap = new Map<string, ListingVariantRecord>();
+      const listingMap = new Map<string, ListingRecord>();
+      const sellerMap = new Map<string, SellerRecord>();
 
       if (listingIds.length === 0) return { variantMap, listingMap, sellerMap };
 
       const variantRows = await db.select().from(listingVariants).where(inArray(listingVariants.listingId, listingIds));
       const listingRows = await db.select().from(listings).where(inArray(listings.id, listingIds));
-      const sellerIds = Array.from(new Set(listingRows.map((l: any) => l.sellerId).filter(Boolean)));
+      const sellerIds = Array.from(
+        new Set(
+          listingRows
+            .map((l) => l.sellerId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
       const sellerRows = sellerIds.length > 0 ? await db.select().from(sellers).where(inArray(sellers.id, sellerIds)) : [];
 
       for (const v of variantRows) variantMap.set(v.id, mapListingVariant(v));
@@ -1258,7 +1264,7 @@ export function createPostgresRepositories(db: Db): Repositories {
       await db
         .update(orders)
         .set({
-          stateEta: { ...existing.stateEta, rating: input.rating },
+          stateEta: { ...existing.stateEta, rating: input.rating } as OrderRecord["stateEta"],
           updatedAt: now(),
         })
         .where(eq(orders.id, input.orderId));

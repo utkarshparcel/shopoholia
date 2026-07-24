@@ -7,7 +7,6 @@ import type { Repositories } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
 import { pushCopyForState, type PushService } from "../push/stub.js";
 import { isValidTransition } from "../orders/state-machine.js";
-import { downloadImage } from "./download.js";
 
 export async function seedOrderRenders(repos: Repositories, orderId: string) {
   const existing = await repos.findRendersByOrderId(orderId);

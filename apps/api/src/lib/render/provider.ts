@@ -69,7 +69,9 @@ export function createFashnRenderProvider(
       let imageBytes: Uint8Array | undefined;
       try {
         imageBytes = await client.downloadFromUrl(fashnResult.outputUrl);
-      } catch {}
+      } catch {
+        // Fall through — try-on still returns a remote key without local bytes.
+      }
 
       return {
         imageKey: `tryon/fashn/${fashnResult.predictionId}.jpg`,
@@ -91,7 +93,9 @@ export function createFashnRenderProvider(
           }
 
           return { ...result, imageBytes };
-        } catch {}
+        } catch {
+          // Fall back to mock scenario when CDN download fails.
+        }
       }
       return mock.scenarioPass(input);
     },

@@ -368,7 +368,11 @@ export interface Repositories {
   findSellersByIds(ids: string[]): Promise<SellerRecord[]>;
   loadDataForVariantIds(
     listingIds: string[],
-  ): Promise<{ variantMap: Map<string, any>; listingMap: Map<string, any>; sellerMap: Map<string, any> }>;
+  ): Promise<{
+    variantMap: Map<string, ListingVariantRecord>;
+    listingMap: Map<string, ListingRecord>;
+    sellerMap: Map<string, SellerRecord>;
+  }>;
 
   recordRevealRating(input: {
     orderId: string;

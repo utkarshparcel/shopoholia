@@ -851,7 +851,7 @@ export function createMemoryRepositories(): Repositories {
       if (!order) return;
       orders.set(input.orderId, {
         ...order,
-        stateEta: { ...order.stateEta, rating: input.rating } as any,
+        stateEta: { ...order.stateEta, rating: input.rating } as OrderRecord["stateEta"],
         updatedAt: now(),
       });
     },

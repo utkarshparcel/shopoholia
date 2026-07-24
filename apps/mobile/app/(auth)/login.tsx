@@ -32,7 +32,6 @@ import {
   space4,
   space6,
   surface,
-  text,
   textMuted,
   wornInk,
   wornPaper,

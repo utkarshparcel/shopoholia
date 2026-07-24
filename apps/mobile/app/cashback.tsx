@@ -6,7 +6,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getCashback } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import {
-  accent,
   bg,
   fontDisplay,
   fontMono,

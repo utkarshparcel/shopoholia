@@ -1,7 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useRef, useState } from 'react';
 import {
-  Animated as RNAnimated,
   Image,
   PanResponder,
   Pressable,

@@ -6,7 +6,6 @@ import {
   generateRenders,
   unlockRenders,
   type RenderCard,
-  type GenerateRenderResponse,
 } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 
