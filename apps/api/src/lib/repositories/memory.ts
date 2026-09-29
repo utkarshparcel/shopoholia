@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
+import { InsufficientCoinsError } from "./errors.js";
 import type {
   AvatarRecord,
   CartItemRecord,
@@ -386,10 +387,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async getCoinBalance(userId) {
-      const entries = ledger
-        .filter((e) => e.userId === userId)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      if (entries[0]) return entries[0].balanceAfter;
+      // The ledger is append-only, so the user's last entry is the latest balance.
+      // (Sorting by createdAt breaks ties between entries written in the same millisecond.)
+      for (let i = ledger.length - 1; i >= 0; i--) {
+        const entry = ledger[i]!;
+        if (entry.userId === userId) return entry.balanceAfter;
+      }
       return users.get(userId)?.coinBalanceCache ?? 0;
     },
 
@@ -397,7 +400,7 @@ export function createMemoryRepositories(): Repositories {
       return withCoinLock(input.userId, async () => {
         const current = await this.getCoinBalance(input.userId);
         const balanceAfter = current + input.delta;
-        if (balanceAfter < 0) throw new Error("Insufficient coin balance");
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
 
         appendLedger(ledger, input, balanceAfter);
         await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
@@ -756,6 +759,42 @@ export function createMemoryRepositories(): Repositories {
       orderItemsByOrder.set(order.id, itemIds);
 
       return { order, items };
+    },
+
+    async placeOrder(input: CreateOrderInput) {
+      return withCoinLock(input.userId, async () => {
+        if (input.idempotencyKey) {
+          const existing = await this.findOrderByIdempotencyKey(input.idempotencyKey);
+          if (existing) {
+            if (existing.userId !== input.userId) {
+              throw new Error("Idempotency key already used by another order");
+            }
+            return {
+              order: existing,
+              items: await this.listOrderItemsByOrderId(existing.id),
+              created: false,
+            };
+          }
+        }
+
+        const balanceAfter = (await this.getCoinBalance(input.userId)) - input.coinTotal;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const { order, items } = await this.createOrder(input);
+        appendLedger(
+          ledger,
+          {
+            userId: input.userId,
+            delta: -input.coinTotal,
+            type: "SPEND_ORDER",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
+        await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
+        return { order, items, created: true };
+      });
     },
 
     async findOrderById(id) {

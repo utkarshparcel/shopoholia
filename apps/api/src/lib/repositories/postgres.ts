@@ -20,6 +20,7 @@ import {
   users,
   type Db,
 } from "@worn/db";
+import { InsufficientCoinsError } from "./errors.js";
 import type {
   AffiliateLinkRecord,
   AvatarRecord,
@@ -63,9 +64,85 @@ type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 type RenderRow = typeof renders.$inferSelect;
 type PushEventRow = typeof pushEvents.$inferSelect;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 function now() {
   return new Date();
+}
+
+/** Locks the user's row for the rest of the transaction and returns their coin balance. */
+async function lockedCoinBalance(tx: Tx, userId: string): Promise<number> {
+  const [user] = await tx.select().from(users).where(eq(users.id, userId)).for("update");
+  if (!user) throw new Error(`User not found: ${userId}`);
+
+  const [latest] = await tx
+    .select({ balanceAfter: coinLedger.balanceAfter })
+    .from(coinLedger)
+    .where(eq(coinLedger.userId, userId))
+    .orderBy(desc(coinLedger.createdAt))
+    .limit(1);
+
+  return latest?.balanceAfter ?? user.coinBalanceCache;
+}
+
+/** Appends a ledger entry and updates the balance cache. Call after lockedCoinBalance. */
+async function appendCoinLedger(tx: Tx, input: GrantCoinsInput, balanceAfter: number) {
+  await tx.insert(coinLedger).values({
+    userId: input.userId,
+    delta: input.delta,
+    type: input.type as typeof coinLedger.$inferInsert.type,
+    refType: input.refType ?? null,
+    refId: input.refId ?? null,
+    balanceAfter,
+    // Time of the insert (taken after the row lock) rather than now(), which is the
+    // transaction start: that keeps "latest entry" in the order balances were applied.
+    createdAt: sql`clock_timestamp()`,
+  });
+
+  await tx
+    .update(users)
+    .set({ coinBalanceCache: balanceAfter, updatedAt: now() })
+    .where(eq(users.id, input.userId));
+}
+
+async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
+  const timestamp = now();
+  const [orderRow] = await tx
+    .insert(orders)
+    .values({
+      userId: input.userId,
+      tier: input.tier,
+      state: "PROCESSING",
+      coinTotal: input.coinTotal,
+      placedAt: timestamp,
+      stateEta: input.stateEta,
+      revealReadyAt: null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    .returning();
+
+  const itemRows =
+    input.items.length === 0
+      ? []
+      : await tx
+          .insert(orderItems)
+          .values(
+            input.items.map((item) => ({
+              orderId: orderRow!.id,
+              listingVariantId: item.listingVariantId,
+              coinPriceSnapshot: item.coinPriceSnapshot,
+              quantity: item.quantity,
+              createdAt: timestamp,
+            })),
+          )
+          .returning();
+
+  return {
+    order: mapOrder(orderRow!),
+    items: itemRows.map(mapOrderItem),
+  };
 }
 
 function generateReferralCode(userId: string): string {
@@ -600,39 +677,10 @@ export function createPostgresRepositories(db: Db): Repositories {
 
     async grantCoins(input: GrantCoinsInput) {
       return db.transaction(async (tx) => {
-        const [user] = await tx
-          .select()
-          .from(users)
-          .where(eq(users.id, input.userId))
-          .for("update");
+        const balanceAfter = (await lockedCoinBalance(tx, input.userId)) + input.delta;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
 
-        if (!user) throw new Error(`User not found: ${input.userId}`);
-
-        const [latest] = await tx
-          .select({ balanceAfter: coinLedger.balanceAfter })
-          .from(coinLedger)
-          .where(eq(coinLedger.userId, input.userId))
-          .orderBy(desc(coinLedger.createdAt))
-          .limit(1);
-
-        const current = latest?.balanceAfter ?? user.coinBalanceCache;
-        const balanceAfter = current + input.delta;
-        if (balanceAfter < 0) throw new Error("Insufficient coin balance");
-
-        await tx.insert(coinLedger).values({
-          userId: input.userId,
-          delta: input.delta,
-          type: input.type as typeof coinLedger.$inferInsert.type,
-          refType: input.refType ?? null,
-          refId: input.refId ?? null,
-          balanceAfter,
-        });
-
-        await tx
-          .update(users)
-          .set({ coinBalanceCache: balanceAfter, updatedAt: now() })
-          .where(eq(users.id, input.userId));
-
+        await appendCoinLedger(tx, input, balanceAfter);
         return { balanceAfter };
       });
     },
@@ -1097,42 +1145,54 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async createOrder(input: CreateOrderInput) {
-      const timestamp = now();
+      return db.transaction((tx) => insertOrderWithItems(tx, input));
+    },
 
+    async placeOrder(input: CreateOrderInput) {
       return db.transaction(async (tx) => {
-        const [orderRow] = await tx
-          .insert(orders)
-          .values({
+        // Holding the user's row lock serializes this with other checkouts and coin spends.
+        const balance = await lockedCoinBalance(tx, input.userId);
+
+        if (input.idempotencyKey) {
+          const [existing] = await tx
+            .select()
+            .from(orders)
+            .where(eq(orders.idempotencyKey, input.idempotencyKey))
+            .limit(1);
+
+          if (existing) {
+            if (existing.userId !== input.userId) {
+              throw new Error("Idempotency key already used by another order");
+            }
+            const itemRows = await tx
+              .select()
+              .from(orderItems)
+              .where(eq(orderItems.orderId, existing.id));
+            return {
+              order: mapOrder(existing),
+              items: itemRows.map(mapOrderItem),
+              created: false,
+            };
+          }
+        }
+
+        const balanceAfter = balance - input.coinTotal;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const { order, items } = await insertOrderWithItems(tx, input);
+        await appendCoinLedger(
+          tx,
+          {
             userId: input.userId,
-            tier: input.tier,
-            state: "PROCESSING",
-            coinTotal: input.coinTotal,
-            placedAt: timestamp,
-            stateEta: input.stateEta,
-            revealReadyAt: null,
-            idempotencyKey: input.idempotencyKey ?? null,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          })
-          .returning();
+            delta: -input.coinTotal,
+            type: "SPEND_ORDER",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
 
-        const itemRows = await tx
-          .insert(orderItems)
-          .values(
-            input.items.map((item) => ({
-              orderId: orderRow!.id,
-              listingVariantId: item.listingVariantId,
-              coinPriceSnapshot: item.coinPriceSnapshot,
-              quantity: item.quantity,
-              createdAt: timestamp,
-            })),
-          )
-          .returning();
-
-        return {
-          order: mapOrder(orderRow!),
-          items: itemRows.map(mapOrderItem),
-        };
+        return { order, items, created: true };
       });
     },
 

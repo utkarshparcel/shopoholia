@@ -245,6 +245,13 @@ export type CreateOrderInput = {
   }>;
 };
 
+export type PlaceOrderResult = {
+  order: OrderRecord;
+  items: OrderItemRecord[];
+  /** False when the idempotency key matched an existing order (nothing was charged). */
+  created: boolean;
+};
+
 export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
@@ -341,6 +348,12 @@ export interface Repositories {
   removeCartItem(cartId: string, listingVariantId: string): Promise<void>;
 
   createOrder(input: CreateOrderInput): Promise<{ order: OrderRecord; items: OrderItemRecord[] }>;
+  /**
+   * Checkout: creates the order and debits `coinTotal` (SPEND_ORDER) as one atomic step.
+   * Throws InsufficientCoinsError without creating anything when the balance is too low.
+   * Replaying the same user's idempotency key returns the existing order with `created: false`.
+   */
+  placeOrder(input: CreateOrderInput): Promise<PlaceOrderResult>;
   findOrderById(id: string): Promise<OrderRecord | null>;
   listOrdersByUserId(userId: string): Promise<OrderRecord[]>;
   updateOrderState(
