@@ -59,6 +59,6 @@ jobs:
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
 
       - name: Postgres repository tests
-        run: pnpm --filter @worn/api exec vitest run src/lib/repositories/postgres.test.ts
+        run: pnpm --filter @worn/api exec vitest run src/lib/repositories/postgres
         env:
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
