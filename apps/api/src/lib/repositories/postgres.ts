@@ -1211,23 +1211,32 @@ export function createPostgresRepositories(db: Db): Repositories {
       return rows.map(mapOrder);
     },
 
-    async updateOrderState(orderId, state, patch) {
-      const [existing] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
-      if (!existing) return null;
+    async listOrdersByStates(states) {
+      if (states.length === 0) return [];
+      const rows = await db
+        .select()
+        .from(orders)
+        .where(inArray(orders.state, [...states]))
+        .orderBy(asc(orders.placedAt));
 
+      return rows.map(mapOrder);
+    },
+
+    async updateOrderState(orderId, state, patch, options) {
       const [row] = await db
         .update(orders)
         .set({
           state,
-          stateEta: patch?.stateEta ?? existing.stateEta,
-          revealReadyAt:
-            patch?.revealReadyAt !== undefined ? patch.revealReadyAt : existing.revealReadyAt,
+          ...(patch?.stateEta ? { stateEta: patch.stateEta } : {}),
+          ...(patch?.revealReadyAt !== undefined ? { revealReadyAt: patch.revealReadyAt } : {}),
           updatedAt: now(),
         })
-        .where(eq(orders.id, orderId))
+        .where(
+          and(eq(orders.id, orderId), options?.from ? eq(orders.state, options.from) : undefined),
+        )
         .returning();
 
-      return mapOrder(row!);
+      return row ? mapOrder(row) : null;
     },
 
     async listOrderItemsByOrderId(orderId) {
@@ -1294,6 +1303,16 @@ export function createPostgresRepositories(db: Db): Repositories {
       return rows.map(mapRender);
     },
 
+    async listPendingRenders() {
+      const rows = await db
+        .select({ render: renders, orderId: orderItems.orderId })
+        .from(renders)
+        .innerJoin(orderItems, eq(renders.orderItemId, orderItems.id))
+        .where(and(eq(renders.unlocked, true), inArray(renders.status, ["QUEUED", "RUNNING"])));
+
+      return rows.map((row) => ({ render: mapRender(row.render), orderId: row.orderId }));
+    },
+
     async updateRender(id, patch) {
       const [existing] = await db.select().from(renders).where(eq(renders.id, id)).limit(1);
       if (!existing) return null;
@@ -1343,9 +1362,17 @@ export function createPostgresRepositories(db: Db): Repositories {
           payload: input.payload,
           status: input.status,
         })
+        .onConflictDoNothing({ target: pushEvents.dedupeKey })
         .returning();
+      if (row) return mapPushEvent(row);
 
-      return mapPushEvent(row!);
+      // Already recorded under this dedupe key: a repeat is a no-op, not an error.
+      const [existing] = await db
+        .select()
+        .from(pushEvents)
+        .where(eq(pushEvents.dedupeKey, input.dedupeKey))
+        .limit(1);
+      return mapPushEvent(existing!);
     },
 
     async listPushEvents(userId) {

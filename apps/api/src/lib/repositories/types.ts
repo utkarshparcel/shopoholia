@@ -356,10 +356,16 @@ export interface Repositories {
   placeOrder(input: CreateOrderInput): Promise<PlaceOrderResult>;
   findOrderById(id: string): Promise<OrderRecord | null>;
   listOrdersByUserId(userId: string): Promise<OrderRecord[]>;
+  listOrdersByStates(states: readonly OrderState[]): Promise<OrderRecord[]>;
+  /**
+   * With `options.from`, only updates while the order is still in that state and returns
+   * null otherwise, so two concurrent callers can't both apply the same transition.
+   */
   updateOrderState(
     orderId: string,
     state: OrderState,
     patch?: Partial<Pick<OrderRecord, "stateEta" | "revealReadyAt">>,
+    options?: { from?: OrderState },
   ): Promise<OrderRecord | null>
 
   listOrderItemsByOrderId(orderId: string): Promise<OrderItemRecord[]>;
@@ -371,6 +377,8 @@ export interface Repositories {
   findRenderById(id: string): Promise<RenderRecord | null>;
   findRendersByIds(ids: string[]): Promise<RenderRecord[]>;
   findRendersByOrderId(orderId: string): Promise<RenderRecord[]>;
+  /** Unlocked renders still QUEUED or RUNNING (free ones, and paid ones already unlocked). */
+  listPendingRenders(): Promise<Array<{ render: RenderRecord; orderId: string }>>;
   updateRender(
     id: string,
     patch: Partial<Pick<RenderRecord, "imageKey" | "unlocked" | "provider" | "status" | "costMicros">>,

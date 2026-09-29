@@ -41,6 +41,9 @@ export function createMemoryJobQueue(
     job: OrderTransitionJob;
     timer?: ReturnType<typeof setTimeout>;
   }> = [];
+  // Steps for one order run one at a time, in the order their timers fire, so steps
+  // that come due together (e.g. overdue ones after a restart) can't race each other.
+  const orderChains = new Map<string, Promise<void>>();
 
   const schedule = (fn: () => Promise<void>) => {
     if (autoProcess) {
@@ -48,6 +51,18 @@ export function createMemoryJobQueue(
         void fn().catch(() => undefined);
       });
     }
+  };
+
+  const runOrderTransition = (job: OrderTransitionJob) => {
+    const previous = orderChains.get(job.orderId) ?? Promise.resolve();
+    const current = previous
+      .then(() => handlers.orderTransition(job))
+      .catch(() => undefined);
+    orderChains.set(job.orderId, current);
+    void current.then(() => {
+      if (orderChains.get(job.orderId) === current) orderChains.delete(job.orderId);
+    });
+    return current;
   };
 
   const enqueueOrderTransition = async (job: OrderTransitionJob, delayMs: number) => {
@@ -60,7 +75,9 @@ export function createMemoryJobQueue(
     if (!autoProcess) return;
 
     entry.timer = setTimeout(() => {
-      void handlers.orderTransition(job).catch(() => undefined);
+      const index = orderPending.indexOf(entry);
+      if (index >= 0) orderPending.splice(index, 1);
+      void runOrderTransition(job);
     }, delayMs);
   };
 

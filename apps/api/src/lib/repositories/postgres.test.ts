@@ -1,5 +1,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { createStubPushService } from "../push/stub.js";
+import { checkAndMarkRevealReady, seedOrderRenders } from "../render/pipeline.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { createPostgresRepositoriesFromUrl } from "./postgres.js";
 import type { Repositories } from "./types.js";
@@ -84,7 +86,8 @@ describePostgres("createPostgresRepositories", () => {
             houseModelRenderKey: "",
             affiliateUrl: null,
             affiliateLinks: null,
-            status: "ACTIVE",
+            // Kept out of the feed so these rows can't be mistaken for the real catalog.
+            status: "DRAFT",
             sortOrder: 0,
             createdAt: new Date(),
           },
@@ -179,6 +182,100 @@ describePostgres("createPostgresRepositories", () => {
       await expect(
         repos.spendCoins({ userId: user.id, delta: 1, type: "SPEND_ORDER" }),
       ).rejects.toBeInstanceOf(InsufficientCoinsError);
+    });
+
+    it("applies a state change only from the expected state", async () => {
+      const user = await userWithCoins(100);
+      const variantId = await seedVariant(repos);
+      const { order } = await repos.placeOrder(orderInput(user.id, variantId, 60));
+
+      expect(await repos.updateOrderState(order.id, "OUT_FOR_DELIVERY", undefined, { from: "PACKED" })).toBeNull();
+      expect((await repos.findOrderById(order.id))!.state).toBe("PROCESSING");
+      const moved = await repos.updateOrderState(order.id, "PACKED", undefined, { from: "PROCESSING" });
+      expect(moved?.state).toBe("PACKED");
+      expect(moved?.stateEta).toEqual(order.stateEta);
+    });
+
+    it("marks an order revealed once when its free renders finish together", async () => {
+      const user = await userWithCoins(100);
+      const variantId = await seedVariant(repos);
+      const { order } = await repos.placeOrder(orderInput(user.id, variantId, 60));
+      await repos.updateOrderState(order.id, "DELIVERED");
+      const renders = await seedOrderRenders(repos, order.id);
+      for (const render of renders.filter((r) => r.isFree)) {
+        await repos.updateRender(render.id, { status: "DONE", imageKey: "reveal/x.jpg" });
+      }
+      // Pause between reading the order and updating it so both callers read DELIVERED.
+      const racing: Repositories = {
+        ...repos,
+        async findRendersByOrderId(orderId) {
+          const rows = await repos.findRendersByOrderId(orderId);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return rows;
+        },
+      };
+      const push = createStubPushService(racing);
+
+      await Promise.all([
+        checkAndMarkRevealReady({ repos: racing, push, orderId: order.id }),
+        checkAndMarkRevealReady({ repos: racing, push, orderId: order.id }),
+      ]);
+
+      expect((await repos.findOrderById(order.id))!.state).toBe("REVEAL_READY");
+      const events = await repos.listPushEvents(user.id);
+      expect(events.filter((e) => e.eventType === "ORDER_REVEAL_READY")).toHaveLength(1);
+    });
+
+    it("treats a repeated push event as a no-op", async () => {
+      const user = await userWithCoins(0);
+      const event = {
+        userId: user.id,
+        orderId: null,
+        eventType: "TEST",
+        dedupeKey: `test:${randomUUID()}`,
+        title: "t",
+        body: "b",
+        payload: { deepLink: "worn://x", screen: "order" as const, orderId: "x" },
+        status: "QUEUED" as const,
+      };
+
+      const first = await repos.recordPushEvent(event);
+      const second = await repos.recordPushEvent(event);
+
+      expect(second.id).toBe(first.id);
+    });
+
+    it("finds in-flight orders and pending renders for restart recovery", async () => {
+      const user = await userWithCoins(100);
+      const variantId = await seedVariant(repos);
+      const { order, items } = await repos.placeOrder(orderInput(user.id, variantId, 60));
+      await repos.updateOrderState(order.id, "OUT_FOR_DELIVERY");
+
+      const inTransit = await repos.listOrdersByStates(["PACKED", "OUT_FOR_DELIVERY"]);
+      expect(inTransit.map((o) => o.id)).toContain(order.id);
+      expect(await repos.listOrdersByStates(["REVEAL_READY"])).not.toContainEqual(
+        expect.objectContaining({ id: order.id }),
+      );
+      expect(await repos.listOrdersByStates([])).toEqual([]);
+
+      const base = {
+        orderItemId: items[0]!.id,
+        imageKey: null,
+        provider: "",
+        costMicros: 0,
+      };
+      const created = await repos.createRenders([
+        { ...base, scenario: "STUDIO", isFree: true, unlocked: true, status: "QUEUED" },
+        { ...base, scenario: "GOLDEN_HOUR", isFree: true, unlocked: true, status: "RUNNING" },
+        { ...base, scenario: "STREET", isFree: false, unlocked: false, status: "QUEUED" },
+        { ...base, scenario: "NIGHT", isFree: false, unlocked: true, status: "DONE" },
+      ]);
+
+      const pending = (await repos.listPendingRenders()).filter((p) =>
+        created.some((r) => r.id === p.render.id),
+      );
+      expect(pending.map((p) => p.render.scenario).sort()).toEqual(["GOLDEN_HOUR", "STUDIO"]);
+      expect(pending.every((p) => p.orderId === order.id)).toBe(true);
     });
   });
 });

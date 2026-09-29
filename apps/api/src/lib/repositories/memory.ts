@@ -809,9 +809,14 @@ export function createMemoryRepositories(): Repositories {
         .sort((a, b) => b.placedAt.getTime() - a.placedAt.getTime());
     },
 
-    async updateOrderState(orderId, state, patch) {
+    async listOrdersByStates(states) {
+      return Array.from(orders.values()).filter((order) => states.includes(order.state));
+    },
+
+    async updateOrderState(orderId, state, patch, options) {
       const order = orders.get(orderId);
       if (!order) return null;
+      if (options?.from && order.state !== options.from) return null;
       const updated: OrderRecord = {
         ...order,
         ...patch,
@@ -875,6 +880,18 @@ export function createMemoryRepositories(): Repositories {
         }
       }
       return all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    },
+
+    async listPendingRenders() {
+      const pending: Array<{ render: RenderRecord; orderId: string }> = [];
+      for (const render of renders.values()) {
+        if (!render.unlocked || (render.status !== "QUEUED" && render.status !== "RUNNING")) {
+          continue;
+        }
+        const item = orderItems.get(render.orderItemId);
+        if (item) pending.push({ render, orderId: item.orderId });
+      }
+      return pending;
     },
 
     async updateRender(id, patch) {
@@ -954,6 +971,10 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async recordPushEvent(input) {
+      // Same dedupe-key semantics as the unique index in Postgres: a repeat is a no-op.
+      const existing = pushEvents.find((e) => e.dedupeKey === input.dedupeKey);
+      if (existing) return existing;
+
       const event: PushEventRecord = {
         id: randomUUID(),
         ...input,

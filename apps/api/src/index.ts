@@ -9,6 +9,7 @@ import {
 import Fastify from "fastify";
 import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
+import { resumeInFlightWork } from "./lib/jobs/resume.js";
 import { initSentry } from "./lib/sentry.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { apiRoutes } from "./routes/index.js";
@@ -75,6 +76,13 @@ const host = process.env.HOST ?? "0.0.0.0";
 async function main() {
   initSentry();
   const app = await buildServer();
+
+  try {
+    const resumed = await resumeInFlightWork(app.deps);
+    app.log.info(resumed, "Resumed in-flight orders and renders");
+  } catch (error) {
+    app.log.error(error, "Failed to resume in-flight orders and renders");
+  }
 
   try {
     await app.listen({ port, host });

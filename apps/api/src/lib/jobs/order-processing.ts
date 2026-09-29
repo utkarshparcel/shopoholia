@@ -20,7 +20,9 @@ export function createOrderTransitionHandler(deps: {
     if (order.state === job.targetState) return;
     if (!isValidTransition(order.state, job.targetState)) return;
 
-    const updated = await deps.repos.updateOrderState(job.orderId, job.targetState);
+    const updated = await deps.repos.updateOrderState(job.orderId, job.targetState, undefined, {
+      from: order.state,
+    });
     if (!updated) return;
 
     const copy = pushCopyForState(job.targetState);
