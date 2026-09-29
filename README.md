@@ -71,7 +71,7 @@ Copy `.env.example` to `.env` at the repo root when wiring Postgres-backed API o
 |----------|----------|-------------|
 | `DATABASE_URL` | For Postgres mode | e.g. `postgresql://worn:worn@localhost:5432/worn` |
 
-When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, and push events. OTP codes and refresh tokens stay in-memory (no DB tables yet). Without `DATABASE_URL`, all repos use in-memory storage (CI default).
+When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, push events, and login refresh tokens (stored hashed). Phone OTP codes stay in memory. Without `DATABASE_URL`, all repos use in-memory storage (CI default).
 
 ### Cloudflare R2 storage
 

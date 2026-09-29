@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
 import {
   avatars,
@@ -14,6 +14,7 @@ import {
   orderItems,
   orders,
   pushEvents,
+  refreshTokens,
   renders,
   sellers,
   tryonPreviews,
@@ -41,7 +42,6 @@ import type {
   OtpRecord,
   PushEventPayload,
   PushEventRecord,
-  RefreshTokenRecord,
   RenderRecord,
   Repositories,
   SellerRecord,
@@ -68,6 +68,11 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 function now() {
   return new Date();
+}
+
+/** Refresh tokens are stored hashed, so a database leak doesn't hand out live sessions. */
+function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 /** Locks the user's row for the rest of the transaction and returns their coin balance. */
@@ -359,7 +364,6 @@ function decodeListingCursor(cursor: string): { sortOrder: number; id: string } 
 
 export function createPostgresRepositories(db: Db): Repositories {
   const otps = new Map<string, OtpRecord>();
-  const refreshTokens = new Map<string, RefreshTokenRecord>();
 
   const repos: Repositories = {
     async findUserByPhone(phone) {
@@ -798,21 +802,34 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async saveRefreshToken(record) {
-      refreshTokens.set(record.token, record);
+      await db.insert(refreshTokens).values({
+        tokenHash: hashRefreshToken(record.token),
+        userId: record.userId,
+        expiresAt: record.expiresAt,
+      });
+      // Clear out this user's expired tokens so the table doesn't grow forever.
+      await db
+        .delete(refreshTokens)
+        .where(and(eq(refreshTokens.userId, record.userId), lt(refreshTokens.expiresAt, now())));
     },
 
     async findRefreshToken(token) {
-      const record = refreshTokens.get(token);
-      if (!record) return null;
-      if (record.expiresAt < now()) {
-        refreshTokens.delete(token);
+      const tokenHash = hashRefreshToken(token);
+      const [row] = await db
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .limit(1);
+      if (!row) return null;
+      if (row.expiresAt < now()) {
+        await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
         return null;
       }
-      return record;
+      return { token, userId: row.userId, expiresAt: row.expiresAt };
     },
 
     async deleteRefreshToken(token) {
-      refreshTokens.delete(token);
+      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, hashRefreshToken(token)));
     },
 
     async seedListings(seedListings, seedVariants) {

@@ -13,6 +13,7 @@ export { orderItems } from "./schema/order-items.js";
 export { renders } from "./schema/renders.js";
 export { tryonPreviews } from "./schema/tryon-previews.js";
 export { pushEvents } from "./schema/push-events.js";
+export { refreshTokens } from "./schema/refresh-tokens.js";
 export { sellers } from "./schema/sellers.js";
 export {
   getCoinBalance,

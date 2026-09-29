@@ -1,4 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
+import { createDb, refreshTokens } from "@worn/db";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createStubPushService } from "../push/stub.js";
 import { checkAndMarkRevealReady, seedOrderRenders } from "../render/pipeline.js";
@@ -57,6 +59,62 @@ describePostgres("createPostgresRepositories", () => {
     });
     expect(order.state).toBe("PROCESSING");
     expect(await repos.findOrderById(order.id)).toBeTruthy();
+  });
+
+  describe("refresh tokens", () => {
+    it("keeps them across restarts, storing only a hash", async () => {
+      const before = createPostgresRepositoriesFromUrl(databaseUrl!);
+      const { user } = await before.createUser(`9${randomInt(10 ** 10, 10 ** 11)}`);
+      const token = randomUUID();
+      const expiresAt = new Date(Date.now() + 60 * 60_000);
+      await before.saveRefreshToken({ token, userId: user.id, expiresAt });
+
+      // A new repository instance with its own connection pool, as after a restart.
+      const after = createPostgresRepositoriesFromUrl(databaseUrl!);
+      expect(await after.findRefreshToken(token)).toEqual({ token, userId: user.id, expiresAt });
+
+      const rows = await createDb(databaseUrl!)
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.userId, user.id));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.tokenHash).not.toContain(token);
+
+      await after.deleteRefreshToken(token);
+      expect(await before.findRefreshToken(token)).toBeNull();
+    });
+
+    it("rejects and clears out expired tokens", async () => {
+      const repos = createPostgresRepositoriesFromUrl(databaseUrl!);
+      const { user } = await repos.createUser(`9${randomInt(10 ** 10, 10 ** 11)}`);
+      const expired = randomUUID();
+      await repos.saveRefreshToken({
+        token: expired,
+        userId: user.id,
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+      expect(await repos.findRefreshToken(expired)).toBeNull();
+
+      const stale = randomUUID();
+      await repos.saveRefreshToken({
+        token: stale,
+        userId: user.id,
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+      const fresh = randomUUID();
+      await repos.saveRefreshToken({
+        token: fresh,
+        userId: user.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      const rows = await createDb(databaseUrl!)
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.userId, user.id));
+      expect(rows).toHaveLength(1);
+      expect(await repos.findRefreshToken(fresh)).toMatchObject({ userId: user.id });
+    });
   });
 
   describe("checkout and coins", () => {
