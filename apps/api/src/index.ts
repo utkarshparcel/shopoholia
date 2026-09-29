@@ -11,6 +11,7 @@ import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
 import { initSentry } from "./lib/sentry.js";
+import { resolveJwtSecret, resolveListenAddress } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { apiRoutes } from "./routes/index.js";
 
@@ -41,14 +42,9 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024 },
   });
-  const jwtSecret = process.env.JWT_SECRET;
-  if (!jwtSecret) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("JWT_SECRET must be set in production");
-    }
-    app.log.warn("JWT_SECRET not set — using dev fallback. Do not deploy.");
-  }
-  await app.register(jwt, { secret: jwtSecret ?? "dev-only-change-me" });
+  const jwtSecret = resolveJwtSecret();
+  if (jwtSecret.warning) app.log.warn(jwtSecret.warning);
+  await app.register(jwt, { secret: jwtSecret.secret });
   await app.register(depsPlugin(deps));
 
   app.get(
@@ -70,8 +66,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   return app;
 }
 
-const port = Number(process.env.PORT ?? 3000);
-const host = process.env.HOST ?? "0.0.0.0";
+const { port, host } = resolveListenAddress();
 
 async function main() {
   initSentry();
