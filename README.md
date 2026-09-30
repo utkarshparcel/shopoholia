@@ -173,12 +173,17 @@ Set env vars for submit (`APPLE_ID`, `ASC_APP_ID`, `APPLE_TEAM_ID`, `GOOGLE_SERV
 
 ### Beta observability
 
+Each of these is off (a no-op) until its env var is set.
+
 | Concern | Env var | Notes |
 |---------|---------|-------|
-| API errors | `SENTRY_DSN` | Scaffolded in `@worn/api`; no-op without DSN |
-| Mobile crashes | `EXPO_PUBLIC_SENTRY_DSN` | Scaffolded in mobile; no-op without DSN |
-| Funnel events | console (dev) | `trackEvent()` in mobile; swap sink for PostHog/Mixpanel |
+| API errors | `SENTRY_DSN` | Unexpected (5xx) request errors, tagged with request id, method and route; expected 4xx aren't reported. Failed background jobs (avatar, try-on, order steps, renders) are logged and reported with the job kind and ids |
+| Mobile crashes | `EXPO_PUBLIC_SENTRY_DSN` | Uncaught JS errors, plus render errors caught by the root `ErrorBoundary` (which shows a retry screen). Also adds the Sentry Expo plugin at build time |
+| Funnel events | `EXPO_PUBLIC_POSTHOG_KEY` | `trackEvent()` → PostHog's `/batch/` API, sent every 10 s, at 20 queued events, and when the app goes to the background. `distinct_id` is the signed-in user's id (with an `$identify` on sign-in), otherwise a random id per app session. Without a key: console in dev, nothing in release builds |
+| PostHog host | `EXPO_PUBLIC_POSTHOG_HOST` | Optional; defaults to `https://us.i.posthog.com` (EU cloud: `https://eu.i.posthog.com`) |
 | Reveal satisfaction | `POST /orders/:id/reveal/rating` | 1-tap survey → API stub + `reveal_rated` event |
+
+`EXPO_PUBLIC_*` values are inlined when the app is bundled, so set them where Expo reads env: `apps/mobile/.env`, your shell, or the EAS build's environment variables.
 
 ## Scripts
 
