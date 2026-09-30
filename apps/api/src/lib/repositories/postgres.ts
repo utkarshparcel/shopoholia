@@ -23,6 +23,12 @@ import {
   type Db,
 } from "@worn/db";
 import { InsufficientCoinsError } from "./errors.js";
+import {
+  LISTING_WORD_SEPARATOR,
+  decodeListingCursor,
+  encodeListingCursor,
+  normalizeStyleKeywords,
+} from "./listing-feed.js";
 import type {
   AffiliateLinkRecord,
   AvatarRecord,
@@ -349,19 +355,15 @@ function mapPushEvent(row: PushEventRow): PushEventRecord {
   };
 }
 
-function encodeListingCursor(listing: Pick<ListingRecord, "sortOrder" | "id">): string {
-  return `${listing.sortOrder}:${listing.id}`;
-}
-
-function decodeListingCursor(cursor: string): { sortOrder: number; id: string } | null {
-  const separator = cursor.indexOf(":");
-  if (separator === -1) return null;
-
-  const sortOrder = Number(cursor.slice(0, separator));
-  const id = cursor.slice(separator + 1);
-  if (!Number.isFinite(sortOrder) || !id) return null;
-
-  return { sortOrder, id };
+/**
+ * SQL twin of matchesStyleKeywords: the listing's title, category and tags as padded
+ * lowercase words (non-ASCII-alphanumerics become spaces first, under "C" so the
+ * result is the same in any locale), tested against " keyword " patterns.
+ */
+function styleMatchSql(keywords: string[]) {
+  const words = sql`' ' || lower(regexp_replace((${listings.title} || ' ' || ${listings.category} || ' ' || array_to_string(${listings.tags}, ' ')) COLLATE "C", ${LISTING_WORD_SEPARATOR}, ' ', 'g')) || ' '`;
+  const patterns = keywords.map((keyword) => sql`${`% ${keyword} %`}`);
+  return sql<boolean>`coalesce(${words} LIKE ANY (ARRAY[${sql.join(patterns, sql`, `)}]::text[]), false)`;
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
@@ -899,37 +901,70 @@ export function createPostgresRepositories(db: Db): Repositories {
       await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
     },
 
-    async listListings({ cursor, limit, sellerId }): Promise<ListListingsResult> {
+    async listListings({
+      cursor,
+      limit,
+      sellerId,
+      category,
+      styleKeywords,
+    }): Promise<ListListingsResult> {
       const conditions = [eq(listings.status, "ACTIVE")];
 
       if (sellerId) {
         conditions.push(eq(listings.sellerId, sellerId));
       }
 
-      if (cursor) {
-        const decoded = decodeListingCursor(cursor);
-        if (decoded) {
-          conditions.push(
-            sql`(${listings.sortOrder} > ${decoded.sortOrder} OR (${listings.sortOrder} = ${decoded.sortOrder} AND ${listings.id} > ${decoded.id}))`,
-          );
+      if (category) {
+        conditions.push(eq(listings.category, category));
+      }
+
+      const keywords = normalizeStyleKeywords(styleKeywords ?? []);
+      const decoded = cursor ? decodeListingCursor(cursor) : null;
+      // Catalog-order cursors keep paging in catalog order (see listing-feed.ts).
+      const matched =
+        keywords.length > 0 && decoded?.matched !== null ? styleMatchSql(keywords) : null;
+
+      if (decoded) {
+        const afterPosition = sql`(${listings.sortOrder} > ${decoded.sortOrder} OR (${listings.sortOrder} = ${decoded.sortOrder} AND ${listings.id} > ${decoded.id}))`;
+        if (!matched) {
+          conditions.push(afterPosition);
+        } else if (decoded.matched) {
+          // Every non-matching listing comes after all the matching ones.
+          conditions.push(sql`(NOT ${matched} OR ${afterPosition})`);
+        } else {
+          conditions.push(sql`(NOT ${matched} AND ${afterPosition})`);
         }
       }
 
       const rows = await db
-        .select()
+        .select({ listing: listings, matched: (matched ?? sql<boolean>`false`).as("style_match") })
         .from(listings)
         .where(and(...conditions))
-        .orderBy(asc(listings.sortOrder), asc(listings.id))
+        .orderBy(
+          ...(matched ? [desc(sql.identifier("style_match"))] : []),
+          asc(listings.sortOrder),
+          asc(listings.id),
+        )
         .limit(limit + 1);
 
-      const hasMore = rows.length > limit;
-      const items = rows.slice(0, limit).map(mapListing);
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       const nextCursor =
-        hasMore && items.length > 0
-          ? encodeListingCursor(items[items.length - 1]!)
+        rows.length > limit && last
+          ? encodeListingCursor(last.listing, matched ? last.matched : null)
           : null;
 
-      return { items, nextCursor };
+      return { items: page.map((row) => mapListing(row.listing)), nextCursor };
+    },
+
+    async listListingCategories() {
+      const count = sql<number>`cast(count(*) as integer)`;
+      return db
+        .select({ category: listings.category, count })
+        .from(listings)
+        .where(eq(listings.status, "ACTIVE"))
+        .groupBy(listings.category)
+        .orderBy(desc(count), sql`${listings.category} COLLATE "C"`);
     },
 
     async findListingById(id) {

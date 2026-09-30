@@ -196,6 +196,19 @@ export type ListListingsInput = {
   cursor?: string;
   limit: number;
   sellerId?: string;
+  /** Exact category name. */
+  category?: string;
+  /**
+   * Words or phrases describing the viewer's style. When given, listings whose title,
+   * category or tags contain one (as whole words, ignoring case) come first, then the
+   * rest; both groups keep the catalog order. See listing-feed.ts for the cursors.
+   */
+  styleKeywords?: string[];
+};
+
+export type ListingCategoryCount = {
+  category: string;
+  count: number;
 };
 
 export type CreateSellerListingInput = {
@@ -339,6 +352,8 @@ export interface Repositories {
   /** Wipe catalog listings/variants (and cascaded cart/tryon rows). Dev/reseed only. */
   clearCatalog(): Promise<void>;
   listListings(input: ListListingsInput): Promise<ListListingsResult>;
+  /** Categories of ACTIVE listings with their counts, largest first (ties by name). */
+  listListingCategories(): Promise<ListingCategoryCount[]>;
   findListingById(id: string): Promise<ListingRecord | null>;
   findVariantsByListingId(listingId: string): Promise<ListingVariantRecord[]>;
   findVariantById(id: string): Promise<ListingVariantRecord | null>;

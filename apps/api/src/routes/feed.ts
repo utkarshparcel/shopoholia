@@ -1,4 +1,5 @@
 import {
+  FeedCategoriesResponseSchema,
   FeedQuerySchema,
   FeedResponseSchema,
   ListingDetailSchema,
@@ -6,15 +7,25 @@ import {
   TryonRequestSchema,
   TryonResponseSchema,
 } from "@worn/shared";
+import type { FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { requireAuth } from "../lib/auth/guard.js";
+import { optionalUserId, requireAuth } from "../lib/auth/guard.js";
+import { styleKeywordsForTags } from "../lib/catalog/style-match.js";
 import { listingCardDto, listingDetailDto } from "../lib/catalog/urls.js";
 import { newJobId } from "../lib/jobs/avatar-processing.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
+  /** Signed-in viewers who took the style quiz get listings matching it first. */
+  async function viewerStyleKeywords(request: FastifyRequest): Promise<string[]> {
+    const userId = await optionalUserId(request);
+    if (!userId) return [];
+    const user = await app.deps.repos.findUserById(userId);
+    return user?.styleProfile ? styleKeywordsForTags(user.styleProfile.tags) : [];
+  }
+
   app.get(
     "/feed",
     {
@@ -27,8 +38,14 @@ export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request) => {
-      const { cursor, limit, seller_id: sellerId } = request.query;
-      const page = await app.deps.repos.listListings({ cursor, limit, sellerId });
+      const { cursor, limit, seller_id: sellerId, category } = request.query;
+      const page = await app.deps.repos.listListings({
+        cursor,
+        limit,
+        sellerId,
+        category,
+        styleKeywords: await viewerStyleKeywords(request),
+      });
       const items = await Promise.all(
         page.items.map((listing) =>
           listingCardDto(listing, app.deps.storage, app.deps.repos),
@@ -36,6 +53,19 @@ export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
       );
       return { items, nextCursor: page.nextCursor };
     },
+  );
+
+  app.get(
+    "/feed/categories",
+    {
+      schema: {
+        tags: ["feed"],
+        response: {
+          200: FeedCategoriesResponseSchema,
+        },
+      },
+    },
+    async () => ({ categories: await app.deps.repos.listListingCategories() }),
   );
 
   app.get(

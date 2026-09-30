@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
 import { InsufficientCoinsError } from "./errors.js";
+import {
+  compareText,
+  decodeListingCursor,
+  encodeListingCursor,
+  matchesStyleKeywords,
+  normalizeStyleKeywords,
+} from "./listing-feed.js";
 import type {
   AvatarRecord,
   CartItemRecord,
@@ -542,23 +549,52 @@ export function createMemoryRepositories(): Repositories {
       lookbooks.clear();
     },
 
-    async listListings({ cursor, limit, sellerId }: ListListingsInput) {
-      const all = [...listings.values()]
+    async listListings({ cursor, limit, sellerId, category, styleKeywords }: ListListingsInput) {
+      const keywords = normalizeStyleKeywords(styleKeywords ?? []);
+      const after = cursor ? decodeListingCursor(cursor) : null;
+      // Catalog-order cursors keep paging in catalog order (see listing-feed.ts).
+      const ranked = keywords.length > 0 && after?.matched !== null;
+
+      const rows = [...listings.values()]
         .filter((l) => l.status === "ACTIVE")
         .filter((l) => (sellerId ? l.sellerId === sellerId : true))
-        .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+        .filter((l) => (category ? l.category === category : true))
+        .map((listing) => ({ listing, matched: ranked && matchesStyleKeywords(listing, keywords) }))
+        .sort(
+          (a, b) =>
+            Number(b.matched) - Number(a.matched) ||
+            a.listing.sortOrder - b.listing.sortOrder ||
+            compareText(a.listing.id, b.listing.id),
+        )
+        .filter(({ listing, matched }) => {
+          if (!after) return true;
+          const afterPosition =
+            listing.sortOrder > after.sortOrder ||
+            (listing.sortOrder === after.sortOrder && listing.id > after.id);
+          if (!ranked) return afterPosition;
+          // Every non-matching listing comes after all the matching ones.
+          return after.matched ? !matched || afterPosition : !matched && afterPosition;
+        });
 
-      let start = 0;
-      if (cursor) {
-        const idx = all.findIndex((l) => l.id === cursor);
-        start = idx >= 0 ? idx + 1 : 0;
-      }
-
-      const slice = all.slice(start, start + limit);
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       const nextCursor =
-        start + limit < all.length ? (slice[slice.length - 1]?.id ?? null) : null;
+        rows.length > limit && last
+          ? encodeListingCursor(last.listing, ranked ? last.matched : null)
+          : null;
 
-      return { items: slice, nextCursor };
+      return { items: page.map((row) => row.listing), nextCursor };
+    },
+
+    async listListingCategories() {
+      const counts = new Map<string, number>();
+      for (const listing of listings.values()) {
+        if (listing.status !== "ACTIVE") continue;
+        counts.set(listing.category, (counts.get(listing.category) ?? 0) + 1);
+      }
+      return [...counts]
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count || compareText(a.category, b.category));
     },
 
     async findListingById(id) {

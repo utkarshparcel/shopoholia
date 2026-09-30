@@ -25,11 +25,22 @@ export const FeedQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   seller_id: z.string().uuid().optional(),
+  /** Exact category name, as returned by GET /feed/categories. */
+  category: z.string().min(1).max(200).optional(),
 });
 
 export const FeedResponseSchema = z.object({
   items: z.array(ListingCardSchema),
   nextCursor: z.string().nullable(),
+});
+
+export const FeedCategorySchema = z.object({
+  category: z.string(),
+  count: z.number().int().positive(),
+});
+
+export const FeedCategoriesResponseSchema = z.object({
+  categories: z.array(FeedCategorySchema),
 });
 
 export const ListingVariantSchema = z.object({
@@ -59,6 +70,8 @@ export const TryonResponseSchema = z.object({
 
 export type ListingCard = z.infer<typeof ListingCardSchema>;
 export type FeedResponse = z.infer<typeof FeedResponseSchema>;
+export type FeedCategory = z.infer<typeof FeedCategorySchema>;
+export type FeedCategoriesResponse = z.infer<typeof FeedCategoriesResponseSchema>;
 export type ListingDetail = z.infer<typeof ListingDetailSchema>;
 export type TryonRequest = z.infer<typeof TryonRequestSchema>;
 export type TryonResponse = z.infer<typeof TryonResponseSchema>;
