@@ -107,6 +107,14 @@ Primary sign-in is **Google OAuth** (`POST /auth/google`). No Twilio/MSG91 spend
 
 Phone OTP remains available for local tooling only. Optional auto OTP login: `EXPO_PUBLIC_DEV_AUTO_AUTH=1` (defaults off). Login screen also has **Dev continue** in `__DEV__`.
 
+### Push notifications
+
+Every order step ("Order confirmed" → packed → out for delivery → arriving soon → delivered → "Your haul is here") is sent through the [Expo push service](https://docs.expo.dev/push-notifications/sending-notifications/); tapping one opens the order tracker or the reveal. After sign-in the app asks for notification permission once and registers its Expo push token (`PUT /me/push-token`, cleared on sign-out). Each push is recorded in `push_events`: `SENT` with the Expo ticket id, `FAILED`, or `QUEUED` when the user has no registered device.
+
+- **Real delivery needs an EAS development build** (`eas build --profile development`) with push credentials: an APNs key for iOS and FCM V1 credentials for Android (see [push setup](https://docs.expo.dev/push-notifications/push-notifications-setup/)). Expo Go on Android can't receive remote pushes.
+- The app needs the EAS project id (`extra.eas.projectId` in the app config, added by `eas init`); without it the app skips registration.
+- `EXPO_ACCESS_TOKEN` (API, optional): only needed if you turn on enhanced push security for the Expo project.
+
 ### Run tests
 
 ```bash

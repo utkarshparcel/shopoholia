@@ -15,6 +15,8 @@ export const ANALYTICS_EVENTS = [
   "iap_purchase",
   "generate_render",
   "rush_to_express",
+  "push_permission",
+  "push_opened",
 ] as const;
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[number];

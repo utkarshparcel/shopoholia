@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 
+import { usePushNotifications } from '@/src/hooks/push-notifications';
 import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { trackEvent } from '@/src/lib/analytics';
@@ -12,6 +13,7 @@ import { bg } from '@/src/theme/tokens';
 export default function RootLayout() {
   const [queryClient] = useState(() => new QueryClient());
   const installTracked = useRef(false);
+  usePushNotifications();
 
   useEffect(() => {
     initSentry();

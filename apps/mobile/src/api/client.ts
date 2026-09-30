@@ -450,6 +450,27 @@ export async function claimStreak(accessToken: string) {
   }>(res);
 }
 
+export async function registerPushToken(accessToken: string, token: string) {
+  const res = await fetch(`${API_URL}/me/push-token`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ token }),
+  });
+  return parseJson<{ registered: boolean }>(res);
+}
+
+/** With `token`, the API only clears it while it's still this device's (not a newer one). */
+export async function clearPushToken(accessToken: string, token?: string) {
+  const res = await fetch(`${API_URL}/me/push-token`, {
+    method: 'DELETE',
+    headers: token
+      ? { 'Content-Type': 'application/json', ...authHeaders(accessToken) }
+      : authHeaders(accessToken),
+    body: token ? JSON.stringify({ token }) : undefined,
+  });
+  return parseJson<{ registered: boolean }>(res);
+}
+
 export async function getStyleQuiz(accessToken: string) {
   const res = await fetch(`${API_URL}/style-quiz`, {
     headers: authHeaders(accessToken),
