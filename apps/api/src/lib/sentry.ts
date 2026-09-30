@@ -18,7 +18,8 @@ export function initSentry(): void {
   initialized = true;
 }
 
-export function captureException(error: unknown): void {
+/** `tags` go on this event only (searchable in Sentry); no-op until initSentry has run with a DSN. */
+export function captureException(error: unknown, tags?: Record<string, string>): void {
   if (!initialized) return;
-  Sentry.captureException(error);
+  Sentry.captureException(error, tags ? { tags } : undefined);
 }

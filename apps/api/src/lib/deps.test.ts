@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import * as Sentry from "@sentry/node";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultDeps } from "./deps.js";
+import { createMemoryRepositories } from "./repositories/memory.js";
+import { initSentry } from "./sentry.js";
+
+vi.mock("@sentry/node", () => ({ init: vi.fn(), captureException: vi.fn() }));
 
 describe("createDefaultDeps", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
   it("returns wired dependencies", async () => {
     const deps = await createDefaultDeps();
     expect(deps.repos).toBeDefined();
@@ -25,5 +35,33 @@ describe("createDefaultDeps", () => {
     const base = await createDefaultDeps();
     const deps = await createDefaultDeps({ repos: base.repos });
     expect(deps.repos).toBe(base.repos);
+  });
+
+  it("logs failed background jobs and reports them to Sentry", async () => {
+    // Jobs only run in the background outside tests.
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("SENTRY_DSN", "https://key@o0.ingest.sentry.io/1");
+    initSentry();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failure = new Error("database unavailable");
+    const repos = {
+      ...createMemoryRepositories(),
+      findRendersByOrderId: async () => {
+        throw failure;
+      },
+    };
+
+    const deps = await createDefaultDeps({ repos });
+    await deps.jobQueue.enqueueDeliveredRender({ orderId: "order-1" });
+
+    await vi.waitFor(() => expect(Sentry.captureException).toHaveBeenCalled());
+    expect(Sentry.captureException).toHaveBeenCalledWith(failure, {
+      tags: { job: "deliveredRender", orderId: "order-1" },
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      "[jobs] deliveredRender job failed",
+      { orderId: "order-1" },
+      failure,
+    );
   });
 });

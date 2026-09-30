@@ -5,6 +5,7 @@ import { createPostgresRepositoriesFromUrl } from "./repositories/postgres.js";
 import { createStorageFromEnv, type StorageClient } from "./storage/r2.js";
 import { createRenderProvider } from "./render/provider.js";
 import { createDevOtpService, type OtpService } from "./auth/otp.js";
+import { reportJobError } from "./error-reporting.js";
 import {
   createAvatarProcessingHandler,
   newJobId,
@@ -109,7 +110,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
       }),
       render: renderHandler,
     },
-    { autoProcess: process.env.NODE_ENV !== "test", repos },
+    { autoProcess: process.env.NODE_ENV !== "test", repos, onError: reportJobError },
   );
 
   const otp = overrides.otp ?? createDevOtpService(repos);

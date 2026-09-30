@@ -4,7 +4,7 @@ import { createStubPushService } from "../push/stub.js";
 import { createMemoryRepositories } from "../repositories/memory.js";
 import type { Repositories } from "../repositories/types.js";
 import { createOrderTransitionHandler, type OrderTransitionJob } from "./order-processing.js";
-import { createMemoryJobQueue, type JobHandler } from "./queue.js";
+import { createMemoryJobQueue, type JobErrorReporter, type JobHandler } from "./queue.js";
 
 type Wrap = (handler: JobHandler<OrderTransitionJob>) => JobHandler<OrderTransitionJob>;
 
@@ -28,7 +28,11 @@ function withOrderLatency(repos: Repositories, ms: number): Repositories {
  * `repos` is the plain in-memory store for arranging and asserting; the queue and
  * transition handler see it through `latencyMs` of simulated database latency.
  */
-function setup({ wrap = (handler) => handler, latencyMs = 0 }: { wrap?: Wrap; latencyMs?: number } = {}) {
+function setup({
+  wrap = (handler) => handler,
+  latencyMs = 0,
+  onError,
+}: { wrap?: Wrap; latencyMs?: number; onError?: JobErrorReporter } = {}) {
   const repos = createMemoryRepositories();
   const queueRepos = latencyMs > 0 ? withOrderLatency(repos, latencyMs) : repos;
   const onDelivered = vi.fn(async () => undefined);
@@ -45,7 +49,7 @@ function setup({ wrap = (handler) => handler, latencyMs = 0 }: { wrap?: Wrap; la
       deliveredRender: vi.fn(),
       render: vi.fn(),
     },
-    { repos: queueRepos, autoProcess: true },
+    { repos: queueRepos, autoProcess: true, onError },
   );
   return { repos, queue, onDelivered };
 }
@@ -149,6 +153,51 @@ describe("createMemoryJobQueue order ladder", () => {
     expect(targets).toEqual(["ARRIVING_SOON", "DELIVERED"]);
   });
 
+  it("reports a failed step and still runs the order's later steps", async () => {
+    const targets: string[] = [];
+    const onError = vi.fn();
+    const { repos, queue } = setup({
+      onError,
+      wrap: (handler) => async (job) => {
+        targets.push(job.targetState);
+        if (job.targetState === "PACKED") throw new Error("push provider down");
+        await handler(job);
+      },
+    });
+    const order = await createOrder(repos, new Date(Date.now() - 10 * 60_000));
+
+    const scheduling = queue.scheduleOrderLadder(order.id);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await scheduling;
+
+    expect(onError).toHaveBeenCalledExactlyOnceWith(new Error("push provider down"), {
+      kind: "orderTransition",
+      ids: { orderId: order.id, targetState: "PACKED" },
+    });
+    expect(targets).toEqual(["PACKED", "OUT_FOR_DELIVERY", "ARRIVING_SOON", "DELIVERED"]);
+  });
+
+  it("keeps an order's steps running when the reporter itself throws", async () => {
+    const targets: string[] = [];
+    const { repos, queue } = setup({
+      onError: () => {
+        throw new Error("reporter down");
+      },
+      wrap: (handler) => async (job) => {
+        targets.push(job.targetState);
+        if (job.targetState === "PACKED") throw new Error("push provider down");
+        await handler(job);
+      },
+    });
+    const order = await createOrder(repos, new Date(Date.now() - 10 * 60_000));
+
+    const scheduling = queue.scheduleOrderLadder(order.id);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await scheduling;
+
+    expect(targets).toEqual(["PACKED", "OUT_FOR_DELIVERY", "ARRIVING_SOON", "DELIVERED"]);
+  });
+
   it("schedules nothing for orders past delivery", async () => {
     const targets: string[] = [];
     const { repos, queue } = setup({
@@ -164,5 +213,88 @@ describe("createMemoryJobQueue order ladder", () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
     expect(targets).toEqual([]);
+  });
+});
+
+describe("createMemoryJobQueue background failures", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function failingQueue(onError?: JobErrorReporter) {
+    const fail = (message: string) => async () => {
+      throw new Error(message);
+    };
+    return createMemoryJobQueue(
+      {
+        avatar: fail("avatar failed"),
+        tryon: fail("tryon failed"),
+        orderTransition: fail("step failed"),
+        deliveredRender: fail("seeding failed"),
+        render: fail("render failed"),
+      },
+      { repos: createMemoryRepositories(), autoProcess: true, onError },
+    );
+  }
+
+  it("reports each failed job with its kind and ids instead of dropping it", async () => {
+    const onError = vi.fn();
+    const queue = failingQueue(onError);
+
+    await queue.enqueueAvatarProcessing({
+      jobId: "job-1",
+      userId: "user-1",
+      avatarId: "avatar-1",
+      uploadKeys: ["uploads/selfie.jpg"],
+    });
+    await queue.enqueueTryonProcessing({
+      jobId: "job-2",
+      userId: "user-1",
+      listingVariantId: "variant-1",
+      modelImageKey: "references/model.jpg",
+      garmentImageKey: "garments/dress.jpg",
+    });
+    await queue.enqueueDeliveredRender({ orderId: "order-1" });
+    await queue.enqueueRender({ renderId: "render-1", orderId: "order-1" });
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(4));
+    expect(onError.mock.calls).toEqual([
+      [
+        new Error("avatar failed"),
+        { kind: "avatar", ids: { jobId: "job-1", userId: "user-1", avatarId: "avatar-1" } },
+      ],
+      [
+        new Error("tryon failed"),
+        { kind: "tryon", ids: { jobId: "job-2", userId: "user-1", listingVariantId: "variant-1" } },
+      ],
+      [new Error("seeding failed"), { kind: "deliveredRender", ids: { orderId: "order-1" } }],
+      [new Error("render failed"), { kind: "render", ids: { renderId: "render-1", orderId: "order-1" } }],
+    ]);
+  });
+
+  it("logs to console.error when no reporter is given", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const queue = failingQueue();
+
+    await queue.enqueueRender({ renderId: "render-1", orderId: "order-1" });
+
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledOnce());
+    expect(consoleError).toHaveBeenCalledWith(
+      "[jobs] render job failed",
+      { renderId: "render-1", orderId: "order-1" },
+      new Error("render failed"),
+    );
+  });
+
+  it("keeps processing jobs when the reporter itself throws", async () => {
+    const onError = vi.fn(() => {
+      throw new Error("reporter down");
+    });
+    const queue = failingQueue(onError);
+
+    await queue.enqueueRender({ renderId: "render-1", orderId: "order-1" });
+    await queue.enqueueRender({ renderId: "render-2", orderId: "order-1" });
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(2));
   });
 });

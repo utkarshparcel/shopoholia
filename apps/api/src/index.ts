@@ -9,8 +9,9 @@ import {
 import Fastify from "fastify";
 import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
+import { reportRequestError } from "./lib/error-reporting.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
-import { initSentry } from "./lib/sentry.js";
+import { captureException, initSentry } from "./lib/sentry.js";
 import { resolveJwtSecret, resolveListenAddress } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { apiRoutes } from "./routes/index.js";
@@ -33,6 +34,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  // Added before any plugin or route so it applies to all of them.
+  app.addHook("onError", reportRequestError);
 
   await app.register(cors, {
     origin: process.env.NODE_ENV === "production"
@@ -77,6 +80,7 @@ async function main() {
     app.log.info(resumed, "Resumed in-flight orders and renders");
   } catch (error) {
     app.log.error(error, "Failed to resume in-flight orders and renders");
+    captureException(error);
   }
 
   try {
