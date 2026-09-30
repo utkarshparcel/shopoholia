@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  ApiRequestError,
   createOrder,
   fetchCoinBalance,
   fetchOrder,
+  rushOrder,
   type OrderSummary,
 } from '@/src/api/client';
 import { trackEvent } from '@/src/lib/analytics';
@@ -62,6 +64,46 @@ export function useOrder(orderId: string) {
     refetchInterval: (query) => {
       const state = query.state.data?.state;
       return state && state !== 'REVEAL_READY' ? 5_000 : false;
+    },
+  });
+}
+
+/** True when the API turned a coin spend down for lack of coins (402). */
+export function isInsufficientCoinsError(error: unknown) {
+  return error instanceof ApiRequestError && error.status === 402;
+}
+
+export function useRushOrder(orderId: string) {
+  const accessToken = useSessionStore((s) => s.accessToken);
+  const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => {
+      if (!accessToken) throw new Error('Sign in to rush your order');
+      return rushOrder(accessToken, orderId);
+    },
+    onSuccess: ({ order, balanceAfter }) => {
+      trackEvent('rush_to_express', {
+        orderId: order.id,
+        state: order.state,
+        coinsSpent: order.rushCostCoins,
+      });
+      setCoinBalance(balanceAfter);
+      queryClient.setQueryData(['coins', 'balance', accessToken], { balance: balanceAfter });
+      queryClient.setQueryData(['order', order.id, accessToken], order);
+      void queryClient.invalidateQueries({ queryKey: ['orders', accessToken] });
+    },
+    onError: async () => {
+      // A refusal means the order or the balance isn't what this screen showed: reload both.
+      if (!accessToken) return;
+      await Promise.allSettled([
+        queryClient.invalidateQueries({ queryKey: ['order', orderId, accessToken] }),
+        fetchCoinBalance(accessToken).then((balance) => {
+          setCoinBalance(balance.balance);
+          queryClient.setQueryData(['coins', 'balance', accessToken], balance);
+        }),
+      ]);
     },
   });
 }

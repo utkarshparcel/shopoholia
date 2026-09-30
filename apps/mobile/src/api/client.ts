@@ -230,6 +230,9 @@ export type OrderSummary = {
   coinTotal: number;
   placedAt: string;
   stateEta?: Partial<Record<OrderState, string>>;
+  /** Whether paying rushCostCoins would get this order to you sooner. */
+  rushAvailable: boolean;
+  rushCostCoins: number;
 };
 
 export async function fetchCoinBalance(accessToken: string) {
@@ -267,6 +270,34 @@ export async function fetchOrder(accessToken: string, orderId: string) {
     headers: authHeaders(accessToken),
   });
   return parseJson<OrderSummary>(res);
+}
+
+/** A refused request, with its HTTP status so callers can handle e.g. 402 specially. */
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
+export type RushOrderResponse = {
+  order: OrderSummary;
+  balanceAfter: number;
+};
+
+export async function rushOrder(accessToken: string, orderId: string) {
+  const res = await fetch(`${API_URL}/orders/${orderId}/rush`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as ApiError | null;
+    throw new ApiRequestError(res.status, err?.message ?? `Request failed (${res.status})`);
+  }
+  return (await res.json()) as RushOrderResponse;
 }
 
 export type RenderCard = {

@@ -68,6 +68,7 @@ vi.mock('react-native', () => ({
   },
   Image: createComponent('img'),
   ActivityIndicator: createComponent('div'),
+  Alert: { alert: vi.fn() },
   PanResponder: {
     create: () => ({
       panHandlers: {},
