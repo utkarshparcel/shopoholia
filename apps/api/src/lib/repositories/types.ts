@@ -288,6 +288,13 @@ export interface Repositories {
 
   saveStyleProfile(userId: string, profile: { tags: string[]; answers: Record<string, string> }): Promise<void>;
 
+  /** Idempotent; a repeat save keeps the original save time. The listing must exist. */
+  saveLookbookItem(userId: string, listingId: string): Promise<void>;
+  /** Idempotent; removing a listing that isn't saved does nothing. */
+  removeLookbookItem(userId: string, listingId: string): Promise<void>;
+  /** Every listing the user has saved, whatever its status, most recently saved first. */
+  listLookbookListings(userId: string): Promise<ListingRecord[]>;
+
   recordCashbackEvent(input: { userId: string; listingId: string; platform: string; clickId: string }): Promise<void>;
   listCashbackEvents(userId: string): Promise<Array<{ id: string; listingId: string | null; platform: string; coinsEarned: number; status: string; createdAt: Date }>>;
   confirmCashback(clickId: string, status: "CONFIRMED" | "REJECTED"): Promise<void>;

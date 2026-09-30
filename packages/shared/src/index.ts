@@ -176,6 +176,12 @@ export {
   type StyleQuizSubmitResponse,
 } from "./schemas/style-quiz.js";
 export {
+  LookbookParamsSchema,
+  LookbookResponseSchema,
+  type LookbookParams,
+  type LookbookResponse,
+} from "./schemas/lookbook.js";
+export {
   CashbackEventSchema,
   CashbackHistoryResponseSchema,
   CashbackWebhookBodySchema,

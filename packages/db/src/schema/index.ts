@@ -8,6 +8,7 @@ export * from "./enums.js";
 export * from "./iap-receipts.js";
 export * from "./listing-variants.js";
 export * from "./listings.js";
+export * from "./lookbook-items.js";
 export * from "./order-items.js";
 export * from "./orders.js";
 export * from "./push-events.js";

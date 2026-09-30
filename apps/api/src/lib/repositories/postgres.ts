@@ -11,6 +11,7 @@ import {
   iapReceipts,
   listingVariants,
   listings,
+  lookbookItems,
   orderItems,
   orders,
   pushEvents,
@@ -564,6 +565,26 @@ export function createPostgresRepositories(db: Db): Repositories {
         .update(users)
         .set({ styleProfile: profile, updatedAt: now() })
         .where(eq(users.id, userId));
+    },
+
+    async saveLookbookItem(userId, listingId) {
+      await db.insert(lookbookItems).values({ userId, listingId }).onConflictDoNothing();
+    },
+
+    async removeLookbookItem(userId, listingId) {
+      await db
+        .delete(lookbookItems)
+        .where(and(eq(lookbookItems.userId, userId), eq(lookbookItems.listingId, listingId)));
+    },
+
+    async listLookbookListings(userId) {
+      const rows = await db
+        .select({ listing: listings })
+        .from(lookbookItems)
+        .innerJoin(listings, eq(lookbookItems.listingId, listings.id))
+        .where(eq(lookbookItems.userId, userId))
+        .orderBy(desc(lookbookItems.createdAt), asc(lookbookItems.listingId));
+      return rows.map((row) => mapListing(row.listing));
     },
 
     async recordCashbackEvent(input) {

@@ -69,6 +69,8 @@ export function createMemoryRepositories(): Repositories {
   const usersByPhone = new Map<string, string>();
   const avatars = new Map<string, AvatarRecord>();
   const avatarsByUser = new Map<string, string>();
+  // userId -> (listingId -> saved at), in the order the listings were saved.
+  const lookbooks = new Map<string, Map<string, Date>>();
   const ledger: CoinLedgerRecord[] = [];
   const coinLocks = new Map<string, Promise<void>>();
   const otps = new Map<string, OtpRecord>();
@@ -296,6 +298,25 @@ export function createMemoryRepositories(): Repositories {
       users.set(userId, { ...user, styleProfile: profile, updatedAt: now() });
     },
 
+    async saveLookbookItem(userId, listingId) {
+      // Mirrors the foreign key in Postgres.
+      if (!listings.has(listingId)) throw new Error(`Listing not found: ${listingId}`);
+      const saved = lookbooks.get(userId) ?? new Map<string, Date>();
+      if (!saved.has(listingId)) saved.set(listingId, now());
+      lookbooks.set(userId, saved);
+    },
+
+    async removeLookbookItem(userId, listingId) {
+      lookbooks.get(userId)?.delete(listingId);
+    },
+
+    async listLookbookListings(userId) {
+      // Newest insertion first, so the stable sort keeps same-millisecond saves in order.
+      const saved = [...(lookbooks.get(userId) ?? [])].reverse();
+      saved.sort(([, a], [, b]) => b.getTime() - a.getTime());
+      return saved.flatMap(([listingId]) => listings.get(listingId) ?? []);
+    },
+
     async recordCashbackEvent(input) {
       cashbackEvents.set(input.clickId, {
         id: randomUUID(),
@@ -518,6 +539,7 @@ export function createMemoryRepositories(): Repositories {
       listings.clear();
       variants.clear();
       variantsByListing.clear();
+      lookbooks.clear();
     },
 
     async listListings({ cursor, limit, sellerId }: ListListingsInput) {

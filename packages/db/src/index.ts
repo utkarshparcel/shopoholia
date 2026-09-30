@@ -8,6 +8,7 @@ export { coinLedger } from "./schema/coin-ledger.js";
 export { iapReceipts } from "./schema/iap-receipts.js";
 export { listings } from "./schema/listings.js";
 export { listingVariants } from "./schema/listing-variants.js";
+export { lookbookItems } from "./schema/lookbook-items.js";
 export { orders } from "./schema/orders.js";
 export { orderItems } from "./schema/order-items.js";
 export { renders } from "./schema/renders.js";
