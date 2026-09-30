@@ -12,6 +12,20 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: worn
+          POSTGRES_PASSWORD: worn
+          POSTGRES_DB: worn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U worn -d worn"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -31,10 +45,20 @@ jobs:
         run: pnpm turbo run build --filter=@worn/shared --filter=@worn/api
 
       - name: Lint
-        run: pnpm turbo run lint --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
+        run: pnpm turbo run lint --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render
 
       - name: Typecheck
-        run: pnpm turbo run typecheck --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
+        run: pnpm turbo run typecheck --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render
 
       - name: Test
-        run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile
+        run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render
+
+      - name: Apply database migrations
+        run: pnpm --filter @worn/db db:migrate
+        env:
+          DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
+
+      - name: Postgres repository tests
+        run: pnpm --filter @worn/api exec vitest run src/lib/repositories/postgres
+        env:
+          DATABASE_URL: postgresql://worn:worn@localhost:5432/worn

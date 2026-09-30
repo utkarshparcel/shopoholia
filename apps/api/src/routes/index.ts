@@ -5,7 +5,9 @@ import { cartRoutes } from "./cart.js";
 import { cashbackRoutes } from "./cashback.js";
 import { coinsRoutes } from "./coins.js";
 import { feedRoutes } from "./feed.js";
+import { lookbookRoutes } from "./lookbook.js";
 import { ordersRoutes } from "./orders.js";
+import { pushRoutes } from "./push.js";
 import { referralRoutes } from "./referrals.js";
 import { revealRoutes } from "./reveal.js";
 import { sellersRoutes } from "./sellers.js";
@@ -25,6 +27,8 @@ export const apiRoutes: FastifyPluginAsyncZod = async (app) => {
   await app.register(referralRoutes);
   await app.register(streaksRoutes);
   await app.register(styleQuizRoutes);
+  await app.register(lookbookRoutes);
   await app.register(cashbackRoutes);
   await app.register(webhooksRoutes);
+  await app.register(pushRoutes);
 };

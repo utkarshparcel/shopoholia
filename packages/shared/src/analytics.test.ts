@@ -22,6 +22,9 @@ describe("analytics schemas", () => {
       "affiliate_click",
       "iap_purchase",
       "generate_render",
+      "rush_to_express",
+      "push_permission",
+      "push_opened",
     ]);
   });
 

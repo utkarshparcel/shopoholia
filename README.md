@@ -71,7 +71,7 @@ Copy `.env.example` to `.env` at the repo root when wiring Postgres-backed API o
 |----------|----------|-------------|
 | `DATABASE_URL` | For Postgres mode | e.g. `postgresql://worn:worn@localhost:5432/worn` |
 
-When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, and push events. OTP codes and refresh tokens stay in-memory (no DB tables yet). Without `DATABASE_URL`, all repos use in-memory storage (CI default).
+When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, push events, and login refresh tokens (stored hashed). Phone OTP codes stay in memory. Without `DATABASE_URL`, all repos use in-memory storage (CI default).
 
 ### Cloudflare R2 storage
 
@@ -106,6 +106,14 @@ Primary sign-in is **Google OAuth** (`POST /auth/google`). No Twilio/MSG91 spend
 4. Run migration `0004_google_auth` (nullable phone + email/google_sub).
 
 Phone OTP remains available for local tooling only. Optional auto OTP login: `EXPO_PUBLIC_DEV_AUTO_AUTH=1` (defaults off). Login screen also has **Dev continue** in `__DEV__`.
+
+### Push notifications
+
+Every order step ("Order confirmed" → packed → out for delivery → arriving soon → delivered → "Your haul is here") is sent through the [Expo push service](https://docs.expo.dev/push-notifications/sending-notifications/); tapping one opens the order tracker or the reveal. After sign-in the app asks for notification permission once and registers its Expo push token (`PUT /me/push-token`, cleared on sign-out). Each push is recorded in `push_events`: `SENT` with the Expo ticket id, `FAILED`, or `QUEUED` when the user has no registered device.
+
+- **Real delivery needs an EAS development build** (`eas build --profile development`) with push credentials: an APNs key for iOS and FCM V1 credentials for Android (see [push setup](https://docs.expo.dev/push-notifications/push-notifications-setup/)). Expo Go on Android can't receive remote pushes.
+- The app needs the EAS project id (`extra.eas.projectId` in the app config, added by `eas init`); without it the app skips registration.
+- `EXPO_ACCESS_TOKEN` (API, optional): only needed if you turn on enhanced push security for the Expo project.
 
 ### Run tests
 
@@ -165,12 +173,17 @@ Set env vars for submit (`APPLE_ID`, `ASC_APP_ID`, `APPLE_TEAM_ID`, `GOOGLE_SERV
 
 ### Beta observability
 
+Each of these is off (a no-op) until its env var is set.
+
 | Concern | Env var | Notes |
 |---------|---------|-------|
-| API errors | `SENTRY_DSN` | Scaffolded in `@worn/api`; no-op without DSN |
-| Mobile crashes | `EXPO_PUBLIC_SENTRY_DSN` | Scaffolded in mobile; no-op without DSN |
-| Funnel events | console (dev) | `trackEvent()` in mobile; swap sink for PostHog/Mixpanel |
+| API errors | `SENTRY_DSN` | Unexpected (5xx) request errors, tagged with request id, method and route; expected 4xx aren't reported. Failed background jobs (avatar, try-on, order steps, renders) are logged and reported with the job kind and ids |
+| Mobile crashes | `EXPO_PUBLIC_SENTRY_DSN` | Uncaught JS errors, plus render errors caught by the root `ErrorBoundary` (which shows a retry screen). Also adds the Sentry Expo plugin at build time |
+| Funnel events | `EXPO_PUBLIC_POSTHOG_KEY` | `trackEvent()` → PostHog's `/batch/` API, sent every 10 s, at 20 queued events, and when the app goes to the background. `distinct_id` is the signed-in user's id (with an `$identify` on sign-in), otherwise a random id per app session. Without a key: console in dev, nothing in release builds |
+| PostHog host | `EXPO_PUBLIC_POSTHOG_HOST` | Optional; defaults to `https://us.i.posthog.com` (EU cloud: `https://eu.i.posthog.com`) |
 | Reveal satisfaction | `POST /orders/:id/reveal/rating` | 1-tap survey → API stub + `reveal_rated` event |
+
+`EXPO_PUBLIC_*` values are inlined when the app is bundled, so set them where Expo reads env: `apps/mobile/.env`, your shell, or the EAS build's environment variables.
 
 ## Scripts
 

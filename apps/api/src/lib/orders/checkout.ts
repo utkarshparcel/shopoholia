@@ -1,5 +1,6 @@
 import { REFERRAL_REWARD_COINS, type DeliveryTier } from "@worn/shared";
-import type { Repositories } from "../repositories/types.js";
+import { InsufficientCoinsError } from "../repositories/errors.js";
+import type { PlaceOrderResult, Repositories } from "../repositories/types.js";
 import { buildStateEta } from "./state-machine.js";
 import type { JobQueue } from "../jobs/queue.js";
 import type { PushService } from "../push/stub.js";
@@ -19,7 +20,7 @@ export type CheckoutInput = {
 export async function checkoutOrder(deps: CheckoutDeps, input: CheckoutInput) {
   if (input.idempotencyKey) {
     const existing = await deps.repos.findOrderByIdempotencyKey(input.idempotencyKey);
-    if (existing) return existing;
+    if (existing?.userId === input.userId) return existing;
   }
 
   const cart = await deps.repos.getOrCreateCart(input.userId);
@@ -54,30 +55,30 @@ export async function checkoutOrder(deps: CheckoutDeps, input: CheckoutInput) {
     });
   }
 
-  const balance = await deps.repos.getCoinBalance(input.userId);
-  if (balance < coinTotal) {
-    throw new CheckoutError("INSUFFICIENT_COINS", "Not enough WORN coins for this haul");
-  }
-
   const placedAt = new Date();
   const stateEta = buildStateEta(placedAt, input.tier);
 
-  const { order } = await deps.repos.createOrder({
-    userId: input.userId,
-    tier: input.tier,
-    coinTotal,
-    stateEta,
-    idempotencyKey: input.idempotencyKey,
-    items,
-  });
+  let placed: PlaceOrderResult;
+  try {
+    // Creates the order and debits the coins together; the balance is checked inside.
+    placed = await deps.repos.placeOrder({
+      userId: input.userId,
+      tier: input.tier,
+      coinTotal,
+      stateEta,
+      idempotencyKey: input.idempotencyKey,
+      items,
+    });
+  } catch (error) {
+    if (error instanceof InsufficientCoinsError) {
+      throw new CheckoutError("INSUFFICIENT_COINS", "Not enough WORN coins for this haul");
+    }
+    throw error;
+  }
 
-  await deps.repos.spendCoins({
-    userId: input.userId,
-    delta: coinTotal,
-    type: "SPEND_ORDER",
-    refType: "order",
-    refId: order.id,
-  });
+  const { order } = placed;
+  // A concurrent retry with the same idempotency key already placed (and is finishing) it.
+  if (!placed.created) return order;
 
   await deps.repos.clearCart(cart.id);
   await deps.jobQueue.scheduleOrderLadder(order.id);

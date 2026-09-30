@@ -189,13 +189,30 @@ export type PushEventRecord = {
   body: string;
   payload: PushEventPayload;
   status: "QUEUED" | "SENT" | "FAILED";
+  /** Expo push ticket id, set once Expo accepted the message. */
+  expoTicketId: string | null;
   createdAt: Date;
 };
+
+export type RecordPushEventInput = Omit<PushEventRecord, "id" | "createdAt" | "expoTicketId">;
 
 export type ListListingsInput = {
   cursor?: string;
   limit: number;
   sellerId?: string;
+  /** Exact category name. */
+  category?: string;
+  /**
+   * Words or phrases describing the viewer's style. When given, listings whose title,
+   * category or tags contain one (as whole words, ignoring case) come first, then the
+   * rest; both groups keep the catalog order. See listing-feed.ts for the cursors.
+   */
+  styleKeywords?: string[];
+};
+
+export type ListingCategoryCount = {
+  category: string;
+  count: number;
 };
 
 export type CreateSellerListingInput = {
@@ -245,6 +262,28 @@ export type CreateOrderInput = {
   }>;
 };
 
+export type PlaceOrderResult = {
+  order: OrderRecord;
+  items: OrderItemRecord[];
+  /** False when the idempotency key matched an existing order (nothing was charged). */
+  created: boolean;
+};
+
+export type RushOrderInput = {
+  userId: string;
+  orderId: string;
+  costCoins: number;
+  /** The state the new schedule was worked out from. */
+  from: OrderState;
+  /** The order's full new schedule. */
+  stateEta: StateEta;
+};
+
+export type RushOrderResult = {
+  order: OrderRecord;
+  balanceAfter: number;
+};
+
 export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
@@ -265,6 +304,13 @@ export interface Repositories {
   getStreakStatus(userId: string): Promise<{ streakCount: number; lastClaimedAt: Date | null; todayClaimed: boolean }>;
 
   saveStyleProfile(userId: string, profile: { tags: string[]; answers: Record<string, string> }): Promise<void>;
+
+  /** Idempotent; a repeat save keeps the original save time. The listing must exist. */
+  saveLookbookItem(userId: string, listingId: string): Promise<void>;
+  /** Idempotent; removing a listing that isn't saved does nothing. */
+  removeLookbookItem(userId: string, listingId: string): Promise<void>;
+  /** Every listing the user has saved, whatever its status, most recently saved first. */
+  listLookbookListings(userId: string): Promise<ListingRecord[]>;
 
   recordCashbackEvent(input: { userId: string; listingId: string; platform: string; clickId: string }): Promise<void>;
   listCashbackEvents(userId: string): Promise<Array<{ id: string; listingId: string | null; platform: string; coinsEarned: number; status: string; createdAt: Date }>>;
@@ -310,6 +356,8 @@ export interface Repositories {
   /** Wipe catalog listings/variants (and cascaded cart/tryon rows). Dev/reseed only. */
   clearCatalog(): Promise<void>;
   listListings(input: ListListingsInput): Promise<ListListingsResult>;
+  /** Categories of ACTIVE listings with their counts, largest first (ties by name). */
+  listListingCategories(): Promise<ListingCategoryCount[]>;
   findListingById(id: string): Promise<ListingRecord | null>;
   findVariantsByListingId(listingId: string): Promise<ListingVariantRecord[]>;
   findVariantById(id: string): Promise<ListingVariantRecord | null>;
@@ -341,12 +389,32 @@ export interface Repositories {
   removeCartItem(cartId: string, listingVariantId: string): Promise<void>;
 
   createOrder(input: CreateOrderInput): Promise<{ order: OrderRecord; items: OrderItemRecord[] }>;
+  /**
+   * Checkout: creates the order and debits `coinTotal` (SPEND_ORDER) as one atomic step.
+   * Throws InsufficientCoinsError without creating anything when the balance is too low.
+   * Replaying the same user's idempotency key returns the existing order with `created: false`.
+   */
+  placeOrder(input: CreateOrderInput): Promise<PlaceOrderResult>;
+  /**
+   * Rush to Express: debits `costCoins` (SPEND_RUSH, ref "order"/orderId) and switches the
+   * order to EXPRESS with `stateEta`, as one atomic step under the user's coin lock. Applies
+   * only while the user's order is still in `from` and not already EXPRESS, so a repeat can't
+   * charge twice; returns null, changing nothing, otherwise.
+   * Throws InsufficientCoinsError, changing nothing, when the balance can't cover the cost.
+   */
+  rushOrderToExpress(input: RushOrderInput): Promise<RushOrderResult | null>;
   findOrderById(id: string): Promise<OrderRecord | null>;
   listOrdersByUserId(userId: string): Promise<OrderRecord[]>;
+  listOrdersByStates(states: readonly OrderState[]): Promise<OrderRecord[]>;
+  /**
+   * With `options.from`, only updates while the order is still in that state and returns
+   * null otherwise, so two concurrent callers can't both apply the same transition.
+   */
   updateOrderState(
     orderId: string,
     state: OrderState,
     patch?: Partial<Pick<OrderRecord, "stateEta" | "revealReadyAt">>,
+    options?: { from?: OrderState },
   ): Promise<OrderRecord | null>
 
   listOrderItemsByOrderId(orderId: string): Promise<OrderItemRecord[]>;
@@ -358,6 +426,8 @@ export interface Repositories {
   findRenderById(id: string): Promise<RenderRecord | null>;
   findRendersByIds(ids: string[]): Promise<RenderRecord[]>;
   findRendersByOrderId(orderId: string): Promise<RenderRecord[]>;
+  /** Unlocked renders still QUEUED or RUNNING (free ones, and paid ones already unlocked). */
+  listPendingRenders(): Promise<Array<{ render: RenderRecord; orderId: string }>>;
   updateRender(
     id: string,
     patch: Partial<Pick<RenderRecord, "imageKey" | "unlocked" | "provider" | "status" | "costMicros">>,
@@ -380,8 +450,21 @@ export interface Repositories {
     rating: string;
   }): Promise<void>
 
-  recordPushEvent(
-    input: Omit<PushEventRecord, "id" | "createdAt">,
-  ): Promise<PushEventRecord>;
+  recordPushEvent(input: RecordPushEventInput): Promise<PushEventRecord>;
+  /**
+   * recordPushEvent that also says whether this call inserted the row. A repeat of the same
+   * dedupe key returns the existing row with `created: false`, so only one caller sends it.
+   */
+  recordPushEventIfNew(
+    input: RecordPushEventInput,
+  ): Promise<{ event: PushEventRecord; created: boolean }>;
   listPushEvents(userId?: string): Promise<PushEventRecord[]>;
+  updatePushEvent(
+    id: string,
+    patch: Partial<Pick<PushEventRecord, "status" | "expoTicketId">>,
+  ): Promise<PushEventRecord | null>;
+  /** Saves the device's Expo push token for the user and takes it off any other user. */
+  setPushToken(userId: string, token: string): Promise<UserRecord | null>;
+  /** Clears the user's push token; with `onlyIf`, only while the saved token still equals it. */
+  clearPushToken(userId: string, onlyIf?: string): Promise<void>;
 }

@@ -61,10 +61,13 @@ export async function checkAndMarkRevealReady(deps: {
     REVEAL_READY: revealReadyAt.toISOString(),
   };
 
-  const updated = await deps.repos.updateOrderState(deps.orderId, "REVEAL_READY", {
-    revealReadyAt,
-    stateEta,
-  });
+  // Free renders finishing together each get here; only the first one moves the order on.
+  const updated = await deps.repos.updateOrderState(
+    deps.orderId,
+    "REVEAL_READY",
+    { revealReadyAt, stateEta },
+    { from: "DELIVERED" },
+  );
   if (!updated) return;
 
   const copy = pushCopyForState("REVEAL_READY");

@@ -1,6 +1,7 @@
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   StyleSheet,
   Text,
@@ -10,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, ListingCard, SectionHeader } from '@/src/components/ui';
 import type { PlaceholderTone } from '@/src/components/ui';
-import { useFeed } from '@/src/hooks/catalog';
+import { useLookbook } from '@/src/hooks/lookbook';
 import { useLookbookStore } from '@/src/stores/lookbook';
 import {
   bg,
@@ -25,6 +26,7 @@ import {
   text,
   textMuted,
   trackingTight,
+  wornInk,
 } from '@/src/theme/tokens';
 
 const TONES: PlaceholderTone[] = ['dusk', 'rose', 'sand', 'olive', 'warm'];
@@ -32,18 +34,16 @@ const TONES: PlaceholderTone[] = ['dusk', 'rose', 'sand', 'olive', 'warm'];
 export default function LookbookScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const feed = useFeed(20);
+  // Refetches whenever the tab comes back into view.
+  const isFocused = useIsFocused();
+  const lookbook = useLookbook({ enabled: isFocused });
   const savedIds = useLookbookStore((s) => s.savedIds);
   const toggleSave = useLookbookStore((s) => s.toggle);
 
-  const items = useMemo(
-    () => feed.data?.pages.flatMap((page) => page.items) ?? [],
-    [feed.data],
-  );
-
+  // Filtering by the store hides a piece as soon as it's un-saved.
   const savedItems = useMemo(
-    () => items.filter((item) => savedIds.has(item.id)),
-    [items, savedIds],
+    () => (lookbook.data ?? []).filter((item) => savedIds.has(item.id)),
+    [lookbook.data, savedIds],
   );
 
   return (
@@ -56,7 +56,20 @@ export default function LookbookScreen() {
       <View style={styles.content}>
         <SectionHeader kicker="Inspiration" title="Your lookbook" />
 
-        {savedItems.length === 0 ? (
+        {lookbook.isLoading ? (
+          <ActivityIndicator color={wornInk} style={styles.loader} />
+        ) : lookbook.isError && !lookbook.data ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>Couldn’t load your lookbook</Text>
+            <Text style={styles.emptyBody}>Check your connection and try again.</Text>
+            <Button
+              label="Retry"
+              onPress={() => void lookbook.refetch()}
+              variant="primary"
+              block
+            />
+          </View>
+        ) : savedItems.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={styles.emptyIcon}>
               <Text style={styles.emptyIconText}>◫</Text>
@@ -156,6 +169,9 @@ const styles = StyleSheet.create({
   gridItem: {
     flex: 1,
     maxWidth: '50%',
+  },
+  loader: {
+    marginVertical: space6,
   },
   row: {
     gap: space4,

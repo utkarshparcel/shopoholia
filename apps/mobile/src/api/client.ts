@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
 import type { OrderState } from '@worn/shared';
 
+import { useSessionStore } from '@/src/stores/session';
+
 const API_URL =
   (Constants.expoConfig?.extra?.apiUrl as string | undefined) ??
   process.env.EXPO_PUBLIC_API_URL ??
@@ -20,8 +22,68 @@ async function parseJson<T>(res: Response): Promise<T> {
   return data as T;
 }
 
+let renewing: Promise<string | null> | null = null;
+
+/**
+ * Trades the refresh token for a new pair and returns the new access token, or null if the
+ * session can't be renewed. Refresh tokens are single-use, so concurrent callers share one call.
+ */
+export function refreshSession(): Promise<string | null> {
+  renewing ??= renewSession().finally(() => {
+    renewing = null;
+  });
+  return renewing;
+}
+
+async function renewSession(): Promise<string | null> {
+  const { refreshToken } = useSessionStore.getState();
+  if (!refreshToken) return null;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+  } catch {
+    // Offline or unreachable: keep the session and let the original request fail.
+    return null;
+  }
+
+  // Signed out (or in as someone else) while this was in flight.
+  if (useSessionStore.getState().refreshToken !== refreshToken) return null;
+
+  if (!res.ok) {
+    // Only a rejected token ends the session; a server error might be temporary.
+    if (res.status === 401) useSessionStore.getState().clear();
+    return null;
+  }
+  const tokens = (await res.json()) as { accessToken: string; refreshToken: string };
+  useSessionStore.getState().setTokens(tokens);
+  return tokens.accessToken;
+}
+
+/** fetch for API calls: a signed-in request that comes back 401 renews the session once and retries. */
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(url, init);
+  if (res.status !== 401) return res;
+
+  const headers = new Headers(init.headers);
+  const sent = headers.get('Authorization');
+  if (!sent) return res;
+
+  // Another request may already have renewed the token this one was sent with.
+  const current = useSessionStore.getState().accessToken;
+  const accessToken = current && `Bearer ${current}` !== sent ? current : await refreshSession();
+  if (!accessToken) return res;
+
+  headers.set('Authorization', `Bearer ${accessToken}`);
+  return fetch(url, { ...init, headers });
+}
+
 export async function sendOtp(phone: string) {
-  const res = await fetch(`${API_URL}/auth/otp`, {
+  const res = await apiFetch(`${API_URL}/auth/otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone }),
@@ -30,7 +92,7 @@ export async function sendOtp(phone: string) {
 }
 
 export async function verifyOtp(phone: string, otp: string) {
-  const res = await fetch(`${API_URL}/auth/verify`, {
+  const res = await apiFetch(`${API_URL}/auth/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone, otp }),
@@ -44,7 +106,7 @@ export async function verifyOtp(phone: string, otp: string) {
 }
 
 export async function signInWithGoogle(idToken: string) {
-  const res = await fetch(`${API_URL}/auth/google`, {
+  const res = await apiFetch(`${API_URL}/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken }),
@@ -58,7 +120,7 @@ export async function signInWithGoogle(idToken: string) {
 }
 
 export async function getAvatar(accessToken: string) {
-  const res = await fetch(`${API_URL}/avatar`, {
+  const res = await apiFetch(`${API_URL}/avatar`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   return parseJson<{ status: string; referencePreviewUrl: string | null }>(res);
@@ -75,7 +137,7 @@ export async function uploadAvatar(accessToken: string, imageUri: string, fileNa
     } as unknown as Blob,
   );
 
-  const res = await fetch(`${API_URL}/avatar`, {
+  const res = await apiFetch(`${API_URL}/avatar`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -143,21 +205,40 @@ function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export async function fetchFeed(cursor?: string, limit = 20, sellerId?: string) {
+export async function fetchFeed(
+  cursor?: string,
+  limit = 20,
+  sellerId?: string,
+  options: { category?: string | null; accessToken?: string | null } = {},
+) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set('cursor', cursor);
   if (sellerId) params.set('seller_id', sellerId);
-  const res = await fetch(`${API_URL}/feed?${params.toString()}`);
+  if (options.category) params.set('category', options.category);
+  // Optional auth: signed-in shoppers who took the style quiz get matching pieces first.
+  const res = await apiFetch(`${API_URL}/feed?${params.toString()}`, {
+    headers: options.accessToken ? authHeaders(options.accessToken) : {},
+  });
   return parseJson<FeedPage>(res);
 }
 
+export type FeedCategory = {
+  category: string;
+  count: number;
+};
+
+export async function fetchFeedCategories() {
+  const res = await apiFetch(`${API_URL}/feed/categories`);
+  return parseJson<{ categories: FeedCategory[] }>(res);
+}
+
 export async function fetchListing(id: string) {
-  const res = await fetch(`${API_URL}/listings/${id}`);
+  const res = await apiFetch(`${API_URL}/listings/${id}`);
   return parseJson<ListingDetail>(res);
 }
 
 export async function requestTryon(accessToken: string, listingId: string, variantId: string) {
-  const res = await fetch(`${API_URL}/listings/${listingId}/tryon`, {
+  const res = await apiFetch(`${API_URL}/listings/${listingId}/tryon`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -169,14 +250,14 @@ export async function requestTryon(accessToken: string, listingId: string, varia
 }
 
 export async function fetchCart(accessToken: string) {
-  const res = await fetch(`${API_URL}/cart`, {
+  const res = await apiFetch(`${API_URL}/cart`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<CartResponse>(res);
 }
 
 export async function addToCart(accessToken: string, variantId: string, quantity = 1) {
-  const res = await fetch(`${API_URL}/cart`, {
+  const res = await apiFetch(`${API_URL}/cart`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -188,7 +269,7 @@ export async function addToCart(accessToken: string, variantId: string, quantity
 }
 
 export async function removeFromCart(accessToken: string, variantId: string) {
-  const res = await fetch(`${API_URL}/cart`, {
+  const res = await apiFetch(`${API_URL}/cart`, {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
@@ -230,10 +311,13 @@ export type OrderSummary = {
   coinTotal: number;
   placedAt: string;
   stateEta?: Partial<Record<OrderState, string>>;
+  /** Whether paying rushCostCoins would get this order to you sooner. */
+  rushAvailable: boolean;
+  rushCostCoins: number;
 };
 
 export async function fetchCoinBalance(accessToken: string) {
-  const res = await fetch(`${API_URL}/coins/balance`, {
+  const res = await apiFetch(`${API_URL}/coins/balance`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<CoinBalanceResponse>(res);
@@ -244,7 +328,7 @@ export async function createOrder(
   tier: OrderSummary['tier'],
   idempotencyKey?: string,
 ) {
-  const res = await fetch(`${API_URL}/orders`, {
+  const res = await apiFetch(`${API_URL}/orders`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -256,17 +340,45 @@ export async function createOrder(
 }
 
 export async function fetchOrders(accessToken: string) {
-  const res = await fetch(`${API_URL}/orders`, {
+  const res = await apiFetch(`${API_URL}/orders`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<{ orders: OrderSummary[] }>(res);
 }
 
 export async function fetchOrder(accessToken: string, orderId: string) {
-  const res = await fetch(`${API_URL}/orders/${orderId}`, {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<OrderSummary>(res);
+}
+
+/** A refused request, with its HTTP status so callers can handle e.g. 402 specially. */
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
+export type RushOrderResponse = {
+  order: OrderSummary;
+  balanceAfter: number;
+};
+
+export async function rushOrder(accessToken: string, orderId: string) {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/rush`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as ApiError | null;
+    throw new ApiRequestError(res.status, err?.message ?? `Request failed (${res.status})`);
+  }
+  return (await res.json()) as RushOrderResponse;
 }
 
 export type RenderCard = {
@@ -286,7 +398,7 @@ export type RevealResponse = {
 };
 
 export async function fetchReveal(accessToken: string, orderId: string) {
-  const res = await fetch(`${API_URL}/orders/${orderId}/reveal`, {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<RevealResponse>(res);
@@ -298,7 +410,7 @@ export async function unlockRenders(
   renderIds: string[],
   idempotencyKey?: string,
 ) {
-  const res = await fetch(`${API_URL}/orders/${orderId}/reveal/unlock`, {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/unlock`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -314,7 +426,7 @@ export async function validateIap(
   productId: string,
   receipt: string,
 ) {
-  const res = await fetch(`${API_URL}/coins/iap/validate`, {
+  const res = await apiFetch(`${API_URL}/coins/iap/validate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -331,7 +443,7 @@ export async function generateRenders(
   orderItemIds: string[],
   scenario: string,
 ) {
-  const res = await fetch(`${API_URL}/orders/${orderId}/reveal/generate`, {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -347,7 +459,7 @@ export async function submitRevealRating(
   orderId: string,
   rating: 'loved' | 'ok' | 'meh',
 ) {
-  const res = await fetch(`${API_URL}/orders/${orderId}/reveal/rating`, {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/rating`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -359,14 +471,14 @@ export async function submitRevealRating(
 }
 
 export async function getMyReferral(accessToken: string) {
-  const res = await fetch(`${API_URL}/referrals/me`, {
+  const res = await apiFetch(`${API_URL}/referrals/me`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<{ referralCode: string; referredCount: number; earnedCoins: number }>(res);
 }
 
 export async function applyReferral(accessToken: string, code: string) {
-  const res = await fetch(`${API_URL}/referrals/apply`, {
+  const res = await apiFetch(`${API_URL}/referrals/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
     body: JSON.stringify({ referralCode: code }),
@@ -375,7 +487,7 @@ export async function applyReferral(accessToken: string, code: string) {
 }
 
 export async function getStreak(accessToken: string) {
-  const res = await fetch(`${API_URL}/streaks/me`, {
+  const res = await apiFetch(`${API_URL}/streaks/me`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<{
@@ -388,7 +500,7 @@ export async function getStreak(accessToken: string) {
 }
 
 export async function claimStreak(accessToken: string) {
-  const res = await fetch(`${API_URL}/streaks/claim`, {
+  const res = await apiFetch(`${API_URL}/streaks/claim`, {
     method: 'POST',
     headers: authHeaders(accessToken),
   });
@@ -400,8 +512,29 @@ export async function claimStreak(accessToken: string) {
   }>(res);
 }
 
+export async function registerPushToken(accessToken: string, token: string) {
+  const res = await apiFetch(`${API_URL}/me/push-token`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ token }),
+  });
+  return parseJson<{ registered: boolean }>(res);
+}
+
+/** With `token`, the API only clears it while it's still this device's (not a newer one). */
+export async function clearPushToken(accessToken: string, token?: string) {
+  const res = await apiFetch(`${API_URL}/me/push-token`, {
+    method: 'DELETE',
+    headers: token
+      ? { 'Content-Type': 'application/json', ...authHeaders(accessToken) }
+      : authHeaders(accessToken),
+    body: token ? JSON.stringify({ token }) : undefined,
+  });
+  return parseJson<{ registered: boolean }>(res);
+}
+
 export async function getStyleQuiz(accessToken: string) {
-  const res = await fetch(`${API_URL}/style-quiz`, {
+  const res = await apiFetch(`${API_URL}/style-quiz`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<{
@@ -417,7 +550,7 @@ export async function submitStyleQuiz(
   accessToken: string,
   answers: Array<{ questionId: string; optionId: string }>,
 ) {
-  const res = await fetch(`${API_URL}/style-quiz`, {
+  const res = await apiFetch(`${API_URL}/style-quiz`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
     body: JSON.stringify({ answers }),
@@ -425,8 +558,49 @@ export async function submitStyleQuiz(
   return parseJson<{ saved: true; profileTags: string[] }>(res);
 }
 
+/** For endpoints that answer 204 No Content on success. */
+async function expectNoContent(res: Response) {
+  if (res.ok) return;
+  const err = (await res.json().catch(() => null)) as ApiError | null;
+  throw new Error(err?.message ?? `Request failed (${res.status})`);
+}
+
+export type LookbookItem = FeedPage['items'][number];
+
+export async function fetchLookbook(accessToken: string) {
+  const res = await apiFetch(`${API_URL}/lookbook`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{ items: LookbookItem[] }>(res);
+}
+
+export async function saveToLookbook(accessToken: string, listingId: string) {
+  const res = await apiFetch(`${API_URL}/lookbook/${listingId}`, {
+    method: 'PUT',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
+export async function removeFromLookbook(accessToken: string, listingId: string) {
+  const res = await apiFetch(`${API_URL}/lookbook/${listingId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
+/** Permanently deletes the user's uploaded photos and avatar. */
+export async function deleteAvatar(accessToken: string) {
+  const res = await apiFetch(`${API_URL}/avatar`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
 export async function getCashback(accessToken: string) {
-  const res = await fetch(`${API_URL}/cashback/me`, {
+  const res = await apiFetch(`${API_URL}/cashback/me`, {
     headers: authHeaders(accessToken),
   });
   return parseJson<{
@@ -448,7 +622,7 @@ export async function recordAffiliateClick(
   platform: string,
 ) {
   const clickId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const res = await fetch(`${API_URL}/cashback/click`, {
+  const res = await apiFetch(`${API_URL}/cashback/click`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
     body: JSON.stringify({ listingId, platform, clickId }),

@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
+import { InsufficientCoinsError } from "./errors.js";
+import {
+  compareText,
+  decodeListingCursor,
+  encodeListingCursor,
+  matchesStyleKeywords,
+  normalizeStyleKeywords,
+} from "./listing-feed.js";
 import type {
   AvatarRecord,
   CartItemRecord,
@@ -19,6 +27,7 @@ import type {
   RefreshTokenRecord,
   RenderRecord,
   Repositories,
+  RushOrderInput,
   SellerRecord,
   TryonPreviewRecord,
   UserRecord,
@@ -67,6 +76,8 @@ export function createMemoryRepositories(): Repositories {
   const usersByPhone = new Map<string, string>();
   const avatars = new Map<string, AvatarRecord>();
   const avatarsByUser = new Map<string, string>();
+  // userId -> (listingId -> saved at), in the order the listings were saved.
+  const lookbooks = new Map<string, Map<string, Date>>();
   const ledger: CoinLedgerRecord[] = [];
   const coinLocks = new Map<string, Promise<void>>();
   const otps = new Map<string, OtpRecord>();
@@ -294,6 +305,25 @@ export function createMemoryRepositories(): Repositories {
       users.set(userId, { ...user, styleProfile: profile, updatedAt: now() });
     },
 
+    async saveLookbookItem(userId, listingId) {
+      // Mirrors the foreign key in Postgres.
+      if (!listings.has(listingId)) throw new Error(`Listing not found: ${listingId}`);
+      const saved = lookbooks.get(userId) ?? new Map<string, Date>();
+      if (!saved.has(listingId)) saved.set(listingId, now());
+      lookbooks.set(userId, saved);
+    },
+
+    async removeLookbookItem(userId, listingId) {
+      lookbooks.get(userId)?.delete(listingId);
+    },
+
+    async listLookbookListings(userId) {
+      // Newest insertion first, so the stable sort keeps same-millisecond saves in order.
+      const saved = [...(lookbooks.get(userId) ?? [])].reverse();
+      saved.sort(([, a], [, b]) => b.getTime() - a.getTime());
+      return saved.flatMap(([listingId]) => listings.get(listingId) ?? []);
+    },
+
     async recordCashbackEvent(input) {
       cashbackEvents.set(input.clickId, {
         id: randomUUID(),
@@ -386,10 +416,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async getCoinBalance(userId) {
-      const entries = ledger
-        .filter((e) => e.userId === userId)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      if (entries[0]) return entries[0].balanceAfter;
+      // The ledger is append-only, so the user's last entry is the latest balance.
+      // (Sorting by createdAt breaks ties between entries written in the same millisecond.)
+      for (let i = ledger.length - 1; i >= 0; i--) {
+        const entry = ledger[i]!;
+        if (entry.userId === userId) return entry.balanceAfter;
+      }
       return users.get(userId)?.coinBalanceCache ?? 0;
     },
 
@@ -397,7 +429,7 @@ export function createMemoryRepositories(): Repositories {
       return withCoinLock(input.userId, async () => {
         const current = await this.getCoinBalance(input.userId);
         const balanceAfter = current + input.delta;
-        if (balanceAfter < 0) throw new Error("Insufficient coin balance");
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
 
         appendLedger(ledger, input, balanceAfter);
         await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
@@ -514,25 +546,55 @@ export function createMemoryRepositories(): Repositories {
       listings.clear();
       variants.clear();
       variantsByListing.clear();
+      lookbooks.clear();
     },
 
-    async listListings({ cursor, limit, sellerId }: ListListingsInput) {
-      const all = [...listings.values()]
+    async listListings({ cursor, limit, sellerId, category, styleKeywords }: ListListingsInput) {
+      const keywords = normalizeStyleKeywords(styleKeywords ?? []);
+      const after = cursor ? decodeListingCursor(cursor) : null;
+      // Catalog-order cursors keep paging in catalog order (see listing-feed.ts).
+      const ranked = keywords.length > 0 && after?.matched !== null;
+
+      const rows = [...listings.values()]
         .filter((l) => l.status === "ACTIVE")
         .filter((l) => (sellerId ? l.sellerId === sellerId : true))
-        .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+        .filter((l) => (category ? l.category === category : true))
+        .map((listing) => ({ listing, matched: ranked && matchesStyleKeywords(listing, keywords) }))
+        .sort(
+          (a, b) =>
+            Number(b.matched) - Number(a.matched) ||
+            a.listing.sortOrder - b.listing.sortOrder ||
+            compareText(a.listing.id, b.listing.id),
+        )
+        .filter(({ listing, matched }) => {
+          if (!after) return true;
+          const afterPosition =
+            listing.sortOrder > after.sortOrder ||
+            (listing.sortOrder === after.sortOrder && listing.id > after.id);
+          if (!ranked) return afterPosition;
+          // Every non-matching listing comes after all the matching ones.
+          return after.matched ? !matched || afterPosition : !matched && afterPosition;
+        });
 
-      let start = 0;
-      if (cursor) {
-        const idx = all.findIndex((l) => l.id === cursor);
-        start = idx >= 0 ? idx + 1 : 0;
-      }
-
-      const slice = all.slice(start, start + limit);
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       const nextCursor =
-        start + limit < all.length ? (slice[slice.length - 1]?.id ?? null) : null;
+        rows.length > limit && last
+          ? encodeListingCursor(last.listing, ranked ? last.matched : null)
+          : null;
 
-      return { items: slice, nextCursor };
+      return { items: page.map((row) => row.listing), nextCursor };
+    },
+
+    async listListingCategories() {
+      const counts = new Map<string, number>();
+      for (const listing of listings.values()) {
+        if (listing.status !== "ACTIVE") continue;
+        counts.set(listing.category, (counts.get(listing.category) ?? 0) + 1);
+      }
+      return [...counts]
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count || compareText(a.category, b.category));
     },
 
     async findListingById(id) {
@@ -758,6 +820,84 @@ export function createMemoryRepositories(): Repositories {
       return { order, items };
     },
 
+    async placeOrder(input: CreateOrderInput) {
+      return withCoinLock(input.userId, async () => {
+        if (input.idempotencyKey) {
+          const existing = await this.findOrderByIdempotencyKey(input.idempotencyKey);
+          if (existing) {
+            if (existing.userId !== input.userId) {
+              throw new Error("Idempotency key already used by another order");
+            }
+            return {
+              order: existing,
+              items: await this.listOrderItemsByOrderId(existing.id),
+              created: false,
+            };
+          }
+        }
+
+        const balanceAfter = (await this.getCoinBalance(input.userId)) - input.coinTotal;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const { order, items } = await this.createOrder(input);
+        appendLedger(
+          ledger,
+          {
+            userId: input.userId,
+            delta: -input.coinTotal,
+            type: "SPEND_ORDER",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
+        await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
+        return { order, items, created: true };
+      });
+    },
+
+    async rushOrderToExpress(input: RushOrderInput) {
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+
+        // No awaits from this check until the order is written, so a delivery step
+        // can't move the order on in between.
+        const order = orders.get(input.orderId);
+        if (
+          !order ||
+          order.userId !== input.userId ||
+          order.state !== input.from ||
+          order.tier === "EXPRESS"
+        ) {
+          return null;
+        }
+
+        const balanceAfter = balance - input.costCoins;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const updated: OrderRecord = {
+          ...order,
+          tier: "EXPRESS",
+          stateEta: input.stateEta,
+          updatedAt: now(),
+        };
+        orders.set(order.id, updated);
+        appendLedger(
+          ledger,
+          {
+            userId: input.userId,
+            delta: -input.costCoins,
+            type: "SPEND_RUSH",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
+        await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
+        return { order: updated, balanceAfter };
+      });
+    },
+
     async findOrderById(id) {
       return orders.get(id) ?? null;
     },
@@ -770,9 +910,14 @@ export function createMemoryRepositories(): Repositories {
         .sort((a, b) => b.placedAt.getTime() - a.placedAt.getTime());
     },
 
-    async updateOrderState(orderId, state, patch) {
+    async listOrdersByStates(states) {
+      return Array.from(orders.values()).filter((order) => states.includes(order.state));
+    },
+
+    async updateOrderState(orderId, state, patch, options) {
       const order = orders.get(orderId);
       if (!order) return null;
+      if (options?.from && order.state !== options.from) return null;
       const updated: OrderRecord = {
         ...order,
         ...patch,
@@ -836,6 +981,18 @@ export function createMemoryRepositories(): Repositories {
         }
       }
       return all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    },
+
+    async listPendingRenders() {
+      const pending: Array<{ render: RenderRecord; orderId: string }> = [];
+      for (const render of renders.values()) {
+        if (!render.unlocked || (render.status !== "QUEUED" && render.status !== "RUNNING")) {
+          continue;
+        }
+        const item = orderItems.get(render.orderItemId);
+        if (item) pending.push({ render, orderId: item.orderId });
+      }
+      return pending;
     },
 
     async updateRender(id, patch) {
@@ -915,18 +1072,56 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async recordPushEvent(input) {
+      return (await this.recordPushEventIfNew(input)).event;
+    },
+
+    async recordPushEventIfNew(input) {
+      // Same dedupe-key semantics as the unique index in Postgres: a repeat is a no-op.
+      const existing = pushEvents.find((e) => e.dedupeKey === input.dedupeKey);
+      if (existing) return { event: existing, created: false };
+
       const event: PushEventRecord = {
         id: randomUUID(),
         ...input,
+        expoTicketId: null,
         createdAt: now(),
       };
       pushEvents.push(event);
-      return event;
+      return { event, created: true };
     },
 
     async listPushEvents(userId) {
       if (!userId) return [...pushEvents];
       return pushEvents.filter((e) => e.userId === userId);
+    },
+
+    async updatePushEvent(id, patch) {
+      const index = pushEvents.findIndex((e) => e.id === id);
+      if (index < 0) return null;
+      const updated: PushEventRecord = { ...pushEvents[index]!, ...patch };
+      pushEvents[index] = updated;
+      return updated;
+    },
+
+    async setPushToken(userId, token) {
+      const user = users.get(userId);
+      if (!user) return null;
+      // A device's token belongs to whoever signed in on it last.
+      for (const other of users.values()) {
+        if (other.id !== userId && other.pushToken === token) {
+          users.set(other.id, { ...other, pushToken: null, updatedAt: now() });
+        }
+      }
+      const updated = { ...user, pushToken: token, updatedAt: now() };
+      users.set(userId, updated);
+      return updated;
+    },
+
+    async clearPushToken(userId, onlyIf) {
+      const user = users.get(userId);
+      if (!user?.pushToken) return;
+      if (onlyIf !== undefined && user.pushToken !== onlyIf) return;
+      users.set(userId, { ...user, pushToken: null, updatedAt: now() });
     },
   };
 }

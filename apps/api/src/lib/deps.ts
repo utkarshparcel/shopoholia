@@ -5,6 +5,7 @@ import { createPostgresRepositoriesFromUrl } from "./repositories/postgres.js";
 import { createStorageFromEnv, type StorageClient } from "./storage/r2.js";
 import { createRenderProvider } from "./render/provider.js";
 import { createDevOtpService, type OtpService } from "./auth/otp.js";
+import { reportJobError } from "./error-reporting.js";
 import {
   createAvatarProcessingHandler,
   newJobId,
@@ -16,7 +17,8 @@ import {
   createRenderProcessingHandler,
 } from "./jobs/render-processing.js";
 import { createMemoryJobQueue, type JobQueue } from "./jobs/queue.js";
-import { createStubPushService, type PushService } from "./push/stub.js";
+import { createExpoPushService } from "./push/expo.js";
+import type { PushService } from "./push/stub.js";
 import { seedCatalog } from "./seed/catalog.js";
 import { isRealProductImageUrl } from "./seed/scraped.js";
 
@@ -69,7 +71,9 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
       apiKey: process.env.FASHN_API_KEY,
       resolveImage: (key) => storage.getSignedUrl(key),
     });
-  const push = overrides.push ?? createStubPushService(repos);
+  const push =
+    overrides.push ??
+    createExpoPushService({ repos, accessToken: process.env.EXPO_ACCESS_TOKEN || undefined });
   const avatarHandler = createAvatarProcessingHandler({ repos, storage, renderProvider });
   const tryonHandler = createTryonProcessingHandler({ repos, storage, renderProvider });
   const renderHandler = createRenderProcessingHandler({ repos, storage, renderProvider, push });
@@ -106,7 +110,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
       }),
       render: renderHandler,
     },
-    { autoProcess: process.env.NODE_ENV !== "test", repos },
+    { autoProcess: process.env.NODE_ENV !== "test", repos, onError: reportJobError },
   );
 
   const otp = overrides.otp ?? createDevOtpService(repos);
