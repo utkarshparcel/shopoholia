@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -36,6 +37,7 @@ type Question = {
 export default function StyleQuizScreen() {
   const accessToken = useSessionStore((s) => s.accessToken);
   const router = useRouter();
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +123,8 @@ export default function StyleQuizScreen() {
           optionId,
         }));
         await submitStyleQuiz(accessToken, answerArray);
+        // The feed ranks pieces by this profile, so cached pages are now out of date.
+        void queryClient.invalidateQueries({ queryKey: ['feed'] });
         router.replace('/(tabs)/feed');
       } finally {
         setSubmitting(false);
