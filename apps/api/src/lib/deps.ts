@@ -16,7 +16,8 @@ import {
   createRenderProcessingHandler,
 } from "./jobs/render-processing.js";
 import { createMemoryJobQueue, type JobQueue } from "./jobs/queue.js";
-import { createStubPushService, type PushService } from "./push/stub.js";
+import { createExpoPushService } from "./push/expo.js";
+import type { PushService } from "./push/stub.js";
 import { seedCatalog } from "./seed/catalog.js";
 import { isRealProductImageUrl } from "./seed/scraped.js";
 
@@ -69,7 +70,9 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
       apiKey: process.env.FASHN_API_KEY,
       resolveImage: (key) => storage.getSignedUrl(key),
     });
-  const push = overrides.push ?? createStubPushService(repos);
+  const push =
+    overrides.push ??
+    createExpoPushService({ repos, accessToken: process.env.EXPO_ACCESS_TOKEN || undefined });
   const avatarHandler = createAvatarProcessingHandler({ repos, storage, renderProvider });
   const tryonHandler = createTryonProcessingHandler({ repos, storage, renderProvider });
   const renderHandler = createRenderProcessingHandler({ repos, storage, renderProvider, push });

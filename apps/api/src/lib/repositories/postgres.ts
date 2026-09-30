@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
 import {
   avatars,
@@ -351,6 +351,7 @@ function mapPushEvent(row: PushEventRow): PushEventRecord {
     body: row.body,
     payload: row.payload as PushEventPayload,
     status: row.status,
+    expoTicketId: row.expoTicketId ?? null,
     createdAt: row.createdAt,
   };
 }
@@ -1462,6 +1463,10 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async recordPushEvent(input) {
+      return (await repos.recordPushEventIfNew(input)).event;
+    },
+
+    async recordPushEventIfNew(input) {
       const [row] = await db
         .insert(pushEvents)
         .values({
@@ -1476,7 +1481,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         })
         .onConflictDoNothing({ target: pushEvents.dedupeKey })
         .returning();
-      if (row) return mapPushEvent(row);
+      if (row) return { event: mapPushEvent(row), created: true };
 
       // Already recorded under this dedupe key: a repeat is a no-op, not an error.
       const [existing] = await db
@@ -1484,7 +1489,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(pushEvents)
         .where(eq(pushEvents.dedupeKey, input.dedupeKey))
         .limit(1);
-      return mapPushEvent(existing!);
+      return { event: mapPushEvent(existing!), created: false };
     },
 
     async listPushEvents(userId) {
@@ -1497,6 +1502,44 @@ export function createPostgresRepositories(db: Db): Repositories {
         : await db.select().from(pushEvents).orderBy(desc(pushEvents.createdAt));
 
       return rows.map(mapPushEvent);
+    },
+
+    async updatePushEvent(id, patch) {
+      const [row] = await db
+        .update(pushEvents)
+        .set({ ...patch, updatedAt: now() })
+        .where(eq(pushEvents.id, id))
+        .returning();
+      return row ? mapPushEvent(row) : null;
+    },
+
+    async setPushToken(userId, token) {
+      return db.transaction(async (tx) => {
+        const [row] = await tx
+          .update(users)
+          .set({ pushToken: token, updatedAt: now() })
+          .where(eq(users.id, userId))
+          .returning();
+        if (!row) return null;
+
+        // A device's token belongs to whoever signed in on it last.
+        await tx
+          .update(users)
+          .set({ pushToken: null, updatedAt: now() })
+          .where(and(eq(users.pushToken, token), ne(users.id, userId)));
+        return mapUser(row);
+      });
+    },
+
+    async clearPushToken(userId, onlyIf) {
+      await db
+        .update(users)
+        .set({ pushToken: null, updatedAt: now() })
+        .where(
+          onlyIf === undefined
+            ? eq(users.id, userId)
+            : and(eq(users.id, userId), eq(users.pushToken, onlyIf)),
+        );
     },
   };
 

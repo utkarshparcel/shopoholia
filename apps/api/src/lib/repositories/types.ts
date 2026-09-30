@@ -189,8 +189,12 @@ export type PushEventRecord = {
   body: string;
   payload: PushEventPayload;
   status: "QUEUED" | "SENT" | "FAILED";
+  /** Expo push ticket id, set once Expo accepted the message. */
+  expoTicketId: string | null;
   createdAt: Date;
 };
+
+export type RecordPushEventInput = Omit<PushEventRecord, "id" | "createdAt" | "expoTicketId">;
 
 export type ListListingsInput = {
   cursor?: string;
@@ -446,8 +450,21 @@ export interface Repositories {
     rating: string;
   }): Promise<void>
 
-  recordPushEvent(
-    input: Omit<PushEventRecord, "id" | "createdAt">,
-  ): Promise<PushEventRecord>;
+  recordPushEvent(input: RecordPushEventInput): Promise<PushEventRecord>;
+  /**
+   * recordPushEvent that also says whether this call inserted the row. A repeat of the same
+   * dedupe key returns the existing row with `created: false`, so only one caller sends it.
+   */
+  recordPushEventIfNew(
+    input: RecordPushEventInput,
+  ): Promise<{ event: PushEventRecord; created: boolean }>;
   listPushEvents(userId?: string): Promise<PushEventRecord[]>;
+  updatePushEvent(
+    id: string,
+    patch: Partial<Pick<PushEventRecord, "status" | "expoTicketId">>,
+  ): Promise<PushEventRecord | null>;
+  /** Saves the device's Expo push token for the user and takes it off any other user. */
+  setPushToken(userId: string, token: string): Promise<UserRecord | null>;
+  /** Clears the user's push token; with `onlyIf`, only while the saved token still equals it. */
+  clearPushToken(userId: string, onlyIf?: string): Promise<void>;
 }

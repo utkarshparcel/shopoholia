@@ -1072,22 +1072,56 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async recordPushEvent(input) {
+      return (await this.recordPushEventIfNew(input)).event;
+    },
+
+    async recordPushEventIfNew(input) {
       // Same dedupe-key semantics as the unique index in Postgres: a repeat is a no-op.
       const existing = pushEvents.find((e) => e.dedupeKey === input.dedupeKey);
-      if (existing) return existing;
+      if (existing) return { event: existing, created: false };
 
       const event: PushEventRecord = {
         id: randomUUID(),
         ...input,
+        expoTicketId: null,
         createdAt: now(),
       };
       pushEvents.push(event);
-      return event;
+      return { event, created: true };
     },
 
     async listPushEvents(userId) {
       if (!userId) return [...pushEvents];
       return pushEvents.filter((e) => e.userId === userId);
+    },
+
+    async updatePushEvent(id, patch) {
+      const index = pushEvents.findIndex((e) => e.id === id);
+      if (index < 0) return null;
+      const updated: PushEventRecord = { ...pushEvents[index]!, ...patch };
+      pushEvents[index] = updated;
+      return updated;
+    },
+
+    async setPushToken(userId, token) {
+      const user = users.get(userId);
+      if (!user) return null;
+      // A device's token belongs to whoever signed in on it last.
+      for (const other of users.values()) {
+        if (other.id !== userId && other.pushToken === token) {
+          users.set(other.id, { ...other, pushToken: null, updatedAt: now() });
+        }
+      }
+      const updated = { ...user, pushToken: token, updatedAt: now() };
+      users.set(userId, updated);
+      return updated;
+    },
+
+    async clearPushToken(userId, onlyIf) {
+      const user = users.get(userId);
+      if (!user?.pushToken) return;
+      if (onlyIf !== undefined && user.pushToken !== onlyIf) return;
+      users.set(userId, { ...user, pushToken: null, updatedAt: now() });
     },
   };
 }
