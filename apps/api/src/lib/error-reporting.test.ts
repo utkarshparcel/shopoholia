@@ -5,7 +5,11 @@ import { errorStatusCode, reportJobError } from "./error-reporting.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
 import { initSentry } from "./sentry.js";
 
-vi.mock("@sentry/node", () => ({ init: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/node", () => ({
+  init: vi.fn(),
+  captureException: vi.fn(),
+  fastifyIntegration: vi.fn(() => ({ name: "Fastify" })),
+}));
 
 const captureException = vi.mocked(Sentry.captureException);
 
@@ -54,12 +58,15 @@ describe("onError hook", () => {
       message: "boom",
     });
     expect(captureException).toHaveBeenCalledExactlyOnceWith(new Error("boom"), {
-      tags: {
-        request_id: expect.stringMatching(/^req-/),
-        method: "GET",
-        route: "/test/orders/:id",
-        status_code: "500",
+      captureContext: {
+        tags: {
+          request_id: expect.stringMatching(/^req-/),
+          method: "GET",
+          route: "/test/orders/:id",
+          status_code: "500",
+        },
       },
+      mechanism: { type: "fastify", handled: false },
     });
   });
 
@@ -67,9 +74,14 @@ describe("onError hook", () => {
     const res = await app.inject({ method: "GET", url: "/test/unavailable" });
 
     expect(res.statusCode).toBe(503);
-    expect(captureException).toHaveBeenCalledExactlyOnceWith(unavailable, {
-      tags: expect.objectContaining({ route: "/test/unavailable", status_code: "503" }),
-    });
+    expect(captureException).toHaveBeenCalledExactlyOnceWith(
+      unavailable,
+      expect.objectContaining({
+        captureContext: {
+          tags: expect.objectContaining({ route: "/test/unavailable", status_code: "503" }),
+        },
+      }),
+    );
   });
 
   it("skips expected 4xx errors", async () => {
@@ -122,7 +134,7 @@ describe("reportJobError", () => {
       error,
     );
     expect(captureException).toHaveBeenCalledExactlyOnceWith(error, {
-      tags: { job: "render", renderId: "render-1", orderId: "order-1" },
+      captureContext: { tags: { job: "render", renderId: "render-1", orderId: "order-1" } },
     });
   });
 });

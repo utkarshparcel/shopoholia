@@ -26,15 +26,18 @@ export async function reportRequestError(
   const status = errorStatusCode(error, reply);
   if (status >= 400 && status < 500) return;
   captureException(error, {
-    request_id: request.id,
-    method: request.method,
-    route: request.routeOptions.url ?? "unmatched",
-    status_code: String(status),
+    tags: {
+      request_id: request.id,
+      method: request.method,
+      route: request.routeOptions.url ?? "unmatched",
+      status_code: String(status),
+    },
+    unhandled: true,
   });
 }
 
 /** Failed background jobs: logged, and sent to Sentry tagged with the job's kind and ids. */
 export const reportJobError: JobErrorReporter = (error, job) => {
   logJobError(error, job);
-  captureException(error, { job: job.kind, ...job.ids });
+  captureException(error, { tags: { job: job.kind, ...job.ids } });
 };

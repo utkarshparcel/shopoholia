@@ -4,7 +4,11 @@ import { createDefaultDeps } from "./deps.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
 import { initSentry } from "./sentry.js";
 
-vi.mock("@sentry/node", () => ({ init: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/node", () => ({
+  init: vi.fn(),
+  captureException: vi.fn(),
+  fastifyIntegration: vi.fn(() => ({ name: "Fastify" })),
+}));
 
 describe("createDefaultDeps", () => {
   afterEach(() => {
@@ -56,7 +60,7 @@ describe("createDefaultDeps", () => {
 
     await vi.waitFor(() => expect(Sentry.captureException).toHaveBeenCalled());
     expect(Sentry.captureException).toHaveBeenCalledWith(failure, {
-      tags: { job: "deliveredRender", orderId: "order-1" },
+      captureContext: { tags: { job: "deliveredRender", orderId: "order-1" } },
     });
     expect(consoleError).toHaveBeenCalledWith(
       "[jobs] deliveredRender job failed",
