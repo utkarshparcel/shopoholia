@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Chip, ListingCard, SectionHeader } from '@/src/components/ui';
 import type { PlaceholderTone } from '@/src/components/ui';
 import { fetchListing } from '@/src/api/client';
-import { useCart, useFeed } from '@/src/hooks/catalog';
+import { useCart, useFeed, useFeedCategories } from '@/src/hooks/catalog';
 import { useLookbookStore } from '@/src/stores/lookbook';
 import {
   bg,
@@ -45,22 +45,20 @@ function listingBrand(item: { sellerName?: string | null; title: string }) {
 export default function FeedScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [category, setCategory] = useState('All');
-  const feed = useFeed(20);
+  // null is "All". The server filters, so a category shows all of its pieces, not just loaded ones.
+  const [category, setCategory] = useState<string | null>(null);
+  const feed = useFeed(20, category);
+  const categoriesQuery = useFeedCategories();
   const { query: cartQuery, addMutation } = useCart();
   const savedIds = useLookbookStore((s) => s.savedIds);
   const toggleSave = useLookbookStore((s) => s.toggle);
 
-  const items = useMemo(() => {
-    const flat = feed.data?.pages.flatMap((page) => page.items) ?? [];
-    if (category === 'All') return flat;
-    return flat.filter((item) => item.category === category);
-  }, [feed.data, category]);
+  const items = useMemo(
+    () => feed.data?.pages.flatMap((page) => page.items) ?? [],
+    [feed.data],
+  );
 
-  const categories = useMemo(() => {
-    const flat = feed.data?.pages.flatMap((page) => page.items) ?? [];
-    return ['All', ...new Set(flat.map((item) => item.category))];
-  }, [feed.data]);
+  const categories = categoriesQuery.data?.categories ?? [];
 
   const cartCount = cartQuery.data?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
   const isInitialLoading = feed.isLoading && items.length === 0;
@@ -91,12 +89,13 @@ export default function FeedScreen() {
         contentContainerStyle={styles.chips}
         style={styles.chipsScroll}
       >
-        {categories.map((label) => (
+        <Chip active={category === null} label="All" onPress={() => setCategory(null)} />
+        {categories.map(({ category: name }) => (
           <Chip
-            key={label}
-            active={category === label}
-            label={label}
-            onPress={() => setCategory(label)}
+            key={name}
+            active={category === name}
+            label={name}
+            onPress={() => setCategory(name)}
           />
         ))}
       </ScrollView>

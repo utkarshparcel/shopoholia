@@ -143,12 +143,31 @@ function authHeaders(accessToken: string) {
   return { Authorization: `Bearer ${accessToken}` };
 }
 
-export async function fetchFeed(cursor?: string, limit = 20, sellerId?: string) {
+export async function fetchFeed(
+  cursor?: string,
+  limit = 20,
+  sellerId?: string,
+  options: { category?: string | null; accessToken?: string | null } = {},
+) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set('cursor', cursor);
   if (sellerId) params.set('seller_id', sellerId);
-  const res = await fetch(`${API_URL}/feed?${params.toString()}`);
+  if (options.category) params.set('category', options.category);
+  // Optional auth: signed-in shoppers who took the style quiz get matching pieces first.
+  const res = await fetch(`${API_URL}/feed?${params.toString()}`, {
+    headers: options.accessToken ? authHeaders(options.accessToken) : {},
+  });
   return parseJson<FeedPage>(res);
+}
+
+export type FeedCategory = {
+  category: string;
+  count: number;
+};
+
+export async function fetchFeedCategories() {
+  const res = await fetch(`${API_URL}/feed/categories`);
+  return parseJson<{ categories: FeedCategory[] }>(res);
 }
 
 export async function fetchListing(id: string) {
