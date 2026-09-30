@@ -6,6 +6,7 @@ import {
   saveToLookbook,
   type LookbookItem,
 } from '@/src/api/client';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { useSessionStore } from '@/src/stores/session';
 
 type LookbookState = {
@@ -115,6 +116,9 @@ export const useLookbookStore = create<LookbookState>((set, get) => {
 // signing out clears it. A failed load leaves the set empty; the Lookbook tab loads again.
 useSessionStore.subscribe((state, prev) => {
   if (state.accessToken === prev.accessToken) return;
+  // A renewed token for the same account keeps the saved set.
+  const userId = userIdFromAccessToken(state.accessToken);
+  if (userId && userId === userIdFromAccessToken(prev.accessToken)) return;
   useLookbookStore.getState().reset();
   if (state.accessToken) void useLookbookStore.getState().load().catch(() => undefined);
 });

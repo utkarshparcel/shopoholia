@@ -29,6 +29,9 @@ function deferred<T = void>() {
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** An access token shaped like the API's: only the `sub` claim matters here. */
+const jwtFor = (sub: string, n: number) =>
+  `h.${btoa(JSON.stringify({ sub, n })).replace(/=+$/, '')}.sig`;
 const lookbook = () => useLookbookStore.getState();
 const saved = () => [...lookbook().savedIds].sort();
 
@@ -55,6 +58,17 @@ describe('lookbook store', () => {
 
     useSessionStore.getState().clear();
     expect(saved()).toEqual([]);
+  });
+
+  it('keeps the saved set when the session is renewed for the same user', async () => {
+    await signIn([A, B], jwtFor('user-1', 1));
+    vi.mocked(fetchLookbook).mockClear();
+
+    useSessionStore.getState().setTokens({ accessToken: jwtFor('user-1', 2), refreshToken: 'r2' });
+    await flush();
+
+    expect(fetchLookbook).not.toHaveBeenCalled();
+    expect(saved()).toEqual([A, B]);
   });
 
   it('saves and removes optimistically, then confirms with the server', async () => {

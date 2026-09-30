@@ -17,7 +17,8 @@ vi.mock('react-native', () => ({
 
 import { useSessionStore } from '@/src/stores/session';
 
-import { createPostHogClient, randomId, startPostHog, userIdFromAccessToken } from './posthog';
+import { userIdFromAccessToken } from './access-token';
+import { createPostHogClient, randomId, startPostHog } from './posthog';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
