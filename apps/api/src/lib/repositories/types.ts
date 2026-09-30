@@ -252,6 +252,21 @@ export type PlaceOrderResult = {
   created: boolean;
 };
 
+export type RushOrderInput = {
+  userId: string;
+  orderId: string;
+  costCoins: number;
+  /** The state the new schedule was worked out from. */
+  from: OrderState;
+  /** The order's full new schedule. */
+  stateEta: StateEta;
+};
+
+export type RushOrderResult = {
+  order: OrderRecord;
+  balanceAfter: number;
+};
+
 export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
@@ -354,6 +369,14 @@ export interface Repositories {
    * Replaying the same user's idempotency key returns the existing order with `created: false`.
    */
   placeOrder(input: CreateOrderInput): Promise<PlaceOrderResult>;
+  /**
+   * Rush to Express: debits `costCoins` (SPEND_RUSH, ref "order"/orderId) and switches the
+   * order to EXPRESS with `stateEta`, as one atomic step under the user's coin lock. Applies
+   * only while the user's order is still in `from` and not already EXPRESS, so a repeat can't
+   * charge twice; returns null, changing nothing, otherwise.
+   * Throws InsufficientCoinsError, changing nothing, when the balance can't cover the cost.
+   */
+  rushOrderToExpress(input: RushOrderInput): Promise<RushOrderResult | null>;
   findOrderById(id: string): Promise<OrderRecord | null>;
   listOrdersByUserId(userId: string): Promise<OrderRecord[]>;
   listOrdersByStates(states: readonly OrderState[]): Promise<OrderRecord[]>;

@@ -44,6 +44,7 @@ import type {
   PushEventRecord,
   RenderRecord,
   Repositories,
+  RushOrderInput,
   SellerRecord,
   SellerStatus,
   TryonPreviewRecord,
@@ -1210,6 +1211,44 @@ export function createPostgresRepositories(db: Db): Repositories {
         );
 
         return { order, items, created: true };
+      });
+    },
+
+    async rushOrderToExpress(input: RushOrderInput) {
+      return db.transaction(async (tx) => {
+        // The user's row lock serializes this with their other coin spends, including a
+        // second rush; the order's row lock holds off delivery steps until we commit.
+        const balance = await lockedCoinBalance(tx, input.userId);
+        const [current] = await tx
+          .select()
+          .from(orders)
+          .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)))
+          .for("update");
+        if (!current || current.state !== input.from || current.tier === "EXPRESS") {
+          return null;
+        }
+
+        const balanceAfter = balance - input.costCoins;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const [row] = await tx
+          .update(orders)
+          .set({ tier: "EXPRESS", stateEta: input.stateEta, updatedAt: now() })
+          .where(eq(orders.id, input.orderId))
+          .returning();
+        await appendCoinLedger(
+          tx,
+          {
+            userId: input.userId,
+            delta: -input.costCoins,
+            type: "SPEND_RUSH",
+            refType: "order",
+            refId: input.orderId,
+          },
+          balanceAfter,
+        );
+
+        return { order: mapOrder(row!), balanceAfter };
       });
     },
 

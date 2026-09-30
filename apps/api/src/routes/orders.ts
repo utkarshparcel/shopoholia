@@ -3,14 +3,22 @@ import {
   OrderListResponseSchema,
   OrderParamsSchema,
   OrderSummarySchema,
+  RushOrderResponseSchema,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { CheckoutError, checkoutOrder } from "../lib/orders/checkout.js";
 import { orderSummaryDto } from "../lib/orders/dto.js";
+import { RushError, rushOrderToExpress } from "../lib/orders/rush.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+function rushErrorStatus(code: RushError["code"]) {
+  if (code === "NOT_FOUND") return 404;
+  if (code === "INSUFFICIENT_COINS") return 402;
+  return 409;
+}
 
 export const ordersRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
@@ -84,6 +92,40 @@ export const ordersRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Order not found" });
       }
       return orderSummaryDto(order);
+    },
+  );
+
+  app.post(
+    "/orders/:id/rush",
+    {
+      schema: {
+        tags: ["orders"],
+        params: OrderParamsSchema,
+        response: {
+          200: RushOrderResponseSchema,
+          401: ErrorSchema,
+          402: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+      preHandler: requireAuth,
+    },
+    async (request, reply) => {
+      try {
+        const { order, balanceAfter } = await rushOrderToExpress(app.deps, {
+          userId: request.user.sub,
+          orderId: request.params.id,
+        });
+        return { order: orderSummaryDto(order), balanceAfter };
+      } catch (error) {
+        if (error instanceof RushError) {
+          return reply
+            .code(rushErrorStatus(error.code))
+            .send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
     },
   );
 };

@@ -20,6 +20,7 @@ import type {
   RefreshTokenRecord,
   RenderRecord,
   Repositories,
+  RushOrderInput,
   SellerRecord,
   TryonPreviewRecord,
   UserRecord,
@@ -794,6 +795,48 @@ export function createMemoryRepositories(): Repositories {
         );
         await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
         return { order, items, created: true };
+      });
+    },
+
+    async rushOrderToExpress(input: RushOrderInput) {
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+
+        // No awaits from this check until the order is written, so a delivery step
+        // can't move the order on in between.
+        const order = orders.get(input.orderId);
+        if (
+          !order ||
+          order.userId !== input.userId ||
+          order.state !== input.from ||
+          order.tier === "EXPRESS"
+        ) {
+          return null;
+        }
+
+        const balanceAfter = balance - input.costCoins;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const updated: OrderRecord = {
+          ...order,
+          tier: "EXPRESS",
+          stateEta: input.stateEta,
+          updatedAt: now(),
+        };
+        orders.set(order.id, updated);
+        appendLedger(
+          ledger,
+          {
+            userId: input.userId,
+            delta: -input.costCoins,
+            type: "SPEND_RUSH",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
+        await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
+        return { order: updated, balanceAfter };
       });
     },
 
