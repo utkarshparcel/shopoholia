@@ -456,6 +456,47 @@ export async function submitStyleQuiz(
   return parseJson<{ saved: true; profileTags: string[] }>(res);
 }
 
+/** For endpoints that answer 204 No Content on success. */
+async function expectNoContent(res: Response) {
+  if (res.ok) return;
+  const err = (await res.json().catch(() => null)) as ApiError | null;
+  throw new Error(err?.message ?? `Request failed (${res.status})`);
+}
+
+export type LookbookItem = FeedPage['items'][number];
+
+export async function fetchLookbook(accessToken: string) {
+  const res = await fetch(`${API_URL}/lookbook`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseJson<{ items: LookbookItem[] }>(res);
+}
+
+export async function saveToLookbook(accessToken: string, listingId: string) {
+  const res = await fetch(`${API_URL}/lookbook/${listingId}`, {
+    method: 'PUT',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
+export async function removeFromLookbook(accessToken: string, listingId: string) {
+  const res = await fetch(`${API_URL}/lookbook/${listingId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
+/** Permanently deletes the user's uploaded photos and avatar. */
+export async function deleteAvatar(accessToken: string) {
+  const res = await fetch(`${API_URL}/avatar`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await expectNoContent(res);
+}
+
 export async function getCashback(accessToken: string) {
   const res = await fetch(`${API_URL}/cashback/me`, {
     headers: authHeaders(accessToken),

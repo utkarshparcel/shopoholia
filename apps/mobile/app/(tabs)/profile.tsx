@@ -1,10 +1,11 @@
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, CoinWallet } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
+import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -21,6 +22,7 @@ import {
   fsDisplayM,
   fsMicro,
   radiusCard,
+  sale,
   space4,
   space6,
   surface,
@@ -40,11 +42,41 @@ const MENU = [
   { label: 'Edit avatar', href: '/(onboarding)/avatar' },
 ] as const;
 
+/** Alert.alert does nothing on react-native-web, so the browser's confirm stands in there. */
+function confirmDestructive(
+  title: string,
+  message: string,
+  confirmLabel: string,
+  onConfirm: () => void,
+) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n\n${message}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
+  ]);
+}
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
   const { data: balanceData } = useCoinBalance();
+  // Refetched on focus, so a new upload shows up after the avatar screen closes.
+  const isFocused = useIsFocused();
+  const { data: avatar } = useAvatar({ enabled: isFocused });
+  const deletePhotos = useDeletePhotos();
+  const avatarUrl = avatar?.status === 'READY' ? avatar.referencePreviewUrl : null;
+
+  const confirmDeletePhotos = () =>
+    confirmDestructive(
+      'Delete your photos?',
+      'This permanently deletes the photos you uploaded and your avatar. It can’t be undone, and try-on will need a new upload.',
+      'Delete',
+      () => deletePhotos.mutate(),
+    );
 
   const { data: ordersData } = useQuery({
     queryKey: ['orders', accessToken],
@@ -71,7 +103,15 @@ export default function ProfileScreen() {
               <Text style={styles.subtext}>Orders · Coins · Rewards</Text>
             </View>
             <View style={styles.avatarCircle}>
-              <Text style={styles.avatarLetter}>Y</Text>
+              {avatarUrl ? (
+                <Image
+                  accessibilityLabel="Your avatar"
+                  source={{ uri: avatarUrl }}
+                  style={styles.avatarImage}
+                />
+              ) : (
+                <Text style={styles.avatarLetter}>Y</Text>
+              )}
             </View>
           </View>
 
@@ -170,6 +210,24 @@ export default function ProfileScreen() {
           ))}
           <Pressable
             accessibilityRole="button"
+            disabled={deletePhotos.isPending}
+            onPress={confirmDeletePhotos}
+            style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={[styles.menuItemText, styles.danger]}>
+              {deletePhotos.isPending ? 'Deleting your photos…' : 'Delete my photos'}
+            </Text>
+            <Text style={styles.menuItemArrow}>→</Text>
+          </Pressable>
+          {deletePhotos.isSuccess && avatar?.status === 'NONE' ? (
+            <Text style={styles.photosNote}>Your photos and avatar were deleted.</Text>
+          ) : deletePhotos.isError ? (
+            <Text style={[styles.photosNote, styles.danger]}>
+              Couldn’t delete your photos. {deletePhotos.error.message}
+            </Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
             onPress={() => {
               useSessionStore.getState().clear();
               router.replace('/(auth)/login' as never);
@@ -199,12 +257,20 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     height: 44,
     justifyContent: 'center',
+    overflow: 'hidden',
+    width: 44,
+  },
+  avatarImage: {
+    height: 44,
     width: 44,
   },
   avatarLetter: {
     color: wornPaper,
     fontFamily: fontDisplay,
     fontSize: 20,
+  },
+  danger: {
+    color: sale,
   },
   divider: {
     backgroundColor: border,
@@ -301,6 +367,12 @@ const styles = StyleSheet.create({
     fontFamily: fontSansSemiBold,
     fontSize: fsBody,
     marginTop: 4,
+  },
+  photosNote: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    marginBottom: 12,
   },
   revealCta: {
     color: wornPaper,
