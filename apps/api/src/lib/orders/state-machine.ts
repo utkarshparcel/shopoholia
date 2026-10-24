@@ -25,24 +25,6 @@ export function buildStateEta(placedAt: Date, tier: DeliveryTier): StateEta {
   return eta;
 }
 
-export function transitionDelayMs(
-  fromState: OrderState,
-  toState: OrderState,
-  tier: DeliveryTier,
-  placedAt: Date,
-): number {
-  const eta = buildStateEta(placedAt, tier);
-  const targetIso = eta[toState];
-  if (!targetIso) return 0;
-
-  const fromIso =
-    fromState === "PROCESSING"
-      ? placedAt.toISOString()
-      : eta[fromState] ?? placedAt.toISOString();
-
-  return Math.max(0, new Date(targetIso).getTime() - new Date(fromIso).getTime());
-}
-
 export function nextState(current: OrderState): OrderState | null {
   if (current === "PROCESSING") return "PACKED";
   const idx = ORDER_DELIVERY_LADDER.indexOf(

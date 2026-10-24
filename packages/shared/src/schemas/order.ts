@@ -34,10 +34,18 @@ export const OrderSummarySchema = z.object({
   coinTotal: z.number().int().nonnegative(),
   placedAt: z.string().datetime(),
   stateEta: StateEtaSchema.optional(),
+  /** True when paying rushCostCoins would move the order's remaining steps earlier. */
+  rushAvailable: z.boolean(),
+  rushCostCoins: z.number().int().nonnegative(),
 });
 
 export const OrderListResponseSchema = z.object({
   orders: z.array(OrderSummarySchema),
+});
+
+export const RushOrderResponseSchema = z.object({
+  order: OrderSummarySchema,
+  balanceAfter: z.number().int().nonnegative(),
 });
 
 export const OrderParamsSchema = z.object({
@@ -47,6 +55,7 @@ export const OrderParamsSchema = z.object({
 export type CreateOrderBody = z.infer<typeof CreateOrderBodySchema>;
 export type OrderSummary = z.infer<typeof OrderSummarySchema>;
 export type OrderListResponse = z.infer<typeof OrderListResponseSchema>;
+export type RushOrderResponse = z.infer<typeof RushOrderResponseSchema>;
 
 /** Timer-driven states after checkout (PROCESSING is initial). */
 export const ORDER_DELIVERY_LADDER = [

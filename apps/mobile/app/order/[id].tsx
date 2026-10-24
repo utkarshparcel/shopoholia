@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { RushToExpress } from '@/src/components/order/RushToExpress';
 import { Button, OrderTracker, SectionHeader } from '@/src/components/ui';
 import { useOrder } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
@@ -56,6 +57,8 @@ export default function OrderTrackingScreen() {
             orderId={`#${orderQuery.data.id.slice(0, 8)}`}
             steps={buildTrackerSteps(orderQuery.data)}
           />
+
+          {orderQuery.data.rushAvailable ? <RushToExpress order={orderQuery.data} /> : null}
 
           {orderQuery.data.state === 'REVEAL_READY' ? (
             <Button

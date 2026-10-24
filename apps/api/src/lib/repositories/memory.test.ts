@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { InsufficientCoinsError } from "./errors.js";
 import { createMemoryRepositories } from "./memory.js";
 
 describe("createMemoryRepositories", () => {
@@ -49,7 +50,49 @@ describe("createMemoryRepositories", () => {
     const { user } = await repos.createUser("919876543210");
     await expect(
       repos.grantCoins({ userId: user.id, delta: -10, type: "SPEND_ORDER" }),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(InsufficientCoinsError);
+  });
+
+  it("reads the latest balance when ledger entries share a timestamp", async () => {
+    vi.useFakeTimers({ now: new Date("2026-09-29T12:00:00Z") });
+    try {
+      const repos = createMemoryRepositories();
+      const { user } = await repos.createUser("919876543210");
+      await repos.grantCoins({ userId: user.id, delta: 100, type: "GRANT" });
+      await repos.spendCoins({ userId: user.id, delta: 30, type: "SPEND_ORDER" });
+      await repos.spendCoins({ userId: user.id, delta: 20, type: "SPEND_ORDER" });
+
+      expect(await repos.getCoinBalance(user.id)).toBe(50);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("places an order and debits its coins in one step", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("919876543210");
+    await repos.grantCoins({ userId: user.id, delta: 100, type: "GRANT" });
+    const input = {
+      userId: user.id,
+      tier: "EXPRESS" as const,
+      coinTotal: 60,
+      stateEta: {},
+      idempotencyKey: "key-1",
+      items: [],
+    };
+
+    const placed = await repos.placeOrder(input);
+    expect(placed.created).toBe(true);
+    expect(await repos.getCoinBalance(user.id)).toBe(40);
+
+    const replay = await repos.placeOrder(input);
+    expect(replay).toMatchObject({ created: false, order: { id: placed.order.id } });
+    expect(await repos.getCoinBalance(user.id)).toBe(40);
+
+    await expect(repos.placeOrder({ ...input, idempotencyKey: "key-2" })).rejects.toBeInstanceOf(
+      InsufficientCoinsError,
+    );
+    expect(await repos.listOrdersByUserId(user.id)).toHaveLength(1);
   });
 
   it("manages refresh tokens", async () => {

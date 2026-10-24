@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS } from "@worn/shared";
 import {
   avatars,
@@ -11,15 +11,24 @@ import {
   iapReceipts,
   listingVariants,
   listings,
+  lookbookItems,
   orderItems,
   orders,
   pushEvents,
+  refreshTokens,
   renders,
   sellers,
   tryonPreviews,
   users,
   type Db,
 } from "@worn/db";
+import { InsufficientCoinsError } from "./errors.js";
+import {
+  LISTING_WORD_SEPARATOR,
+  decodeListingCursor,
+  encodeListingCursor,
+  normalizeStyleKeywords,
+} from "./listing-feed.js";
 import type {
   AffiliateLinkRecord,
   AvatarRecord,
@@ -40,9 +49,9 @@ import type {
   OtpRecord,
   PushEventPayload,
   PushEventRecord,
-  RefreshTokenRecord,
   RenderRecord,
   Repositories,
+  RushOrderInput,
   SellerRecord,
   SellerStatus,
   TryonPreviewRecord,
@@ -63,9 +72,90 @@ type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 type RenderRow = typeof renders.$inferSelect;
 type PushEventRow = typeof pushEvents.$inferSelect;
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 function now() {
   return new Date();
+}
+
+/** Refresh tokens are stored hashed, so a database leak doesn't hand out live sessions. */
+function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Locks the user's row for the rest of the transaction and returns their coin balance. */
+async function lockedCoinBalance(tx: Tx, userId: string): Promise<number> {
+  const [user] = await tx.select().from(users).where(eq(users.id, userId)).for("update");
+  if (!user) throw new Error(`User not found: ${userId}`);
+
+  const [latest] = await tx
+    .select({ balanceAfter: coinLedger.balanceAfter })
+    .from(coinLedger)
+    .where(eq(coinLedger.userId, userId))
+    .orderBy(desc(coinLedger.createdAt))
+    .limit(1);
+
+  return latest?.balanceAfter ?? user.coinBalanceCache;
+}
+
+/** Appends a ledger entry and updates the balance cache. Call after lockedCoinBalance. */
+async function appendCoinLedger(tx: Tx, input: GrantCoinsInput, balanceAfter: number) {
+  await tx.insert(coinLedger).values({
+    userId: input.userId,
+    delta: input.delta,
+    type: input.type as typeof coinLedger.$inferInsert.type,
+    refType: input.refType ?? null,
+    refId: input.refId ?? null,
+    balanceAfter,
+    // Time of the insert (taken after the row lock) rather than now(), which is the
+    // transaction start: that keeps "latest entry" in the order balances were applied.
+    createdAt: sql`clock_timestamp()`,
+  });
+
+  await tx
+    .update(users)
+    .set({ coinBalanceCache: balanceAfter, updatedAt: now() })
+    .where(eq(users.id, input.userId));
+}
+
+async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
+  const timestamp = now();
+  const [orderRow] = await tx
+    .insert(orders)
+    .values({
+      userId: input.userId,
+      tier: input.tier,
+      state: "PROCESSING",
+      coinTotal: input.coinTotal,
+      placedAt: timestamp,
+      stateEta: input.stateEta,
+      revealReadyAt: null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    .returning();
+
+  const itemRows =
+    input.items.length === 0
+      ? []
+      : await tx
+          .insert(orderItems)
+          .values(
+            input.items.map((item) => ({
+              orderId: orderRow!.id,
+              listingVariantId: item.listingVariantId,
+              coinPriceSnapshot: item.coinPriceSnapshot,
+              quantity: item.quantity,
+              createdAt: timestamp,
+            })),
+          )
+          .returning();
+
+  return {
+    order: mapOrder(orderRow!),
+    items: itemRows.map(mapOrderItem),
+  };
 }
 
 function generateReferralCode(userId: string): string {
@@ -261,28 +351,24 @@ function mapPushEvent(row: PushEventRow): PushEventRecord {
     body: row.body,
     payload: row.payload as PushEventPayload,
     status: row.status,
+    expoTicketId: row.expoTicketId ?? null,
     createdAt: row.createdAt,
   };
 }
 
-function encodeListingCursor(listing: Pick<ListingRecord, "sortOrder" | "id">): string {
-  return `${listing.sortOrder}:${listing.id}`;
-}
-
-function decodeListingCursor(cursor: string): { sortOrder: number; id: string } | null {
-  const separator = cursor.indexOf(":");
-  if (separator === -1) return null;
-
-  const sortOrder = Number(cursor.slice(0, separator));
-  const id = cursor.slice(separator + 1);
-  if (!Number.isFinite(sortOrder) || !id) return null;
-
-  return { sortOrder, id };
+/**
+ * SQL twin of matchesStyleKeywords: the listing's title, category and tags as padded
+ * lowercase words (non-ASCII-alphanumerics become spaces first, under "C" so the
+ * result is the same in any locale), tested against " keyword " patterns.
+ */
+function styleMatchSql(keywords: string[]) {
+  const words = sql`' ' || lower(regexp_replace((${listings.title} || ' ' || ${listings.category} || ' ' || array_to_string(${listings.tags}, ' ')) COLLATE "C", ${LISTING_WORD_SEPARATOR}, ' ', 'g')) || ' '`;
+  const patterns = keywords.map((keyword) => sql`${`% ${keyword} %`}`);
+  return sql<boolean>`coalesce(${words} LIKE ANY (ARRAY[${sql.join(patterns, sql`, `)}]::text[]), false)`;
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
   const otps = new Map<string, OtpRecord>();
-  const refreshTokens = new Map<string, RefreshTokenRecord>();
 
   const repos: Repositories = {
     async findUserByPhone(phone) {
@@ -484,6 +570,26 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(eq(users.id, userId));
     },
 
+    async saveLookbookItem(userId, listingId) {
+      await db.insert(lookbookItems).values({ userId, listingId }).onConflictDoNothing();
+    },
+
+    async removeLookbookItem(userId, listingId) {
+      await db
+        .delete(lookbookItems)
+        .where(and(eq(lookbookItems.userId, userId), eq(lookbookItems.listingId, listingId)));
+    },
+
+    async listLookbookListings(userId) {
+      const rows = await db
+        .select({ listing: listings })
+        .from(lookbookItems)
+        .innerJoin(listings, eq(lookbookItems.listingId, listings.id))
+        .where(eq(lookbookItems.userId, userId))
+        .orderBy(desc(lookbookItems.createdAt), asc(lookbookItems.listingId));
+      return rows.map((row) => mapListing(row.listing));
+    },
+
     async recordCashbackEvent(input) {
       await db.insert(cashbackEvents).values({
         id: randomUUID(),
@@ -600,39 +706,10 @@ export function createPostgresRepositories(db: Db): Repositories {
 
     async grantCoins(input: GrantCoinsInput) {
       return db.transaction(async (tx) => {
-        const [user] = await tx
-          .select()
-          .from(users)
-          .where(eq(users.id, input.userId))
-          .for("update");
+        const balanceAfter = (await lockedCoinBalance(tx, input.userId)) + input.delta;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
 
-        if (!user) throw new Error(`User not found: ${input.userId}`);
-
-        const [latest] = await tx
-          .select({ balanceAfter: coinLedger.balanceAfter })
-          .from(coinLedger)
-          .where(eq(coinLedger.userId, input.userId))
-          .orderBy(desc(coinLedger.createdAt))
-          .limit(1);
-
-        const current = latest?.balanceAfter ?? user.coinBalanceCache;
-        const balanceAfter = current + input.delta;
-        if (balanceAfter < 0) throw new Error("Insufficient coin balance");
-
-        await tx.insert(coinLedger).values({
-          userId: input.userId,
-          delta: input.delta,
-          type: input.type as typeof coinLedger.$inferInsert.type,
-          refType: input.refType ?? null,
-          refId: input.refId ?? null,
-          balanceAfter,
-        });
-
-        await tx
-          .update(users)
-          .set({ coinBalanceCache: balanceAfter, updatedAt: now() })
-          .where(eq(users.id, input.userId));
-
+        await appendCoinLedger(tx, input, balanceAfter);
         return { balanceAfter };
       });
     },
@@ -750,21 +827,34 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async saveRefreshToken(record) {
-      refreshTokens.set(record.token, record);
+      await db.insert(refreshTokens).values({
+        tokenHash: hashRefreshToken(record.token),
+        userId: record.userId,
+        expiresAt: record.expiresAt,
+      });
+      // Clear out this user's expired tokens so the table doesn't grow forever.
+      await db
+        .delete(refreshTokens)
+        .where(and(eq(refreshTokens.userId, record.userId), lt(refreshTokens.expiresAt, now())));
     },
 
     async findRefreshToken(token) {
-      const record = refreshTokens.get(token);
-      if (!record) return null;
-      if (record.expiresAt < now()) {
-        refreshTokens.delete(token);
+      const tokenHash = hashRefreshToken(token);
+      const [row] = await db
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .limit(1);
+      if (!row) return null;
+      if (row.expiresAt < now()) {
+        await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
         return null;
       }
-      return record;
+      return { token, userId: row.userId, expiresAt: row.expiresAt };
     },
 
     async deleteRefreshToken(token) {
-      refreshTokens.delete(token);
+      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, hashRefreshToken(token)));
     },
 
     async seedListings(seedListings, seedVariants) {
@@ -812,37 +902,70 @@ export function createPostgresRepositories(db: Db): Repositories {
       await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
     },
 
-    async listListings({ cursor, limit, sellerId }): Promise<ListListingsResult> {
+    async listListings({
+      cursor,
+      limit,
+      sellerId,
+      category,
+      styleKeywords,
+    }): Promise<ListListingsResult> {
       const conditions = [eq(listings.status, "ACTIVE")];
 
       if (sellerId) {
         conditions.push(eq(listings.sellerId, sellerId));
       }
 
-      if (cursor) {
-        const decoded = decodeListingCursor(cursor);
-        if (decoded) {
-          conditions.push(
-            sql`(${listings.sortOrder} > ${decoded.sortOrder} OR (${listings.sortOrder} = ${decoded.sortOrder} AND ${listings.id} > ${decoded.id}))`,
-          );
+      if (category) {
+        conditions.push(eq(listings.category, category));
+      }
+
+      const keywords = normalizeStyleKeywords(styleKeywords ?? []);
+      const decoded = cursor ? decodeListingCursor(cursor) : null;
+      // Catalog-order cursors keep paging in catalog order (see listing-feed.ts).
+      const matched =
+        keywords.length > 0 && decoded?.matched !== null ? styleMatchSql(keywords) : null;
+
+      if (decoded) {
+        const afterPosition = sql`(${listings.sortOrder} > ${decoded.sortOrder} OR (${listings.sortOrder} = ${decoded.sortOrder} AND ${listings.id} > ${decoded.id}))`;
+        if (!matched) {
+          conditions.push(afterPosition);
+        } else if (decoded.matched) {
+          // Every non-matching listing comes after all the matching ones.
+          conditions.push(sql`(NOT ${matched} OR ${afterPosition})`);
+        } else {
+          conditions.push(sql`(NOT ${matched} AND ${afterPosition})`);
         }
       }
 
       const rows = await db
-        .select()
+        .select({ listing: listings, matched: (matched ?? sql<boolean>`false`).as("style_match") })
         .from(listings)
         .where(and(...conditions))
-        .orderBy(asc(listings.sortOrder), asc(listings.id))
+        .orderBy(
+          ...(matched ? [desc(sql.identifier("style_match"))] : []),
+          asc(listings.sortOrder),
+          asc(listings.id),
+        )
         .limit(limit + 1);
 
-      const hasMore = rows.length > limit;
-      const items = rows.slice(0, limit).map(mapListing);
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
       const nextCursor =
-        hasMore && items.length > 0
-          ? encodeListingCursor(items[items.length - 1]!)
+        rows.length > limit && last
+          ? encodeListingCursor(last.listing, matched ? last.matched : null)
           : null;
 
-      return { items, nextCursor };
+      return { items: page.map((row) => mapListing(row.listing)), nextCursor };
+    },
+
+    async listListingCategories() {
+      const count = sql<number>`cast(count(*) as integer)`;
+      return db
+        .select({ category: listings.category, count })
+        .from(listings)
+        .where(eq(listings.status, "ACTIVE"))
+        .groupBy(listings.category)
+        .orderBy(desc(count), sql`${listings.category} COLLATE "C"`);
     },
 
     async findListingById(id) {
@@ -1097,42 +1220,92 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async createOrder(input: CreateOrderInput) {
-      const timestamp = now();
+      return db.transaction((tx) => insertOrderWithItems(tx, input));
+    },
 
+    async placeOrder(input: CreateOrderInput) {
       return db.transaction(async (tx) => {
-        const [orderRow] = await tx
-          .insert(orders)
-          .values({
+        // Holding the user's row lock serializes this with other checkouts and coin spends.
+        const balance = await lockedCoinBalance(tx, input.userId);
+
+        if (input.idempotencyKey) {
+          const [existing] = await tx
+            .select()
+            .from(orders)
+            .where(eq(orders.idempotencyKey, input.idempotencyKey))
+            .limit(1);
+
+          if (existing) {
+            if (existing.userId !== input.userId) {
+              throw new Error("Idempotency key already used by another order");
+            }
+            const itemRows = await tx
+              .select()
+              .from(orderItems)
+              .where(eq(orderItems.orderId, existing.id));
+            return {
+              order: mapOrder(existing),
+              items: itemRows.map(mapOrderItem),
+              created: false,
+            };
+          }
+        }
+
+        const balanceAfter = balance - input.coinTotal;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const { order, items } = await insertOrderWithItems(tx, input);
+        await appendCoinLedger(
+          tx,
+          {
             userId: input.userId,
-            tier: input.tier,
-            state: "PROCESSING",
-            coinTotal: input.coinTotal,
-            placedAt: timestamp,
-            stateEta: input.stateEta,
-            revealReadyAt: null,
-            idempotencyKey: input.idempotencyKey ?? null,
-            createdAt: timestamp,
-            updatedAt: timestamp,
-          })
-          .returning();
+            delta: -input.coinTotal,
+            type: "SPEND_ORDER",
+            refType: "order",
+            refId: order.id,
+          },
+          balanceAfter,
+        );
 
-        const itemRows = await tx
-          .insert(orderItems)
-          .values(
-            input.items.map((item) => ({
-              orderId: orderRow!.id,
-              listingVariantId: item.listingVariantId,
-              coinPriceSnapshot: item.coinPriceSnapshot,
-              quantity: item.quantity,
-              createdAt: timestamp,
-            })),
-          )
-          .returning();
+        return { order, items, created: true };
+      });
+    },
 
-        return {
-          order: mapOrder(orderRow!),
-          items: itemRows.map(mapOrderItem),
-        };
+    async rushOrderToExpress(input: RushOrderInput) {
+      return db.transaction(async (tx) => {
+        // The user's row lock serializes this with their other coin spends, including a
+        // second rush; the order's row lock holds off delivery steps until we commit.
+        const balance = await lockedCoinBalance(tx, input.userId);
+        const [current] = await tx
+          .select()
+          .from(orders)
+          .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)))
+          .for("update");
+        if (!current || current.state !== input.from || current.tier === "EXPRESS") {
+          return null;
+        }
+
+        const balanceAfter = balance - input.costCoins;
+        if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        const [row] = await tx
+          .update(orders)
+          .set({ tier: "EXPRESS", stateEta: input.stateEta, updatedAt: now() })
+          .where(eq(orders.id, input.orderId))
+          .returning();
+        await appendCoinLedger(
+          tx,
+          {
+            userId: input.userId,
+            delta: -input.costCoins,
+            type: "SPEND_RUSH",
+            refType: "order",
+            refId: input.orderId,
+          },
+          balanceAfter,
+        );
+
+        return { order: mapOrder(row!), balanceAfter };
       });
     },
 
@@ -1151,23 +1324,32 @@ export function createPostgresRepositories(db: Db): Repositories {
       return rows.map(mapOrder);
     },
 
-    async updateOrderState(orderId, state, patch) {
-      const [existing] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
-      if (!existing) return null;
+    async listOrdersByStates(states) {
+      if (states.length === 0) return [];
+      const rows = await db
+        .select()
+        .from(orders)
+        .where(inArray(orders.state, [...states]))
+        .orderBy(asc(orders.placedAt));
 
+      return rows.map(mapOrder);
+    },
+
+    async updateOrderState(orderId, state, patch, options) {
       const [row] = await db
         .update(orders)
         .set({
           state,
-          stateEta: patch?.stateEta ?? existing.stateEta,
-          revealReadyAt:
-            patch?.revealReadyAt !== undefined ? patch.revealReadyAt : existing.revealReadyAt,
+          ...(patch?.stateEta ? { stateEta: patch.stateEta } : {}),
+          ...(patch?.revealReadyAt !== undefined ? { revealReadyAt: patch.revealReadyAt } : {}),
           updatedAt: now(),
         })
-        .where(eq(orders.id, orderId))
+        .where(
+          and(eq(orders.id, orderId), options?.from ? eq(orders.state, options.from) : undefined),
+        )
         .returning();
 
-      return mapOrder(row!);
+      return row ? mapOrder(row) : null;
     },
 
     async listOrderItemsByOrderId(orderId) {
@@ -1234,6 +1416,16 @@ export function createPostgresRepositories(db: Db): Repositories {
       return rows.map(mapRender);
     },
 
+    async listPendingRenders() {
+      const rows = await db
+        .select({ render: renders, orderId: orderItems.orderId })
+        .from(renders)
+        .innerJoin(orderItems, eq(renders.orderItemId, orderItems.id))
+        .where(and(eq(renders.unlocked, true), inArray(renders.status, ["QUEUED", "RUNNING"])));
+
+      return rows.map((row) => ({ render: mapRender(row.render), orderId: row.orderId }));
+    },
+
     async updateRender(id, patch) {
       const [existing] = await db.select().from(renders).where(eq(renders.id, id)).limit(1);
       if (!existing) return null;
@@ -1271,6 +1463,10 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async recordPushEvent(input) {
+      return (await repos.recordPushEventIfNew(input)).event;
+    },
+
+    async recordPushEventIfNew(input) {
       const [row] = await db
         .insert(pushEvents)
         .values({
@@ -1283,9 +1479,17 @@ export function createPostgresRepositories(db: Db): Repositories {
           payload: input.payload,
           status: input.status,
         })
+        .onConflictDoNothing({ target: pushEvents.dedupeKey })
         .returning();
+      if (row) return { event: mapPushEvent(row), created: true };
 
-      return mapPushEvent(row!);
+      // Already recorded under this dedupe key: a repeat is a no-op, not an error.
+      const [existing] = await db
+        .select()
+        .from(pushEvents)
+        .where(eq(pushEvents.dedupeKey, input.dedupeKey))
+        .limit(1);
+      return { event: mapPushEvent(existing!), created: false };
     },
 
     async listPushEvents(userId) {
@@ -1298,6 +1502,44 @@ export function createPostgresRepositories(db: Db): Repositories {
         : await db.select().from(pushEvents).orderBy(desc(pushEvents.createdAt));
 
       return rows.map(mapPushEvent);
+    },
+
+    async updatePushEvent(id, patch) {
+      const [row] = await db
+        .update(pushEvents)
+        .set({ ...patch, updatedAt: now() })
+        .where(eq(pushEvents.id, id))
+        .returning();
+      return row ? mapPushEvent(row) : null;
+    },
+
+    async setPushToken(userId, token) {
+      return db.transaction(async (tx) => {
+        const [row] = await tx
+          .update(users)
+          .set({ pushToken: token, updatedAt: now() })
+          .where(eq(users.id, userId))
+          .returning();
+        if (!row) return null;
+
+        // A device's token belongs to whoever signed in on it last.
+        await tx
+          .update(users)
+          .set({ pushToken: null, updatedAt: now() })
+          .where(and(eq(users.pushToken, token), ne(users.id, userId)));
+        return mapUser(row);
+      });
+    },
+
+    async clearPushToken(userId, onlyIf) {
+      await db
+        .update(users)
+        .set({ pushToken: null, updatedAt: now() })
+        .where(
+          onlyIf === undefined
+            ? eq(users.id, userId)
+            : and(eq(users.id, userId), eq(users.pushToken, onlyIf)),
+        );
     },
   };
 

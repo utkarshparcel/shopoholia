@@ -7,6 +7,7 @@ import {
   unlockRenders,
   type RenderCard,
 } from '@/src/api/client';
+import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 
 export function useReveal(orderId: string) {
@@ -19,11 +20,8 @@ export function useReveal(orderId: string) {
       return fetchReveal(accessToken, orderId);
     },
     enabled: Boolean(accessToken && orderId),
-    refetchInterval: (query) => {
-      const renders = query.state.data?.renders ?? [];
-      const pending = renders.some((r) => r.status === 'QUEUED' || r.status === 'RUNNING');
-      return pending ? 2500 : false;
-    },
+    refetchInterval: (query) =>
+      hasRendersInProgress(query.state.data?.renders ?? []) ? 2500 : false,
   });
 }
 

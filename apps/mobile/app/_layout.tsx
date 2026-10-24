@@ -3,18 +3,24 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 
+import { usePushNotifications } from '@/src/hooks/push-notifications';
 import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { trackEvent } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
 import { bg } from '@/src/theme/tokens';
 
+export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
+
+// At import, not in an effect: a render error replaces this layout before its effects run.
+initSentry();
+
 export default function RootLayout() {
   const [queryClient] = useState(() => new QueryClient());
   const installTracked = useRef(false);
+  usePushNotifications();
 
   useEffect(() => {
-    initSentry();
     if (!installTracked.current) {
       installTracked.current = true;
       trackEvent('install');

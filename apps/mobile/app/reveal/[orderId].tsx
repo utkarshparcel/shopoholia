@@ -19,6 +19,7 @@ import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfac
 import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/reveal';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
+import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -128,7 +129,7 @@ export default function RevealScreen() {
   const isCombine = selectedCombineIds.length > 1;
   const generateCost = isCombine ? 75 : 50;
   const canGenerate = balance >= generateCost && !generating;
-  const pendingRenders = renders.some((r) => r.status === 'QUEUED' || r.status === 'RUNNING');
+  const pendingRenders = hasRendersInProgress(renders);
 
   return (
     <ScrollView

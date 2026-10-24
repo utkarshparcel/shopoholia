@@ -102,6 +102,64 @@ describe("render pipeline", () => {
     expect(freeDone.every((r) => r.costMicros > 0)).toBe(true);
   });
 
+  it("marks REVEAL_READY once when the free renders finish together", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("919111111112");
+    await repos.seedListings(
+      [
+        {
+          id: "listing-2",
+          sellerId: null,
+          title: "Test",
+          category: "tops",
+          tags: [],
+          coinPrice: 50,
+          productImageKeys: [],
+          houseModelRenderKey: "house/2.jpg",
+          status: "ACTIVE",
+          sortOrder: 0,
+          createdAt: new Date(),
+        },
+      ],
+      [
+        {
+          id: "variant-2",
+          listingId: "listing-2",
+          size: "M",
+          color: "Black",
+          garmentImageKey: "garments/2.jpg",
+        },
+      ],
+    );
+    const { order } = await repos.createOrder({
+      userId: user.id,
+      tier: "EXPRESS",
+      coinTotal: 50,
+      stateEta: {},
+      items: [{ listingVariantId: "variant-2", coinPriceSnapshot: 50, quantity: 1 }],
+    });
+    await repos.updateOrderState(order.id, "DELIVERED");
+    const deps = {
+      repos,
+      storage: createMockStorage(),
+      renderProvider: createMockRenderProvider(),
+      push: createStubPushService(repos),
+    };
+    const seeded = await seedOrderRenders(repos, order.id);
+
+    await Promise.all(
+      seeded.filter((r) => r.isFree).map((r) => processRenderJob(deps, r.id, order.id)),
+    );
+
+    expect((await repos.findOrderById(order.id))?.state).toBe("REVEAL_READY");
+    const renders = await repos.findRendersByOrderId(order.id);
+    expect(renders.filter((r) => r.isFree).every((r) => r.status === "DONE")).toBe(true);
+    const revealPushes = (await repos.listPushEvents(user.id)).filter(
+      (e) => e.eventType === "ORDER_REVEAL_READY",
+    );
+    expect(revealPushes).toHaveLength(1);
+  });
+
   it("does not mark reveal ready until all free renders complete", async () => {
     const repos = createMemoryRepositories();
     const { order } = await repos.createOrder({

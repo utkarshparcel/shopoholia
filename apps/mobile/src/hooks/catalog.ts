@@ -4,6 +4,7 @@ import {
   addToCart,
   fetchCart,
   fetchFeed,
+  fetchFeedCategories,
   fetchListing,
   removeFromCart,
   requestTryon,
@@ -11,12 +12,24 @@ import {
 import { trackEvent } from '@/src/lib/analytics';
 import { useSessionStore } from '@/src/stores/session';
 
-export function useFeed(limit = 20) {
+/** `category` null/undefined means the whole catalog. */
+export function useFeed(limit = 20, category?: string | null) {
+  const accessToken = useSessionStore((s) => s.accessToken);
+
   return useInfiniteQuery({
-    queryKey: ['feed', limit],
-    queryFn: ({ pageParam }) => fetchFeed(pageParam, limit),
+    // The token is in the key so signing in or out refetches with (or without) style ranking.
+    queryKey: ['feed', limit, category ?? null, accessToken],
+    queryFn: ({ pageParam }) =>
+      fetchFeed(pageParam, limit, undefined, { category, accessToken }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  });
+}
+
+export function useFeedCategories() {
+  return useQuery({
+    queryKey: ['feed-categories'],
+    queryFn: fetchFeedCategories,
   });
 }
 

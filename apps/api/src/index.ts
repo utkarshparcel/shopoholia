@@ -9,7 +9,10 @@ import {
 import Fastify from "fastify";
 import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
-import { initSentry } from "./lib/sentry.js";
+import { reportRequestError } from "./lib/error-reporting.js";
+import { resumeInFlightWork } from "./lib/jobs/resume.js";
+import { captureException, initSentry } from "./lib/sentry.js";
+import { resolveJwtSecret, resolveListenAddress } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { apiRoutes } from "./routes/index.js";
 
@@ -31,6 +34,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  // Added before any plugin or route so it applies to all of them.
+  app.addHook("onError", reportRequestError);
 
   await app.register(cors, {
     origin: process.env.NODE_ENV === "production"
@@ -40,14 +45,9 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024 },
   });
-  const jwtSecret = process.env.JWT_SECRET;
-  if (!jwtSecret) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("JWT_SECRET must be set in production");
-    }
-    app.log.warn("JWT_SECRET not set — using dev fallback. Do not deploy.");
-  }
-  await app.register(jwt, { secret: jwtSecret ?? "dev-only-change-me" });
+  const jwtSecret = resolveJwtSecret();
+  if (jwtSecret.warning) app.log.warn(jwtSecret.warning);
+  await app.register(jwt, { secret: jwtSecret.secret });
   await app.register(depsPlugin(deps));
 
   app.get(
@@ -69,12 +69,19 @@ export async function buildServer(options: BuildServerOptions = {}) {
   return app;
 }
 
-const port = Number(process.env.PORT ?? 3000);
-const host = process.env.HOST ?? "0.0.0.0";
+const { port, host } = resolveListenAddress();
 
 async function main() {
   initSentry();
   const app = await buildServer();
+
+  try {
+    const resumed = await resumeInFlightWork(app.deps);
+    app.log.info(resumed, "Resumed in-flight orders and renders");
+  } catch (error) {
+    app.log.error(error, "Failed to resume in-flight orders and renders");
+    captureException(error);
+  }
 
   try {
     await app.listen({ port, host });
