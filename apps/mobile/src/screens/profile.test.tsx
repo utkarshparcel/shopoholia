@@ -71,6 +71,7 @@ vi.mock('@/src/components/ui', () => ({
 }));
 
 vi.mock('@/src/hooks/orders', () => ({
+  orderKeys: { list: (userId: string | null) => ['orders', userId] },
   useCoinBalance: () => ({ data: { balance: 500 } }),
 }));
 

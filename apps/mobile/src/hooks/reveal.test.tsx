@@ -7,8 +7,10 @@ import { fetchReveal, type RenderCard } from '@/src/api/client';
 import { useReveal } from './reveal';
 
 vi.mock('@/src/stores/session', () => ({
-  useSessionStore: (selector: (s: { accessToken: string }) => unknown) =>
-    selector({ accessToken: 'token' }),
+  useSessionStore: Object.assign(
+    (selector: (s: { accessToken: string }) => unknown) => selector({ accessToken: 'token' }),
+    { getState: () => ({ accessToken: 'token' }) },
+  ),
 }));
 
 vi.mock('@/src/api/client', () => ({

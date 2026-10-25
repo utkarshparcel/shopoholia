@@ -1,8 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
+import { AppState, Platform } from 'react-native';
 
+import { ApiRequestError } from '@/src/api/client';
 import { usePushNotifications } from '@/src/hooks/push-notifications';
 import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
@@ -16,9 +18,31 @@ export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBo
 initSentry();
 
 export default function RootLayout() {
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // A refusal (4xx) won't change on a retry; a network blip or a 5xx might.
+            retry: (count, error) =>
+              count < 2 && !(error instanceof ApiRequestError && error.status < 500),
+            staleTime: 30_000,
+          },
+        },
+      }),
+  );
   const installTracked = useRef(false);
   usePushNotifications();
+
+  // React Native has no window focus events: tell React Query when the app comes to the
+  // foreground, so stale queries refetch on resume and polling pauses in the background.
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const subscription = AppState.addEventListener('change', (status) => {
+      focusManager.setFocused(status === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (!installTracked.current) {

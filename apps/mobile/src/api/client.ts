@@ -17,7 +17,7 @@ async function parseJson<T>(res: Response): Promise<T> {
   const data = (await res.json()) as T | ApiError;
   if (!res.ok) {
     const err = data as ApiError;
-    throw new Error(err.message ?? `Request failed (${res.status})`);
+    throw new ApiRequestError(res.status, err.message ?? `Request failed (${res.status})`);
   }
   return data as T;
 }

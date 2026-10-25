@@ -36,6 +36,9 @@ vi.mock('@/src/api/client', () => ({
   })),
 }));
 
+const jwtFor = (sub: string, n: number) =>
+  `h.${btoa(JSON.stringify({ sub, n })).replace(/=+$/, '')}.sig`;
+
 function withClient(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -81,16 +84,42 @@ describe('useFeed', () => {
   });
 
   it('refetches with the access token once the shopper signs in', async () => {
+    const token = jwtFor('user-1', 1);
     render(withClient(<FeedProbe category={null} />));
     await waitFor(() => expect(screen.getByText('all for guest')).toBeTruthy());
 
     act(() => {
-      useSessionStore.getState().setSession({ accessToken: 'token-123', refreshToken: 'refresh' });
+      useSessionStore.getState().setSession({ accessToken: token, refreshToken: 'refresh' });
     });
-    await waitFor(() => expect(screen.getByText('all for token-123')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(`all for ${token}`)).toBeTruthy());
     expect(fetchFeed).toHaveBeenLastCalledWith(undefined, 20, undefined, {
       category: null,
-      accessToken: 'token-123',
+      accessToken: token,
+    });
+  });
+
+  it('keeps the pages through a token renewal and fetches with the new token next time', async () => {
+    const first = jwtFor('user-1', 1);
+    const renewed = jwtFor('user-1', 2);
+    useSessionStore.getState().setSession({ accessToken: first, refreshToken: 'refresh' });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <FeedProbe category={null} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText(`all for ${first}`)).toBeTruthy());
+
+    await act(async () => {
+      useSessionStore.getState().setTokens({ accessToken: renewed, refreshToken: 'r2' });
+    });
+    expect(fetchFeed).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(`all for ${first}`)).toBeTruthy();
+
+    await act(() => client.refetchQueries({ queryKey: ['feed'] }));
+    expect(fetchFeed).toHaveBeenLastCalledWith(undefined, 20, undefined, {
+      category: null,
+      accessToken: renewed,
     });
   });
 });

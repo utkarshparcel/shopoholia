@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchFeed, fetchFeedCategories } from './client';
+import { ApiRequestError, fetchFeed, fetchFeedCategories, fetchListing } from './client';
 
 vi.mock('expo-constants', () => ({
   default: { expoConfig: { extra: { apiUrl: 'https://api.worn.test' } } },
@@ -47,5 +47,17 @@ describe('feed client', () => {
   it('loads categories from the feed categories endpoint', async () => {
     await expect(fetchFeedCategories()).resolves.toMatchObject({ categories: [] });
     expect(fetchMock.mock.calls[0]![0]).toBe('https://api.worn.test/feed/categories');
+  });
+
+  it('rejects a refused request with its status and the API message', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'Not Found', message: 'Listing not found' }), {
+        status: 404,
+      }),
+    );
+
+    const error = await fetchListing('missing').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ status: 404, message: 'Listing not found' });
   });
 });

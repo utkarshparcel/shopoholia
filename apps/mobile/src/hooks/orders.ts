@@ -8,28 +8,42 @@ import {
   rushOrder,
   type OrderSummary,
 } from '@/src/api/client';
+import { cartKey } from '@/src/hooks/catalog';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { trackEvent } from '@/src/lib/analytics';
 import { useSessionStore } from '@/src/stores/session';
+
+/** Keyed on the shopper, not their token, so a token renewal keeps the cache. */
+export const orderKeys = {
+  balance: (userId: string | null) => ['coins', 'balance', userId] as const,
+  list: (userId: string | null) => ['orders', userId] as const,
+  detail: (orderId: string, userId: string | null) => ['order', orderId, userId] as const,
+};
 
 function idempotencyKey() {
   return globalThis.crypto?.randomUUID?.() ?? `idem-${Date.now()}`;
 }
 
 export function useCoinBalance() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const signedIn = useSessionStore((s) => Boolean(s.accessToken));
 
   return useQuery({
-    queryKey: ['coins', 'balance', accessToken],
+    queryKey: orderKeys.balance(userId),
     queryFn: () => {
+      const accessToken = useSessionStore.getState().accessToken;
       if (!accessToken) return { balance: 0 };
       return fetchCoinBalance(accessToken);
     },
-    enabled: Boolean(accessToken),
+    enabled: signedIn,
+    // Streak claims and coin packs change the balance without touching this cache.
+    staleTime: 0,
   });
 }
 
 export function useCheckout() {
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
 
@@ -43,24 +57,27 @@ export function useCheckout() {
       if (accessToken) {
         const balance = await fetchCoinBalance(accessToken);
         setCoinBalance(balance.balance);
-        queryClient.setQueryData(['coins', 'balance', accessToken], balance);
-        queryClient.invalidateQueries({ queryKey: ['cart', accessToken] });
-        queryClient.setQueryData(['order', order.id, accessToken], order);
+        queryClient.setQueryData(orderKeys.balance(userId), balance);
+        queryClient.invalidateQueries({ queryKey: cartKey(userId) });
+        queryClient.setQueryData(orderKeys.detail(order.id, userId), order);
+        queryClient.invalidateQueries({ queryKey: orderKeys.list(userId) });
       }
     },
   });
 }
 
 export function useOrder(orderId: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const signedIn = useSessionStore((s) => Boolean(s.accessToken));
 
   return useQuery({
-    queryKey: ['order', orderId, accessToken],
+    queryKey: orderKeys.detail(orderId, userId),
     queryFn: () => {
+      const accessToken = useSessionStore.getState().accessToken;
       if (!accessToken) throw new Error('Sign in to track your order');
       return fetchOrder(accessToken, orderId);
     },
-    enabled: Boolean(accessToken && orderId),
+    enabled: signedIn && Boolean(orderId),
     refetchInterval: (query) => {
       const state = query.state.data?.state;
       return state && state !== 'REVEAL_READY' ? 5_000 : false;
@@ -75,6 +92,7 @@ export function isInsufficientCoinsError(error: unknown) {
 
 export function useRushOrder(orderId: string) {
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
 
@@ -90,18 +108,18 @@ export function useRushOrder(orderId: string) {
         coinsSpent: order.rushCostCoins,
       });
       setCoinBalance(balanceAfter);
-      queryClient.setQueryData(['coins', 'balance', accessToken], { balance: balanceAfter });
-      queryClient.setQueryData(['order', order.id, accessToken], order);
-      void queryClient.invalidateQueries({ queryKey: ['orders', accessToken] });
+      queryClient.setQueryData(orderKeys.balance(userId), { balance: balanceAfter });
+      queryClient.setQueryData(orderKeys.detail(order.id, userId), order);
+      void queryClient.invalidateQueries({ queryKey: orderKeys.list(userId) });
     },
     onError: async () => {
       // A refusal means the order or the balance isn't what this screen showed: reload both.
       if (!accessToken) return;
       await Promise.allSettled([
-        queryClient.invalidateQueries({ queryKey: ['order', orderId, accessToken] }),
+        queryClient.invalidateQueries({ queryKey: orderKeys.detail(orderId, userId) }),
         fetchCoinBalance(accessToken).then((balance) => {
           setCoinBalance(balance.balance);
-          queryClient.setQueryData(['coins', 'balance', accessToken], balance);
+          queryClient.setQueryData(orderKeys.balance(userId), balance);
         }),
       ]);
     },

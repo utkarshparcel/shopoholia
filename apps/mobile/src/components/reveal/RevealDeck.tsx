@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
   PanResponder,
@@ -136,12 +136,27 @@ export function RevealDeck({ renders, onUnlock, unlockingId }: RevealDeckProps) 
     else goPrev();
     translateX.value = 0;
   };
+  // The responder is built once, so swipes call the latest onSwipeEnd through this ref.
+  const onSwipeEndRef = useRef(onSwipeEnd);
+  useEffect(() => {
+    onSwipeEndRef.current = onSwipeEnd;
+  });
+  const swipeEnd = (direction: 'left' | 'right') => onSwipeEndRef.current(direction);
+
+  // Only the current card is mounted, so load its neighbors' images before a swipe lands there.
+  const prevImageUrl = renders[index - 1]?.imageUrl;
+  const nextImageUrl = renders[index + 1]?.imageUrl;
+  useEffect(() => {
+    for (const uri of [prevImageUrl, nextImageUrl]) {
+      if (uri) void Image.prefetch(uri).catch(() => undefined);
+    }
+  }, [prevImageUrl, nextImageUrl]);
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      // Horizontal swipes only, so vertical drags still scroll the screen.
       onMoveShouldSetPanResponder: (_e, gestureState) =>
-        Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5,
+        Math.abs(gestureState.dx) > 8 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
       onPanResponderGrant: () => {
         startXRef.current = translateX.value;
       },
@@ -150,11 +165,11 @@ export function RevealDeck({ renders, onUnlock, unlockingId }: RevealDeckProps) 
       },
       onPanResponderRelease: (_e, gestureState) => {
         if (gestureState.dx < -SWIPE_THRESHOLD) {
-          translateX.value = withSpring(-240, {}, () => runOnJS(onSwipeEnd)('left'));
+          translateX.value = withSpring(-240, {}, () => runOnJS(swipeEnd)('left'));
           return;
         }
         if (gestureState.dx > SWIPE_THRESHOLD) {
-          translateX.value = withSpring(240, {}, () => runOnJS(onSwipeEnd)('right'));
+          translateX.value = withSpring(240, {}, () => runOnJS(swipeEnd)('right'));
           return;
         }
         translateX.value = withSpring(0);

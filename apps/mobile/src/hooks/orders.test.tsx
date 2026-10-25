@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { useOrder } from './orders';
 
 vi.mock('@/src/stores/session', () => ({
-  useSessionStore: (selector: (s: { accessToken: string | null }) => unknown) =>
-    selector({ accessToken: 'token' }),
+  useSessionStore: Object.assign(
+    (selector: (s: { accessToken: string | null }) => unknown) => selector({ accessToken: 'token' }),
+    { getState: () => ({ accessToken: 'token' }) },
+  ),
 }));
 
 vi.mock('@/src/api/client', () => ({

@@ -77,23 +77,17 @@ export const roles = {
 
 // ── Type families ───────────────────────────────────────
 export const fontDisplay = 'DMSerifDisplay_400Regular';
-export const fontDisplayItalic = 'DMSerifDisplay_400Regular_Italic';
 export const fontSans = 'DMSans_400Regular';
-export const fontSansLight = 'DMSans_300Light';
 export const fontSansMedium = 'DMSans_500Medium';
 export const fontSansSemiBold = 'DMSans_600SemiBold';
 export const fontMono = 'DMMono_400Regular';
-export const fontMonoMedium = 'DMMono_500Medium';
 
 export const fonts = {
   display: fontDisplay,
-  displayItalic: fontDisplayItalic,
   sans: fontSans,
-  sansLight: fontSansLight,
   sansMedium: fontSansMedium,
   sansSemiBold: fontSansSemiBold,
   mono: fontMono,
-  monoMedium: fontMonoMedium,
 } as const;
 
 // ── Type scale (mobile-first) ───────────────────────────

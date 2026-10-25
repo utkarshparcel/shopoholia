@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View, type ViewProps } from 'react-native';
 
 import {
@@ -48,7 +48,7 @@ const gradients: Record<PlaceholderTone, [string, string, string]> = {
   dusk: ['#d8cfc4', '#b9a894', '#9c8b78'],
 };
 
-export function ListingCard({
+export const ListingCard = memo(function ListingCard({
   brand: brandName,
   title,
   coinPrice,
@@ -148,7 +148,7 @@ export function ListingCard({
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   badges: {

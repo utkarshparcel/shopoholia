@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, Chip, CoinIcon } from '@/src/components/ui';
-import { useCart, useListing, useTryon } from '@/src/hooks/catalog';
+import { useAddToCart, useListing, useTryon } from '@/src/hooks/catalog';
 import { trackEvent } from '@/src/lib/analytics';
 import { recordAffiliateClick, type AffiliateLink } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
@@ -96,7 +96,7 @@ export default function ListingDetailScreen() {
   const insets = useSafeAreaInsets();
   const accessToken = useSessionStore((s) => s.accessToken);
   const listing = useListing(id);
-  const { addMutation } = useCart();
+  const addMutation = useAddToCart();
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [heroFailed, setHeroFailed] = useState(false);
   const tryon = useTryon(id, selectedVariantId);
@@ -199,13 +199,6 @@ export default function ListingDetailScreen() {
                 onPress={() => {
                   void tryon
                     .mutateAsync()
-                    .then((result) => {
-                      if (result.status === 'PROCESSING') {
-                        setTimeout(() => {
-                          void tryon.mutateAsync().catch(() => undefined);
-                        }, 400);
-                      }
-                    })
                     .catch((error: unknown) => {
                       const message =
                         error instanceof Error ? error.message : 'Try-on failed';

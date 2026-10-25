@@ -66,7 +66,7 @@ vi.mock('react-native', () => ({
       content,
     );
   },
-  Image: createComponent('img'),
+  Image: Object.assign(createComponent('img'), { prefetch: vi.fn(() => Promise.resolve(true)) }),
   ActivityIndicator: createComponent('div'),
   Alert: { alert: vi.fn() },
   PanResponder: {
