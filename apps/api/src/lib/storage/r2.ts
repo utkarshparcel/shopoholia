@@ -28,6 +28,10 @@ export type R2Config = {
   publicUrl?: string;
 };
 
+const HOUR_SECONDS = 60 * 60;
+// SigV4 rejects presigned URLs that expire more than a week out.
+const MAX_PRESIGNED_SECONDS = 7 * 24 * HOUR_SECONDS;
+
 export function hasR2Config(
   env: Record<string, string | undefined>,
 ): env is R2Config & Record<string, string | undefined> {
@@ -85,13 +89,20 @@ export function createR2Storage(config: R2Config): StorageClient {
         return `${config.publicUrl.replace(/\/$/, "")}/${key}`;
       }
 
+      // Sign as of the start of the hour so the URL stays the same, and cacheable, all hour.
+      // The extra hour keeps it valid for at least expiresInSeconds from now.
+      const signingDate = new Date();
+      signingDate.setUTCMinutes(0, 0, 0);
       return getSignedUrl(
         client,
         new GetObjectCommand({
           Bucket: config.bucketName,
           Key: key,
         }),
-        { expiresIn: expiresInSeconds },
+        {
+          signingDate,
+          expiresIn: Math.min(expiresInSeconds + HOUR_SECONDS, MAX_PRESIGNED_SECONDS),
+        },
       );
     },
 

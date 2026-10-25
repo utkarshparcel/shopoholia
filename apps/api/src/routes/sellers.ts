@@ -181,9 +181,10 @@ export const sellersRoutes: FastifyPluginAsyncZod = async (app) => {
         sellerId: seller.id,
         limit: 100,
       });
+      const sellerMap = new Map([[seller.id, seller]]);
       const items = await Promise.all(
         page.items.map((listing) =>
-          listingCardDto(listing, app.deps.storage, app.deps.repos),
+          listingCardDto(listing, app.deps.storage, app.deps.repos, sellerMap),
         ),
       );
 
