@@ -1,0 +1,23 @@
+# Worn - robots.txt
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://worn.app/sitemap.xml
+
+# Host
+Host: https://worn.app
+
+# Crawl-delay for polite crawling
+Crawl-delay: 10
+
+# Disallow private/admin areas
+Disallow: /api/
+Disallow: /_next/
+Disallow: /static/
+Disallow: /admin/
+Disallow: /dashboard/
+Disallow: /account/
+Disallow: /settings/
+Disallow: /*.json$
+Disallow: /*.xml$
