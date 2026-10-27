@@ -17,9 +17,16 @@ export const users = pgTable("users", {
   avatarStatus: avatarStatusEnum("avatar_status").notNull().default("NONE"),
   coinBalanceCache: integer("coin_balance_cache").notNull().default(0),
   consentFlags: jsonb("consent_flags")
-    .$type<Record<string, boolean>>()
+    .$type<Record<string, unknown>>()
     .notNull()
     .default({}),
+  /** Settings (not consent): `UserPrefs` from @worn/shared. Write with `patchUserPrefs`. */
+  prefs: jsonb("prefs")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
+  /** IANA name; validate with `isValidTimeZone` from @worn/shared before writing. */
+  timeZone: text("time_zone").notNull().default("Asia/Kolkata"),
   pushToken: text("push_token"),
   referralCode: text("referral_code").unique(),
   referredBy: text("referred_by"),

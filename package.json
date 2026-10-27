@@ -8,7 +8,13 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "test:coverage": "turbo run test:coverage",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "check:eas-gates": "node scripts/check-eas-gates.mjs",
+    "check:casa-track": "node scripts/check-casa-track.mjs",
+    "check:store-listings": "node scripts/check-store-listings.mjs",
+    "check:ops-playbooks": "node scripts/check-ops-playbooks.mjs",
+    "check:dpdp-gdpr": "node scripts/check-dpdp-gdpr.mjs",
+    "check:pentest-readiness": "node scripts/check-pentest-readiness.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.29.0",

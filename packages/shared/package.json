@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./node-sentry": {
+      "types": "./dist/node-sentry.d.ts",
+      "import": "./dist/node-sentry.js"
     }
   },
   "scripts": {
@@ -20,9 +24,11 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@sentry/node": "^9.30.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.7.2",
     "vitest": "^3.2.4"

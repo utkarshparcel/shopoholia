@@ -1,9 +1,15 @@
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { PropsWithChildren } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import OrderTrackingScreen from '@/app/order/[id]';
 
 const mocks = vi.hoisted(() => ({ rushAvailable: true }));
+
+function Wrapper({ children }: PropsWithChildren) {
+  return <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
+}
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), push: vi.fn() }),
@@ -31,13 +37,13 @@ vi.mock('@/src/hooks/orders', () => ({
 describe('OrderTrackingScreen rush', () => {
   it('offers Rush to Express when it would get the order there sooner', () => {
     mocks.rushAvailable = true;
-    render(<OrderTrackingScreen />);
+    render(<OrderTrackingScreen />, { wrapper: Wrapper });
     expect(screen.getByText('Rush to Express · 25 coins')).toBeTruthy();
   });
 
   it('leaves it out when it would not', () => {
     mocks.rushAvailable = false;
-    render(<OrderTrackingScreen />);
+    render(<OrderTrackingScreen />, { wrapper: Wrapper });
     expect(screen.getByText('Packed')).toBeTruthy();
     expect(screen.queryByText(/Rush to Express/)).toBeNull();
   });

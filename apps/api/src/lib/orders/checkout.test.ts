@@ -4,6 +4,31 @@ import { createMemoryRepositories } from "../repositories/memory.js";
 import { createStubPushService } from "../push/stub.js";
 import type { JobQueue } from "../jobs/queue.js";
 import { CheckoutError, checkoutOrder } from "./checkout.js";
+import { COOLING_OFF_MS, readCoolingOffFromFlags } from "../cooling-off.js";
+
+async function seedApparelCart(repos: ReturnType<typeof createMemoryRepositories>, userId: string) {
+  const seller = await repos.registerSeller(userId, "Play Seller", "RETAILER");
+  const { listing, variant } = await repos.createSellerListing({
+    sellerId: seller.id,
+    title: "Linen shirt",
+    category: "APPAREL",
+    tags: ["linen"],
+    coinPrice: 100,
+    realPrice: "₹2,500",
+    productImageKeys: ["listings/shirt.jpg"],
+    houseModelRenderKey: "listings/shirt-hm.jpg",
+    affiliateUrl: null,
+    variant: { size: "M", color: "Blue", garmentImageKey: "listings/shirt-g.jpg" },
+  });
+  const cart = await repos.getOrCreateCart(userId);
+  await repos.addCartItem({
+    cartId: cart.id,
+    listingVariantId: variant.id,
+    coinPriceSnapshot: listing.coinPrice,
+    quantity: 1,
+  });
+  return { listing, variant };
+}
 
 async function setup({ balance, price }: { balance: number; price: number }) {
   const repos = createMemoryRepositories();
@@ -75,7 +100,7 @@ describe("checkoutOrder", () => {
       price: 120,
     });
 
-    const order = await checkoutOrder(deps, { userId: user.id, tier: "EXPRESS" });
+    const { order } = await checkoutOrder(deps, { userId: user.id, tier: "EXPRESS" });
 
     expect(order.state).toBe("PROCESSING");
     expect(order.coinTotal).toBe(120);
@@ -136,8 +161,8 @@ describe("checkoutOrder", () => {
       idempotencyKey,
     });
 
-    expect(second.id).toBe(first.id);
-    expect(retry.id).toBe(first.id);
+    expect(second.order.id).toBe(first.order.id);
+    expect(retry.order.id).toBe(first.order.id);
     expect(await repos.listOrdersByUserId(user.id)).toHaveLength(1);
     expect(await repos.getCoinBalance(user.id)).toBe(400);
     expect(scheduleOrderLadder).toHaveBeenCalledTimes(1);
@@ -146,7 +171,11 @@ describe("checkoutOrder", () => {
   it("does not hand out another user's order for a reused idempotency key", async () => {
     const { repos, user, deps } = await setup({ balance: 500, price: 100 });
     const idempotencyKey = randomUUID();
-    const order = await checkoutOrder(deps, { userId: user.id, tier: "EXPRESS", idempotencyKey });
+    const { order } = await checkoutOrder(deps, {
+      userId: user.id,
+      tier: "EXPRESS",
+      idempotencyKey,
+    });
 
     const { user: other } = await repos.createUser("919876543211");
     await repos.grantCoins({ userId: other.id, delta: 500, type: "GRANT" });
@@ -163,5 +192,46 @@ describe("checkoutOrder", () => {
       checkoutOrder(deps, { userId: other.id, tier: "EXPRESS", idempotencyKey }),
     ).rejects.toThrow("Idempotency key already used");
     expect(await repos.getCoinBalance(other.id)).toBe(500);
+  });
+
+  it("soft-locks apparel over-budget haul for 24h and allows override (N34)", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("919876543211");
+    await repos.grantCoins({ userId: user.id, delta: 5000, type: "GRANT" });
+    await repos.createBudget({
+      userId: user.id,
+      category: "APPAREL",
+      period: "MONTHLY",
+      limitMinor: 100,
+    });
+    await seedApparelCart(repos, user.id);
+
+    const deps = {
+      repos,
+      push: createStubPushService(repos),
+      jobQueue: { scheduleOrderLadder: vi.fn() } as unknown as JobQueue,
+    };
+
+    const blocked = await checkoutOrder(deps, { userId: user.id, tier: "EXPRESS" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blocked).toBeInstanceOf(CheckoutError);
+    expect((blocked as CheckoutError).code).toBe("COOLING_OFF");
+    expect((blocked as CheckoutError).coolingOff?.releaseAt).toBeTruthy();
+
+    const held = readCoolingOffFromFlags((await repos.findUserById(user.id))?.consentFlags);
+    expect(held).toBeTruthy();
+    expect(new Date(held!.releaseAt).getTime() - new Date(held!.heldAt).getTime()).toBe(
+      COOLING_OFF_MS,
+    );
+
+    const order = await checkoutOrder(deps, {
+      userId: user.id,
+      tier: "EXPRESS",
+      coolingOffOverride: true,
+    });
+    expect(order.order.id).toBeTruthy();
+    expect(readCoolingOffFromFlags((await repos.findUserById(user.id))?.consentFlags)).toBeNull();
   });
 });

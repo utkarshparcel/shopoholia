@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/node";
+import { sentrySmokeMessage, wornSentryTags } from "@worn/shared";
 
 let initialized = false;
 
@@ -14,6 +15,7 @@ export function initSentry(): void {
     enabled: true,
     tracesSampleRate: 0.2,
     environment: process.env.NODE_ENV ?? "development",
+    initialScope: { tags: wornSentryTags({ surface: "api" }) },
     integrations: [
       // Request errors are reported by our onError hook (error-reporting.ts), with request tags.
       // Left on, this integration captures route errors first and Sentry then drops the hook's
@@ -22,6 +24,10 @@ export function initSentry(): void {
     ],
   });
   initialized = true;
+
+  if (process.env.SENTRY_SMOKE === "1") {
+    Sentry.captureMessage(sentrySmokeMessage("api"), "info");
+  }
 }
 
 export type CaptureOptions = {

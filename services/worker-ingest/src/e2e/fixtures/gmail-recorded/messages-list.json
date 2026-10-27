@@ -1,0 +1,8 @@
+{
+  "messages": [
+    { "id": "msg-amazon-fixture-1", "threadId": "thread-amazon-1" },
+    { "id": "msg-flipkart-fixture-1", "threadId": "thread-flipkart-1" },
+    { "id": "msg-promo-fixture-1", "threadId": "thread-promo-1" }
+  ],
+  "resultSizeEstimate": 3
+}

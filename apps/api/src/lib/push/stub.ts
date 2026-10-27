@@ -1,17 +1,26 @@
+import {
+  closetDeepLinkForEvent,
+  deliverQueuedPush,
+  type ClosetPushDeepLink,
+  type sendExpoPush,
+} from "@worn/shared";
 import type { Repositories } from "../repositories/types.js";
 
 export type PushDeepLinkPayload = {
   deepLink: string;
-  screen: "order" | "reveal";
-  orderId: string;
+  screen: string;
+  orderId?: string;
+  [key: string]: unknown;
 };
 
 export type PushPayload = {
   userId: string;
-  orderId: string;
+  orderId?: string | null;
   eventType: string;
   title: string;
   body: string;
+  /** Optional Closet / override deep-link payload. */
+  link?: PushDeepLinkPayload;
 };
 
 export type PushService = {
@@ -71,34 +80,61 @@ export function deepLinkForPushEvent(
     };
   }
 
-  return {
-    deepLink: `worn://order/${orderId}`,
-    screen: "order",
-    orderId,
-  };
+  if (eventType.startsWith("ORDER_")) {
+    return {
+      deepLink: `worn://order/${orderId}`,
+      screen: "order",
+      orderId,
+    };
+  }
+
+  return closetDeepLinkForEvent(eventType, { orderId }) as ClosetPushDeepLink;
 }
 
 export function pushDedupeKey(orderId: string, eventType: string) {
   return `${orderId}:${eventType}`;
 }
 
-export function createStubPushService(repos: Repositories): PushService {
+export type StubPushServiceOptions = {
+  /** Injected Expo sender (tests). Defaults to shared `sendExpoPush`. */
+  sendExpo?: typeof sendExpoPush;
+};
+
+/**
+ * Shared Play + Closet send path:
+ * 1. Log
+ * 2. Record push_events as QUEUED
+ * 3. Attempt Expo delivery when the user has a pushToken → SENT/FAILED
+ *    (no token leaves QUEUED — preserves existing Play stub tests)
+ */
+export function createStubPushService(
+  repos: Repositories,
+  options: StubPushServiceOptions = {},
+): PushService {
   return {
     async send(payload) {
-      const linkPayload = deepLinkForPushEvent(payload.eventType, payload.orderId);
-      const dedupeKey = pushDedupeKey(payload.orderId, payload.eventType);
+      const orderId = payload.orderId ?? null;
+      const linkPayload: PushDeepLinkPayload =
+        payload.link ??
+        (orderId
+          ? deepLinkForPushEvent(payload.eventType, orderId)
+          : (closetDeepLinkForEvent(payload.eventType) as ClosetPushDeepLink));
+
+      const dedupeKey = orderId
+        ? pushDedupeKey(orderId, payload.eventType)
+        : `${payload.userId}:${payload.eventType}:${linkPayload.deepLink}`;
 
       console.info(
         "[push]",
         payload.eventType,
-        payload.orderId,
+        orderId ?? payload.userId,
         linkPayload.deepLink,
         payload.title,
       );
 
-      await repos.recordPushEvent({
+      const event = await repos.recordPushEvent({
         userId: payload.userId,
-        orderId: payload.orderId,
+        orderId,
         eventType: payload.eventType,
         title: payload.title,
         body: payload.body,
@@ -106,6 +142,23 @@ export function createStubPushService(repos: Repositories): PushService {
         payload: linkPayload,
         status: "QUEUED",
       });
+
+      const user = await repos.findUserById(payload.userId);
+      const delivered = await deliverQueuedPush({
+        pushToken: user?.pushToken ?? null,
+        title: payload.title,
+        body: payload.body,
+        data: linkPayload,
+        sendExpo: options.sendExpo,
+      });
+
+      if (delivered.status !== "QUEUED" && repos.updatePushEventStatus) {
+        await repos.updatePushEventStatus(
+          event.id,
+          delivered.status,
+          delivered.expoTicketId ?? null,
+        );
+      }
     },
     async listEvents(userId) {
       return repos.listPushEvents(userId);

@@ -1,0 +1,21 @@
+{
+  "id": "msg-flipkart-fixture-1",
+  "threadId": "thread-flipkart-1",
+  "historyId": "9002",
+  "snippet": "Your Flipkart Order is confirmed — Order total ₹849.00",
+  "payload": {
+    "headers": [
+      { "name": "From", "value": "order@flipkart.com" },
+      { "name": "To", "value": "fixture-buyer@example.com" },
+      {
+        "name": "Subject",
+        "value": "Your Flipkart Order is confirmed"
+      },
+      { "name": "Date", "value": "Mon, 11 Aug 2025 18:42:00 +0530" },
+      { "name": "Message-ID", "value": "flipkart-fixture-1" }
+    ],
+    "body": {
+      "data": "SGksCgpZb3VyIEZsaXBrYXJ0IG9yZGVyIGhhcyBiZWVuIHBsYWNlZCBzdWNjZXNzZnVsbHkuCgpPcmRlciBJRDogRkstNzcxMjA5MzQKT3JkZXIgdG90YWw6IOKCuTg0OS4wMAoKV2UnbGwgbm90aWZ5IHlvdSB3aGVuIGl0IHNoaXBzLgoKRmxpcGthcnQ"
+    }
+  }
+}

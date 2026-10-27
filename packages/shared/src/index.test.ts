@@ -8,4 +8,13 @@ describe("package exports", () => {
     expect(shared.AvatarStatusSchema).toBeDefined();
     expect(shared.OrderState).toBeDefined();
   });
+
+  it("re-exports Wave A money / delight foundations", () => {
+    expect(shared.formatMinor).toBeTypeOf("function");
+    expect(shared.formatMinorWithPrefs).toBeTypeOf("function");
+    expect(shared.defaultCurrencyFromLocale).toBeTypeOf("function");
+    expect(shared.foundMoneyCountUpPlan).toBeTypeOf("function");
+    expect(shared.barcodeSuccessFeedback).toBeTypeOf("function");
+    expect(shared.hapticStyleForMoment).toBeTypeOf("function");
+  });
 });

@@ -1,4 +1,41 @@
 export { createDb, type Db } from "./client.js";
+export { consentGrants } from "./schema/consent.js";
+export { moneyAccounts, moneyLedger } from "./schema/money.js";
+export {
+  ingestionSources,
+  ingestionDocuments,
+} from "./schema/ingestion.js";
+export { merchantPurchases, merchantPurchaseItems } from "./schema/purchases.js";
+export { receipts, type ReceiptRow, type NewReceipt } from "./schema/receipts.js";
+export {
+  warranties,
+  type WarrantyRow,
+  type NewWarranty,
+} from "./schema/warranties.js";
+export {
+  postLedgerEntry,
+  getAccountBalance,
+  computeBalanceAfter,
+  deleteOrphanMoneyAccount,
+  purgeOrphanMoneyAccounts,
+  type MoneyLedgerType,
+} from "./queries/money.js";
+export {
+  wardrobeItems,
+  outfits,
+  wearLog,
+  itemMetrics,
+  dispositionListings,
+  repairLogs,
+  type WardrobeItemRow,
+  type OutfitRow,
+  type WearLogRow,
+  type ItemMetricRow,
+  type DispositionListingRow,
+  type RepairLogRow,
+} from "./schema/wardrobe.js";
+export { budgets, spendRollups, type BudgetRow, type SpendRollupRow } from "./schema/accountant.js";
+export { returnRequests, returnEvents, type ReturnRequestRow, type ReturnEventRow } from "./schema/returns.js";
 export { users } from "./schema/users.js";
 export { avatars } from "./schema/avatars.js";
 export { carts } from "./schema/carts.js";
@@ -16,6 +53,33 @@ export { tryonPreviews } from "./schema/tryon-previews.js";
 export { pushEvents } from "./schema/push-events.js";
 export { refreshTokens } from "./schema/refresh-tokens.js";
 export { sellers } from "./schema/sellers.js";
+export { recipients, recipientProfiles, giftOrders, groupGiftContributions, type RecipientRow, type RecipientProfileRow, type GiftOrderRow, type GroupGiftContributionRow, type WishlistRef } from "./schema/gift.js";
+export { measurementProfiles, customizationTemplates, tailoringOrders, tailoringReviews, type MeasurementProfileRow, type CustomizationTemplateRow, type TailoringOrderRow, type TailoringReviewRow } from "./schema/fit.js";
+export {
+  swapCircles,
+  swapCircleMembers,
+  swapListings,
+  type SwapCircleRow,
+  type SwapCircleMemberRow,
+  type SwapListingRow,
+} from "./schema/swap-circle.js";
+export {
+  brandPriceWatches,
+  type BrandPriceWatchRow,
+} from "./schema/price-watches.js";
+export { emiPlans, type EmiPlanRow } from "./schema/emi.js";
+export {
+  cashbackClaims,
+  type CashbackClaimRow,
+} from "./schema/cashback-claims.js";
+export {
+  households,
+  householdMembers,
+  closetProfiles,
+  type HouseholdRow,
+  type HouseholdMemberRow,
+  type ClosetProfileRow,
+} from "./schema/household.js";
 export {
   getCoinBalance,
   grantCoins,

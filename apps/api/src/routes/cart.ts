@@ -9,6 +9,11 @@ import { requireAuth } from "../lib/auth/guard.js";
 import { listingCardDto } from "../lib/catalog/urls.js";
 import { loadDataForCart } from "../lib/repositories/loader.js";
 import type { AppDeps } from "../lib/deps.js";
+import {
+  coolingOffMessage,
+  isHoldActive,
+  readCoolingOffFromFlags,
+} from "../lib/cooling-off.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -27,7 +32,7 @@ async function buildCartResponse(deps: AppDeps, userId: string) {
   }> = [];
 
   if (rows.length === 0) {
-    return { items, coinTotal: 0 };
+    return { items, coinTotal: 0, coolingOff: null as null };
   }
 
   const variantIds = rows.map((r) => r.listingVariantId);
@@ -57,7 +62,23 @@ async function buildCartResponse(deps: AppDeps, userId: string) {
     0,
   );
 
-  return { items, coinTotal };
+  const user = await deps.repos.findUserById(userId);
+  const hold = readCoolingOffFromFlags(user?.consentFlags);
+  const now = new Date();
+  const coolingOff =
+    hold && isHoldActive(hold, now)
+      ? {
+          active: true,
+          heldAt: hold.heldAt,
+          releaseAt: hold.releaseAt,
+          category: hold.category,
+          projectedMinor: hold.projectedMinor,
+          limitMinor: hold.limitMinor,
+          message: coolingOffMessage(hold, now),
+        }
+      : null;
+
+  return { items, coinTotal, coolingOff };
 }
 
 export const cartRoutes: FastifyPluginAsyncZod = async (app) => {

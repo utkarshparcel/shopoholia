@@ -42,16 +42,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build workspace packages
-        run: pnpm turbo run build --filter=@worn/shared --filter=@worn/api
+        run: pnpm turbo run build --filter=@worn/shared --filter=@worn/api --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts
 
       - name: Lint
-        run: pnpm turbo run lint --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render
+        run: pnpm turbo run lint --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts
 
       - name: Typecheck
-        run: pnpm turbo run typecheck --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render
+        run: pnpm turbo run typecheck --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts
 
       - name: Test
-        run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render
+        run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts
 
       - name: Apply database migrations
         run: pnpm --filter @worn/db db:migrate
@@ -62,3 +62,64 @@ jobs:
         run: pnpm --filter @worn/api exec vitest run src/lib/repositories/postgres
         env:
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
+
+      - name: Parser-accuracy threshold check (coverage ≥80%, grand-total ≥90%)
+        run: pnpm --filter @worn/worker-ingest spike:check
+
+      - name: EAS release gates (profiles + OTA docs; no store submit)
+        run: node scripts/check-eas-gates.mjs
+
+      - name: CASA / Limited Use track (docs + in-app; no Google/store submit)
+        run: node scripts/check-casa-track.mjs
+
+      - name: Store listings packet (copy + Data Safety + screenshots; no store submit)
+        run: node scripts/check-store-listings.mjs
+
+      - name: Ops playbooks (parser / refund / deletion + admin link)
+        run: node scripts/check-ops-playbooks.mjs
+
+      - name: DPDP + GDPR packet (privacy policy + checklist; no fake counsel sign)
+        run: node scripts/check-dpdp-gdpr.mjs
+
+      - name: Pentest readiness (threat model; no fake third-party report)
+        run: node scripts/check-pentest-readiness.mjs
+
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Every migration file is in the journal
+        run: |
+          FILES=$(ls packages/db/migrations/*.sql | wc -l)
+          ENTRIES=$(node -p "require('./packages/db/migrations/meta/_journal.json').entries.length")
+          if [ "$FILES" -ne "$ENTRIES" ]; then
+            echo "::error::packages/db/migrations has $FILES SQL files but $ENTRIES journal entries"
+            exit 1
+          fi
+
+      - name: drizzle-kit check
+        run: pnpm --filter @worn/db exec drizzle-kit check
+
+      - name: Check for schema drift
+        run: |
+          OUTPUT=$(pnpm --filter @worn/db db:generate 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qiE "No schema changes|nothing to migrate"; then
+            echo "No pending schema changes."
+          else
+            echo "::error::Schema drift: run \`pnpm --filter @worn/db db:generate\` and commit the migration"
+            exit 1
+          fi

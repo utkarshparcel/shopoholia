@@ -151,7 +151,7 @@ CI tests mock `fetch` — no live API calls in `pnpm test`.
 
 ## Beta deploy (TestFlight + Play internal)
 
-`apps/mobile/eas.json` scaffolds two beta profiles — no builds are run from CI yet.
+`apps/mobile/eas.json` scaffolds beta profiles. CI runs `pnpm check:eas-gates` (validates profiles + `docs/EAS.md` OTA/crash-free checklist) and `pnpm check:store-listings` (listing copy + Data Safety + screenshot plan) — **no builds or store submits from CI**. Paste-ready metadata: [docs/STORE_LISTINGS.md](docs/STORE_LISTINGS.md). Ops runbooks: [docs/playbooks/](docs/playbooks/) via `GET /admin/ops/playbooks`.
 
 ```bash
 cd apps/mobile
@@ -200,8 +200,46 @@ Each of these is off (a no-op) until its env var is set.
 | `pnpm lint`      | Lint across the monorepo             |
 | `pnpm typecheck` | Type-check across the monorepo       |
 
+## Universe (P0–P4) — closet + money + wardrobe
+
+> Platform spine for the *real* closet. See [Architecture](docs/UNIVERSE_ARCHITECTURE.md) + [Dev Plan](docs/UNIVERSE_DEV_PLAN.md) and EAS details in [docs/EAS.md](docs/EAS.md).
+
+| Phase | Ships | Modules |
+|-------|-------|---------|
+| **P0 spine** | DB + API + workers + `(closet)` shell | `consent_grants`, Money Ledger v2, `merchant_purchases`, ingestion (`worker-ingest` / Gmail OAuth + SMS), two-surface IA (`(closet)`) |
+| **P1 found-money** | Gift-card vault + receipts/warranties | **WV-02** Gift-Card Vault, **WV-03** Warranty/Receipt Vault |
+| **P2 retention** | Wardrobe + outfits | **WV-04** Digital Wardrobe & Morning Outfit, **WV-05** Waste Tracker |
+| **P3 legibility** | Accountant + returns | **WV-08** Wardrobe Accountant, **WV-01** Return Concierge |
+| **P4 commerce/network** | Gifts + tailoring + resale | **WV-07** Gift Engine, **WV-06** Fit & Customization Vault, Disposition (sell/donate/barter) |
+
+Feature flag: `EXPO_PUBLIC_FEATURE_CLOSET=1` gates the `(closet)` surface (default on in dev). Rate limiting is global (`@fastify/rate-limit`: 100/min, 20/min for `auth`/`vault/consent`).
+
+Monetization scaffold (env-flagged, no store secrets): `FEATURE_REVENUECAT` / `EXPO_PUBLIC_FEATURE_REVENUECAT` + optional `REVENUECAT_WEBHOOK_SECRET`; `FEATURE_PREMIUM_GATES` for Accountant/Outfits paywall; `FEATURE_TAKE_RATE` for marketplace settlements; `EXPERIMENT_UPI_CHECKOUT` / `FEATURE_UPI` for India UPI intents (`POST /payments/*`).
+
+Workers (BullMQ + Redis):
+
+```bash
+pnpm --filter @worn/worker-ingest dev   # email/SMS ingest + parsers
+pnpm --filter @worn/worker-expiry dev   # expiry nudges (gift/warranty)
+pnpm --filter @worn/worker-returns dev  # return windows
+pnpm --filter @worn/worker-gifts dev    # gift occasions
+pnpm --filter @worn/worker-wardrobe dev # morning outfit (if enabled)
+```
+
+Ingestion metrics (Sentry already present): `GET /ingestion/metrics` (auth-gated) returns coverage per parser + cost stub (`totalMessages`, `specificHits`, `misses`, `coverage`, `byMerchant`, `costEstimate`) — consume from Grafana/Metabase. Dashboards: worker `InMemoryMetricsSink` / `ConsoleMetricsSink` + API aggregation.
+
+Transparency: consent scopes (`EMAIL`/`SMS`/`FINANCIAL`/`LIKENESS`/`CONCIERGE`), `GET /vault/export` + `DELETE /vault` (hard-delete cascade), encryption-at-rest (R2 SSE-S3, encrypted ingest tokens) + signed-URL-only access.
+
 ## Docs
 
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
+- [Universe Architecture](docs/UNIVERSE_ARCHITECTURE.md)
+- [Universe Dev Plan](docs/UNIVERSE_DEV_PLAN.md)
+- [EAS Build & Submit](docs/EAS.md)
+- [Store listings / Data Safety](docs/STORE_LISTINGS.md)
+- [Ops playbooks](docs/playbooks/)
+- [CASA / Limited Use](docs/CASA.md)
+- [DPDP / GDPR checklist + privacy draft](docs/TRUST_DPDP_GDPR.md)
+- [Pentest readiness (no fake report)](docs/PENTEST_READINESS.md)
 - [Product spec](docs/worn-spec.html)
 - [Design system](docs/design-system/)

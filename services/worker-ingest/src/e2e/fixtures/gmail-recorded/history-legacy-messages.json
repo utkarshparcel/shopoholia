@@ -1,0 +1,12 @@
+{
+  "historyId": "9300",
+  "history": [
+    {
+      "id": "hist-legacy-1",
+      "messages": [
+        { "id": "msg-amazon-fixture-1" },
+        { "id": "msg-flipkart-fixture-1" }
+      ]
+    }
+  ]
+}

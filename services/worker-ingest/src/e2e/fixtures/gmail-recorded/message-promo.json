@@ -1,0 +1,21 @@
+{
+  "id": "msg-promo-fixture-1",
+  "threadId": "thread-promo-1",
+  "historyId": "9003",
+  "snippet": "20% off this weekend only!",
+  "payload": {
+    "headers": [
+      { "name": "From", "value": "deals@newsletter.example" },
+      { "name": "To", "value": "fixture-buyer@example.com" },
+      {
+        "name": "Subject",
+        "value": "Weekend deals — nothing to buy yet"
+      },
+      { "name": "Date", "value": "Sun, 10 Aug 2025 12:00:00 +0530" },
+      { "name": "Message-ID", "value": "promo-fixture-1" }
+    ],
+    "body": {
+      "data": "SGksCgoyMCUgb2ZmIHRoaXMgd2Vla2VuZCBvbmx5ISBCcm93c2UgdGhlIGNhdGFsb2cgd2hlbiB5b3UgYXJlIHJlYWR5LgoKU2hvcG9ob2xpYSBQcm9tbyBUZWFt"
+    }
+  }
+}

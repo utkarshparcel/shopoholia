@@ -1,0 +1,1 @@
+CREATE INDEX "tryon_previews_wardrobe_item_idx" ON "tryon_previews" USING btree ("wardrobe_item_id");

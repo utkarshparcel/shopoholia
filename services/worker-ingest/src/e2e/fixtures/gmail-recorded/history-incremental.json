@@ -1,0 +1,27 @@
+{
+  "historyId": "9100",
+  "history": [
+    {
+      "id": "hist-9001",
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "msg-amazon-fixture-1",
+            "threadId": "thread-amazon-1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "hist-9002",
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "msg-flipkart-fixture-1",
+            "threadId": "thread-flipkart-1"
+          }
+        }
+      ]
+    }
+  ]
+}

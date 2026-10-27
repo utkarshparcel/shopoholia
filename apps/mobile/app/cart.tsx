@@ -110,6 +110,9 @@ export default function CartScreen() {
               <CoinIcon />
               <Text style={styles.totalValue}>{coinTotal}</Text>
             </View>
+            {data?.coolingOff?.active ? (
+              <Text style={styles.coolingNote}>{data.coolingOff.message}</Text>
+            ) : null}
             <Button
               block
               disabled={coinTotal <= 0}
@@ -259,5 +262,11 @@ const styles = StyleSheet.create({
     color: text,
     fontFamily: fontSansSemiBold,
     fontSize: 28,
+  },
+  coolingNote: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 18,
   },
 });

@@ -1,5 +1,54 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockStorage, createR2Storage, hasR2Config } from "./r2.js";
+import {
+  createMockStorage,
+  createR2Storage,
+  hasR2Config,
+  isUserObjectKey,
+  userObjectKey,
+} from "./r2.js";
+
+describe("userObjectKey", () => {
+  const userId = "2f0c4e1a-8a1b-4c35-9d7e-5b1a2c3d4e5f";
+
+  it("builds u/{userId}/{area}/{name}, which isUserObjectKey accepts for that user only", () => {
+    const key = userObjectKey(userId, "wardrobe", "item-1.jpg");
+    expect(key).toBe(`u/${userId}/wardrobe/item-1.jpg`);
+    expect(isUserObjectKey(key, userId)).toBe(true);
+    expect(isUserObjectKey(key, "someone-else")).toBe(false);
+  });
+
+  it("refuses parts that are empty, dot segments, or contain separators or control chars", () => {
+    for (const bad of ["", ".", "..", "a/b", "a\\b", "a\nb", "a\u0000b"]) {
+      expect(() => userObjectKey(userId, "wardrobe", bad)).toThrow(RangeError);
+      expect(() => userObjectKey(userId, bad, "x.jpg")).toThrow(RangeError);
+      expect(() => userObjectKey(bad, "wardrobe", "x.jpg")).toThrow(RangeError);
+    }
+    expect(() => userObjectKey(userId, "wardrobe", "x".repeat(1024))).toThrow(RangeError);
+    // Dots inside a name are ordinary characters.
+    expect(userObjectKey(userId, "receipts", "a..b.pdf")).toBe(`u/${userId}/receipts/a..b.pdf`);
+  });
+
+  it("rejects keys outside the user's prefix, traversal, a leading slash and empty parts", () => {
+    for (const key of [
+      `/u/${userId}/wardrobe/x.jpg`,
+      `u/${userId}/../other/x.jpg`,
+      `u/${userId}/wardrobe/..`,
+      `u/${userId}/./x.jpg`,
+      `u/${userId}//x.jpg`,
+      `u/${userId}/wardrobe/`,
+      `u/${userId}/wardrobe`,
+      `u/${userId}/wardrobe/a/b.jpg`,
+      `u//wardrobe/x.jpg`,
+      `uploads/${userId}/x.jpg`,
+      `U/${userId}/wardrobe/x.jpg`,
+      `u/${userId}/wardrobe/x.jpg\n`,
+      "",
+    ]) {
+      expect(isUserObjectKey(key, userId), key).toBe(false);
+    }
+    expect(isUserObjectKey("u//wardrobe/x.jpg", "")).toBe(false);
+  });
+});
 
 describe("createMockStorage", () => {
   it("stores and signs objects with a working placeholder URL", async () => {

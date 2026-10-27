@@ -8,9 +8,19 @@
     "scheme": "worn",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.shopoholia.worn",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "WORN reads event titles (interview, wedding, office) to plan outfits. You can skip this anytime.",
+        "NSCalendarsFullAccessUsageDescription": "WORN reads event titles (interview, wedding, office) to plan outfits. You can skip this anytime."
+      }
     },
     "android": {
+      "package": "com.shopoholia.worn",
+      "permissions": [
+        "android.permission.READ_SMS",
+        "android.permission.READ_CALENDAR"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -41,6 +51,12 @@
     },
     "extra": {
       "apiUrl": "http://localhost:3000"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
     }
   }
 }

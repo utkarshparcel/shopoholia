@@ -3,6 +3,7 @@ import type { Repositories } from "./repositories/types.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
 import { createPostgresRepositoriesFromUrl } from "./repositories/postgres.js";
 import { createStorageFromEnv, type StorageClient } from "./storage/r2.js";
+import { createOcrClientFromEnv, type OcrClient } from "./ocr/index.js";
 import { createRenderProvider } from "./render/provider.js";
 import { createDevOtpService, type OtpService } from "./auth/otp.js";
 import { reportJobError } from "./error-reporting.js";
@@ -25,6 +26,7 @@ import { isRealProductImageUrl } from "./seed/scraped.js";
 export type AppDeps = {
   repos: Repositories;
   storage: StorageClient;
+  ocr: OcrClient;
   renderProvider: RenderProvider;
   jobQueue: JobQueue;
   otp: OtpService;
@@ -65,6 +67,7 @@ async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
 export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promise<AppDeps> {
   const repos = overrides.repos ?? createRepositories();
   const storage = overrides.storage ?? createStorageFromEnv();
+  const ocr = overrides.ocr ?? createOcrClientFromEnv();
   const renderProvider =
     overrides.renderProvider ??
     createRenderProvider({
@@ -86,6 +89,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
     return {
       repos,
       storage,
+      ocr,
       renderProvider,
       jobQueue: overrides.jobQueue,
       otp,
@@ -119,7 +123,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
     await maybeSeedCatalog(repos, storage);
   }
 
-  return { repos, storage, renderProvider, jobQueue, otp, push };
+  return { repos, storage, ocr, renderProvider, jobQueue, otp, push };
 }
 
 export { newJobId };

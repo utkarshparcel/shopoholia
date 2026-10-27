@@ -11,9 +11,23 @@ export const CartItemSchema = z.object({
   imageUrl: z.string().url(),
 });
 
+export const CartCoolingOffSchema = z
+  .object({
+    active: z.boolean(),
+    heldAt: z.string().datetime(),
+    releaseAt: z.string().datetime(),
+    category: z.string(),
+    projectedMinor: z.number().int().nonnegative(),
+    limitMinor: z.number().int().nonnegative(),
+    message: z.string(),
+  })
+  .nullable();
+
 export const CartResponseSchema = z.object({
   items: z.array(CartItemSchema),
   coinTotal: z.number().int().nonnegative(),
+  /** N34 soft lock when apparel haul exceeds budget. */
+  coolingOff: CartCoolingOffSchema.optional(),
 });
 
 export const AddToCartBodySchema = z.object({

@@ -20,6 +20,39 @@ export interface StorageClient {
   deleteMany(keys: string[]): Promise<void>;
 }
 
+// S3 and R2 cap object keys at 1024 bytes.
+const MAX_KEY_BYTES = 1024;
+
+/** One path segment: not empty, ".", or "..", and no "/", "\" or control characters. */
+function isKeyPart(part: string): boolean {
+  return part !== "" && part !== "." && part !== ".." && !/[\p{Cc}/\\]/u.test(part);
+}
+
+/**
+ * Key for a new object that holds a user's data: `u/{userId}/{area}/{name}`.
+ * Throws RangeError when a part is not a single safe segment (so `name` can't nest or escape).
+ */
+export function userObjectKey(userId: string, area: string, name: string): string {
+  for (const part of [userId, area, name]) {
+    if (!isKeyPart(part)) throw new RangeError(`unsafe storage key part: ${JSON.stringify(part)}`);
+  }
+  const key = `u/${userId}/${area}/${name}`;
+  if (Buffer.byteLength(key) > MAX_KEY_BYTES) throw new RangeError("storage key is too long");
+  return key;
+}
+
+/** True only for a key `userObjectKey` could have made for `userId`. Check client-sent keys with it. */
+export function isUserObjectKey(key: string, userId: string): boolean {
+  const parts = key.split("/");
+  return (
+    parts.length === 4 &&
+    parts[0] === "u" &&
+    parts[1] === userId &&
+    parts.slice(1).every(isKeyPart) &&
+    Buffer.byteLength(key) <= MAX_KEY_BYTES
+  );
+}
+
 export type R2Config = {
   accountId: string;
   accessKeyId: string;
@@ -61,6 +94,20 @@ export function r2ConfigFromEnv(
   };
 }
 
+/**
+ * Encryption-at-rest & retention:
+ * - R2 encrypts all objects at rest by default (SSE-S3 / AES-256) — no
+ *   per-object header needed. Tokens are separately AES-256-GCM-encrypted
+ *   via services/worker-ingest/src/crypto.ts (OAUTH_TOKEN_SECRET) before
+ *   being stored in `ingestion_sources.encrypted_token`.
+ * - Raw ingestion_documents use a per-kind retention schedule (EMAIL 7d /
+ *   SMS 14d / RECEIPT 30d by default; see apps/api/src/lib/retention.ts).
+ *   After the kind TTL the raw R2 object at `rawKey` is deleted and the DB
+ *   row keeps its parse status with `rawKey` cleared (no EXPIRED/PURGED
+ *   enum value) — see `purgeExpiredIngestionDocuments`.
+ * - All object access is via scoped, time-limited presigned URLs from
+ *   `getSignedUrl`; raw keys are never exposed to clients.
+ */
 export function createR2Storage(config: R2Config): StorageClient {
   const client = new S3Client({
     region: "auto",

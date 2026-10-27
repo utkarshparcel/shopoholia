@@ -1,18 +1,21 @@
 import {
+  CashbackClickBodySchema,
+  CashbackClickResponseSchema,
   CashbackHistoryResponseSchema,
   CashbackWebhookBodySchema,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
+import { trackServerEvent } from "../lib/analytics.js";
+import {
+  buildClosetAffiliateClickId,
+  isClosetAffiliateSource,
+  platformFromAffiliateUrl,
+  type ClosetAffiliateSource,
+} from "../lib/closet-affiliate.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
-
-const CashbackClickBodySchema = z.object({
-  listingId: z.string().uuid(),
-  platform: z.string(),
-  clickId: z.string(),
-});
 
 export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
@@ -21,18 +24,62 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["cashback"],
         body: CashbackClickBodySchema,
-        response: { 200: z.object({ recorded: z.literal(true) }), 401: ErrorSchema },
+        response: {
+          200: CashbackClickResponseSchema,
+          400: ErrorSchema,
+          401: ErrorSchema,
+        },
       },
       preHandler: requireAuth,
     },
     async (request) => {
+      const body = request.body as {
+        listingId?: string | null;
+        platform: string;
+        clickId?: string;
+        source?: string;
+        url?: string;
+      };
+      const source = body.source ?? "play_listing";
+      const listingId = body.listingId ?? null;
+      let platform = body.platform?.trim() || "other";
+      if (body.url && (platform === "other" || !platform)) {
+        platform = platformFromAffiliateUrl(body.url);
+      }
+
+      let clickId = body.clickId;
+      if (!clickId) {
+        if (isClosetAffiliateSource(source)) {
+          clickId = buildClosetAffiliateClickId(source as ClosetAffiliateSource, platform, {
+            listingId,
+          });
+        } else {
+          clickId = `play:${listingId}:${Date.now()}`;
+        }
+      }
+
       await app.deps.repos.recordCashbackEvent({
         userId: request.user.sub,
-        listingId: request.body.listingId,
-        platform: request.body.platform,
-        clickId: request.body.clickId,
+        listingId,
+        platform,
+        clickId,
       });
-      return { recorded: true as const };
+
+      trackServerEvent("affiliate_click", {
+        userId: request.user.sub,
+        source,
+        platform,
+        listingId,
+        clickId,
+      });
+
+      return {
+        recorded: true as const,
+        clickId,
+        source,
+        platform,
+        listingId,
+      };
     },
   );
 

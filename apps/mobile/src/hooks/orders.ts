@@ -48,9 +48,11 @@ export function useCheckout() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (tier: OrderSummary['tier']) => {
+    mutationFn: (input: OrderSummary['tier'] | { tier: OrderSummary['tier']; coolingOffOverride?: boolean }) => {
       if (!accessToken) throw new Error('Sign in to checkout');
-      return createOrder(accessToken, tier, idempotencyKey());
+      const tier = typeof input === 'string' ? input : input.tier;
+      const coolingOffOverride = typeof input === 'string' ? undefined : input.coolingOffOverride;
+      return createOrder(accessToken, tier, idempotencyKey(), coolingOffOverride);
     },
     onSuccess: async (order) => {
       trackEvent('checkout', { orderId: order.id, tier: order.tier, coinTotal: order.coinTotal });
