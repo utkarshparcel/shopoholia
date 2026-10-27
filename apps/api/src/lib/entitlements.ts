@@ -1,21 +1,29 @@
 /**
- * MON-REVENUECAT — in-memory entitlement store + RevenueCat webhook handling.
- * No App Store / Play secrets; gated by FEATURE_REVENUECAT / REVENUECAT_WEBHOOK_SECRET.
+ * Closet premium entitlements, stored per user (entitlement_grants). Grants come only from a verified
+ * source: an App Store / Google Play subscription checked with the store (POST /entitlements/sync,
+ * App Store Server Notifications, the daily Play re-check), or the dev simulation outside production.
  */
 
-import { randomUUID } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   buildTrialGrants,
   canAccessPremiumSurface,
   entitlementsForProduct,
+  isGrantActive,
+  premiumSubscriptionByStoreProductId,
   type ClosetEntitlement,
   type EntitlementGrant,
   type EntitlementSnapshot,
+  type EntitlementSyncBody,
 } from "@worn/shared";
-
-const grantsByUser = new Map<string, EntitlementGrant[]>();
-const processedEventIds = new Set<string>();
+import {
+  rejectionResponse,
+  simulatedPurchasesAllowed,
+  type PurchaseVerifier,
+  type ValidateOutcome,
+  type VerifiedSubscription,
+} from "./coin-purchases.js";
+import type { EntitlementGrantRecord, Repositories } from "./repositories/types.js";
 
 export function premiumGatesEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -23,67 +31,63 @@ export function premiumGatesEnabled(
   return env.FEATURE_PREMIUM_GATES === "1";
 }
 
-export function revenueCatEnabled(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return env.FEATURE_REVENUECAT === "1";
-}
-
-export function snapshotForUser(userId: string): EntitlementSnapshot {
+function toGrant(record: EntitlementGrantRecord): EntitlementGrant {
   return {
-    userId,
-    grants: [...(grantsByUser.get(userId) ?? [])],
-    asOf: new Date().toISOString(),
+    entitlementId: record.entitlementId as ClosetEntitlement,
+    productId: record.productId,
+    expiresAt: record.expiresAt?.toISOString() ?? null,
+    isTrial: record.isTrial,
+    source: record.source,
   };
 }
 
-export function upsertGrants(userId: string, incoming: EntitlementGrant[]): EntitlementSnapshot {
-  const existing = grantsByUser.get(userId) ?? [];
-  const byKey = new Map<string, EntitlementGrant>();
-  for (const g of existing) {
-    byKey.set(`${g.entitlementId}:${g.productId}`, g);
-  }
-  for (const g of incoming) {
-    byKey.set(`${g.entitlementId}:${g.productId}`, g);
-  }
-  const merged = [...byKey.values()];
-  grantsByUser.set(userId, merged);
-  return snapshotForUser(userId);
+export async function snapshotForUser(
+  repos: Repositories,
+  userId: string,
+): Promise<EntitlementSnapshot> {
+  const grants = await repos.listEntitlementGrants(userId);
+  return { userId, grants: grants.map(toGrant), asOf: new Date().toISOString() };
 }
 
-export function grantTrial(
-  userId: string,
+/** Grant records for every entitlement of `productId` (none for an unknown product). */
+export function grantsForProduct(
   productId: string,
-  source: EntitlementGrant["source"] = "revenuecat",
-): EntitlementSnapshot {
-  return upsertGrants(userId, buildTrialGrants(productId, { source }));
-}
-
-export function grantPaid(
-  userId: string,
-  productId: string,
-  expiresAt: Date | null,
-  source: EntitlementGrant["source"] = "revenuecat",
-): EntitlementSnapshot {
-  const ids = entitlementsForProduct(productId);
-  const grants: EntitlementGrant[] = ids.map((entitlementId) => ({
+  opts: {
+    expiresAt: Date | null;
+    isTrial: boolean;
+    source: EntitlementGrantRecord["source"];
+    eventAt: Date;
+    storeRef?: string | null;
+  },
+): EntitlementGrantRecord[] {
+  return entitlementsForProduct(productId).map((entitlementId) => ({
     entitlementId,
     productId,
-    expiresAt: expiresAt?.toISOString() ?? null,
-    isTrial: false,
-    source,
+    ...opts,
   }));
-  return upsertGrants(userId, grants);
 }
 
-export function userCanAccess(
+/** Dev simulation only (callers check NODE_ENV): a trial from the product's trial length. */
+export function devTrialGrants(productId: string, startedAt: Date): EntitlementGrantRecord[] {
+  return buildTrialGrants(productId, { startedAt, source: "dev" }).map((grant) => ({
+    entitlementId: grant.entitlementId,
+    productId: grant.productId,
+    expiresAt: grant.expiresAt ? new Date(grant.expiresAt) : null,
+    isTrial: true,
+    source: "dev" as const,
+    eventAt: startedAt,
+  }));
+}
+
+export async function userCanAccess(
+  repos: Repositories,
   userId: string,
   surface: ClosetEntitlement,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return canAccessPremiumSurface(surface, snapshotForUser(userId), {
-    gatesEnabled: premiumGatesEnabled(env),
-  });
+): Promise<boolean> {
+  const gatesEnabled = premiumGatesEnabled(env);
+  if (!gatesEnabled) return true;
+  return canAccessPremiumSurface(surface, await snapshotForUser(repos, userId), { gatesEnabled });
 }
 
 /**
@@ -98,7 +102,7 @@ export function requireEntitlement(surface: ClosetEntitlement) {
         .code(401)
         .send({ error: "Unauthorized", message: "Invalid or missing token" });
     }
-    if (userCanAccess(userId, surface)) return;
+    if (await userCanAccess(request.server.deps.repos, userId, surface)) return;
     return reply.code(403).send({
       error: "Forbidden",
       message: `Premium entitlement required: ${surface}`,
@@ -106,87 +110,82 @@ export function requireEntitlement(surface: ClosetEntitlement) {
   };
 }
 
-export type RevenueCatWebhookResult =
-  | { ok: true; duplicate?: boolean; userId?: string; productId?: string }
-  | { ok: false; reason: string };
-
-/**
- * Process a RevenueCat-shaped webhook payload (scaffold).
- * Expects optional Authorization Bearer matching REVENUECAT_WEBHOOK_SECRET when set.
- */
-export function processRevenueCatWebhook(
-  body: Record<string, unknown>,
-  opts?: { authorization?: string | null },
-): RevenueCatWebhookResult {
-  const secret = process.env.REVENUECAT_WEBHOOK_SECRET;
-  if (secret) {
-    const auth = opts?.authorization ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
-    if (token !== secret) {
-      return { ok: false, reason: "invalid_webhook_secret" };
-    }
-  } else if (!revenueCatEnabled()) {
-    return { ok: false, reason: "revenuecat_disabled" };
-  }
-
-  const event = (body.event ?? body) as Record<string, unknown>;
-  const eventId =
-    (typeof event.id === "string" && event.id) ||
-    (typeof body.event_id === "string" && body.event_id) ||
-    randomUUID();
-
-  if (processedEventIds.has(eventId)) {
-    return { ok: true, duplicate: true };
-  }
-
-  const appUserId =
-    (typeof event.app_user_id === "string" && event.app_user_id) ||
-    (typeof event.appUserId === "string" && event.appUserId) ||
-    null;
-  const productId =
-    (typeof event.product_id === "string" && event.product_id) ||
-    (typeof event.productId === "string" && event.productId) ||
-    null;
-  const type =
-    (typeof event.type === "string" && event.type) ||
-    (typeof body.type === "string" && body.type) ||
-    "INITIAL_PURCHASE";
-
-  if (!appUserId || !productId) {
-    return { ok: false, reason: "missing_user_or_product" };
-  }
-
-  if (entitlementsForProduct(productId).length === 0) {
-    return { ok: false, reason: "unknown_product" };
-  }
-
-  const expiration =
-    typeof event.expiration_at_ms === "number"
-      ? new Date(event.expiration_at_ms)
-      : typeof event.expiration_at === "string"
-        ? new Date(event.expiration_at)
-        : null;
-
-  if (type === "EXPIRATION" || type === "CANCELLATION") {
-    // Expire by writing grants with past expiry
-    grantPaid(appUserId, productId, new Date(0), "revenuecat");
-  } else if (type === "TRIAL_STARTED" || type === "INITIAL_PURCHASE") {
-    const isTrial = type === "TRIAL_STARTED" || event.period_type === "TRIAL";
-    if (isTrial) {
-      grantTrial(appUserId, productId, "revenuecat");
-    } else {
-      grantPaid(appUserId, productId, expiration, "revenuecat");
-    }
-  } else {
-    grantPaid(appUserId, productId, expiration, "revenuecat");
-  }
-
-  processedEventIds.add(eventId);
-  return { ok: true, userId: appUserId, productId };
+/** Grants for a verified store subscription, under its Closet product (none for another product). */
+export function subscriptionGrants(sub: VerifiedSubscription): EntitlementGrantRecord[] {
+  const premium = premiumSubscriptionByStoreProductId(sub.productId);
+  if (!premium) return [];
+  return grantsForProduct(premium.productId, {
+    expiresAt: sub.expiresAt,
+    isTrial: sub.isTrial,
+    source: sub.store,
+    eventAt: sub.eventAt,
+    storeRef: sub.storeRef,
+  });
 }
 
-/** Test helper. */
-export function __resetEntitlementsForTests(): void {
-  grantsByUser.clear();
-  processedEventIds.clear();
+export type SyncOutcome =
+  | { ok: true; snapshot: EntitlementSnapshot }
+  | Extract<ValidateOutcome, { ok: false }>;
+
+/**
+ * POST /entitlements/sync: checks the subscription with its store and stores what the store says.
+ * Without proof, only the dev simulation (simulatedPurchasesAllowed) answers, with a trial.
+ */
+export async function syncStoreSubscription(
+  repos: Repositories,
+  verifier: PurchaseVerifier,
+  userId: string,
+  body: EntitlementSyncBody,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<SyncOutcome> {
+  const { productId } = body;
+  if (entitlementsForProduct(productId).length === 0) {
+    return { ok: false, status: 400, error: "Bad Request", message: `Unknown product: ${productId}` };
+  }
+
+  if (!body.jws && !body.purchaseToken) {
+    if (!simulatedPurchasesAllowed(env)) {
+      return {
+        ok: false,
+        status: 400,
+        error: "Bad Request",
+        message: "store and jws (App Store) or purchaseToken (Google Play) are required",
+      };
+    }
+    // Dev simulation outside production: one trial per product, marked source "dev".
+    const existing = await repos.listEntitlementGrants(userId);
+    if (!existing.some((g) => g.productId === productId)) {
+      await repos.applyEntitlementGrants(userId, devTrialGrants(productId, new Date()));
+    }
+    return { ok: true, snapshot: await snapshotForUser(repos, userId) };
+  }
+
+  const store = body.store;
+  if (!store) return { ok: false, status: 400, error: "Bad Request", message: "store is required" };
+  const verified = await verifier.verifySubscription({
+    store,
+    proof: store === "app_store" ? body.jws : body.purchaseToken,
+    userId,
+  });
+  if (!verified.ok) return rejectionResponse(verified);
+  if (premiumSubscriptionByStoreProductId(verified.subscription.productId)?.productId !== productId) {
+    return {
+      ok: false,
+      status: 402,
+      error: "product_mismatch",
+      message: "This subscription is for a different product",
+    };
+  }
+
+  await repos.applyEntitlementGrants(userId, subscriptionGrants(verified.subscription));
+  const snapshot = await snapshotForUser(repos, userId);
+  if (!snapshot.grants.some((g) => g.productId === productId && g.source === store && isGrantActive(g))) {
+    return {
+      ok: false,
+      status: 402,
+      error: "subscription_inactive",
+      message: "This subscription isn't active",
+    };
+  }
+  return { ok: true, snapshot };
 }

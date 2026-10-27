@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import {
@@ -11,6 +11,8 @@ import {
   cashbackClaims,
   brandPriceWatches,
   emiPlans,
+  entitlementEvents,
+  entitlementGrants,
   coinLedger,
   consentGrants,
   createDb,
@@ -37,6 +39,9 @@ import {
   deleteOrphanMoneyAccount as deleteOrphanMoneyAccountQuery,
   purgeOrphanMoneyAccounts as purgeOrphanMoneyAccountsQuery,
   pushEvents,
+  oauthStates,
+  otpCodes,
+  paymentIntents,
   refreshTokens,
   receipts,
   recipientProfiles,
@@ -84,9 +89,11 @@ import type {
   ListingVariantRecord,
   ListCoinTransactionsResult,
   ListListingsResult,
+  CoinPurchaseRecord,
+  EntitlementGrantRecord,
   OrderItemRecord,
   OrderRecord,
-  OtpRecord,
+  PaymentIntentRecord,
   PushEventPayload,
   PushEventRecord,
   RenderRecord,
@@ -140,6 +147,7 @@ type OrderRow = typeof orders.$inferSelect;
 type OrderItemRow = typeof orderItems.$inferSelect;
 type RenderRow = typeof renders.$inferSelect;
 type PushEventRow = typeof pushEvents.$inferSelect;
+type PaymentIntentRow = typeof paymentIntents.$inferSelect;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 function now() {
@@ -149,6 +157,49 @@ function now() {
 /** Refresh tokens are stored hashed, so a database leak doesn't hand out live sessions. */
 function hashRefreshToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function toPaymentIntentRecord(row: PaymentIntentRow): PaymentIntentRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    provider: row.provider as PaymentIntentRecord["provider"],
+    productId: row.productId,
+    amountMinor: row.amountMinor,
+    currency: row.currency,
+    upiIntentUrl: row.upiIntentUrl,
+    status: row.status as PaymentIntentRecord["status"],
+    providerOrderId: row.providerOrderId,
+    providerPaymentId: row.providerPaymentId,
+    paidAt: row.paidAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+type IapReceiptRow = typeof iapReceipts.$inferSelect;
+
+function toCoinPurchaseRecord(row: IapReceiptRow): CoinPurchaseRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    store: row.store as CoinPurchaseRecord["store"],
+    transactionId: row.storeTransactionId ?? "",
+    productId: row.productId,
+    coinsGranted: row.coinsGranted,
+    environment: row.environment,
+    source: row.source,
+    refundedAt: row.refundedAt,
+    refundedCoins: row.refundedCoins,
+    refundShortfall: row.refundShortfall,
+    createdAt: row.createdAt,
+  };
+}
+
+function coinPurchaseKey(store: string, transactionId: string) {
+  return and(eq(iapReceipts.store, store), eq(iapReceipts.storeTransactionId, transactionId));
 }
 
 /** Locks the user's row for the rest of the transaction and returns their coin balance. */
@@ -764,7 +815,6 @@ function mapDispositionListing(row: DispositionListingRow): DispositionListingRe
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
-  const otps = new Map<string, OtpRecord>();
   /** U015 — process-local vault ACL until persisted columns land. */
   const householdVaultSettingsStore = new Map<string, HouseholdVaultSettingsRecord>();
 
@@ -1242,20 +1292,322 @@ export function createPostgresRepositories(db: Db): Repositories {
       });
     },
 
-    async saveOtp(phone, code, expiresAt) {
-      otps.set(phone, { phone, code, expiresAt });
+    async creditCoinPurchase(input) {
+      return db.transaction(async (tx) => {
+        // The user's row first, as every coin write does; then claim the transaction id. A second
+        // claim of the same id waits on the unique index until the first commits, then finds its row.
+        const balance = await lockedCoinBalance(tx, input.userId);
+        const [inserted] = await tx
+          .insert(iapReceipts)
+          .values({
+            revenuecatEventId: `${input.store}:${input.transactionId}`,
+            userId: input.userId,
+            productId: input.productId,
+            coinsGranted: input.coins,
+            rawPayload: input.rawPayload ?? {},
+            store: input.store,
+            storeTransactionId: input.transactionId,
+            environment: input.environment,
+            source: input.source,
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (inserted) {
+          const balanceAfter = balance + input.coins;
+          await appendCoinLedger(
+            tx,
+            {
+              userId: input.userId,
+              delta: input.coins,
+              type: "IAP_PURCHASE",
+              refType: "iap",
+              refId: inserted.id,
+            },
+            balanceAfter,
+          );
+          return { status: "granted" as const, purchase: toCoinPurchaseRecord(inserted), balanceAfter };
+        }
+
+        const [existing] = await tx
+          .select()
+          .from(iapReceipts)
+          .where(coinPurchaseKey(input.store, input.transactionId))
+          .limit(1);
+        if (!existing) throw new Error(`iap receipt conflict without a row: ${input.store}:${input.transactionId}`);
+        const purchase = toCoinPurchaseRecord(existing);
+        if (existing.userId !== input.userId) return { status: "other_user" as const, purchase };
+        return { status: "already_granted" as const, purchase, balanceAfter: balance };
+      });
     },
 
-    async consumeOtp(phone, code) {
-      const record = otps.get(phone);
-      if (!record) return false;
-      if (record.expiresAt < now()) {
-        otps.delete(phone);
-        return false;
-      }
-      if (record.code !== code) return false;
-      otps.delete(phone);
-      return true;
+    async refundCoinPurchase(input) {
+      return db.transaction(async (tx) => {
+        const key = coinPurchaseKey(input.store, input.transactionId);
+        let [row] = await tx.select().from(iapReceipts).where(key).limit(1);
+        if (!row) {
+          if (!input.userId || !input.productId) return { status: "unknown" as const };
+          // Remember the refund so a grant that arrives later credits nothing.
+          await lockedCoinBalance(tx, input.userId);
+          const [tombstone] = await tx
+            .insert(iapReceipts)
+            .values({
+              revenuecatEventId: `${input.store}:${input.transactionId}`,
+              userId: input.userId,
+              productId: input.productId,
+              coinsGranted: 0,
+              rawPayload: { refund: input.rawPayload ?? {} },
+              store: input.store,
+              storeTransactionId: input.transactionId,
+              source: input.source,
+              refundedAt: now(),
+            })
+            .onConflictDoNothing()
+            .returning();
+          if (tombstone) {
+            return { status: "refunded_before_grant" as const, purchase: toCoinPurchaseRecord(tombstone) };
+          }
+          // A grant committed in the meantime: take it back below.
+          [row] = await tx.select().from(iapReceipts).where(key).limit(1);
+          if (!row) throw new Error(`iap receipt conflict without a row: ${input.store}:${input.transactionId}`);
+        }
+
+        const balance = await lockedCoinBalance(tx, row.userId);
+        const [locked] = await tx
+          .select()
+          .from(iapReceipts)
+          .where(eq(iapReceipts.id, row.id))
+          .for("update");
+        if (locked!.refundedAt) {
+          return { status: "already_refunded" as const, purchase: toCoinPurchaseRecord(locked!) };
+        }
+        const debited = Math.min(locked!.coinsGranted, Math.max(balance, 0));
+        const shortfall = locked!.coinsGranted - debited;
+        const balanceAfter = balance - debited;
+        if (debited > 0) {
+          await appendCoinLedger(
+            tx,
+            {
+              userId: locked!.userId,
+              delta: -debited,
+              type: "REFUND",
+              refType: "iap_refund",
+              refId: locked!.id,
+            },
+            balanceAfter,
+          );
+        }
+        const [updated] = await tx
+          .update(iapReceipts)
+          .set({
+            refundedAt: now(),
+            refundedCoins: debited,
+            refundShortfall: shortfall,
+            rawPayload: { ...locked!.rawPayload, refund: input.rawPayload ?? {} },
+            updatedAt: now(),
+          })
+          .where(eq(iapReceipts.id, locked!.id))
+          .returning();
+        return {
+          status: "refunded" as const,
+          purchase: toCoinPurchaseRecord(updated!),
+          debited,
+          shortfall,
+          balanceAfter,
+        };
+      });
+    },
+
+    async findCoinPurchase(store, transactionId) {
+      const [row] = await db
+        .select()
+        .from(iapReceipts)
+        .where(coinPurchaseKey(store, transactionId))
+        .limit(1);
+      return row ? toCoinPurchaseRecord(row) : null;
+    },
+
+    async listEntitlementGrants(userId) {
+      const rows = await db
+        .select()
+        .from(entitlementGrants)
+        .where(eq(entitlementGrants.userId, userId))
+        .orderBy(asc(entitlementGrants.productId), asc(entitlementGrants.entitlementId));
+      return rows.map(
+        (row): EntitlementGrantRecord => ({
+          entitlementId: row.entitlementId,
+          productId: row.productId,
+          expiresAt: row.expiresAt,
+          isTrial: row.isTrial,
+          source: row.source as EntitlementGrantRecord["source"],
+          eventAt: row.eventAt,
+          storeRef: row.storeRef,
+        }),
+      );
+    },
+
+    async applyEntitlementGrants(userId, grants, eventId) {
+      return db.transaction(async (tx) => {
+        if (eventId) {
+          const inserted = await tx
+            .insert(entitlementEvents)
+            .values({ eventId, userId })
+            .onConflictDoNothing()
+            .returning({ eventId: entitlementEvents.eventId });
+          if (inserted.length === 0) return { applied: false };
+        }
+        if (grants.length > 0) {
+          await tx
+            .insert(entitlementGrants)
+            .values(grants.map((grant) => ({ ...grant, userId, updatedAt: now() })))
+            .onConflictDoUpdate({
+              target: [
+                entitlementGrants.userId,
+                entitlementGrants.entitlementId,
+                entitlementGrants.productId,
+                entitlementGrants.source,
+              ],
+              set: {
+                expiresAt: sql`excluded.expires_at`,
+                isTrial: sql`excluded.is_trial`,
+                eventAt: sql`excluded.event_at`,
+                storeRef: sql`coalesce(excluded.store_ref, ${entitlementGrants.storeRef})`,
+                updatedAt: sql`excluded.updated_at`,
+              },
+              // A late-arriving older event never overwrites a newer grant.
+              setWhere: sql`${entitlementGrants.eventAt} <= excluded.event_at`,
+            });
+        }
+        return { applied: true };
+      });
+    },
+
+    async listStoreSubscriptionGrants(source, expiresAfter) {
+      return db
+        .selectDistinct({
+          userId: entitlementGrants.userId,
+          productId: entitlementGrants.productId,
+          storeRef: sql<string>`${entitlementGrants.storeRef}`,
+        })
+        .from(entitlementGrants)
+        .where(
+          and(
+            eq(entitlementGrants.source, source),
+            sql`${entitlementGrants.storeRef} is not null`,
+            or(isNull(entitlementGrants.expiresAt), gt(entitlementGrants.expiresAt, expiresAfter)),
+          ),
+        )
+        .orderBy(asc(entitlementGrants.userId), asc(entitlementGrants.productId));
+    },
+
+    async createPaymentIntent(input) {
+      const [row] = await db
+        .insert(paymentIntents)
+        .values({ ...input, status: "created" })
+        .returning();
+      return toPaymentIntentRecord(row!);
+    },
+
+    async findPaymentIntent(id) {
+      if (!UUID_PATTERN.test(id)) return null;
+      const [row] = await db.select().from(paymentIntents).where(eq(paymentIntents.id, id)).limit(1);
+      return row ? toPaymentIntentRecord(row) : null;
+    },
+
+    async findPaymentIntentByProviderOrderId(providerOrderId) {
+      const [row] = await db
+        .select()
+        .from(paymentIntents)
+        .where(eq(paymentIntents.providerOrderId, providerOrderId))
+        .limit(1);
+      return row ? toPaymentIntentRecord(row) : null;
+    },
+
+    async markPaymentIntentPending(id) {
+      if (!UUID_PATTERN.test(id)) return null;
+      const [row] = await db
+        .update(paymentIntents)
+        .set({ status: "pending", updatedAt: now() })
+        .where(and(eq(paymentIntents.id, id), eq(paymentIntents.status, "created")))
+        .returning();
+      return row ? toPaymentIntentRecord(row) : repos.findPaymentIntent(id);
+    },
+
+    async markPaymentIntentPaid(id, providerPaymentId, paidAt) {
+      if (!UUID_PATTERN.test(id)) return null;
+      const [row] = await db
+        .update(paymentIntents)
+        .set({ status: "paid", providerPaymentId, paidAt, updatedAt: now() })
+        .where(and(eq(paymentIntents.id, id), ne(paymentIntents.status, "paid")))
+        .returning();
+      return row ? toPaymentIntentRecord(row) : repos.findPaymentIntent(id);
+    },
+
+    async markPaymentIntentFailed(id) {
+      if (!UUID_PATTERN.test(id)) return null;
+      const [row] = await db
+        .update(paymentIntents)
+        .set({ status: "failed", updatedAt: now() })
+        .where(and(eq(paymentIntents.id, id), ne(paymentIntents.status, "paid")))
+        .returning();
+      return row ? toPaymentIntentRecord(row) : repos.findPaymentIntent(id);
+    },
+
+    async saveOtp(phone, code, expiresAt, limit) {
+      return db.transaction(async (tx) => {
+        // Serializes sends per phone so concurrent requests can't overshoot the limit.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`otp:${phone}`}))`);
+        const sentAt = now();
+        if (limit) {
+          const windowStart = new Date(sentAt.getTime() - limit.windowMs);
+          const recent = await tx
+            .select({ createdAt: otpCodes.createdAt })
+            .from(otpCodes)
+            .where(and(eq(otpCodes.phone, phone), gt(otpCodes.createdAt, windowStart)))
+            .orderBy(desc(otpCodes.createdAt))
+            .limit(limit.max);
+          if (recent.length >= limit.max) {
+            const oldest = recent[recent.length - 1]!.createdAt;
+            return { saved: false as const, retryAt: new Date(oldest.getTime() + limit.windowMs) };
+          }
+        }
+        await tx.insert(otpCodes).values({ phone, codeHash: code, expiresAt, createdAt: sentAt });
+        // Rows outside the send window that can no longer be used are only clutter.
+        const keepAfter = new Date(sentAt.getTime() - (limit?.windowMs ?? 0));
+        await tx
+          .delete(otpCodes)
+          .where(
+            and(
+              eq(otpCodes.phone, phone),
+              lt(otpCodes.createdAt, keepAfter),
+              lt(otpCodes.expiresAt, sentAt),
+            ),
+          );
+        return { saved: true as const };
+      });
+    },
+
+    async consumeOtp(phone, code, maxAttempts = 5) {
+      // One statement: counts the guess and consumes the latest code only if it matches,
+      // so concurrent guesses can't exceed `maxAttempts` or redeem a code twice.
+      const [row] = await db
+        .update(otpCodes)
+        .set({
+          attempts: sql`${otpCodes.attempts} + 1`,
+          consumedAt: sql`case when ${otpCodes.codeHash} = ${code} then now() else null end`,
+        })
+        .where(
+          and(
+            eq(
+              otpCodes.id,
+              sql`(select ${otpCodes.id} from ${otpCodes} where ${otpCodes.phone} = ${phone} order by ${otpCodes.createdAt} desc limit 1)`,
+            ),
+            isNull(otpCodes.consumedAt),
+            gt(otpCodes.expiresAt, now()),
+            lt(otpCodes.attempts, maxAttempts),
+          ),
+        )
+        .returning({ consumedAt: otpCodes.consumedAt });
+      return Boolean(row?.consumedAt);
     },
 
     async saveRefreshToken(record) {
@@ -1285,8 +1637,30 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { token, userId: row.userId, expiresAt: row.expiresAt };
     },
 
+    async consumeRefreshToken(token) {
+      const [row] = await db
+        .delete(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
+        .returning();
+      if (!row || row.expiresAt < now()) return null;
+      return { token, userId: row.userId, expiresAt: row.expiresAt };
+    },
+
     async deleteRefreshToken(token) {
       await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, hashRefreshToken(token)));
+    },
+
+    async saveOauthState(record) {
+      await db.insert(oauthStates).values(record);
+      await db
+        .delete(oauthStates)
+        .where(and(eq(oauthStates.userId, record.userId), lt(oauthStates.expiresAt, now())));
+    },
+
+    async consumeOauthState(nonce) {
+      const [row] = await db.delete(oauthStates).where(eq(oauthStates.nonce, nonce)).returning();
+      if (!row || row.expiresAt < now()) return null;
+      return { nonce: row.nonce, userId: row.userId, sourceId: row.sourceId, expiresAt: row.expiresAt };
     },
 
     async seedListings(seedListings, seedVariants) {

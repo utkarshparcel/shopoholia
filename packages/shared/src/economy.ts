@@ -86,17 +86,49 @@ export const REVEAL_COMBINE_COST_COINS = 75;
 
 export const RUSH_TO_EXPRESS_COST_COINS = 25;
 
+/**
+ * Coin packs, sold only as consumable App Store / Google Play in-app products (`storeProductId`,
+ * the same id on both stores). A verified purchase of a product credits exactly `coins`. `price` is
+ * the intended price tier; the app shows the store's localized price.
+ */
 export const COIN_PACKS = [
-  { id: "coins_small", label: "Starter Pack", price: "₹99", coins: 100 },
-  { id: "coins_medium", label: "Style Pack", price: "₹299", coins: 350 },
-  { id: "coins_large", label: "Premium Pack", price: "₹499", coins: 650, popular: true },
-  { id: "coins_xl", label: "Ultimate Pack", price: "₹999", coins: 1500, bestValue: true },
+  { id: "coins_small", storeProductId: "worn.coins.100", label: "Starter Pack", price: "₹99", coins: 100 },
+  { id: "coins_medium", storeProductId: "worn.coins.350", label: "Style Pack", price: "₹299", coins: 350 },
+  { id: "coins_large", storeProductId: "worn.coins.650", label: "Premium Pack", price: "₹499", coins: 650, popular: true },
+  { id: "coins_xl", storeProductId: "worn.coins.1500", label: "Ultimate Pack", price: "₹999", coins: 1500, bestValue: true },
 ] as const;
 
 export type CoinPack = (typeof COIN_PACKS)[number];
 
 export function coinPackById(id: string): CoinPack | undefined {
   return COIN_PACKS.find((p) => p.id === id);
+}
+
+export function coinPackByStoreProductId(storeProductId: string): CoinPack | undefined {
+  return COIN_PACKS.find((p) => p.storeProductId === storeProductId);
+}
+
+/**
+ * Closet premium, sold only as auto-renewable App Store / Google Play subscriptions with the same
+ * `storeProductId` on both stores. `productId` is the Closet product (CLOSET_PREMIUM_PRODUCTS) whose
+ * entitlements an active subscription grants.
+ */
+export const PREMIUM_SUBSCRIPTIONS = [
+  { storeProductId: "worn.closet.premium.monthly", productId: "closet_premium_monthly" },
+  { storeProductId: "worn.closet.accountant.monthly", productId: "closet_accountant_monthly" },
+  { storeProductId: "worn.closet.outfits.monthly", productId: "closet_outfits_monthly" },
+] as const;
+
+export type PremiumSubscription = (typeof PREMIUM_SUBSCRIPTIONS)[number];
+
+export function premiumSubscriptionByStoreProductId(
+  storeProductId: string,
+): PremiumSubscription | undefined {
+  return PREMIUM_SUBSCRIPTIONS.find((s) => s.storeProductId === storeProductId);
+}
+
+export function premiumSubscriptionByProductId(productId: string): PremiumSubscription | undefined {
+  return PREMIUM_SUBSCRIPTIONS.find((s) => s.productId === productId);
 }
 
 export type EconomyMode = "beta" | "prod";

@@ -6,6 +6,15 @@ export type GoogleIdTokenPayload = {
   aud: string;
 };
 
+const GOOGLE_TOKENINFO_TIMEOUT_MS = 5_000;
+
+/** Google couldn't be reached (timeout, network error or a 5xx), so the token wasn't checked. */
+export class GoogleVerifyUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Google Sign-In could not be verified right now", { cause });
+  }
+}
+
 function googleClientAudiences(): string[] {
   const raw =
     process.env.GOOGLE_CLIENT_IDS ??
@@ -34,7 +43,13 @@ export async function verifyGoogleIdToken(
   }
 
   const url = `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`;
-  const res = await fetchImpl(url);
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { signal: AbortSignal.timeout(GOOGLE_TOKENINFO_TIMEOUT_MS) });
+  } catch (error) {
+    throw new GoogleVerifyUnavailableError(error);
+  }
+  if (res.status >= 500) throw new GoogleVerifyUnavailableError(`tokeninfo ${res.status}`);
   if (!res.ok) return null;
 
   const data = (await res.json()) as {

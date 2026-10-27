@@ -92,7 +92,8 @@ export async function publishOauthCompleteJob(
 
   try {
     const { Queue } = await import("bullmq");
-    const queue = new Queue(INGEST_QUEUE, { connection: redisUrl });
+    // A bare string here is ignored by BullMQ (it falls back to 127.0.0.1:6379); `url` is honoured.
+    const queue = new Queue(INGEST_QUEUE, { connection: { url: redisUrl } });
     const jobId = stableOauthJobId(payload);
     await queue.add(INGEST_OAUTH_JOB_NAME, payload, {
       jobId,

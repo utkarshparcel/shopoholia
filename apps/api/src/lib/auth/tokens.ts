@@ -80,12 +80,12 @@ export async function refreshAccessToken(
   repos: Repositories,
   refreshToken: string,
 ) {
-  const record = await repos.findRefreshToken(refreshToken);
+  // Redeemed in one step, so two concurrent refreshes with one token can't both succeed.
+  const record = await repos.consumeRefreshToken(refreshToken);
   if (!record) return null;
 
   const user = await repos.findUserById(record.userId);
   if (!user) return null;
 
-  await repos.deleteRefreshToken(refreshToken);
   return issueTokens(app, repos, user.id, identityForUser(user));
 }

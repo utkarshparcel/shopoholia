@@ -8,7 +8,7 @@ export const EntitlementGrantSchema = z.object({
   productId: z.string().min(1),
   expiresAt: z.string().datetime().nullable(),
   isTrial: z.boolean(),
-  source: z.enum(["revenuecat", "upi", "dev"]),
+  source: z.enum(["app_store", "play_store", "upi", "dev"]),
 });
 
 export const EntitlementSnapshotSchema = z.object({
@@ -18,10 +18,17 @@ export const EntitlementSnapshotSchema = z.object({
 });
 
 export const EntitlementSyncBodySchema = z.object({
+  /** Closet product id (`closet_premium_monthly`), not the store product id. */
   productId: z.string().min(1),
-  /** Simulated / RC customer info token — never a store secret. */
+  /** Ignored: kept so older builds still parse. */
   receiptOrToken: z.string().min(1).optional(),
   startTrial: z.boolean().optional().default(true),
+  /** The store the subscription was bought in. Required outside dev simulation. */
+  store: z.enum(["app_store", "play_store"]).optional(),
+  /** app_store: the subscription transaction's `jwsRepresentation`. */
+  jws: z.string().min(1).max(20_000).optional(),
+  /** play_store: the subscription's `purchaseToken`. */
+  purchaseToken: z.string().min(1).max(4_000).optional(),
 });
 
 export const EntitlementSyncResponseSchema = z.object({
@@ -36,12 +43,17 @@ export const PaywallOfferingSchema = z.object({
   /** Display price from regional table when available. */
   priceLabel: z.string().nullable(),
   currency: z.string().nullable(),
+  /** The App Store / Google Play subscription id to buy. */
+  storeProductId: z.string().optional(),
 });
 
 export const PaywallOfferingsResponseSchema = z.object({
   offerings: z.array(PaywallOfferingSchema),
   gatesEnabled: z.boolean(),
-  provider: z.enum(["revenuecat", "upi", "none"]),
+  /** "store": buy through the App Store / Google Play; "none": purchases are unavailable. */
+  provider: z.enum(["store", "none"]),
+  /** Per store: whether the server can verify that store's purchases now. */
+  stores: z.object({ app_store: z.boolean(), play_store: z.boolean() }).optional(),
 });
 
 export type EntitlementGrantDto = z.infer<typeof EntitlementGrantSchema>;

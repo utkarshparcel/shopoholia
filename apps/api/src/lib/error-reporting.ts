@@ -13,6 +13,15 @@ export function errorStatusCode(
   return status >= 400 && status < 600 ? status : 500;
 }
 
+/** Postgres unique_violation, as postgres-js reports it (possibly wrapped in `cause`). */
+export function isUniqueViolation(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /**
  * onError hook: sends unexpected errors (5xx, including errors with no HTTP status) to
  * Sentry. Expected 4xx errors (validation, bad JSON, payload too large…) are skipped.

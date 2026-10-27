@@ -13,7 +13,12 @@ import {
   createDeliveredRenderHandler,
   createRenderProcessingHandler,
 } from "../lib/jobs/render-processing.js";
-import { signState, verifyState } from "./ingestion.js";
+import { OAUTH_STATE_TTL_MS, createOauthState, signState, verifyState } from "./ingestion.js";
+
+/** The signed state inside a Google consent URL. */
+function stateOf(oauthUrl: string): string {
+  return new URL(oauthUrl).searchParams.get("state")!;
+}
 
 process.env.INGEST_WEBHOOK_SECRET = "test-webhook-secret";
 
@@ -109,7 +114,7 @@ describe("ingestion routes", () => {
     const body = res.json() as { source: { id: string }; oauthUrl: string };
     expect(body.source.id).toBeTruthy();
     expect(body.oauthUrl).toContain("accounts.google.com");
-    expect(body.oauthUrl).toContain(encodeURIComponent(body.source.id));
+    expect(verifyState(stateOf(body.oauthUrl))).toMatchObject({ userId, sourceId: body.source.id });
   });
 
   it("GET /ingestion/sources lists created sources", async () => {
@@ -186,8 +191,9 @@ describe("ingestion routes", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { kind: "EMAIL", provider: "gmail" },
     });
-    const sourceId = (created.json() as { source: { id: string } }).source.id;
-    const state = encodeURIComponent(signState({ userId, sourceId, kind: "EMAIL" }));
+    const { source, oauthUrl } = created.json() as { source: { id: string }; oauthUrl: string };
+    const sourceId = source.id;
+    const state = encodeURIComponent(stateOf(oauthUrl));
 
     const res = await app.inject({
       method: "GET",
@@ -205,7 +211,7 @@ describe("ingestion routes", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { kind: "EMAIL", provider: "gmail" },
     });
-    const sourceId = (created.json() as { source: { id: string } }).source.id;
+    const { oauthUrl } = created.json() as { oauthUrl: string };
 
     // Revoke EMAIL consent — grant id on the source is no longer active.
     const revoke = await app.inject({
@@ -218,7 +224,7 @@ describe("ingestion routes", () => {
     // Re-grant so the user has *some* EMAIL consent, but a new grant id.
     await grantConsent(app, token, userId, "EMAIL");
 
-    const state = encodeURIComponent(signState({ userId, sourceId, kind: "EMAIL" }));
+    const state = encodeURIComponent(stateOf(oauthUrl));
     const res = await app.inject({
       method: "GET",
       url: `/ingestion/sources/oauth/callback?code=test-code&state=${state}`,
@@ -493,16 +499,23 @@ describe("ingestion routes", () => {
     expect(row?.health.label).toBe("Healthy");
   });
 
-  it("verifyState rejects tampered / unsigned payloads", () => {
-    const signed = signState({
+  it("verifyState rejects tampered, expired, unsigned and old-format states", () => {
+    const fields = {
       userId,
       sourceId: "00000000-0000-4000-8000-0000000000aa",
       kind: "EMAIL",
-    });
-    expect(verifyState(encodeURIComponent(signed))?.userId).toBe(userId);
-    expect(verifyState(encodeURIComponent(`${signed}x`))).toBeNull();
-    expect(verifyState(encodeURIComponent(JSON.stringify({ userId, sourceId: "x" })))).toBeNull();
+      nonce: "n-1",
+      exp: Date.now() + OAUTH_STATE_TTL_MS,
+    };
+    const signed = signState(fields);
+    expect(verifyState(signed)?.userId).toBe(userId);
+    expect(verifyState(`${signed}x`)).toBeNull();
+    expect(verifyState(`${signed.split(".")[0]}x.${signed.split(".")[1]}`)).toBeNull();
+    expect(verifyState(signed, fields.exp + 1)).toBeNull();
+    expect(verifyState(JSON.stringify({ userId, sourceId: "x" }))).toBeNull();
     expect(verifyState("not-json")).toBeNull();
+    // The old JSON-plus-hex-HMAC state has no nonce or expiry and is refused.
+    expect(verifyState(`${JSON.stringify({ userId, sourceId: fields.sourceId, kind: "EMAIL" })}.${"0".repeat(64)}`)).toBeNull();
   });
 
   it("OAuth callback returns 400 for invalid state", async () => {
@@ -516,7 +529,7 @@ describe("ingestion routes", () => {
 
   it("OAuth callback returns 404 when source is missing", async () => {
     const missingId = "00000000-0000-4000-8000-0000000000ff";
-    const state = encodeURIComponent(signState({ userId, sourceId: missingId, kind: "EMAIL" }));
+    const state = encodeURIComponent(await createOauthState(app.deps.repos, userId, missingId));
     const res = await app.inject({
       method: "GET",
       url: `/ingestion/sources/oauth/callback?code=abc&state=${state}`,
@@ -584,8 +597,8 @@ describe("ingestion routes", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { kind: "EMAIL", provider: "gmail" },
     });
-    const sourceId = (created.json() as { source: { id: string } }).source.id;
-    const state = encodeURIComponent(signState({ userId, sourceId, kind: "EMAIL" }));
+    const { oauthUrl } = created.json() as { oauthUrl: string };
+    const state = encodeURIComponent(stateOf(oauthUrl));
 
     const other = await login(app, "919999988877");
     const res = await app.inject({
@@ -597,7 +610,7 @@ describe("ingestion routes", () => {
     expect((res.json() as { message: string }).message).toMatch(/State mismatch/i);
   });
 
-  it("OAuth callback accepts legacy unsigned state when JWT matches", async () => {
+  it("OAuth callback refuses legacy unsigned state, even with the user's JWT", async () => {
     await grantConsent(app, token, userId, "EMAIL");
     const created = await app.inject({
       method: "POST",
@@ -613,8 +626,7 @@ describe("ingestion routes", () => {
       url: `/ingestion/sources/oauth/callback?code=legacy-code&state=${legacy}`,
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(res.statusCode).toBe(202);
-    expect((res.json() as { sourceId: string }).sourceId).toBe(sourceId);
+    expect(res.statusCode).toBe(400);
   });
 
   it("correct resolves ownership via parsedJson.__userId when list omits the doc", async () => {

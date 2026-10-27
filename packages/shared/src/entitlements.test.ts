@@ -17,7 +17,7 @@ describe("entitlements gate", () => {
     productId: "closet_accountant_monthly",
     expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
     isTrial: true,
-    source: "revenuecat",
+    source: "app_store",
   };
 
   const expiredGrant: EntitlementGrant = {

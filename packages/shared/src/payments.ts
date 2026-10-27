@@ -24,12 +24,18 @@ export const PaymentIntentSchema = z.object({
   status: z.enum(["created", "pending", "paid", "failed"]),
   /** Never a real key — placeholder for client SDK init when wired. */
   publicKeyHint: z.string().nullable(),
+  /** Razorpay order id for the client's checkout (razorpay_upi only). */
+  providerOrderId: z.string().nullable().optional(),
 });
 
 export const ConfirmPaymentBodySchema = z.object({
   intentId: z.string().min(1),
-  /** Simulated payment id from Razorpay/UPI — not a store secret. */
+  /** Payment id from Razorpay checkout (`razorpay_payment_id`). */
   providerPaymentId: z.string().min(1).optional(),
+  /** `razorpay_order_id` from checkout; must match the intent's order. */
+  providerOrderId: z.string().min(1).optional(),
+  /** `razorpay_signature` from checkout. Without it the intent stays pending until the webhook. */
+  providerSignature: z.string().min(1).optional(),
 });
 
 export const ConfirmPaymentResponseSchema = z.object({

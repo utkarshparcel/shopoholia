@@ -1,165 +1,212 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  __resetEntitlementsForTests,
-  grantPaid,
-  grantTrial,
-  processRevenueCatWebhook,
+  devTrialGrants,
+  grantsForProduct,
   premiumGatesEnabled,
   requireEntitlement,
   snapshotForUser,
+  subscriptionGrants,
+  syncStoreSubscription,
   userCanAccess,
 } from "./entitlements.js";
+import { routePurchaseVerifier, type PurchaseVerifier, type VerifySubscriptionResult } from "./coin-purchases.js";
+import { createMemoryRepositories } from "./repositories/memory.js";
 
-describe("entitlements + RevenueCat webhook", () => {
-  const original = {
-    FEATURE_PREMIUM_GATES: process.env.FEATURE_PREMIUM_GATES,
-    FEATURE_REVENUECAT: process.env.FEATURE_REVENUECAT,
-    REVENUECAT_WEBHOOK_SECRET: process.env.REVENUECAT_WEBHOOK_SECRET,
+const GATES = { FEATURE_PREMIUM_GATES: "1" } as NodeJS.ProcessEnv;
+const DAY = 86_400_000;
+
+function subscription(overrides: Partial<Extract<VerifySubscriptionResult, { ok: true }>["subscription"]> = {}) {
+  return {
+    store: "app_store" as const,
+    productId: "worn.closet.premium.monthly",
+    storeRef: "1000000000000001",
+    transactionId: "2000000000000001",
+    environment: "sandbox" as const,
+    expiresAt: new Date(Date.now() + 30 * DAY),
+    isTrial: false,
+    eventAt: new Date(),
+    ...overrides,
   };
+}
 
-  beforeEach(() => {
-    __resetEntitlementsForTests();
-    delete process.env.FEATURE_PREMIUM_GATES;
-    delete process.env.FEATURE_REVENUECAT;
-    delete process.env.REVENUECAT_WEBHOOK_SECRET;
-  });
+function verifierAnswering(result: VerifySubscriptionResult): PurchaseVerifier {
+  const store: PurchaseVerifier = {
+    name: "fake",
+    stores: { app_store: true, play_store: true },
+    verify: async () => ({ ok: false, reason: "unavailable", message: "n/a" }),
+    verifySubscription: async () => result,
+  };
+  return routePurchaseVerifier({ app_store: store, play_store: store });
+}
 
-  afterEach(() => {
-    for (const [k, v] of Object.entries(original)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  });
-
-  it("gates accountant when FEATURE_PREMIUM_GATES=1", () => {
-    process.env.FEATURE_PREMIUM_GATES = "1";
-    expect(premiumGatesEnabled()).toBe(true);
+describe("entitlements", () => {
+  it("gates only when FEATURE_PREMIUM_GATES=1", async () => {
+    const repos = createMemoryRepositories();
     const userId = "00000000-0000-4000-8000-000000000001";
-    expect(userCanAccess(userId, "accountant")).toBe(false);
-    grantTrial(userId, "closet_accountant_monthly");
-    expect(userCanAccess(userId, "accountant")).toBe(true);
-    expect(userCanAccess(userId, "outfits")).toBe(false);
+    expect(premiumGatesEnabled({})).toBe(false);
+    expect(premiumGatesEnabled(GATES)).toBe(true);
+    expect(await userCanAccess(repos, userId, "outfits", {})).toBe(true);
+    expect(await userCanAccess(repos, userId, "accountant", GATES)).toBe(false);
+    await repos.applyEntitlementGrants(userId, devTrialGrants("closet_accountant_monthly", new Date()));
+    expect(await userCanAccess(repos, userId, "accountant", GATES)).toBe(true);
+    expect(await userCanAccess(repos, userId, "outfits", GATES)).toBe(false);
   });
 
-  it("allows surfaces when gates flag off", () => {
+  it("an expired grant gives no access", async () => {
+    const repos = createMemoryRepositories();
     const userId = "00000000-0000-4000-8000-000000000002";
-    expect(userCanAccess(userId, "outfits")).toBe(true);
-  });
-
-  it("grantPaid with future expiry unlocks surface under gates", () => {
-    process.env.FEATURE_PREMIUM_GATES = "1";
-    const userId = "00000000-0000-4000-8000-000000000010";
-    const expires = new Date(Date.now() + 30 * 86_400_000);
-    grantPaid(userId, "closet_outfits_monthly", expires);
-    expect(userCanAccess(userId, "outfits")).toBe(true);
-    expect(userCanAccess(userId, "accountant")).toBe(false);
-  });
-
-  it("requireEntitlement 401 without user, 403 when gated, pass when entitled", async () => {
-    process.env.FEATURE_PREMIUM_GATES = "1";
-    const userId = "00000000-0000-4000-8000-000000000011";
-    const handler = requireEntitlement("accountant");
-
-    const reply401 = { code: vi.fn().mockReturnThis(), send: vi.fn() };
-    await handler({ user: undefined } as never, reply401 as never);
-    expect(reply401.code).toHaveBeenCalledWith(401);
-
-    const reply403 = { code: vi.fn().mockReturnThis(), send: vi.fn() };
-    await handler({ user: { sub: userId } } as never, reply403 as never);
-    expect(reply403.code).toHaveBeenCalledWith(403);
-
-    grantTrial(userId, "closet_accountant_monthly");
-    const replyOk = { code: vi.fn().mockReturnThis(), send: vi.fn() };
-    const out = await handler({ user: { sub: userId } } as never, replyOk as never);
-    expect(out).toBeUndefined();
-    expect(replyOk.code).not.toHaveBeenCalled();
-  });
-
-  it("processes RevenueCat webhook when feature flag on", () => {
-    process.env.FEATURE_REVENUECAT = "1";
-    const userId = "00000000-0000-4000-8000-000000000003";
-    const result = processRevenueCatWebhook({
-      event: {
-        id: "evt-1",
-        type: "INITIAL_PURCHASE",
-        app_user_id: userId,
-        product_id: "closet_premium_monthly",
-        period_type: "TRIAL",
-      },
-    });
-    expect(result.ok).toBe(true);
-    const snap = snapshotForUser(userId);
-    expect(snap.grants.map((g) => g.entitlementId).sort()).toEqual([
-      "accountant",
-      "outfits",
+    await repos.applyEntitlementGrants(
+      userId,
+      grantsForProduct("closet_outfits_monthly", {
+        expiresAt: new Date(Date.now() - 1000),
+        isTrial: false,
+        source: "play_store",
+        eventAt: new Date(),
+      }),
+    );
+    expect(await userCanAccess(repos, userId, "outfits", GATES)).toBe(false);
+    expect((await snapshotForUser(repos, userId)).grants).toEqual([
+      expect.objectContaining({ entitlementId: "outfits", source: "play_store", isTrial: false }),
     ]);
   });
 
-  it("EXPIRATION / CANCELLATION revoke access under gates", () => {
-    process.env.FEATURE_REVENUECAT = "1";
-    process.env.FEATURE_PREMIUM_GATES = "1";
-    const userId = "00000000-0000-4000-8000-000000000012";
-    grantPaid(userId, "closet_premium_monthly", new Date(Date.now() + 86_400_000));
-    expect(userCanAccess(userId, "accountant")).toBe(true);
-
-    const expired = processRevenueCatWebhook({
-      event: {
-        id: "evt-exp",
-        type: "EXPIRATION",
-        app_user_id: userId,
-        product_id: "closet_premium_monthly",
-      },
-    });
-    expect(expired.ok).toBe(true);
-    expect(userCanAccess(userId, "accountant")).toBe(false);
-
-    grantPaid(userId, "closet_premium_monthly", new Date(Date.now() + 86_400_000));
-    const cancelled = processRevenueCatWebhook({
-      event: {
-        id: "evt-cancel",
-        type: "CANCELLATION",
-        app_user_id: userId,
-        product_id: "closet_premium_monthly",
-      },
-    });
-    expect(cancelled.ok).toBe(true);
-    expect(userCanAccess(userId, "outfits")).toBe(false);
-  });
-
-  it("rejects unknown product", () => {
-    process.env.FEATURE_REVENUECAT = "1";
-    const result = processRevenueCatWebhook({
-      event: {
-        id: "evt-unk",
-        type: "INITIAL_PURCHASE",
-        app_user_id: "00000000-0000-4000-8000-000000000013",
-        product_id: "not_a_real_sku",
-      },
-    });
-    expect(result).toEqual({ ok: false, reason: "unknown_product" });
-  });
-
-  it("rejects webhook without secret when secret configured", () => {
-    process.env.REVENUECAT_WEBHOOK_SECRET = "rc-secret";
-    const result = processRevenueCatWebhook(
-      { event: { id: "x", app_user_id: "u", product_id: "closet_premium_monthly" } },
-      { authorization: "Bearer wrong" },
+  it("maps products and store subscriptions to grants", () => {
+    const at = new Date();
+    expect(
+      grantsForProduct("closet_premium_monthly", {
+        expiresAt: null,
+        isTrial: false,
+        source: "app_store",
+        eventAt: at,
+        storeRef: "r1",
+      }).map((g) => [g.entitlementId, g.storeRef]),
+    ).toEqual([
+      ["accountant", "r1"],
+      ["outfits", "r1"],
+    ]);
+    expect(grantsForProduct("not_a_product", { expiresAt: null, isTrial: false, source: "dev", eventAt: at })).toEqual(
+      [],
     );
-    expect(result).toEqual({ ok: false, reason: "invalid_webhook_secret" });
+    const grants = subscriptionGrants(subscription({ productId: "worn.closet.accountant.monthly" }));
+    expect(grants).toEqual([
+      expect.objectContaining({
+        entitlementId: "accountant",
+        productId: "closet_accountant_monthly",
+        source: "app_store",
+        storeRef: "1000000000000001",
+      }),
+    ]);
+    expect(subscriptionGrants(subscription({ productId: "worn.coins.100" }))).toEqual([]);
+    expect(devTrialGrants("closet_premium_monthly", at).every((g) => g.isTrial && g.source === "dev")).toBe(true);
   });
 
-  it("is idempotent on event id", () => {
-    process.env.FEATURE_REVENUECAT = "1";
-    const body = {
-      event: {
-        id: "evt-dup",
-        type: "INITIAL_PURCHASE",
-        app_user_id: "00000000-0000-4000-8000-000000000004",
-        product_id: "closet_outfits_monthly",
-      },
-    };
-    expect(processRevenueCatWebhook(body).ok).toBe(true);
-    const again = processRevenueCatWebhook(body);
-    expect(again).toEqual({ ok: true, duplicate: true });
+  it("requireEntitlement: 401 without user, 403 when gated, passes when entitled", async () => {
+    const repos = createMemoryRepositories();
+    const userId = "00000000-0000-4000-8000-000000000011";
+    const handler = requireEntitlement("accountant");
+    const server = { deps: { repos } };
+    const saved = process.env.FEATURE_PREMIUM_GATES;
+    process.env.FEATURE_PREMIUM_GATES = "1";
+    try {
+      const reply401 = { code: vi.fn().mockReturnThis(), send: vi.fn() };
+      await handler({ user: undefined, server } as never, reply401 as never);
+      expect(reply401.code).toHaveBeenCalledWith(401);
+
+      const reply403 = { code: vi.fn().mockReturnThis(), send: vi.fn() };
+      await handler({ user: { sub: userId }, server } as never, reply403 as never);
+      expect(reply403.code).toHaveBeenCalledWith(403);
+
+      await repos.applyEntitlementGrants(userId, devTrialGrants("closet_accountant_monthly", new Date()));
+      const replyOk = { code: vi.fn().mockReturnThis(), send: vi.fn() };
+      expect(await handler({ user: { sub: userId }, server } as never, replyOk as never)).toBeUndefined();
+      expect(replyOk.code).not.toHaveBeenCalled();
+    } finally {
+      if (saved === undefined) delete process.env.FEATURE_PREMIUM_GATES;
+      else process.env.FEATURE_PREMIUM_GATES = saved;
+    }
+  });
+});
+
+describe("syncStoreSubscription", () => {
+  const userId = "00000000-0000-4000-8000-000000000020";
+  const dev = { NODE_ENV: "development", IAP_ALLOW_SIMULATED: "1" } as NodeJS.ProcessEnv;
+  const off = { NODE_ENV: "development" } as NodeJS.ProcessEnv;
+  const ok = verifierAnswering({ ok: true, subscription: subscription() });
+
+  it("rejects unknown products and missing proof", async () => {
+    const repos = createMemoryRepositories();
+    expect(await syncStoreSubscription(repos, ok, userId, { productId: "nope", startTrial: true }, dev)).toMatchObject({
+      ok: false,
+      status: 400,
+    });
+    expect(
+      await syncStoreSubscription(repos, ok, userId, { productId: "closet_premium_monthly", startTrial: true }, off),
+    ).toMatchObject({ ok: false, status: 400 });
+    expect(
+      await syncStoreSubscription(repos, ok, userId, { productId: "closet_premium_monthly", startTrial: true, jws: "x" }, off),
+    ).toMatchObject({ ok: false, status: 400, message: "store is required" });
+  });
+
+  it("dev simulation: one trial per product, never in production", async () => {
+    const repos = createMemoryRepositories();
+    const body = { productId: "closet_premium_monthly", startTrial: true };
+    const first = await syncStoreSubscription(repos, ok, userId, body, dev);
+    expect(first.ok && first.snapshot.grants.map((g) => g.source)).toEqual(["dev", "dev"]);
+    const firstExpiry = first.ok ? first.snapshot.grants[0]!.expiresAt : null;
+    const again = await syncStoreSubscription(repos, ok, userId, body, dev);
+    expect(again.ok && again.snapshot.grants[0]!.expiresAt).toBe(firstExpiry);
+    expect(
+      await syncStoreSubscription(repos, ok, userId, body, { NODE_ENV: "production", IAP_ALLOW_SIMULATED: "1" }),
+    ).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it("stores what the store says", async () => {
+    const repos = createMemoryRepositories();
+    const result = await syncStoreSubscription(
+      repos,
+      ok,
+      userId,
+      { productId: "closet_premium_monthly", startTrial: true, store: "app_store", jws: "signed" },
+      off,
+    );
+    expect(result.ok && result.snapshot.grants.map((g) => [g.entitlementId, g.source])).toEqual([
+      ["accountant", "app_store"],
+      ["outfits", "app_store"],
+    ]);
+    expect(await repos.listStoreSubscriptionGrants("app_store", new Date())).toEqual([
+      { userId, productId: "closet_premium_monthly", storeRef: "1000000000000001" },
+    ]);
+  });
+
+  it("maps store answers: wrong product 402, inactive 402, other account 409, outage 503", async () => {
+    const repos = createMemoryRepositories();
+    const body = { productId: "closet_outfits_monthly", startTrial: true, store: "play_store" as const, purchaseToken: "t" };
+    expect(await syncStoreSubscription(repos, ok, userId, body, off)).toMatchObject({
+      ok: false,
+      status: 402,
+      error: "product_mismatch",
+    });
+    const lapsed = verifierAnswering({
+      ok: true,
+      subscription: subscription({
+        store: "play_store",
+        productId: "worn.closet.outfits.monthly",
+        expiresAt: new Date(Date.now() - DAY),
+      }),
+    });
+    expect(await syncStoreSubscription(repos, lapsed, userId, body, off)).toMatchObject({
+      ok: false,
+      status: 402,
+      error: "subscription_inactive",
+    });
+    const other = verifierAnswering({ ok: false, reason: "purchase_belongs_to_another_account", message: "x" });
+    expect(await syncStoreSubscription(repos, other, userId, body, off)).toMatchObject({ ok: false, status: 409 });
+    const down = verifierAnswering({ ok: false, reason: "unavailable", message: "Google Play responded 503" });
+    expect(await syncStoreSubscription(repos, down, userId, body, off)).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Unavailable",
+      message: "Purchases are unavailable",
+    });
   });
 });

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SIGNED_URL_SECONDS,
   createMockStorage,
   createR2Storage,
+  createStorageFromEnv,
   hasR2Config,
   isUserObjectKey,
   userObjectKey,
@@ -112,29 +114,54 @@ describe("createR2Storage", () => {
     return { from, until: from + Number(url.searchParams.get("X-Amz-Expires")) * 1000 };
   }
 
-  it("signs the same URL all hour, valid for the full window from any point in it", async () => {
+  it("signs the same URL for 15 minutes, valid for 15 minutes from any point in that window", async () => {
     vi.useFakeTimers();
-    const times = ["2026-10-25T10:00:00.000Z", "2026-10-25T10:23:45.678Z", "2026-10-25T10:59:59.999Z"];
+    const times = ["2026-10-25T10:15:00.000Z", "2026-10-25T10:23:45.678Z", "2026-10-25T10:29:59.999Z"];
     const urls: string[] = [];
     for (const time of times) {
       const url = await signAt(time);
       const { from, until } = validity(url);
       expect(from, time).toBeLessThanOrEqual(Date.parse(time));
-      expect(until, time).toBeGreaterThanOrEqual(Date.parse(time) + 3600 * 1000);
+      expect(until, time).toBeGreaterThanOrEqual(Date.parse(time) + SIGNED_URL_SECONDS * 1000);
+      // Minutes, not hours.
+      expect(until - Date.parse(time), time).toBeLessThanOrEqual(30 * 60 * 1000);
       urls.push(url.href);
     }
     expect(new Set(urls).size).toBe(1);
     expect(new URL(urls[0]!).searchParams.get("X-Amz-Signature")).toBeTruthy();
 
-    const nextHour = await signAt("2026-10-25T11:00:00.000Z");
-    expect(nextHour.href).not.toBe(urls[0]);
-    expect(validity(nextHour).from).toBe(Date.parse("2026-10-25T11:00:00.000Z"));
+    const nextWindow = await signAt("2026-10-25T10:30:00.000Z");
+    expect(nextWindow.href).not.toBe(urls[0]);
+    expect(validity(nextWindow).from).toBe(Date.parse("2026-10-25T10:30:00.000Z"));
+  });
+
+  it("serves only non-user objects from a public bucket URL", async () => {
+    const pub = createR2Storage({
+      accountId: "acc",
+      accessKeyId: "key",
+      secretAccessKey: "secret",
+      bucketName: "bucket",
+      publicUrl: "https://cdn.example.test/",
+    });
+    expect(await pub.getSignedUrl("garments/v1.jpg")).toBe("https://cdn.example.test/garments/v1.jpg");
+    const userUrl = new URL(await pub.getSignedUrl("u/user-1/receipts/r.jpg"));
+    expect(userUrl.host).toBe("bucket.acc.r2.cloudflarestorage.com");
+    expect(userUrl.searchParams.get("X-Amz-Signature")).toBeTruthy();
   });
 
   it("keeps long expiries within the SigV4 one-week limit", async () => {
     vi.useFakeTimers();
     const url = await signAt("2026-10-25T10:30:00.000Z", 7 * 24 * 3600);
     expect(url.searchParams.get("X-Amz-Expires")).toBe(String(7 * 24 * 3600));
+  });
+});
+
+describe("createStorageFromEnv", () => {
+  it("uses placeholder storage only outside production", async () => {
+    await expect(createStorageFromEnv({ NODE_ENV: "development" }).getSignedUrl("a")).resolves.toContain(
+      "picsum.photos",
+    );
+    expect(() => createStorageFromEnv({ NODE_ENV: "production" })).toThrow(/Storage is not configured/);
   });
 });
 

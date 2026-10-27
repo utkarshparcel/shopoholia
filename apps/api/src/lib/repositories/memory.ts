@@ -63,9 +63,13 @@ import type {
   MoneyLedgerRecord,
   ReceiptRecord,
   WarrantyRecord,
+  CoinPurchaseRecord,
+  EntitlementGrantRecord,
+  OauthStateRecord,
   OrderItemRecord,
   OrderRecord,
   OtpRecord,
+  PaymentIntentRecord,
   PushEventRecord,
   RefreshTokenRecord,
   RenderRecord,
@@ -139,8 +143,10 @@ export function createMemoryRepositories(): Repositories {
       release();
     }
   }
-  const otps = new Map<string, OtpRecord>();
+  // phone -> codes, oldest first
+  const otps = new Map<string, OtpRecord[]>();
   const refreshTokens = new Map<string, RefreshTokenRecord>();
+  const oauthStates = new Map<string, OauthStateRecord>();
   const listings = new Map<string, ListingRecord>();
   const sellers = new Map<string, SellerRecord>();
   const sellersByUser = new Map<string, string>();
@@ -164,6 +170,12 @@ export function createMemoryRepositories(): Repositories {
   const pushEvents: PushEventRecord[] = [];
   const cashbackEvents = new Map<string, { id: string; userId: string; listingId: string | null; platform: string; clickId: string; coinsEarned: number; status: string; createdAt: Date }>();
   const iapReceiptsByEventId = new Map<string, { userId: string; coinsGranted: number }>();
+  // `${store}:${transactionId}` -> coin purchase (also listed in iapReceiptsByEventId under that key)
+  const coinPurchases = new Map<string, CoinPurchaseRecord>();
+  // userId -> `${entitlementId}:${productId}:${source}` -> grant
+  const entitlementGrantsByUser = new Map<string, Map<string, EntitlementGrantRecord>>();
+  const entitlementEventUsers = new Map<string, string>();
+  const paymentIntents = new Map<string, PaymentIntentRecord>();
   const consentGrants = new Map<string, ConsentGrantRecord>();
   const ingestionSources = new Map<string, IngestionSourceRecord>();
   const ingestionDocuments = new Map<string, IngestionDocumentRecord>();
@@ -642,19 +654,247 @@ export function createMemoryRepositories(): Repositories {
       });
     },
 
-    async saveOtp(phone, code, expiresAt) {
-      otps.set(phone, { phone, code, expiresAt });
+    async creditCoinPurchase(input) {
+      if (!users.has(input.userId)) throw new Error(`User not found: ${input.userId}`);
+      return withCoinLock(input.userId, async () => {
+        const key = `${input.store}:${input.transactionId}`;
+        // Checked and claimed with no await in between, so one transaction id is credited once.
+        const existing = coinPurchases.get(key);
+        if (existing) {
+          if (existing.userId !== input.userId) {
+            return { status: "other_user" as const, purchase: { ...existing } };
+          }
+          const balanceAfter = await this.getCoinBalance(input.userId);
+          return { status: "already_granted" as const, purchase: { ...existing }, balanceAfter };
+        }
+        const purchase: CoinPurchaseRecord = {
+          id: randomUUID(),
+          userId: input.userId,
+          store: input.store,
+          transactionId: input.transactionId,
+          productId: input.productId,
+          coinsGranted: input.coins,
+          environment: input.environment,
+          source: input.source,
+          refundedAt: null,
+          refundedCoins: 0,
+          refundShortfall: 0,
+          createdAt: now(),
+        };
+        coinPurchases.set(key, purchase);
+        iapReceiptsByEventId.set(key, { userId: input.userId, coinsGranted: input.coins });
+
+        const balanceAfter = (await this.getCoinBalance(input.userId)) + input.coins;
+        appendLedger(
+          ledger,
+          { userId: input.userId, delta: input.coins, type: "IAP_PURCHASE", refType: "iap", refId: purchase.id },
+          balanceAfter,
+        );
+        await this.updateUser(input.userId, { coinBalanceCache: balanceAfter });
+        return { status: "granted" as const, purchase: { ...purchase }, balanceAfter };
+      });
     },
 
-    async consumeOtp(phone, code) {
-      const record = otps.get(phone);
-      if (!record) return false;
-      if (record.expiresAt < now()) {
-        otps.delete(phone);
-        return false;
+    async refundCoinPurchase(input) {
+      const key = `${input.store}:${input.transactionId}`;
+      for (;;) {
+        const userId = coinPurchases.get(key)?.userId ?? input.userId;
+        if (!userId || (!coinPurchases.has(key) && !input.productId)) return { status: "unknown" as const };
+        const result = await withCoinLock(userId, async () => {
+          const row = coinPurchases.get(key);
+          if (!row) {
+            const tombstone: CoinPurchaseRecord = {
+              id: randomUUID(),
+              userId,
+              store: input.store,
+              transactionId: input.transactionId,
+              productId: input.productId!,
+              coinsGranted: 0,
+              environment: null,
+              source: input.source,
+              refundedAt: now(),
+              refundedCoins: 0,
+              refundShortfall: 0,
+              createdAt: now(),
+            };
+            coinPurchases.set(key, tombstone);
+            iapReceiptsByEventId.set(key, { userId, coinsGranted: 0 });
+            return { status: "refunded_before_grant" as const, purchase: { ...tombstone } };
+          }
+          // Granted to someone else while we waited for this lock: retry under theirs.
+          if (row.userId !== userId) return null;
+          if (row.refundedAt) return { status: "already_refunded" as const, purchase: { ...row } };
+
+          const balance = await this.getCoinBalance(row.userId);
+          const debited = Math.min(row.coinsGranted, Math.max(balance, 0));
+          const shortfall = row.coinsGranted - debited;
+          const balanceAfter = balance - debited;
+          if (debited > 0) {
+            appendLedger(
+              ledger,
+              { userId: row.userId, delta: -debited, type: "REFUND", refType: "iap_refund", refId: row.id },
+              balanceAfter,
+            );
+            await this.updateUser(row.userId, { coinBalanceCache: balanceAfter });
+          }
+          row.refundedAt = now();
+          row.refundedCoins = debited;
+          row.refundShortfall = shortfall;
+          return { status: "refunded" as const, purchase: { ...row }, debited, shortfall, balanceAfter };
+        });
+        if (result) return result;
       }
+    },
+
+    async findCoinPurchase(store, transactionId) {
+      const row = coinPurchases.get(`${store}:${transactionId}`);
+      return row ? { ...row } : null;
+    },
+
+    async listEntitlementGrants(userId) {
+      return [...(entitlementGrantsByUser.get(userId)?.values() ?? [])]
+        .map((grant) => ({ ...grant }))
+        .sort(
+          (a, b) =>
+            a.productId.localeCompare(b.productId) || a.entitlementId.localeCompare(b.entitlementId),
+        );
+    },
+
+    async applyEntitlementGrants(userId, grants, eventId) {
+      if (eventId) {
+        if (entitlementEventUsers.has(eventId)) return { applied: false };
+        entitlementEventUsers.set(eventId, userId);
+      }
+      let byKey = entitlementGrantsByUser.get(userId);
+      if (!byKey) {
+        byKey = new Map();
+        entitlementGrantsByUser.set(userId, byKey);
+      }
+      for (const grant of grants) {
+        const key = `${grant.entitlementId}:${grant.productId}:${grant.source}`;
+        const stored = byKey.get(key);
+        // A late-arriving older event never overwrites a newer grant.
+        if (stored && stored.eventAt > grant.eventAt) continue;
+        byKey.set(key, { ...grant, storeRef: grant.storeRef ?? stored?.storeRef ?? null });
+      }
+      return { applied: true };
+    },
+
+    async listStoreSubscriptionGrants(source, expiresAfter) {
+      const refs = new Map<string, { userId: string; productId: string; storeRef: string }>();
+      for (const [userId, byKey] of entitlementGrantsByUser) {
+        for (const grant of byKey.values()) {
+          if (grant.source !== source || !grant.storeRef) continue;
+          if (grant.expiresAt && grant.expiresAt <= expiresAfter) continue;
+          refs.set(`${userId}:${grant.productId}:${grant.storeRef}`, {
+            userId,
+            productId: grant.productId,
+            storeRef: grant.storeRef,
+          });
+        }
+      }
+      return [...refs.values()].sort(
+        (a, b) => a.userId.localeCompare(b.userId) || a.productId.localeCompare(b.productId),
+      );
+    },
+
+    async createPaymentIntent(input) {
+      const timestamp = now();
+      const record: PaymentIntentRecord = {
+        id: input.id ?? randomUUID(),
+        userId: input.userId,
+        provider: input.provider,
+        productId: input.productId,
+        amountMinor: input.amountMinor,
+        currency: input.currency,
+        upiIntentUrl: input.upiIntentUrl,
+        status: "created",
+        providerOrderId: input.providerOrderId,
+        providerPaymentId: null,
+        paidAt: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      paymentIntents.set(record.id, record);
+      return { ...record };
+    },
+
+    async findPaymentIntent(id) {
+      const record = paymentIntents.get(id);
+      return record ? { ...record } : null;
+    },
+
+    async findPaymentIntentByProviderOrderId(providerOrderId) {
+      for (const record of paymentIntents.values()) {
+        if (record.providerOrderId === providerOrderId) return { ...record };
+      }
+      return null;
+    },
+
+    async markPaymentIntentPending(id) {
+      const record = paymentIntents.get(id);
+      if (!record) return null;
+      if (record.status === "created") {
+        record.status = "pending";
+        record.updatedAt = now();
+      }
+      return { ...record };
+    },
+
+    async markPaymentIntentPaid(id, providerPaymentId, paidAt) {
+      const record = paymentIntents.get(id);
+      if (!record) return null;
+      if (record.status !== "paid") {
+        for (const other of paymentIntents.values()) {
+          if (other.id !== id && other.providerPaymentId === providerPaymentId) {
+            throw Object.assign(new Error("duplicate provider payment id"), { code: "23505" });
+          }
+        }
+        record.status = "paid";
+        record.providerPaymentId = providerPaymentId;
+        record.paidAt = paidAt;
+        record.updatedAt = now();
+      }
+      return { ...record };
+    },
+
+    async markPaymentIntentFailed(id) {
+      const record = paymentIntents.get(id);
+      if (!record) return null;
+      if (record.status !== "paid") {
+        record.status = "failed";
+        record.updatedAt = now();
+      }
+      return { ...record };
+    },
+
+    async saveOtp(phone, code, expiresAt, limit) {
+      const sentAt = now();
+      const windowStart = sentAt.getTime() - (limit?.windowMs ?? 0);
+      // Codes outside the send window that can no longer be used are only clutter.
+      const codes = (otps.get(phone) ?? []).filter(
+        (record) => record.createdAt.getTime() >= windowStart || record.expiresAt >= sentAt,
+      );
+      if (limit) {
+        const recent = codes.filter((record) => record.createdAt.getTime() > windowStart);
+        if (recent.length >= limit.max) {
+          const oldest = recent[recent.length - limit.max]!.createdAt;
+          otps.set(phone, codes);
+          return { saved: false, retryAt: new Date(oldest.getTime() + limit.windowMs) };
+        }
+      }
+      codes.push({ phone, code, expiresAt, attempts: 0, consumedAt: null, createdAt: sentAt });
+      otps.set(phone, codes);
+      return { saved: true };
+    },
+
+    async consumeOtp(phone, code, maxAttempts = 5) {
+      const record = otps.get(phone)?.at(-1);
+      if (!record || record.consumedAt || record.expiresAt <= now()) return false;
+      if (record.attempts >= maxAttempts) return false;
+      record.attempts += 1;
       if (record.code !== code) return false;
-      otps.delete(phone);
+      record.consumedAt = now();
       return true;
     },
 
@@ -672,8 +912,29 @@ export function createMemoryRepositories(): Repositories {
       return record;
     },
 
+    async consumeRefreshToken(token) {
+      const record = refreshTokens.get(token);
+      refreshTokens.delete(token);
+      if (!record || record.expiresAt < now()) return null;
+      return record;
+    },
+
     async deleteRefreshToken(token) {
       refreshTokens.delete(token);
+    },
+
+    async saveOauthState(record) {
+      oauthStates.set(record.nonce, { ...record });
+      for (const [nonce, state] of oauthStates) {
+        if (state.userId === record.userId && state.expiresAt < now()) oauthStates.delete(nonce);
+      }
+    },
+
+    async consumeOauthState(nonce) {
+      const record = oauthStates.get(nonce);
+      oauthStates.delete(nonce);
+      if (!record || record.expiresAt < now()) return null;
+      return { ...record };
     },
 
     async seedListings(seedListings, seedVariants) {
@@ -1505,6 +1766,16 @@ export function createMemoryRepositories(): Repositories {
       for (const [eventId, rec] of iapReceiptsByEventId) {
         if (rec.userId === userId) iapReceiptsByEventId.delete(eventId);
       }
+      for (const [key, purchase] of coinPurchases) {
+        if (purchase.userId === userId) coinPurchases.delete(key);
+      }
+      entitlementGrantsByUser.delete(userId);
+      for (const [eventId, eventUserId] of entitlementEventUsers) {
+        if (eventUserId === userId) entitlementEventUsers.delete(eventId);
+      }
+      for (const [id, intent] of paymentIntents) {
+        if (intent.userId === userId) paymentIntents.delete(id);
+      }
       for (let i = ledger.length - 1; i >= 0; i--) {
         if (ledger[i]!.userId === userId) ledger.splice(i, 1);
       }
@@ -1628,6 +1899,9 @@ export function createMemoryRepositories(): Repositories {
       // 16. refresh tokens (session revocation on account wipe)
       for (const [token, record] of refreshTokens) {
         if (record.userId === userId) refreshTokens.delete(token);
+      }
+      for (const [nonce, state] of oauthStates) {
+        if (state.userId === userId) oauthStates.delete(nonce);
       }
 
       // 17. finally user

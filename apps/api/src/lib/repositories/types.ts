@@ -57,15 +57,73 @@ export type CoinLedgerRecord = {
 
 export type OtpRecord = {
   phone: string;
+  /** Opaque to the repository: the OTP service stores an HMAC of the code here. */
   code: string;
   expiresAt: Date;
+  attempts: number;
+  consumedAt: Date | null;
+  createdAt: Date;
 };
+
+/** At most `max` codes per phone in any `windowMs`. */
+export type OtpSendLimit = { max: number; windowMs: number };
+
+export type SaveOtpResult = { saved: true } | { saved: false; retryAt: Date };
 
 export type RefreshTokenRecord = {
   token: string;
   userId: string;
   expiresAt: Date;
 };
+
+export type OauthStateRecord = {
+  nonce: string;
+  userId: string;
+  sourceId: string;
+  expiresAt: Date;
+};
+
+export type EntitlementGrantRecord = {
+  entitlementId: string;
+  productId: string;
+  expiresAt: Date | null;
+  isTrial: boolean;
+  source: "app_store" | "play_store" | "upi" | "dev";
+  /** When the source event happened; a grant is only replaced by a newer or equal event. */
+  eventAt: Date;
+  /** The store's id for the subscription: App Store original transaction id, or Play purchase token. */
+  storeRef?: string | null;
+};
+
+/** A store subscription behind a user's grants, for re-checking it with the store. */
+export type StoreSubscriptionRef = {
+  userId: string;
+  productId: string;
+  storeRef: string;
+};
+
+export type PaymentIntentStatus = "created" | "pending" | "paid" | "failed";
+
+export type PaymentIntentRecord = {
+  id: string;
+  userId: string;
+  provider: "razorpay_upi" | "stub" | "revenuecat";
+  productId: string;
+  amountMinor: number;
+  currency: string;
+  upiIntentUrl: string | null;
+  status: PaymentIntentStatus;
+  providerOrderId: string | null;
+  providerPaymentId: string | null;
+  paidAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type CreatePaymentIntentInput = Pick<
+  PaymentIntentRecord,
+  "userId" | "provider" | "productId" | "amountMinor" | "currency" | "upiIntentUrl" | "providerOrderId"
+> & { id?: string };
 
 export type GrantCoinsInput = {
   userId: string;
@@ -74,6 +132,65 @@ export type GrantCoinsInput = {
   refType?: string;
   refId?: string;
 };
+
+export type CoinPurchaseStore = "app_store" | "play_store";
+
+/** A store transaction that a verifier or a store notification vouched for. */
+export type CoinPurchaseInput = {
+  userId: string;
+  store: CoinPurchaseStore;
+  /** The store's transaction id (iOS transaction id, Play order id): the credit-once key with `store`. */
+  transactionId: string;
+  /** Store product id. */
+  productId: string;
+  /** Coins for the product from COIN_PACKS; never an amount from the client. */
+  coins: number;
+  environment: "production" | "sandbox" | "xcode" | "simulated";
+  source: "validate" | "notification";
+  rawPayload?: Record<string, unknown>;
+};
+
+export type CoinPurchaseRecord = {
+  id: string;
+  userId: string;
+  store: CoinPurchaseStore;
+  transactionId: string;
+  productId: string;
+  coinsGranted: number;
+  environment: string | null;
+  source: string | null;
+  refundedAt: Date | null;
+  refundedCoins: number;
+  /** Coins the refund couldn't take back because the user had spent them. */
+  refundShortfall: number;
+  createdAt: Date;
+};
+
+export type CreditCoinPurchaseResult =
+  | { status: "granted" | "already_granted"; purchase: CoinPurchaseRecord; balanceAfter: number }
+  | { status: "other_user"; purchase: CoinPurchaseRecord };
+
+export type RefundCoinPurchaseInput = {
+  store: CoinPurchaseStore;
+  transactionId: string;
+  /** With `productId`: remembers a refund that arrives before the grant, so the grant is refused later. */
+  userId?: string;
+  productId?: string;
+  source: "notification";
+  rawPayload?: Record<string, unknown>;
+};
+
+export type RefundCoinPurchaseResult =
+  | {
+      status: "refunded";
+      purchase: CoinPurchaseRecord;
+      debited: number;
+      shortfall: number;
+      balanceAfter: number;
+    }
+  | { status: "already_refunded" | "refunded_before_grant"; purchase: CoinPurchaseRecord }
+  /** No grant to take back and no user to remember the refund for. */
+  | { status: "unknown" };
 
 export type ListingStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 
@@ -590,14 +707,78 @@ export interface Repositories {
     coinsGranted: number;
     rawPayload?: Record<string, unknown>;
   }): Promise<void>;
+  /**
+   * Credits a verified store purchase at most once per (store, transactionId): the purchase row
+   * (unique on that pair) and its IAP_PURCHASE ledger entry are written in one transaction. A repeat
+   * for the same user is "already_granted" with the original row; for another user, "other_user".
+   */
+  creditCoinPurchase(input: CoinPurchaseInput): Promise<CreditCoinPurchaseResult>;
+  /**
+   * Takes back a refunded purchase's coins once, never below a zero balance; what the user already
+   * spent is stored as the row's `refundShortfall`. A refund before any grant leaves a refunded row
+   * with 0 coins (when `userId` and `productId` are given), so a later credit grants nothing.
+   */
+  refundCoinPurchase(input: RefundCoinPurchaseInput): Promise<RefundCoinPurchaseResult>;
+  findCoinPurchase(store: CoinPurchaseStore, transactionId: string): Promise<CoinPurchaseRecord | null>;
+  listEntitlementGrants(userId: string): Promise<EntitlementGrantRecord[]>;
+  /**
+   * Upserts grants by (entitlementId, productId, source); a stored grant from a newer event is kept.
+   * With `eventId`, the call is a no-op returning `{ applied: false }` when that provider
+   * event was applied before (webhook retries).
+   */
+  applyEntitlementGrants(
+    userId: string,
+    grants: EntitlementGrantRecord[],
+    eventId?: string,
+  ): Promise<{ applied: boolean }>;
+  /** One row per (user, product, storeRef) of `source` grants with a storeRef that expire after `expiresAfter` (or never). */
+  listStoreSubscriptionGrants(
+    source: "app_store" | "play_store",
+    expiresAfter: Date,
+  ): Promise<StoreSubscriptionRef[]>;
+  createPaymentIntent(input: CreatePaymentIntentInput): Promise<PaymentIntentRecord>;
+  findPaymentIntent(id: string): Promise<PaymentIntentRecord | null>;
+  findPaymentIntentByProviderOrderId(providerOrderId: string): Promise<PaymentIntentRecord | null>;
+  /** created → pending (the client says it tried to pay). Other statuses are left alone. */
+  markPaymentIntentPending(id: string): Promise<PaymentIntentRecord | null>;
+  /**
+   * Marks a verified payment, once: a paid intent keeps its first payment id and `paidAt`.
+   * Returns the intent as stored afterwards, or null when there is no such intent.
+   */
+  markPaymentIntentPaid(
+    id: string,
+    providerPaymentId: string,
+    paidAt: Date,
+  ): Promise<PaymentIntentRecord | null>;
+  /** Marks a failed payment unless the intent is already paid. */
+  markPaymentIntentFailed(id: string): Promise<PaymentIntentRecord | null>;
   findOrderByIdempotencyKey(key: string): Promise<OrderRecord | null>;
 
-  saveOtp(phone: string, code: string, expiresAt: Date): Promise<void>;
-  consumeOtp(phone: string, code: string): Promise<boolean>;
+  /**
+   * Stores a new code for `phone`. With `limit`, stores nothing and returns when the next
+   * send is allowed if the phone already had `limit.max` codes in the window; concurrent
+   * sends for one phone are serialized, so they can't overshoot the limit.
+   */
+  saveOtp(
+    phone: string,
+    code: string,
+    expiresAt: Date,
+    limit?: OtpSendLimit,
+  ): Promise<SaveOtpResult>;
+  /**
+   * Checks `code` against the phone's latest code and counts the guess. True at most once,
+   * while that code is unexpired and has had fewer than `maxAttempts` guesses.
+   */
+  consumeOtp(phone: string, code: string, maxAttempts?: number): Promise<boolean>;
 
   saveRefreshToken(record: RefreshTokenRecord): Promise<void>;
   findRefreshToken(token: string): Promise<RefreshTokenRecord | null>;
+  /** Deletes and returns an unexpired token in one step, so a token can be redeemed only once. */
+  consumeRefreshToken(token: string): Promise<RefreshTokenRecord | null>;
   deleteRefreshToken(token: string): Promise<void>;
+  saveOauthState(record: OauthStateRecord): Promise<void>;
+  /** Deletes and returns an unexpired state in one step, so each state works once. */
+  consumeOauthState(nonce: string): Promise<OauthStateRecord | null>;
 
   seedListings(
     listings: ListingRecord[],

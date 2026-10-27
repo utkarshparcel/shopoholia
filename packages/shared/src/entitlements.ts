@@ -1,6 +1,6 @@
 /**
- * MON-REVENUECAT — Closet premium entitlements (Accountant + Outfits).
- * Product / entitlement IDs are stable strings; store wiring is env-gated.
+ * Closet premium entitlements (Accountant + Outfits), sold as App Store / Google Play
+ * subscriptions (PREMIUM_SUBSCRIPTIONS in economy.ts). Product / entitlement IDs are stable strings.
  */
 
 export const CLOSET_ENTITLEMENTS = ["accountant", "outfits"] as const;
@@ -45,7 +45,7 @@ export type EntitlementGrant = {
   expiresAt: string | null;
   /** True while within trial window. */
   isTrial: boolean;
-  source: "revenuecat" | "upi" | "dev";
+  source: "app_store" | "play_store" | "upi" | "dev";
 };
 
 export type EntitlementSnapshot = {
@@ -108,6 +108,6 @@ export function buildTrialGrants(
     productId,
     expiresAt: expires?.toISOString() ?? null,
     isTrial: true,
-    source: opts?.source ?? "revenuecat",
+    source: opts?.source ?? "dev",
   }));
 }

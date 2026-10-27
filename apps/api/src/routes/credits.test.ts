@@ -1176,7 +1176,8 @@ describe("credits", () => {
           idempotencyKey: key,
         },
       });
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      // An unhandled 23505 reaches the global fallback: 409, never a 500.
+      expect(res.statusCode).toBe(409);
       expect(findCalls).toBeGreaterThanOrEqual(3);
     } finally {
       repos.findMoneyLedgerByRef = origFind;
@@ -1214,7 +1215,7 @@ describe("credits", () => {
         headers: { authorization: `Bearer ${token}` },
         payload: { amountMinor: 500, idempotencyKey },
       });
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.statusCode).toBe(409);
     } finally {
       repos.findMoneyLedgerByRef = origFind;
       repos.postMoneyLedger = origPost;
@@ -1409,7 +1410,7 @@ describe("credits", () => {
           idempotencyKey: key,
         },
       });
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.statusCode).toBe(409);
     } finally {
       repos.findMoneyLedgerByRef = origFind;
       repos.postMoneyLedger = origPost;

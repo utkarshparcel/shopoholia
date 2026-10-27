@@ -10,7 +10,7 @@ import {
   PatchIngestionSourceBodySchema,
   mapAccountHealth,
 } from "@worn/shared";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
@@ -64,71 +64,119 @@ function gmailRedirectUri(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Signed OAuth state — HMAC-SHA256 over the JSON payload with
-// OAUTH_STATE_SECRET (falls back to JWT_ACCESS_SECRET, then dev fallback).
-// Flow:
-//  1. POST /ingestion/sources (auth required) builds OAuth URL: payload
-//     {userId, sourceId, kind} → signState() → state=encodeURIComponent(json+ "."+hmac)
-//  2. Google redirects to GET /ingestion/sources/oauth/callback?code=&state= (no session)
-//  3. Callback verifies HMAC via verifyState(), extracts userId/sourceId, validates
-//     source + consent, enqueues oauth-complete job for the worker to exchange
-//     the code for tokens (encrypted at rest). No requireAuth is needed on the
-//     callback; a legacy unsigned state is accepted only as a fallback when a
-//     valid JWT is present and matches the state (for backwards compat / tests).
+// OAuth state: base64url(JSON {v: 2, userId, sourceId, kind, nonce, exp}) + "." + HMAC-SHA256.
+//  1. POST /ingestion/sources (auth required) stores the nonce (oauth_states, 10 minutes) and
+//     returns the Google consent URL with the signed state.
+//  2. Google redirects the browser to GET /ingestion/sources/oauth/callback?code=&state=.
+//  3. The callback checks the signature and expiry, then consumes the nonce, so each state works
+//     once and only for the user and source it was made for. Unsigned or older states are refused.
+//     The worker exchanges the code for tokens (encrypted at rest). A browser gets a page that
+//     sends it back to the app, never JSON.
 // ---------------------------------------------------------------------------
 
-export function oauthStateSecret(): string {
-  return process.env.OAUTH_STATE_SECRET ?? process.env.JWT_ACCESS_SECRET ?? "dev-only-change-me";
+export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+/** HMAC key for the state. In production only OAUTH_STATE_SECRET counts: there is no fallback. */
+export function oauthStateSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.OAUTH_STATE_SECRET) return env.OAUTH_STATE_SECRET;
+  if (env.NODE_ENV === "production") return null;
+  return env.JWT_ACCESS_SECRET ?? "dev-only-change-me";
 }
 
-export function signState(payload: { userId: string; sourceId: string; kind: string }): string {
-  const json = JSON.stringify(payload);
-  const sig = createHmac("sha256", oauthStateSecret()).update(json).digest("hex");
-  return `${json}.${sig}`;
+/** Gmail connect needs a client id and a state secret; in production neither has a stand-in. */
+export function gmailConnectAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV !== "production" || Boolean(env.GOOGLE_CLIENT_ID && env.OAUTH_STATE_SECRET);
 }
 
-export function verifyState(state: string): { userId: string; sourceId: string; kind?: string } | null {
+export type OauthStatePayload = {
+  v: 2;
+  userId: string;
+  sourceId: string;
+  kind: string;
+  nonce: string;
+  /** Expiry, epoch ms. */
+  exp: number;
+};
+
+function stateSignature(body: string, secret: string): Buffer {
+  return createHmac("sha256", secret).update(body).digest();
+}
+
+export function signState(payload: Omit<OauthStatePayload, "v">): string {
+  const secret = oauthStateSecret();
+  if (!secret) throw new Error("OAUTH_STATE_SECRET is not set");
+  const body = Buffer.from(JSON.stringify({ v: 2, ...payload })).toString("base64url");
+  return `${body}.${stateSignature(body, secret).toString("base64url")}`;
+}
+
+/** The payload of a state this server signed and that has not expired; null for anything else. */
+export function verifyState(state: string, now = Date.now()): OauthStatePayload | null {
+  const secret = oauthStateSecret();
+  const parts = state.split(".");
+  if (!secret || parts.length !== 2) return null;
+  const [body, sig] = parts as [string, string];
+  const given = Buffer.from(sig, "base64url");
+  const expected = stateSignature(body, secret);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   try {
-    const decoded = decodeURIComponent(state);
-    const lastDot = decoded.lastIndexOf(".");
-    if (lastDot === -1) return null;
-    const jsonPart = decoded.slice(0, lastDot);
-    const sigPart = decoded.slice(lastDot + 1);
-    const expected = createHmac("sha256", oauthStateSecret()).update(jsonPart).digest("hex");
-    const a = Buffer.from(sigPart, "utf8");
-    const b = Buffer.from(expected, "utf8");
-    if (a.length !== b.length) return null;
-    if (!timingSafeEqual(a, b)) return null;
-    const payload = JSON.parse(jsonPart) as { userId: string; sourceId: string; kind?: string };
-    if (!payload.userId || !payload.sourceId) return null;
-    return payload;
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Partial<OauthStatePayload>;
+    if (
+      payload.v !== 2 ||
+      typeof payload.userId !== "string" ||
+      typeof payload.sourceId !== "string" ||
+      typeof payload.nonce !== "string" ||
+      typeof payload.exp !== "number" ||
+      payload.exp <= now
+    ) {
+      return null;
+    }
+    return payload as OauthStatePayload;
   } catch {
     return null;
   }
 }
 
-function buildGmailOauthUrl(userId: string, sourceId: string): string {
+/** Stores a single-use nonce for this user and source and returns the signed state that carries it. */
+export async function createOauthState(
+  repos: { saveOauthState(record: { nonce: string; userId: string; sourceId: string; expiresAt: Date }): Promise<void> },
+  userId: string,
+  sourceId: string,
+): Promise<string> {
+  const nonce = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS);
+  await repos.saveOauthState({ nonce, userId, sourceId, expiresAt });
+  return signState({ userId, sourceId, kind: "EMAIL", nonce, exp: expiresAt.getTime() });
+}
+
+/** Where the callback page sends the user: the app's email-connect screen. */
+const APP_RETURN_URL = "worn://connect-email";
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+/** The page a browser sees at the end of the OAuth redirect. */
+function oauthResultPage(title: string, message: string, appUrl: string): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:48px 24px;text-align:center;color:#1b1b1b;background:#faf8f5}a{display:inline-block;margin-top:24px;padding:14px 28px;border-radius:999px;background:#1b1b1b;color:#fff;text-decoration:none}</style>
+</head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><a href="${escapeHtml(appUrl)}">Back to Worn</a></body></html>`;
+}
+
+function buildGmailOauthUrl(state: string): string {
+  // Only outside production: gmailConnectAvailable() keeps production from reaching this without one.
   const clientId = process.env.GOOGLE_CLIENT_ID ?? "MISSING_GOOGLE_CLIENT_ID";
-  // GOOGLE_CLIENT_SECRET is not needed to build the consent URL (auth-code
-  // flow uses it only in the token exchange), but we read it here to
-  // document that the full flow requires it: this route builds the OAuth
-  // consent URL with {userId, sourceId} in `state`; the callback at
-  // GET /ingestion/sources/oauth/callback then enqueues an oauth-complete
-  // job and the worker (services/worker-ingest GmailConnector.completeOAuth)
-  // exchanges `code` for tokens using GOOGLE_CLIENT_SECRET and stores them
-  // encrypted. Best-effort without live creds: falls back to a mock URL
-  // (MISSING_GOOGLE_CLIENT_ID) so local/test runs still work.
-  void (process.env.GOOGLE_CLIENT_SECRET ?? "");
+  // The worker (services/worker-ingest GmailConnector.completeOAuth) exchanges the code for tokens
+  // with GOOGLE_CLIENT_SECRET and stores them encrypted.
   const redirectUri = gmailRedirectUri();
   const scope = encodeURIComponent("https://www.googleapis.com/auth/gmail.readonly");
-  const signed = signState({ userId, sourceId, kind: "EMAIL" });
-  const state = encodeURIComponent(signed);
   // NOTE(B2 resolved): OAuth URL → callback → encrypted token store. See
   // services/worker-ingest/src/connectors/gmail.ts completeOAuth and
   // services/worker-ingest/src/index.ts createGmailConnectorForSource.
   return `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(
     redirectUri,
-  )}&response_type=code&access_type=offline&prompt=consent&scope=${scope}&state=${state}`;
+  )}&response_type=code&access_type=offline&prompt=consent&scope=${scope}&state=${encodeURIComponent(state)}`;
 }
 
 const CreateIngestionSourceBodySchema = z.object({
@@ -205,12 +253,18 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
           201: CreateIngestionSourceResponseSchema,
           401: ErrorSchema,
           403: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const { kind, provider } = request.body;
+
+      if (!gmailConnectAvailable()) {
+        request.log.error("Gmail connect is unavailable: GOOGLE_CLIENT_ID or OAUTH_STATE_SECRET is not set");
+        return reply.code(503).send({ error: "Unavailable", message: "Email connect is unavailable" });
+      }
 
       const grant = await app.deps.repos.findActiveConsent(userId, "EMAIL");
       if (!grant) {
@@ -227,7 +281,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         consentGrantId: grant.id,
       });
 
-      const oauthUrl = buildGmailOauthUrl(userId, source.id);
+      const oauthUrl = buildGmailOauthUrl(await createOauthState(app.deps.repos, userId, source.id));
       audit(app.log, "ingestion.source.created", { userId, sourceId: source.id });
       trackServerEvent("ingestion_connected", { userId, sourceId: source.id, kind });
       return reply.code(201).send({ source: toSourceJson(source), oauthUrl });
@@ -376,20 +430,19 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
-  // Gmail OAuth redirect target. Verifies signed state (HMAC) so the redirect
-  // can succeed without an active session; falls back to JWT verification if
-  // the state is legacy unsigned JSON (backwards compat). The worker owns the
-  // token exchange + encryption at rest, so the API never handles plaintext
-  // tokens.
+  // Gmail OAuth redirect target. The browser arrives here from Google with no session: the signed,
+  // single-use state is the credential (see signState/verifyState above). The worker owns the token
+  // exchange and encryption at rest, so the API never handles plaintext tokens. A browser
+  // (Accept: text/html) gets a page that leads back to the app; other callers get JSON.
   app.get(
     "/ingestion/sources/oauth/callback",
     {
-      // Intentionally no requireAuth — the signed state is the credential.
-      // See signState/verifyState above.
       schema: {
         tags: ["ingestion"],
         querystring: z.object({
-          code: z.string().min(1),
+          code: z.string().min(1).optional(),
+          // Set by Google when the user cancels or the grant fails.
+          error: z.string().optional(),
           state: z.string().min(1),
         }),
         response: {
@@ -401,71 +454,72 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request, reply) => {
-      const rawState = request.query.state;
-      let statePayload = verifyState(rawState);
+      const wantsPage = (request.headers.accept ?? "").includes("text/html");
+      const page = (status: number, title: string, message: string, appUrl: string) =>
+        reply
+          .code(status as 202)
+          .type("text/html; charset=utf-8")
+          .header("cache-control", "no-store")
+          .send(oauthResultPage(title, message, appUrl) as never);
+      const fail = (status: 400 | 403 | 404, error: string, message: string) =>
+        wantsPage
+          ? page(
+              status,
+              "Gmail isn't connected",
+              "This link didn't work or has already been used. Go back to Worn and try connecting Gmail again.",
+              `${APP_RETURN_URL}?status=failed`,
+            )
+          : reply.code(status).send({ error, message });
 
-      // Fallback: legacy unsigned state is accepted only if the caller
-      // presents a valid JWT that matches the state (keeps requireAuth as
-      // fallback for backwards compat / tests).
-      if (!statePayload) {
-        try {
-          const legacy = JSON.parse(decodeURIComponent(rawState)) as {
-            userId: string;
-            sourceId: string;
-          };
-          if (legacy.userId && legacy.sourceId) {
-            // Try to authenticate via JWT if present
-            let authedUserId: string | null = null;
-            try {
-              await request.jwtVerify<{ sub: string }>();
-              authedUserId = (request as unknown as { user: { sub: string } }).user?.sub ?? null;
-            } catch {
-              // no valid JWT — will be treated as invalid state below
-            }
-            if (authedUserId && legacy.userId === authedUserId) {
-              statePayload = legacy;
-            }
-          }
-        } catch {
-          // ignore — will return 400 below
-        }
+      const statePayload = verifyState(request.query.state);
+      if (!statePayload) return fail(400, "Bad Request", "Invalid state");
+      // Single use, and only for the user and source it was issued for.
+      const stored = await app.deps.repos.consumeOauthState(statePayload.nonce);
+      if (!stored || stored.userId !== statePayload.userId || stored.sourceId !== statePayload.sourceId) {
+        return fail(400, "Bad Request", "Invalid state");
       }
 
-      if (!statePayload) {
-        return reply.code(400).send({ error: "Bad Request", message: "Invalid state" });
-      }
-
-      // If the request also carries a valid JWT, enforce that it matches the signed state
+      // If the request also carries a valid JWT, it must be the state's user.
       try {
         await request.jwtVerify<{ sub: string }>();
         const authed = (request as unknown as { user: { sub: string } }).user?.sub;
         if (authed && authed !== statePayload.userId) {
-          return reply.code(403).send({ error: "Forbidden", message: "State mismatch" });
+          return fail(403, "Forbidden", "State mismatch");
         }
       } catch {
-        // No JWT — signed state is sufficient, no auth required
+        // No JWT: the state is enough.
       }
 
       const userId = statePayload.userId;
 
       const source = await app.deps.repos.getIngestionSourceById(statePayload.sourceId);
       if (!source) {
-        return reply.code(404).send({ error: "Not Found", message: "Source not found" });
+        return fail(404, "Not Found", "Source not found");
       }
 
       // Bind OAuth completion to the source's consent grant — revoke/re-grant
       // issues a new grant id, so stale sources cannot complete OAuth.
       const activeConsents = await app.deps.repos.listActiveConsents(userId);
       if (!activeConsents.some((g) => g.id === source.consentGrantId)) {
-        return reply.code(403).send({
-          error: "Forbidden",
-          message: "Source consent grant is not active",
-        });
+        return fail(403, "Forbidden", "Source consent grant is not active");
+      }
+
+      const code = request.query.code;
+      if (request.query.error || !code) {
+        request.log.info({ sourceId: source.id }, "ingestion.oauth.declined");
+        return wantsPage
+          ? page(
+              400,
+              "Gmail isn't connected",
+              "Google didn't give Worn access. Go back to Worn to try again.",
+              `${APP_RETURN_URL}?status=cancelled`,
+            )
+          : reply.code(400).send({ error: "Bad Request", message: "Google did not grant access" });
       }
 
       const status = await publishOauthCompleteJob({
         sourceId: source.id,
-        code: request.query.code,
+        code,
         userId,
       });
       if (status === "skipped") {
@@ -476,6 +530,14 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       audit(app.log, "ingestion.oauth.initiated", { userId, sourceId: source.id });
+      if (wantsPage) {
+        return page(
+          202,
+          "Connecting Gmail",
+          "Google gave Worn access. Go back to Worn to see your Gmail connection finish.",
+          `${APP_RETURN_URL}?status=connecting&sourceId=${encodeURIComponent(source.id)}`,
+        );
+      }
       return reply
         .code(202)
         .send({ status: "pending", sourceId: source.id });

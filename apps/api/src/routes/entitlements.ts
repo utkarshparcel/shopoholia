@@ -2,24 +2,19 @@ import {
   EntitlementSnapshotSchema,
   EntitlementSyncBodySchema,
   EntitlementSyncResponseSchema,
+  PREMIUM_SUBSCRIPTIONS,
   PaywallOfferingsResponseSchema,
   buildRegionalOfferings,
-  selectPaymentMethod,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import {
-  grantTrial,
   premiumGatesEnabled,
-  revenueCatEnabled,
   snapshotForUser,
+  syncStoreSubscription,
 } from "../lib/entitlements.js";
-import {
-  paymentsProviderHint,
-  resolveRegion,
-  upiExperimentEnabled,
-} from "../lib/payments/adapter.js";
+import { resolveRegion } from "../lib/payments/adapter.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -33,7 +28,7 @@ export const entitlementsRoutes: FastifyPluginAsyncZod = async (app) => {
         response: { 200: EntitlementSnapshotSchema, 401: ErrorSchema },
       },
     },
-    async (request) => snapshotForUser(request.user!.sub),
+    async (request) => snapshotForUser(app.deps.repos, request.user!.sub),
   );
 
   app.get(
@@ -48,7 +43,9 @@ export const entitlementsRoutes: FastifyPluginAsyncZod = async (app) => {
         response: { 200: PaywallOfferingsResponseSchema, 401: ErrorSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
+      // Offerings come from static config; a short private cache spares repeat paywall loads.
+      reply.header("cache-control", "private, max-age=300");
       const region = request.query.region ?? resolveRegion();
       const offerings = buildRegionalOfferings(region).map((o) => ({
         productId: o.productId,
@@ -57,22 +54,15 @@ export const entitlementsRoutes: FastifyPluginAsyncZod = async (app) => {
         trialDays: o.trialDays,
         priceLabel: o.priceLabel,
         currency: o.currency,
+        storeProductId: PREMIUM_SUBSCRIPTIONS.find((s) => s.productId === o.productId)?.storeProductId,
       }));
-      const method = selectPaymentMethod({
-        region,
-        upiExperimentEnabled: upiExperimentEnabled(),
-        revenueCatEnabled: revenueCatEnabled(),
-      });
-      const provider =
-        method === "upi"
-          ? ("upi" as const)
-          : revenueCatEnabled()
-            ? ("revenuecat" as const)
-            : ("none" as const);
+      // Premium is a digital good: sold only through App Store / Google Play billing.
+      const stores = app.deps.purchaseVerifier.stores;
       return {
         offerings,
         gatesEnabled: premiumGatesEnabled(),
-        provider,
+        provider: stores.app_store || stores.play_store ? ("store" as const) : ("none" as const),
+        stores: { app_store: stores.app_store, play_store: stores.play_store },
       };
     },
   );
@@ -88,31 +78,26 @@ export const entitlementsRoutes: FastifyPluginAsyncZod = async (app) => {
           200: EntitlementSyncResponseSchema,
           400: ErrorSchema,
           401: ErrorSchema,
+          402: ErrorSchema,
+          409: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
     async (request, reply) => {
-      if (
-        process.env.NODE_ENV === "production" &&
-        request.body.receiptOrToken?.startsWith("simulated")
-      ) {
-        return reply.code(400).send({
-          error: "Bad Request",
-          message: "Simulated receipts are not accepted in production",
-        });
+      const outcome = await syncStoreSubscription(
+        app.deps.repos,
+        app.deps.purchaseVerifier,
+        request.user!.sub,
+        request.body,
+      );
+      if (!outcome.ok) {
+        if (outcome.status === 503) {
+          request.log.warn({ reason: outcome.reason, store: request.body.store }, "subscription unverifiable");
+        }
+        return reply.code(outcome.status).send({ error: outcome.error, message: outcome.message });
       }
-      const source =
-        paymentsProviderHint() === "razorpay_upi" || paymentsProviderHint() === "stub"
-          ? ("dev" as const)
-          : ("revenuecat" as const);
-      const snapshot = grantTrial(request.user!.sub, request.body.productId, source);
-      if (snapshot.grants.length === 0) {
-        return reply.code(400).send({
-          error: "Bad Request",
-          message: `Unknown product: ${request.body.productId}`,
-        });
-      }
-      return { snapshot };
+      return { snapshot: outcome.snapshot };
     },
   );
 };

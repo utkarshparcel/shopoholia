@@ -64,6 +64,10 @@ export type R2Config = {
 const HOUR_SECONDS = 60 * 60;
 // SigV4 rejects presigned URLs that expire more than a week out.
 const MAX_PRESIGNED_SECONDS = 7 * 24 * HOUR_SECONDS;
+/** Default life of a signed URL: minutes, not hours. Callers that need longer pass it. */
+export const SIGNED_URL_SECONDS = 15 * 60;
+// URLs are signed as of the start of the current window, so one URL is reused (and cached) for it.
+const SIGNING_WINDOW_SECONDS = SIGNED_URL_SECONDS;
 
 export function hasR2Config(
   env: Record<string, string | undefined>,
@@ -96,8 +100,9 @@ export function r2ConfigFromEnv(
 
 /**
  * Encryption-at-rest & retention:
- * - R2 encrypts all objects at rest by default (SSE-S3 / AES-256) — no
- *   per-object header needed. Tokens are separately AES-256-GCM-encrypted
+ * - R2 encrypts every object at rest (AES-256) and can't be told otherwise: its S3 API rejects the
+ *   `x-amz-server-side-encryption` header, and SSE-C would stop presigned GETs from working (the
+ *   reader must send the key). So no encryption header is sent. Tokens are separately AES-256-GCM-encrypted
  *   via services/worker-ingest/src/crypto.ts (OAUTH_TOKEN_SECRET) before
  *   being stored in `ingestion_sources.encrypted_token`.
  * - Raw ingestion_documents use a per-kind retention schedule (EMAIL 7d /
@@ -131,15 +136,16 @@ export function createR2Storage(config: R2Config): StorageClient {
       return { key: object.key };
     },
 
-    async getSignedUrl(key, expiresInSeconds = 3600) {
-      if (config.publicUrl) {
+    async getSignedUrl(key, expiresInSeconds = SIGNED_URL_SECONDS) {
+      // A user's objects are never served from the public bucket URL.
+      if (config.publicUrl && !key.startsWith("u/")) {
         return `${config.publicUrl.replace(/\/$/, "")}/${key}`;
       }
 
-      // Sign as of the start of the hour so the URL stays the same, and cacheable, all hour.
-      // The extra hour keeps it valid for at least expiresInSeconds from now.
-      const signingDate = new Date();
-      signingDate.setUTCMinutes(0, 0, 0);
+      // Sign as of the start of the window so the URL stays the same, and cacheable, all window.
+      // The extra window keeps it valid for at least expiresInSeconds from now.
+      const windowMs = SIGNING_WINDOW_SECONDS * 1000;
+      const signingDate = new Date(Math.floor(Date.now() / windowMs) * windowMs);
       return getSignedUrl(
         client,
         new GetObjectCommand({
@@ -148,7 +154,7 @@ export function createR2Storage(config: R2Config): StorageClient {
         }),
         {
           signingDate,
-          expiresIn: Math.min(expiresInSeconds + HOUR_SECONDS, MAX_PRESIGNED_SECONDS),
+          expiresIn: Math.min(expiresInSeconds + SIGNING_WINDOW_SECONDS, MAX_PRESIGNED_SECONDS),
         },
       );
     },
@@ -182,6 +188,10 @@ export function createStorageFromEnv(
 ): StorageClient {
   if (hasR2Config(env)) {
     return createR2Storage(r2ConfigFromEnv(env));
+  }
+  // Placeholder images in production would hide lost uploads.
+  if (env.NODE_ENV === "production") {
+    throw new Error("Storage is not configured: set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME");
   }
   return createMockStorage();
 }

@@ -1,17 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTestServer, login } from "../test-utils.js";
-import { __resetEntitlementsForTests } from "../lib/entitlements.js";
 import { __resetSettlementsForTests } from "../lib/take-rate.js";
-import { __resetPaymentsForTests } from "../lib/payments/adapter.js";
 
 describe("monetization routes", () => {
   let app: Awaited<ReturnType<typeof buildTestServer>>["app"];
   const envKeys = [
-    "FEATURE_REVENUECAT",
     "FEATURE_PREMIUM_GATES",
     "FEATURE_TAKE_RATE",
     "EXPERIMENT_UPI_CHECKOUT",
-    "REVENUECAT_WEBHOOK_SECRET",
+    "IAP_ALLOW_SIMULATED",
+    "APPLE_BUNDLE_ID",
+    "ANDROID_PACKAGE_NAME",
+    "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON",
   ] as const;
   const originals: Record<string, string | undefined> = {};
 
@@ -20,10 +20,9 @@ describe("monetization routes", () => {
       originals[k] = process.env[k];
       delete process.env[k];
     }
-    __resetEntitlementsForTests();
     __resetSettlementsForTests();
-    __resetPaymentsForTests();
-    process.env.FEATURE_REVENUECAT = "1";
+    // Dev simulation: a trial without a store purchase (never in production).
+    process.env.IAP_ALLOW_SIMULATED = "1";
     process.env.FEATURE_TAKE_RATE = "1";
     process.env.EXPERIMENT_UPI_CHECKOUT = "1";
     const s = await buildTestServer();
@@ -57,24 +56,26 @@ describe("monetization routes", () => {
     });
     expect(offerings.statusCode).toBe(200);
     expect(offerings.json().offerings[0].priceLabel).toMatch(/₹/);
+    expect(offerings.json().offerings[0].storeProductId).toBe("worn.closet.premium.monthly");
   });
 
-  it("accepts RevenueCat webhook", async () => {
-    const { userId } = await login(app);
-    const res = await app.inject({
+  it("trial sync without a store purchase is refused when dev simulation is off", async () => {
+    delete process.env.IAP_ALLOW_SIMULATED;
+    const { accessToken } = await login(app);
+    const sync = await app.inject({
       method: "POST",
-      url: "/webhooks/revenuecat",
-      payload: {
-        event: {
-          id: "rc-route-1",
-          type: "INITIAL_PURCHASE",
-          app_user_id: userId,
-          product_id: "closet_accountant_monthly",
-        },
-      },
+      url: "/entitlements/sync",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { productId: "closet_premium_monthly", startTrial: true },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().received).toBe(true);
+    expect(sync.statusCode).toBe(400);
+  });
+
+  it("has no RevenueCat webhook; App Store notifications need APPLE_BUNDLE_ID", async () => {
+    const rc = await app.inject({ method: "POST", url: "/webhooks/revenuecat", payload: { event: {} } });
+    expect(rc.statusCode).toBe(404);
+    const asn = await app.inject({ method: "POST", url: "/webhooks/app-store", payload: { signedPayload: "a.b.c" } });
+    expect(asn.statusCode).toBe(503);
   });
 
   it("settles marketplace order and exports CSV", async () => {
@@ -102,25 +103,18 @@ describe("monetization routes", () => {
     expect(csv.body).toContain("platform_fee_minor");
   });
 
-  it("UPI payment intent + confirm staging path", async () => {
+  it("refuses UPI payment intents for Closet premium and coins (store billing only)", async () => {
     const { accessToken } = await login(app);
-    const intent = await app.inject({
-      method: "POST",
-      url: "/payments/intents",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { productId: "closet_premium_monthly", region: "IN", method: "upi" },
-    });
-    expect(intent.statusCode).toBe(200);
-    expect(intent.json().upiIntentUrl).toMatch(/^upi:\/\//);
-
-    const confirm = await app.inject({
-      method: "POST",
-      url: "/payments/confirm",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { intentId: intent.json().id },
-    });
-    expect(confirm.statusCode).toBe(200);
-    expect(confirm.json().intent.status).toBe("paid");
+    for (const productId of ["closet_premium_monthly", "worn.coins.100"]) {
+      const intent = await app.inject({
+        method: "POST",
+        url: "/payments/intents",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { productId, region: "IN", method: "upi" },
+      });
+      expect(intent.statusCode).toBe(400);
+      expect(intent.json().message).toMatch(/App Store and Google Play/);
+    }
   });
 
   it("gates accountant when FEATURE_PREMIUM_GATES=1 until trial", async () => {
