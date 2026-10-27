@@ -1,34 +1,47 @@
-/**
- * Pluggable device-calendar permission for Closet “event → outfit” (N03).
- *
- * Production can inject an Expo Calendar adapter; tests / Expo Go without a
- * bridge use the in-memory stub (undetermined → granted/denied).
- */
+import type * as ExpoCalendar from 'expo-calendar';
+import { Platform } from 'react-native';
 
-export type CalendarPermissionStatus = 'granted' | 'denied' | 'undetermined';
+/**
+ * Device-calendar permission for Closet "event → outfit" (N03), backed by `expo-calendar`.
+ *
+ * `unavailable` means this device can't be asked at all (the web, or a build without the
+ * calendar module): screens show "calendar not connected", never sample events.
+ */
+export type CalendarPermissionStatus = 'granted' | 'denied' | 'undetermined' | 'unavailable';
 
 export type CalendarPermissionAdapter = {
   getStatus(): Promise<CalendarPermissionStatus>;
   requestPermission(): Promise<CalendarPermissionStatus>;
 };
 
-let adapter: CalendarPermissionAdapter | null = null;
+type PermissionResponseLike = { status: string; granted: boolean };
 
-const memoryStub = (() => {
-  let status: CalendarPermissionStatus = 'undetermined';
-  return {
-    async getStatus() {
-      return status;
-    },
-    async requestPermission() {
-      if (status === 'undetermined') status = 'granted';
-      return status;
-    },
-    _reset(next: CalendarPermissionStatus = 'undetermined') {
-      status = next;
-    },
-  };
-})();
+export function toCalendarPermissionStatus(
+  response: PermissionResponseLike,
+): CalendarPermissionStatus {
+  if (response.granted) return 'granted';
+  return response.status === 'undetermined' ? 'undetermined' : 'denied';
+}
+
+async function askExpoCalendar(
+  ask: (calendar: typeof ExpoCalendar) => Promise<PermissionResponseLike>,
+): Promise<CalendarPermissionStatus> {
+  if (Platform.OS === 'web') return 'unavailable';
+  try {
+    return toCalendarPermissionStatus(await ask(await import('expo-calendar')));
+  } catch (error) {
+    if (__DEV__) console.warn('[calendar] permission unavailable', error);
+    return 'unavailable';
+  }
+}
+
+/** Full read access on iOS 17+ (not write-only); READ_CALENDAR on Android. */
+const expoCalendarPermission: CalendarPermissionAdapter = {
+  getStatus: () => askExpoCalendar((calendar) => calendar.getCalendarPermissions()),
+  requestPermission: () => askExpoCalendar((calendar) => calendar.requestCalendarPermissions()),
+};
+
+let adapter: CalendarPermissionAdapter | null = null;
 
 export function setCalendarPermissionAdapter(
   next: CalendarPermissionAdapter | null,
@@ -37,14 +50,11 @@ export function setCalendarPermissionAdapter(
 }
 
 export function getCalendarPermissionAdapter(): CalendarPermissionAdapter {
-  return adapter ?? memoryStub;
+  return adapter ?? expoCalendarPermission;
 }
 
-/** Reset the default memory stub (tests only). */
-export function resetCalendarPermissionStub(
-  status: CalendarPermissionStatus = 'undetermined',
-): void {
-  memoryStub._reset(status);
+/** Back to the expo-calendar adapter (tests). */
+export function resetCalendarPermissionAdapter(): void {
   adapter = null;
 }
 
@@ -52,6 +62,7 @@ export async function getCalendarPermissionStatus(): Promise<CalendarPermissionS
   return getCalendarPermissionAdapter().getStatus();
 }
 
+/** Shows the system prompt when the user hasn't answered yet; otherwise reports the answer. */
 export async function requestCalendarPermission(): Promise<CalendarPermissionStatus> {
   return getCalendarPermissionAdapter().requestPermission();
 }

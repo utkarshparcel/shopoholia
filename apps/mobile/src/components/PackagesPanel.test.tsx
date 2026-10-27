@@ -9,8 +9,15 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('@/src/stores/session', () => ({
-  useSessionStore: (selector: (s: { accessToken: string | null }) => unknown) =>
-    selector({ accessToken: 'test-token' }),
+  useSessionStore: Object.assign(
+    (selector: (s: { accessToken: string | null }) => unknown) =>
+      selector({ accessToken: 'test-token' }),
+    { getState: () => ({ accessToken: 'test-token' }) },
+  ),
+}));
+
+vi.mock('@/src/lib/access-token', () => ({
+  userIdFromAccessToken: (token: string | null) => (token ? 'user-1' : null),
 }));
 
 vi.mock('@/src/api/client', () => ({

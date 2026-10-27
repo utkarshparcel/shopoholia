@@ -42,23 +42,75 @@ import type {
 
 import { useSessionStore } from '@/src/stores/session';
 
-const API_URL =
-  (Constants.expoConfig?.extra?.apiUrl as string | undefined) ??
-  process.env.EXPO_PUBLIC_API_URL ??
-  'http://localhost:3000';
+/**
+ * The API origin. EXPO_PUBLIC_API_URL is inlined at build time (each eas.json profile sets it);
+ * app.config.js copies it into `extra.apiUrl`. Only a dev build may fall back to localhost: a
+ * release build with no URL gets null, and every request then fails with `no_api_url`.
+ */
+export function resolveApiUrl(
+  envUrl: string | undefined,
+  extraUrl: string | undefined,
+  devFallback: string | null,
+): string | null {
+  const url = envUrl?.trim() || extraUrl?.trim();
+  if (url) return url.replace(/\/+$/, '');
+  return devFallback;
+}
 
+const API_URL = resolveApiUrl(
+  process.env.EXPO_PUBLIC_API_URL,
+  Constants.expoConfig?.extra?.apiUrl as string | undefined,
+  // `__DEV__` is false in a release bundle, so the minifier drops this address from it.
+  __DEV__ ? 'http://localhost:3000' : null,
+);
+
+/** A request that gets no response within this long is aborted (MOB 17). */
+export const REQUEST_TIMEOUT_MS = 20_000;
+/** Photo and file uploads (multipart bodies) get longer on a slow uplink. */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
+/** The API's error body (`ErrorSchema` on every route). */
 export type ApiError = {
   error: string;
   message: string;
 };
 
-async function parseJson<T>(res: Response): Promise<T> {
-  const data = (await res.json()) as T | ApiError;
-  if (!res.ok) {
-    const err = data as ApiError;
-    throw new ApiRequestError(res.status, err.message ?? `Request failed (${res.status})`);
+function isApiError(body: unknown): body is ApiError {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    typeof (body as ApiError).message === 'string' &&
+    typeof (body as ApiError).error === 'string'
+  );
+}
+
+/** Turns a refused response into an ApiRequestError, whatever its body is (JSON, HTML or empty). */
+async function errorFromResponse(res: Response): Promise<ApiRequestError> {
+  const text = await res.text().catch(() => '');
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // A proxy or gateway page (HTML), not the API's JSON error.
   }
-  return data as T;
+  if (isApiError(body)) return new ApiRequestError(res.status, body.message, body.error);
+  return new ApiRequestError(
+    res.status,
+    res.status >= 500 ? 'The server had a problem. Try again in a moment.' : `Request failed (${res.status})`,
+    'http_error',
+  );
+}
+
+async function parseJson<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await errorFromResponse(res);
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ApiRequestError(res.status, 'The server sent a response the app could not read.', 'invalid_response');
+  }
 }
 
 let renewing: Promise<string | null> | null = null;
@@ -80,13 +132,13 @@ async function renewSession(): Promise<string | null> {
 
   let res: Response;
   try {
-    res = await fetch(`${API_URL}/auth/refresh`, {
+    res = await fetchWithTimeout(`${API_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
   } catch {
-    // Offline or unreachable: keep the session and let the original request fail.
+    // Offline, unreachable or timed out: keep the session and let the original request fail.
     return null;
   }
 
@@ -98,14 +150,57 @@ async function renewSession(): Promise<string | null> {
     if (res.status === 401) useSessionStore.getState().clear();
     return null;
   }
-  const tokens = (await res.json()) as { accessToken: string; refreshToken: string };
+  let tokens: { accessToken: string; refreshToken: string };
+  try {
+    tokens = (await res.json()) as { accessToken: string; refreshToken: string };
+  } catch {
+    return null;
+  }
+  if (typeof tokens?.accessToken !== 'string' || typeof tokens.refreshToken !== 'string') return null;
   useSessionStore.getState().setTokens(tokens);
   return tokens.accessToken;
 }
 
+/**
+ * fetch with a deadline. Aborts after REQUEST_TIMEOUT_MS (UPLOAD_TIMEOUT_MS for a multipart
+ * upload), or as soon as the caller's signal
+ * (React Query's, when the screen that asked has gone) aborts. A timeout surfaces as a
+ * retryable ApiRequestError with status 0 and code `timeout`.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  if (!API_URL) {
+    throw new ApiRequestError(0, 'This build has no server address configured.', 'no_api_url');
+  }
+  const controller = new AbortController();
+  const caller = init.signal;
+  const onCallerAbort = () => controller.abort(caller?.reason);
+  if (caller?.aborted) controller.abort(caller.reason);
+  else caller?.addEventListener('abort', onCallerAbort);
+  let timedOut = false;
+  const isUpload = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  const timer = setTimeout(
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
+    isUpload ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiRequestError(0, 'The server took too long to answer. Check your connection and try again.', 'timeout');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener('abort', onCallerAbort);
+  }
+}
+
 /** fetch for API calls: a signed-in request that comes back 401 renews the session once and retries. */
 async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(url, init);
+  const res = await fetchWithTimeout(url, init);
   if (res.status !== 401) return res;
 
   const headers = new Headers(init.headers);
@@ -118,7 +213,7 @@ async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> 
   if (!accessToken) return res;
 
   headers.set('Authorization', `Bearer ${accessToken}`);
-  return fetch(url, { ...init, headers });
+  return fetchWithTimeout(url, { ...init, headers });
 }
 
 export async function sendOtp(phone: string) {
@@ -450,7 +545,7 @@ export async function createOrder(
     }),
   });
   if (res.status === 423) {
-    const data = (await res.json()) as ApiError & {
+    const data = (await res.json().catch(() => ({}))) as Partial<ApiError> & {
       coolingOff?: {
         heldAt: string;
         releaseAt: string;
@@ -541,14 +636,19 @@ export async function fetchOrder(accessToken: string, orderId: string) {
   return parseJson<OrderSummary>(res);
 }
 
-/** A refused request, with its HTTP status so callers can handle e.g. 402 specially. */
+/**
+ * A refused request, with its HTTP status so callers can handle e.g. 402 specially, and the
+ * API's error code (`ErrorSchema.error`). Status 0 means no answer: `timeout` or `no_api_url`.
+ */
 export class ApiRequestError extends Error {
   status: number;
+  code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -562,11 +662,7 @@ export async function rushOrder(accessToken: string, orderId: string) {
     method: 'POST',
     headers: authHeaders(accessToken),
   });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => null)) as ApiError | null;
-    throw new ApiRequestError(res.status, err?.message ?? `Request failed (${res.status})`);
-  }
-  return (await res.json()) as RushOrderResponse;
+  return parseJson<RushOrderResponse>(res);
 }
 
 export type RenderCard = {
@@ -808,6 +904,16 @@ export async function registerPushToken(accessToken: string, token: string) {
   return parseJson<{ registered: boolean }>(res);
 }
 
+/** C1: the device's IANA time zone; quiet hours and "today" on the server follow it. */
+export async function updateTimeZone(accessToken: string, timeZone: string) {
+  const res = await apiFetch(`${API_URL}/me/time-zone`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ timeZone }),
+  });
+  return parseJson<{ timeZone: string }>(res);
+}
+
 /** With `token`, the API only clears it while it's still this device's (not a newer one). */
 export async function clearPushToken(accessToken: string, token?: string) {
   const res = await apiFetch(`${API_URL}/me/push-token`, {
@@ -848,8 +954,7 @@ export async function submitStyleQuiz(
 /** For endpoints that answer 204 No Content on success. */
 async function expectNoContent(res: Response) {
   if (res.ok) return;
-  const err = (await res.json().catch(() => null)) as ApiError | null;
-  throw new Error(err?.message ?? `Request failed (${res.status})`);
+  throw await errorFromResponse(res);
 }
 
 export type LookbookItem = FeedPage['items'][number];
@@ -1274,10 +1379,22 @@ export type WardrobeItem = {
   garmentImageUrl?: string | null;
 };
 
-export async function fetchWardrobe(accessToken: string, profileId?: string | null) {
-  const q = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
-  const res = await apiFetch(`${API_URL}/wardrobe${q}`, { headers: authHeaders(accessToken) });
-  return parseJson<{ items: WardrobeItem[] }>(res);
+/** One page of the wardrobe (C3). `nextCursor` is null on the last page; an API without paging omits it. */
+export type WardrobePage = { items: WardrobeItem[]; nextCursor?: string | null };
+
+export async function fetchWardrobe(
+  accessToken: string,
+  profileId?: string | null,
+  page: { limit?: number; cursor?: string | null } = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  if (profileId) params.set('profileId', profileId);
+  if (page.limit) params.set('limit', String(page.limit));
+  if (page.cursor) params.set('cursor', page.cursor);
+  const query = params.toString();
+  const res = await apiFetch(`${API_URL}/wardrobe${query ? `?${query}` : ''}`, { headers: authHeaders(accessToken), signal });
+  return parseJson<WardrobePage>(res);
 }
 
 export async function createWardrobeItem(accessToken: string, body: { category: string; colors?: string[]; brand?: string | null; costMinor?: number; imageKeys?: string[]; garmentImageKey?: string | null; laundryStatus?: WardrobeItem['laundryStatus']; profileId?: string | null }) {
@@ -1312,6 +1429,22 @@ export async function updateWardrobeItem(
     body: JSON.stringify(body),
   });
   return parseJson<WardrobeItem>(res);
+}
+
+/** C4: one patch for up to 200 items in a single request (PATCH /wardrobe/items). */
+export const BULK_UPDATE_MAX_IDS = 200;
+
+export async function bulkUpdateWardrobeItems(
+  accessToken: string,
+  ids: string[],
+  patch: Parameters<typeof updateWardrobeItem>[2],
+) {
+  const res = await apiFetch(`${API_URL}/wardrobe/items`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    body: JSON.stringify({ ids, patch }),
+  });
+  return parseJson<{ items: WardrobeItem[] }>(res);
 }
 
 export async function careOcrWardrobeItem(
@@ -1434,9 +1567,9 @@ export async function tryOnWardrobeItem(accessToken: string, id: string) {
   return parseJson<{ status: string; previewUrl: string | null; imageKey?: string | null }>(res);
 }
 
-export async function fetchTodayOutfit(accessToken: string, opts?: { alt?: number }) {
+export async function fetchTodayOutfit(accessToken: string, opts?: { alt?: number }, signal?: AbortSignal) {
   const qs = opts?.alt != null && opts.alt > 0 ? `?alt=${opts.alt}` : '';
-  const res = await apiFetch(`${API_URL}/outfits/today${qs}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/outfits/today${qs}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     outfit: {
       id: string;
@@ -1600,9 +1733,9 @@ export type WeekOutfitDay = {
   } | null;
 };
 
-export async function fetchWeekOutfits(accessToken: string, weekStart?: string) {
+export async function fetchWeekOutfits(accessToken: string, weekStart?: string, signal?: AbortSignal) {
   const qs = weekStart ? `?weekStart=${encodeURIComponent(weekStart)}` : '';
-  const res = await apiFetch(`${API_URL}/outfits/week${qs}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/outfits/week${qs}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ weekStart: string; days: WeekOutfitDay[] }>(res);
 }
 
@@ -1890,8 +2023,8 @@ export async function fetchMissingPieces(accessToken: string, limit = 8) {
 }
 
 /** N32 — capsule builder. */
-export async function fetchCapsule(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/wardrobe/capsule`, { headers: authHeaders(accessToken) });
+export async function fetchCapsule(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/wardrobe/capsule`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ itemIds: string[]; maxN: number; items?: WardrobeItem[] }>(res);
 }
 
@@ -2048,8 +2181,8 @@ export type WasteMetricRow = {
   cpwGoal?: CpwGoalPayload;
 };
 
-export async function fetchWasteSummary(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/waste/summary`, { headers: authHeaders(accessToken) });
+export async function fetchWasteSummary(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/waste/summary`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     totalItems: number;
     active: number;
@@ -2098,8 +2231,8 @@ export async function fetchRewearStreak(
   }>(res);
 }
 
-export async function fetchWasteDead(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/waste/dead`, { headers: authHeaders(accessToken) });
+export async function fetchWasteDead(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/waste/dead`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ items: WasteMetricRow[] }>(res);
 }
 
@@ -2121,8 +2254,8 @@ export async function startWearChallenge(accessToken: string, itemId: string) {
 }
 
 // --- Universe P3: accountant ---
-export async function fetchAccountantSummary(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/accountant/summary`, { headers: authHeaders(accessToken) });
+export async function fetchAccountantSummary(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/accountant/summary`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     monthLabel: string;
     monthlySpendMinor: number;
@@ -2151,9 +2284,9 @@ export async function fetchAccountantSummary(accessToken: string) {
     }>;
   }>(res);
 }
-export async function fetchAccountantSeasonRoi(accessToken: string, year?: number) {
+export async function fetchAccountantSeasonRoi(accessToken: string, year?: number, signal?: AbortSignal) {
   const q = year != null ? `?year=${year}` : '';
-  const res = await apiFetch(`${API_URL}/accountant/roi/season${q}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/accountant/roi/season${q}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     year: number;
     seasons: Array<{
@@ -2173,20 +2306,17 @@ export async function fetchAccountantSeasonRoi(accessToken: string, year?: numbe
     totalCostIdleMinor: number;
   }>(res);
 }
-export async function fetchAccountantLedger(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/accountant/ledger`, { headers: authHeaders(accessToken) });
+export async function fetchAccountantLedger(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/accountant/ledger`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ entries: Array<{ id: string; kind: string; description: string; amountMinor: number; createdAt: string; refId: string | null; refType?: string | null }> }>(res);
 }
-export async function fetchAccountantExportCsv(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/accountant/export.csv`, { headers: authHeaders(accessToken) });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error((err as { message?: string }).message ?? `Export failed (${res.status})`);
-  }
+export async function fetchAccountantExportCsv(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/accountant/export.csv`, { headers: authHeaders(accessToken), signal });
+  if (!res.ok) throw await errorFromResponse(res);
   return res.text();
 }
-export async function fetchBudgets(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/budgets`, { headers: authHeaders(accessToken) });
+export async function fetchBudgets(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/budgets`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ budgets: Array<{ id: string; userId: string; category: string; period: string; limitMinor: number; createdAt: string; updatedAt: string }> }>(res);
 }
 export async function createBudget(accessToken: string, body: { category: string; period: string; limitMinor: number }) {
@@ -2194,8 +2324,8 @@ export async function createBudget(accessToken: string, body: { category: string
   return parseJson<{ id: string; userId: string; category: string; period: string; limitMinor: number; createdAt: string; updatedAt: string }>(res);
 }
 
-export async function fetchCpwGoals(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/accountant/cpw-goals`, { headers: authHeaders(accessToken) });
+export async function fetchCpwGoals(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/accountant/cpw-goals`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     goals: Array<{
       wardrobeItemId: string;
@@ -2252,12 +2382,12 @@ export type ClosetReturnRequest = {
   updatedAt: string;
 };
 
-export async function fetchReturns(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/returns`, { headers: authHeaders(accessToken) });
+export async function fetchReturns(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/returns`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ returns: ClosetReturnRequest[] }>(res);
 }
-export async function fetchReturnDetail(accessToken: string, id: string) {
-  const res = await apiFetch(`${API_URL}/returns/${id}`, { headers: authHeaders(accessToken) });
+export async function fetchReturnDetail(accessToken: string, id: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/returns/${id}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{
     request: ClosetReturnRequest;
     events: Array<{
@@ -2570,9 +2700,9 @@ export type ClosetPackage = {
   assigneeLabel?: string | null;
 };
 
-export async function fetchPackages(accessToken: string, all = false) {
+export async function fetchPackages(accessToken: string, all = false, signal?: AbortSignal) {
   const qs = all ? '?all=1' : '';
-  const res = await apiFetch(`${API_URL}/packages${qs}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/packages${qs}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ packages: ClosetPackage[] }>(res);
 }
 
@@ -2701,8 +2831,8 @@ export type ExchangeWindowRow = {
   itemTitles?: string[];
 };
 
-export async function fetchExchanges(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/exchanges`, { headers: authHeaders(accessToken) });
+export async function fetchExchanges(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/exchanges`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ exchanges: ExchangeWindowRow[] }>(res);
 }
 
@@ -2751,40 +2881,40 @@ export async function startRtoRefund(
 }
 
 // --- Universe P4: gift ---
-export async function fetchRecipients(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/recipients`, { headers: authHeaders(accessToken) });
+export async function fetchRecipients(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/recipients`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ recipients: Array<{ id: string; name: string; relationship: string; region: string; nextOccasionDate?: string | null; nextOccasionLabel?: string | null; daysUntil?: number | null; profile: { sizes: Record<string,string>; tasteTags: string[]; wishlist: string[]; importantDates: Array<{ occasion: string; date: string; label?: string }>; notes: string | null } | null }> }>(res);
 }
 export async function createRecipient(accessToken: string, body: { name: string; relationship?: string; region?: string; profile?: { tasteTags?: string[]; sizes?: Record<string,string>; wishlist?: string[]; importantDates?: Array<{occasion:string; date:string}>; notes?: string } }) {
   const res = await apiFetch(`${API_URL}/recipients`, { method: 'POST', headers: { 'Content-Type':'application/json', ...authHeaders(accessToken) }, body: JSON.stringify(body) });
   return parseJson<{ id: string; name: string; relationship: string }>(res);
 }
-export async function fetchRecipientIdeas(accessToken: string, id: string, opts?: { budgetCap?: number }) {
+export async function fetchRecipientIdeas(accessToken: string, id: string, opts?: { budgetCap?: number }, signal?: AbortSignal) {
   const q = opts?.budgetCap != null ? `?budgetCap=${opts.budgetCap}` : '';
-  const res = await apiFetch(`${API_URL}/recipients/${id}/ideas${q}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/recipients/${id}/ideas${q}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ recipientId: string; budgetCap?: number | null; ideas: Array<{ id: string; title: string; category: string; coinPrice: number; affiliateUrl: string | null; reason: string; score?: number }> }>(res);
 }
 export async function createGiftOrder(accessToken: string, body: { recipientId: string; listingId?: string; occasion?: string; affiliateLink?: string }) {
   const res = await apiFetch(`${API_URL}/gifts`, { method: 'POST', headers: { 'Content-Type':'application/json', ...authHeaders(accessToken) }, body: JSON.stringify(body) });
   return parseJson<{ id: string; recipientId: string; listingId: string | null; affiliateLink: string | null }>(res);
 }
-export async function fetchGifts(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/gifts`, { headers: authHeaders(accessToken) });
+export async function fetchGifts(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/gifts`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ gifts: Array<{ id:string; recipientId:string; listingId: string | null }> }>(res);
 }
 
 // --- Universe P4: fit ---
-export async function fetchMeasurements(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/fit/measurements`, { headers: authHeaders(accessToken) });
+export async function fetchMeasurements(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/fit/measurements`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ measurements: Array<{ id:string; region:string; unit:string; points: Record<string,number> }> }>(res);
 }
 export async function createMeasurement(accessToken: string, body: { region?: string; unit?: string; points: Record<string,number> }) {
   const res = await apiFetch(`${API_URL}/fit/measurements`, { method:'POST', headers:{ 'Content-Type':'application/json', ...authHeaders(accessToken)}, body: JSON.stringify(body)});
   return parseJson<{ id:string; points: Record<string,number>}>(res);
 }
-export async function fetchTemplates(accessToken: string, region?: string) {
+export async function fetchTemplates(accessToken: string, region?: string, signal?: AbortSignal) {
   const q = region ? `?region=${encodeURIComponent(region)}` : '';
-  const res = await apiFetch(`${API_URL}/fit/templates${q}`, { headers: authHeaders(accessToken) });
+  const res = await apiFetch(`${API_URL}/fit/templates${q}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ templates: Array<{ id:string; region:string; garmentType:string; name:string; optionsSchema: Record<string,unknown> }> }>(res);
 }
 export async function createTailoringOrder(accessToken: string, body: { templateId: string; measurementProfileId?: string | null; selections?: Record<string,string>; fabricRef?: string; fabricPhotoKeys?: string[]; tailorSellerId?: string | null }) {
@@ -2803,8 +2933,8 @@ export async function fetchTailoringOrders(accessToken: string) {
   const res = await apiFetch(`${API_URL}/fit/orders`, { headers: authHeaders(accessToken)});
   return parseJson<{ orders: Array<{ id:string; state:string; templateId: string | null; tailorSellerId?: string | null }> }>(res);
 }
-export async function fetchFitTailors(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/fit/tailors`, { headers: authHeaders(accessToken) });
+export async function fetchFitTailors(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/fit/tailors`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ tailors: Array<{ id: string; shopName: string; sellerType: 'TAILOR'; ratingAvg: number | null; reviewCount: number }> }>(res);
 }
 export async function previewFitCustomization(accessToken: string, body: { templateId: string; selections?: Record<string, string> }) {
@@ -2874,8 +3004,8 @@ export type SwapListingRow = {
   updatedAt: string;
 };
 
-export async function fetchSwapCircles(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/swap-circles`, { headers: authHeaders(accessToken) });
+export async function fetchSwapCircles(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/swap-circles`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ circles: SwapCircleRow[] }>(res);
 }
 
@@ -2999,8 +3129,8 @@ export type HouseholdRow = {
   updatedAt: string;
 };
 
-export async function fetchHouseholds(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/households`, { headers: authHeaders(accessToken) });
+export async function fetchHouseholds(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/households`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ households: HouseholdRow[] }>(res);
 }
 
@@ -3116,8 +3246,8 @@ export type IngestionMetrics = {
   note: string;
 };
 
-export async function fetchIngestionSources(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/ingestion/sources`, { headers: authHeaders(accessToken) });
+export async function fetchIngestionSources(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/ingestion/sources`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ sources: IngestionSource[] }>(res);
 }
 
@@ -3143,8 +3273,8 @@ export async function createIngestionSource(
   return parseJson<CreateIngestionSourceResponse>(res);
 }
 
-export async function fetchIngestionMetrics(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/ingestion/metrics`, { headers: authHeaders(accessToken) });
+export async function fetchIngestionMetrics(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/ingestion/metrics`, { headers: authHeaders(accessToken), signal });
   return parseJson<IngestionMetrics>(res);
 }
 
@@ -3237,8 +3367,8 @@ export type ClosetPurchaseWithItems = {
   items: ClosetPurchaseItem[];
 };
 
-export async function fetchPurchases(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/purchases`, { headers: authHeaders(accessToken) });
+export async function fetchPurchases(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/purchases`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ purchases: ClosetPurchaseWithItems[] }>(res);
 }
 
@@ -3279,10 +3409,7 @@ export async function disconnectIngestionSource(accessToken: string, sourceId: s
     method: 'DELETE',
     headers: authHeaders(accessToken),
   });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as ApiError;
-    throw new Error(err.message ?? `Disconnect failed (${res.status})`);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
 }
 
 export type ConsentGrant = {
@@ -3295,8 +3422,8 @@ export type ConsentGrant = {
   meta: Record<string, unknown> | null;
 };
 
-export async function fetchConsents(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/vault/consent`, { headers: authHeaders(accessToken) });
+export async function fetchConsents(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/vault/consent`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ grants: ConsentGrant[] }>(res);
 }
 
@@ -3316,20 +3443,17 @@ export async function revokeConsent(accessToken: string, scope: string) {
     method: 'DELETE',
     headers: authHeaders(accessToken),
   });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as ApiError;
-    throw new Error(err.message ?? `Revoke failed (${res.status})`);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
 }
 
-export async function fetchVaultAudit(accessToken: string, limit = 50) {
-  const res = await apiFetch(`${API_URL}/vault/audit?limit=${limit}`, { headers: authHeaders(accessToken) });
+export async function fetchVaultAudit(accessToken: string, limit = 50, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/vault/audit?limit=${limit}`, { headers: authHeaders(accessToken), signal });
   return parseJson<{ records: Array<{ id: string; event: string; userId?: string; timestamp: string; payload: Record<string, unknown> }> }>(res);
 }
 
 /** GDPR/DPDP self-service dump — JSON from GET /vault/export. */
-export async function exportVaultData(accessToken: string) {
-  const res = await apiFetch(`${API_URL}/vault/export`, { headers: authHeaders(accessToken) });
+export async function exportVaultData(accessToken: string, signal?: AbortSignal) {
+  const res = await apiFetch(`${API_URL}/vault/export`, { headers: authHeaders(accessToken), signal });
   return parseJson<VaultExport>(res);
 }
 
@@ -3339,10 +3463,7 @@ export async function deleteVault(accessToken: string) {
     method: 'DELETE',
     headers: authHeaders(accessToken),
   });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as ApiError;
-    throw new Error(err.message ?? `Delete failed (${res.status})`);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
 }
 
 export type NotificationPreferences = {

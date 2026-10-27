@@ -11,8 +11,9 @@ import { useSessionStore } from '@/src/stores/session';
  * Push wiring for the root layout: registers the device while signed in, shows pushes that
  * arrive while the app is open, and opens the order or reveal a tapped push points at. That
  * includes the push that launched the app, which waits for sign-in if there's no session yet.
+ * With `navigationReady` false (the root layout's splash gate), a tapped push waits for it too.
  */
-export function usePushNotifications() {
+export function usePushNotifications({ navigationReady = true }: { navigationReady?: boolean } = {}) {
   const accessToken = useSessionStore((s) => s.accessToken);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
@@ -56,8 +57,8 @@ export function usePushNotifications() {
   }, []);
 
   useEffect(() => {
-    if (!pendingHref || !accessToken) return;
+    if (!pendingHref || !accessToken || !navigationReady) return;
     setPendingHref(null);
     router.push(pendingHref as never);
-  }, [pendingHref, accessToken]);
+  }, [pendingHref, accessToken, navigationReady]);
 }

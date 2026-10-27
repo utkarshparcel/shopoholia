@@ -1,11 +1,15 @@
+import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { useClosetPrefsStore } from './closetPrefs';
 import {
   CLOSET_LOCALE,
   formatClosetDate,
   formatClosetDateTime,
   formatMinor,
   formatRelativeTime,
+  localDayKey,
+  useFormatMinor,
 } from './format';
 
 describe('formatMinor (UX-MONEY-FMT / W003)', () => {
@@ -19,6 +23,40 @@ describe('formatMinor (UX-MONEY-FMT / W003)', () => {
   it('picks locale from currency when omitted (USD / GBP)', () => {
     expect(formatMinor(1234, 'USD')).toMatch(/\$/);
     expect(formatMinor(1234, 'GBP')).toMatch(/£/);
+  });
+
+  it("uses the user's currency when the amount has none (MOB 27)", () => {
+    useClosetPrefsStore.getState().clear();
+    expect(formatMinor(1234)).toMatch(/^₹/);
+    useClosetPrefsStore.getState().setPreferredCurrency('USD');
+    expect(formatMinor(1234)).toMatch(/\$/);
+    expect(formatMinor(1234, null)).toMatch(/\$/);
+    expect(formatMinor(1234, 'INR')).toMatch(/^₹/);
+    useClosetPrefsStore.getState().clear();
+  });
+});
+
+describe('useFormatMinor', () => {
+  it('follows a currency change', () => {
+    useClosetPrefsStore.getState().clear();
+    const { result } = renderHook(() => useFormatMinor());
+    expect(result.current(1234)).toMatch(/^₹/);
+    act(() => {
+      useClosetPrefsStore.getState().setPreferredCurrency('GBP');
+    });
+    expect(result.current(1234)).toMatch(/£/);
+    expect(result.current(1234, 'USD')).toMatch(/\$/);
+    act(() => {
+      useClosetPrefsStore.getState().clear();
+    });
+  });
+});
+
+describe('localDayKey (MOB 20)', () => {
+  it("is the device's local day, not the UTC one", () => {
+    // 00:30 local time: the UTC day is still the day before east of Greenwich.
+    expect(localDayKey(new Date(2026, 9, 27, 0, 30))).toBe('2026-10-27');
+    expect(localDayKey(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
   });
 });
 

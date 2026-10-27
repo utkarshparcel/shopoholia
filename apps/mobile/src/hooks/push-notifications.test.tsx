@@ -103,6 +103,21 @@ describe('usePushNotifications', () => {
     expect(router.push).toHaveBeenCalledWith(`/reveal/${ORDER_ID}`);
   });
 
+  it('holds a tapped push until the root layout can navigate', () => {
+    signIn();
+    notifications.getLastNotificationResponse.mockReturnValue(tap(`worn://order/${ORDER_ID}`));
+    const { rerender } = renderHook(
+      ({ navigationReady }) => usePushNotifications({ navigationReady }),
+      { initialProps: { navigationReady: false } },
+    );
+    expect(router.push).not.toHaveBeenCalled();
+
+    rerender({ navigationReady: true });
+
+    expect(router.push).toHaveBeenCalledTimes(1);
+    expect(router.push).toHaveBeenCalledWith(`/order/${ORDER_ID}`);
+  });
+
   it('opens a launch push only once, even if the listener also delivers it', () => {
     signIn();
     notifications.getLastNotificationResponse.mockReturnValue(tap(`worn://order/${ORDER_ID}`));

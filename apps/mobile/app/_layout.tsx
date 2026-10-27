@@ -1,48 +1,120 @@
-import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Stack, useRouter } from 'expo-router';
+import { focusManager, QueryClientProvider } from '@tanstack/react-query';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState, Platform, Text, View } from 'react-native';
 
-import { ApiRequestError } from '@/src/api/client';
+import { createAppQueryClient, wireOnlineManager } from '@/src/api/queryClient';
+import {
+  clearPersistedQueries,
+  restorePersistedQueries,
+  startQueryPersistence,
+} from '@/src/api/queryPersistence';
 import { usePushNotifications } from '@/src/hooks/push-notifications';
+import { useTimeZoneSync } from '@/src/hooks/useTimeZoneSync';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
-import { initAnalyticsFromEnv, trackEvent } from '@/src/lib/analytics';
+import { initAnalyticsFromEnv, trackInstallOnce } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { SurfaceToggle } from '@/src/components/SurfaceToggle';
 import { useClosetStore } from '@/src/stores/closet';
-import { useSessionStore } from '@/src/stores/session';
+import { startSessionTokenPersistence, useSessionStore } from '@/src/stores/session';
 import { bg, closet, fontSans, fsCaption, space3, space4 } from '@/src/theme/tokens';
 
 export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
 
 // At import, not in an effect: a render error replaces this layout before its effects run.
 initSentry();
+// Read the stored session as early as possible; the layout waits for it (`tokensHydrated`).
+void startSessionTokenPersistence();
+wireOnlineManager();
+
+function subscribeStoreHydration(onChange: () => void) {
+  const unsubscribe = [
+    useSessionStore.persist.onFinishHydration(onChange),
+    useClosetStore.persist.onFinishHydration(onChange),
+  ];
+  return () => unsubscribe.forEach((stop) => stop());
+}
+
+function storesHydrated() {
+  return useSessionStore.persist.hasHydrated() && useClosetStore.persist.hasHydrated();
+}
+
+function sessionUserId() {
+  return userIdFromAccessToken(useSessionStore.getState().accessToken);
+}
 
 export default function RootLayout() {
   const router = useRouter();
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            // A refusal (4xx) won't change on a retry; a network blip or a 5xx might.
-            retry: (count, error) =>
-              count < 2 && !(error instanceof ApiRequestError && error.status < 500),
-            staleTime: 30_000,
-          },
-        },
-      }),
-  );
-  const installTracked = useRef(false);
+  const segments = useSegments();
+  const [queryClient] = useState(createAppQueryClient);
   const surfaceRestored = useRef(false);
   const restoreFallbackToast = useSessionStore((s) => s.restoreFallbackToast);
   const clearRestoreFallbackToast = useSessionStore((s) => s.clearRestoreFallbackToast);
-  usePushNotifications();
+  const tokensHydrated = useSessionStore((s) => s.tokensHydrated);
+  const hydrated = useSyncExternalStore(subscribeStoreHydration, storesHydrated, storesHydrated);
+  const [cacheRestored, setCacheRestored] = useState(false);
+  // Splash gate: nothing routes until the session, the stores and the saved queries are back,
+  // so app/index.tsx doesn't send a signed-in user to the login screen.
+  const ready = tokensHydrated && hydrated && cacheRestored;
+  const segmentsRef = useRef(segments);
+  usePushNotifications({ navigationReady: ready });
+  useTimeZoneSync();
+
+  useEffect(() => {
+    segmentsRef.current = segments;
+  }, [segments]);
+
+  // The saved closet queries come back once the session is known (they belong to one user).
+  useEffect(() => {
+    if (!tokensHydrated) return;
+    const userId = sessionUserId();
+    let cancelled = false;
+    void (userId ? restorePersistedQueries(queryClient, userId) : Promise.resolve(false)).finally(
+      () => {
+        if (!cancelled) setCacheRestored(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [tokensHydrated, queryClient]);
+
+  // The web keeps no session across a reload, so a saved copy could never come back: keep none.
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      void clearPersistedQueries();
+      return;
+    }
+    return startQueryPersistence(queryClient, sessionUserId);
+  }, [queryClient]);
+
+  // Auth gate: when the session ends (sign-out, or the server refused a renewal), nothing of
+  // that user stays on the device and the app goes back to the login screen.
+  useEffect(
+    () =>
+      useSessionStore.subscribe((state, prev) => {
+        if (!prev.accessToken || state.accessToken) return;
+        queryClient.clear();
+        void clearPersistedQueries();
+        useClosetStore.getState().clear();
+        if (segmentsRef.current[0] !== '(auth)') router.replace('/(auth)/login' as never);
+      }),
+    [queryClient, router],
+  );
+
+  // A launch with no session on a signed-in screen (a deep link, or a web reload, which keeps no
+  // tokens) goes to the login screen too, instead of showing that screen empty.
+  useEffect(() => {
+    if (!ready || useSessionStore.getState().accessToken) return;
+    const top = segmentsRef.current[0];
+    if (top && top !== '(auth)' && !top.startsWith('+')) router.replace('/(auth)/login' as never);
+  }, [ready, router]);
 
   // React Native has no window focus events: tell React Query when the app comes to the
   // foreground, so stale queries refetch on resume and polling pauses in the background.
@@ -60,10 +132,6 @@ export default function RootLayout() {
     void import('@/src/lib/delightHaptics').then((m) => {
       void m.initDelightHaptics();
     });
-    // Android: register ContentResolver-backed SMS inbox adapter (no-op on iOS).
-    void import('@/src/lib/smsAndroidAdapter').then((m) => {
-      m.ensureAndroidSmsInboxAdapterRegistered();
-    });
     // Android: Closet notification channels per category (NOTIF-RICH).
     void import('react-native').then(({ Platform }) => {
       if (Platform.OS !== 'android') return;
@@ -71,26 +139,28 @@ export default function RootLayout() {
         void m.ensureAndroidNotificationChannels();
       });
     });
-    if (!installTracked.current) {
-      installTracked.current = true;
-      trackEvent('install');
-    }
+    void trackInstallOnce();
+  }, []);
+
+  // After the stored session is read, so a saved sign-in isn't replaced by the dev one.
+  useEffect(() => {
+    if (!tokensHydrated) return;
     void ensureDevAuth().catch((error: unknown) => {
       if (__DEV__) {
         console.warn('[dev-auth]', error instanceof Error ? error.message : error);
       }
     });
-  }, []);
+  }, [tokensHydrated]);
 
   useEffect(() => {
-    if (!FEATURE_CLOSET) return;
+    if (!FEATURE_CLOSET || !ready) return;
 
     const restore = () => {
       if (surfaceRestored.current) return;
       surfaceRestored.current = true;
       useClosetPrefsStore.getState().ensureEmptyCopyVariant();
-      const surface = useSessionStore.getState().activeSurface;
-      if (surface === 'closet') {
+      const { activeSurface: surface, accessToken } = useSessionStore.getState();
+      if (surface === 'closet' && accessToken) {
         const closetState = useClosetStore.getState();
         closetState.startDelightClock();
         const href = closetEntryHref({
@@ -104,15 +174,20 @@ export default function RootLayout() {
       }
     };
 
-    if (useSessionStore.persist.hasHydrated()) {
-      restore();
-      return;
-    }
+    restore();
+  }, [ready, router]);
 
-    return useSessionStore.persist.onFinishHydration(() => {
-      restore();
-    });
-  }, [router]);
+  // Same providers either way, so the theme (and its font loading) stays mounted.
+  if (!ready) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <StatusBar style="dark" />
+          <View style={{ flex: 1, backgroundColor: bg }} />
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>

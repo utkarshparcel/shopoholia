@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createHttpAnalyticsSink,
   sanitizeAnalyticsProperties,
@@ -60,6 +61,36 @@ export function initAnalyticsFromEnv(): boolean {
   }
   if (!sink) sink = createDefaultSink();
   return true;
+}
+
+/** Set once the install event has been sent from this device. */
+export const INSTALL_TRACKED_KEY = 'worn.analytics.install-tracked';
+
+let installOnce: Promise<boolean> | null = null;
+
+/**
+ * Sends `install` the first time the app runs on a device, not on every cold start (MOB 33).
+ * Resolves true when this call sent it. If storage can't be read, nothing is sent: a missed
+ * install is better than one counted again on every launch.
+ */
+export function trackInstallOnce(): Promise<boolean> {
+  installOnce ??= (async () => {
+    try {
+      if (await AsyncStorage.getItem(INSTALL_TRACKED_KEY)) return false;
+      await AsyncStorage.setItem(INSTALL_TRACKED_KEY, new Date().toISOString());
+    } catch (error) {
+      if (__DEV__) console.warn('[analytics] install flag unavailable', error);
+      return false;
+    }
+    trackEvent('install');
+    return true;
+  })();
+  return installOnce;
+}
+
+/** Test hook: let the next trackInstallOnce read storage again. */
+export function resetInstallTrackingForTests() {
+  installOnce = null;
 }
 
 /** Never throws: a tracking failure must not break the screen doing the tracking. */

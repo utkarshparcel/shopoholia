@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from '@tanstack/react-query';
 
 import {
   addCredit,
@@ -59,8 +65,6 @@ import {
   fetchImportablePurchases,
   fetchLentWardrobe,
   fetchIngestionActivity,
-  fetchIngestionMetrics,
-  fetchIngestionSources,
   fetchMeasurements,
   fetchMissingPieces,
   fetchPackages,
@@ -132,6 +136,8 @@ import {
   tryOnWardrobeItem,
   unclaimWarranty,
   updateWardrobeItem,
+  bulkUpdateWardrobeItems,
+  BULK_UPDATE_MAX_IDS,
   scanPriceDrops,
   createBrandPriceWatch,
   fetchEmiPlans,
@@ -150,10 +156,14 @@ import type {
   CreditCaptureResponse,
   MoneyAccountKind,
 } from '@worn/shared';
-import type { CorrectIngestionDocumentBody, WardrobeItem } from '@/src/api/client';
+import type { CorrectIngestionDocumentBody, WardrobeItem, WardrobePage } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import { useClosetStore } from '@/src/stores/closet';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
+import { closetKey, sessionToken, useClosetSubscribed, useSessionUserId } from './keys';
+import { ingestionSourcesQuery } from './useIngestion';
 import { trackEvent } from '@/src/lib/analytics';
+import { localDayKey } from '@/src/lib/format';
 import { shareTextFile } from '@/src/lib/shareFile';
 import { travelPackSharePayload } from '@/src/lib/todayOccasionWow';
 import { wearChallengeProgress } from '@/src/lib/wearChallenge';
@@ -161,65 +171,33 @@ import { wearChallengeProgress } from '@/src/lib/wearChallenge';
 /**
  * TanStack Query namespace for the Closet surface.
  *
- * NOTE(C2 resolved): Closet data now fetches live ingestion status from the
- * WORN API (GET /ingestion/sources + GET /ingestion/metrics, auth-gated).
- * Mirrors src/hooks/catalog.ts conventions — reads the access token from the
- * shared session store and gates queries on it.
+ * Keys come from `closetKey` (keys.ts): `[domain, userId, ...params]`, so a token renewal keeps
+ * the cache. Each queryFn reads the current token when it runs (`sessionToken()`), and mutations
+ * invalidate by `[domain]`. The ingestion hooks live in useIngestion.ts and are re-exported here.
  */
-export function useCloset() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-
-  return useQuery({
-    queryKey: ['closet', accessToken],
-    queryFn: async () => {
-      const [sourcesRes, metricsRes] = await Promise.all([
-        fetchIngestionSources(accessToken!),
-        fetchIngestionMetrics(accessToken!),
-      ]);
-      return {
-        sources: sourcesRes.sources,
-        metrics: metricsRes,
-        connected: sourcesRes.sources.length > 0,
-        coverage: metricsRes.coverage,
-      };
-    },
-    enabled: Boolean(accessToken),
-  });
-}
-
-export function useIngestionSources() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({
-    queryKey: ['ingestion-sources', accessToken],
-    queryFn: () => fetchIngestionSources(accessToken!),
-    enabled: Boolean(accessToken),
-  });
-}
-
-export function useIngestionMetrics() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({
-    queryKey: ['ingestion-metrics', accessToken],
-    queryFn: () => fetchIngestionMetrics(accessToken!),
-    enabled: Boolean(accessToken),
-  });
-}
+export {
+  ingestionSourcesQuery,
+  useCloset,
+  useIngestionMetrics,
+  useIngestionSources,
+  useIngestionStatus,
+} from './useIngestion';
 
 export function useIngestionActivity() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['ingestion-activity', accessToken],
-    queryFn: () => fetchIngestionActivity(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('ingestion-activity', userId),
+    queryFn: () => fetchIngestionActivity(sessionToken()),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 
 export function useCorrectIngestionDocument() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { documentId: string; body: CorrectIngestionDocumentBody }) =>
-      correctIngestionDocument(accessToken!, input.documentId, input.body),
+      correctIngestionDocument(sessionToken(), input.documentId, input.body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['ingestion-activity'] });
       void qc.invalidateQueries({ queryKey: ['ingestion-metrics'] });
@@ -230,11 +208,12 @@ export function useCorrectIngestionDocument() {
 
 /** Mute a merchant on the first EMAIL ingestion source (N47). */
 export function useMuteMerchant() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (merchant: string) => {
-      const { sources } = await fetchIngestionSources(accessToken!);
+      // The cached list when it's fresh; one request otherwise.
+      const { sources } = await qc.fetchQuery(ingestionSourcesQuery(userId));
       const source =
         sources.find((s) => s.kind === 'EMAIL') ?? sources[0];
       if (!source) throw new Error('Connect email before muting merchants.');
@@ -244,11 +223,10 @@ export function useMuteMerchant() {
       const next = Array.from(
         new Set([...prev.map((m) => m.trim()), merchant.trim()].filter(Boolean)),
       );
-      return patchIngestionSource(accessToken!, source.id, { mutedMerchants: next });
+      return patchIngestionSource(sessionToken(), source.id, { mutedMerchants: next });
     },
     onSuccess: (_data, merchant) => {
       void qc.invalidateQueries({ queryKey: ['ingestion-sources'] });
-      void qc.invalidateQueries({ queryKey: ['ingestion-status'] });
       trackEvent('ingestion_merchant_muted' as never, { merchant });
     },
   });
@@ -256,20 +234,20 @@ export function useMuteMerchant() {
 
 /** N48 — list purchases with items for merge/split. */
 export function usePurchases() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['purchases', accessToken],
-    queryFn: () => fetchPurchases(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('purchases', userId),
+    queryFn: ({ signal }) => fetchPurchases(sessionToken(), signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 
 export function useMergePurchases() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { targetPurchaseId: string; sourcePurchaseId: string }) =>
-      mergePurchases(accessToken!, body),
+      mergePurchases(sessionToken(), body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['purchases'] });
       void qc.invalidateQueries({ queryKey: ['ingestion-activity'] });
@@ -280,11 +258,10 @@ export function useMergePurchases() {
 }
 
 export function useSplitPurchase() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { purchaseId: string; itemIds: string[]; merchant?: string }) =>
-      splitPurchase(accessToken!, body),
+      splitPurchase(sessionToken(), body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['purchases'] });
       void qc.invalidateQueries({ queryKey: ['packages'] });
@@ -293,67 +270,40 @@ export function useSplitPurchase() {
   });
 }
 
-export function useIngestionStatus() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({
-    queryKey: ['ingestion-status', accessToken],
-    queryFn: async () => {
-      const [sourcesRes, metricsRes] = await Promise.all([
-        fetchIngestionSources(accessToken!),
-        fetchIngestionMetrics(accessToken!),
-      ]);
-      return {
-        connected: sourcesRes.sources.length > 0,
-        sourceCount: sourcesRes.sources.length,
-        coverage: metricsRes.coverage,
-        totalMessages: metricsRes.totalMessages,
-        byKind: metricsRes.byKind,
-        byMerchant: metricsRes.byMerchant,
-      };
-    },
-    enabled: Boolean(accessToken),
-  });
-}
-
 export function useGiftCards(kind?: MoneyAccountKind) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['gift-cards', accessToken, kind ?? 'all'],
+    queryKey: closetKey('gift-cards', userId, kind ?? 'all'),
     queryFn: () =>
-      kind ? fetchCredits(accessToken!, { kind }) : fetchCredits(accessToken!),
-    enabled: Boolean(accessToken),
+      kind ? fetchCredits(sessionToken(), { kind }) : fetchCredits(sessionToken()),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
-}
-
-function newIdempotencyKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `idem-${Date.now()}`;
 }
 
 export function useAddGiftCard() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: AddCreditBody) =>
-      addCredit(accessToken!, {
+      addCredit(sessionToken(), {
         ...input,
         idempotencyKey: input.idempotencyKey ?? newIdempotencyKey(),
       }),
     onSuccess: (account) => {
       trackEvent('credit_added', { accountId: account.id, kind: account.kind });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 export function useCaptureGiftCard() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: async (
       input:
         | { mode: 'barcode'; barcode: string }
         | { mode: 'photo'; imageUri: string; barcode?: string },
     ): Promise<CreditCaptureResponse> => {
-      if (!accessToken) throw new Error('Sign in to capture a card');
+      const accessToken = sessionToken('Sign in to capture a card');
       if (input.mode === 'barcode') {
         return captureCreditBarcode(accessToken, input.barcode);
       }
@@ -371,7 +321,6 @@ export function useCaptureGiftCard() {
 }
 
 export function useSpendGiftCard() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({
@@ -384,7 +333,7 @@ export function useSpendGiftCard() {
       idempotencyKey?: string;
     }) => {
       const key = idempotencyKey ?? newIdempotencyKey();
-      const result = await spendCredit(accessToken!, id, {
+      const result = await spendCredit(sessionToken(), id, {
         amountMinor,
         idempotencyKey: key,
       });
@@ -392,14 +341,13 @@ export function useSpendGiftCard() {
     },
     onSuccess: (result, vars) => {
       trackEvent('credit_spent', { accountId: vars.id, amountMinor: vars.amountMinor });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 /** U001 — undo partial spend within 60s. */
 export function useUndoSpendGiftCard() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -408,37 +356,35 @@ export function useUndoSpendGiftCard() {
     }: {
       id: string;
       idempotencyKey: string;
-    }) => undoSpendCredit(accessToken!, id, { idempotencyKey }),
+    }) => undoSpendCredit(sessionToken(), id, { idempotencyKey }),
     onSuccess: (_result, vars) => {
       trackEvent('credit_spend_undone', { accountId: vars.id });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 /** U002 — merge same-merchant credit twins. */
 export function useMergeCredits() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: { targetAccountId: string; sourceAccountId: string }) =>
-      mergeCredits(accessToken!, body),
+      mergeCredits(sessionToken(), body),
     onSuccess: (result) => {
       trackEvent('credits_merged', {
         targetAccountId: result.account.id,
         sourceAccountId: result.mergedFromId,
         transferredMinor: result.transferredMinor,
       });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 /** U003 — mark expiry checklist handled (snooze push 7d). */
 export function useMarkCreditExpiryHandled() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
-    mutationFn: (id: string) => markCreditExpiryHandled(accessToken!, id),
+    mutationFn: (id: string) => markCreditExpiryHandled(sessionToken(), id),
     onSuccess: (_result, id) => {
       trackEvent('credit_expiry_handled', { accountId: id });
     },
@@ -447,19 +393,17 @@ export function useMarkCreditExpiryHandled() {
 
 /** WV02-BALANCE-CHECK — API refresh or manual re-check hint. */
 export function useBalanceCheck() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => checkCreditBalance(accessToken!, id),
+    mutationFn: (id: string) => checkCreditBalance(sessionToken(), id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 /** WV02-BALANCE-CHECK — confirm user-verified merchant balance. */
 export function useConfirmBalance() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -469,7 +413,7 @@ export function useConfirmBalance() {
       id: string;
       balanceMinor: number;
     }) =>
-      confirmCreditBalance(accessToken!, id, {
+      confirmCreditBalance(sessionToken(), id, {
         balanceMinor,
         idempotencyKey: newIdempotencyKey(),
       }),
@@ -478,7 +422,7 @@ export function useConfirmBalance() {
         accountId: vars.id,
         balanceMinor: vars.balanceMinor,
       });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
@@ -491,19 +435,19 @@ export function useReceipts(query?: {
   to?: string;
   gstin?: string;
 }) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['receipts', accessToken, query?.merchant, query?.from, query?.to, query?.gstin],
-    queryFn: () => fetchReceipts(accessToken!, query),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('receipts', userId, query?.merchant, query?.from, query?.to, query?.gstin),
+    queryFn: () => fetchReceipts(sessionToken(), query),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 
 export function useExportReceipt() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: (input: { id: string; format: 'image' | 'pdf' }) =>
-      exportReceipt(accessToken!, input.id, input.format),
+      exportReceipt(sessionToken(), input.id, input.format),
     onSuccess: (res) => {
       trackEvent('receipt_exported' as never, { format: res.format });
     },
@@ -511,101 +455,95 @@ export function useExportReceipt() {
 }
 
 export function useUploadReceipt() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (imageUri: string) => uploadReceipt(accessToken!, imageUri),
+    mutationFn: (imageUri: string) => uploadReceipt(sessionToken(), imageUri),
     onSuccess: (parsed) => {
       trackEvent('receipt_uploaded', { receiptId: parsed.id });
-      queryClient.invalidateQueries({ queryKey: ['receipts', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['receipts'] });
     },
   });
 }
 
 export function useConfirmReceipt() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: string; body: ConfirmReceiptBody }) =>
-      confirmReceipt(accessToken!, id, body),
+      confirmReceipt(sessionToken(), id, body),
     onSuccess: (_result, vars) => {
       trackEvent('receipt_confirmed', { receiptId: vars.id });
-      queryClient.invalidateQueries({ queryKey: ['receipts', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['warranties', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['receipts'] });
+      queryClient.invalidateQueries({ queryKey: ['warranties'] });
     },
   });
 }
 
 export function useWarranties() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['warranties', accessToken],
-    queryFn: () => fetchWarranties(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('warranties', userId),
+    queryFn: () => fetchWarranties(sessionToken()),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 
 export function useClaimWarranty() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => claimWarranty(accessToken!, id),
+    mutationFn: (id: string) => claimWarranty(sessionToken(), id),
     onSuccess: (result) => {
       trackEvent('warranty_claimed');
-      queryClient.invalidateQueries({ queryKey: ['warranties', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['warranties'] });
       return result;
     },
   });
 }
 
 export function useUnclaimWarranty() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => unclaimWarranty(accessToken!, id),
+    mutationFn: (id: string) => unclaimWarranty(sessionToken(), id),
     onSuccess: () => {
       trackEvent('warranty_unclaimed' as never);
-      queryClient.invalidateQueries({ queryKey: ['warranties', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['warranties'] });
     },
   });
 }
 
 export function useCashbackClaims(status?: 'UNCLAIMED' | 'CLAIMED' | 'EXPIRED') {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['cashback-claims', accessToken, status ?? 'all'],
-    queryFn: () => fetchCashbackClaims(accessToken!, status),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('cashback-claims', userId, status ?? 'all'),
+    queryFn: () => fetchCashbackClaims(sessionToken(), status),
+    enabled: Boolean(userId),
   });
 }
 
 export function useCreateCashbackClaim() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: Parameters<typeof createCashbackClaim>[1]) =>
-      createCashbackClaim(accessToken!, body),
+      createCashbackClaim(sessionToken(), body),
     onSuccess: () => {
       trackEvent('cashback_claim_created');
-      queryClient.invalidateQueries({ queryKey: ['cashback-claims', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['cashback-claims'] });
     },
   });
 }
 
 export function useMarkCashbackClaimed() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => markCashbackClaimed(accessToken!, id),
+    mutationFn: (id: string) => markCashbackClaimed(sessionToken(), id),
     onSuccess: () => {
       trackEvent('cashback_claim_marked');
-      queryClient.invalidateQueries({ queryKey: ['cashback-claims', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['cashback-claims'] });
     },
   });
 }
 
 export function useSnoozeWarranty() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: ({
       id,
@@ -615,7 +553,7 @@ export function useSnoozeWarranty() {
       id: string;
       days?: number;
       until?: string;
-    }) => snoozeWarranty(accessToken!, id, { days, until }),
+    }) => snoozeWarranty(sessionToken(), id, { days, until }),
     onSuccess: () => {
       trackEvent('warranty_snoozed');
     },
@@ -623,33 +561,87 @@ export function useSnoozeWarranty() {
 }
 
 // --- Universe P2: wardrobe / outfits / waste ---
+/** Items per wardrobe page (C3). A screen that shows a few items passes a smaller `limit`. */
+export const WARDROBE_PAGE_SIZE = 50;
+
+function selectWardrobeItems(data: InfiniteData<WardrobePage, string | null>) {
+  return { items: data.pages.flatMap((page) => page.items), pageCount: data.pages.length };
+}
+
+/**
+ * The wardrobe, one page at a time (MOB 14). `data.items` holds every page loaded so far;
+ * call `fetchNextPage` while `hasNextPage` (e.g. from a list's onEndReached) to load more.
+ */
 export function useWardrobe(
   profileId?: string | null,
-  opts?: { enabled?: boolean },
+  opts?: { enabled?: boolean; limit?: number },
 ) {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({
-    queryKey: ['wardrobe', profileId ?? null, accessToken],
-    queryFn: () => fetchWardrobe(accessToken!, profileId),
-    enabled: (opts?.enabled ?? true) && Boolean(accessToken),
+  const userId = useSessionUserId();
+  const limit = opts?.limit ?? WARDROBE_PAGE_SIZE;
+  return useInfiniteQuery({
+    queryKey: closetKey('wardrobe', userId, profileId ?? null, limit),
+    queryFn: ({ pageParam, signal }) =>
+      fetchWardrobe(sessionToken(), profileId, { limit, cursor: pageParam }, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    select: selectWardrobeItems,
+    enabled: (opts?.enabled ?? true) && Boolean(userId),
+  });
+}
+
+/**
+ * MOB 21: one patch for many items through PATCH /wardrobe/items (C4), at most 200 ids per
+ * request and one request at a time. Ids whose request failed come back in `failedIds`; the
+ * mutation only rejects when nothing was updated. The wardrobe and outfits refresh once.
+ */
+export function useBulkUpdateWardrobe() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      ids,
+      patch,
+    }: {
+      ids: string[];
+      patch: Parameters<typeof bulkUpdateWardrobeItems>[2];
+    }) => {
+      const unique = Array.from(new Set(ids));
+      const updated: WardrobeItem[] = [];
+      const failedIds: string[] = [];
+      let lastError: unknown = null;
+      for (let i = 0; i < unique.length; i += BULK_UPDATE_MAX_IDS) {
+        const chunk = unique.slice(i, i + BULK_UPDATE_MAX_IDS);
+        try {
+          const res = await bulkUpdateWardrobeItems(sessionToken(), chunk, patch);
+          updated.push(...res.items);
+        } catch (error) {
+          failedIds.push(...chunk);
+          lastError = error;
+        }
+      }
+      if (updated.length === 0 && lastError) throw lastError;
+      return { updated, failedIds };
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      void queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
+      void queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+    },
   });
 }
 
 export function useUploadWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ imageUri, meta }: { imageUri: string; meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number } }) => uploadWardrobeItem(accessToken!, imageUri, meta),
+    mutationFn: ({ imageUri, meta }: { imageUri: string; meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number } }) => uploadWardrobeItem(sessionToken(), imageUri, meta),
     onSuccess: (item) => {
       trackEvent('wardrobe_item_added', { itemId: item.id });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
     },
   });
 }
 
 export function useBulkUploadWardrobe() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -676,53 +668,50 @@ export function useBulkUploadWardrobe() {
         costMinor?: number;
       }>;
     }) =>
-      uploadWardrobeItemsBulk(accessToken!, imageUris, meta, {
+      uploadWardrobeItemsBulk(sessionToken(), imageUris, meta, {
         onProgress,
         shouldCancel,
         perItemMeta,
       }),
     onSuccess: (res) => {
       trackEvent('wardrobe_bulk_imported', { count: res.created });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
     },
   });
 }
 
 export function useWardrobeFromPurchases() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (purchaseItemIds: string[]) => wardrobeFromPurchases(accessToken!, purchaseItemIds),
+    mutationFn: (purchaseItemIds: string[]) => wardrobeFromPurchases(sessionToken(), purchaseItemIds),
     onSuccess: (res) => {
       trackEvent('wardrobe_from_purchases', { count: res.created });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['importable-purchases', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['importable-purchases'] });
     },
   });
 }
 
 export function useImportablePurchases() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['importable-purchases', accessToken],
+    queryKey: closetKey('importable-purchases', userId),
     queryFn: () =>
-      fetchImportablePurchases(accessToken!),
-    enabled: Boolean(accessToken),
+      fetchImportablePurchases(sessionToken()),
+    enabled: Boolean(userId),
   });
 }
 
 export function useWardrobeTryon() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
-    mutationFn: (id: string) => tryOnWardrobeItem(accessToken!, id),
+    mutationFn: (id: string) => tryOnWardrobeItem(sessionToken(), id),
     onSuccess: (_res, id) => trackEvent('wardrobe_tryon_requested', { itemId: id }),
   });
 }
 
 export function useUpdateWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -739,21 +728,20 @@ export function useUpdateWardrobeItem() {
         closetStatus?: WardrobeItem['closetStatus'];
         tags?: string[];
       };
-    }) => updateWardrobeItem(accessToken!, id, patch),
+    }) => updateWardrobeItem(sessionToken(), id, patch),
     onSuccess: (item) => {
       trackEvent('wardrobe_item_updated', {
         itemId: item.id,
         laundryStatus: item.laundryStatus,
         closetStatus: item.closetStatus,
       });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useCareOcrWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -768,17 +756,16 @@ export function useCareOcrWardrobeItem() {
       imageUri?: string;
     }) =>
       imageUri
-        ? careOcrWardrobePhoto(accessToken!, id, imageUri)
-        : careOcrWardrobeItem(accessToken!, id, { imageKey, ocrText }),
+        ? careOcrWardrobePhoto(sessionToken(), id, imageUri)
+        : careOcrWardrobeItem(sessionToken(), id, { imageKey, ocrText }),
     onSuccess: (res) => {
       trackEvent('wardrobe_care_ocr', { itemId: res.itemId });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 export function useDryCleanDropOff() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -789,47 +776,44 @@ export function useDryCleanDropOff() {
       id: string;
       ticket: string;
       pickupOn: string;
-    }) => dryCleanDropOff(accessToken!, id, { ticket, pickupOn }),
+    }) => dryCleanDropOff(sessionToken(), id, { ticket, pickupOn }),
     onSuccess: (res) => {
       trackEvent('wardrobe_dry_clean_drop_off', { itemId: res.item.id, phase: res.phase });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useDryCleanConfirm() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => dryCleanConfirm(accessToken!, id),
+    mutationFn: (id: string) => dryCleanConfirm(sessionToken(), id),
     onSuccess: (res) => {
       trackEvent('wardrobe_dry_clean_confirm', { itemId: res.item.id, phase: res.phase });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useSeasonalSwap() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: { season: 'summer' | 'winter' | 'monsoon'; tagItemIds?: string[] }) =>
-      seasonalSwapWardrobe(accessToken!, body),
+      seasonalSwapWardrobe(sessionToken(), body),
     onSuccess: (res) => {
       trackEvent('wardrobe_seasonal_swap', { season: res.season, active: res.active, stored: res.stored });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useTravelPack() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: (body: { startDate: string; endDate: string; maxItems?: number }) =>
-      buildTravelPack(accessToken!, body),
+      buildTravelPack(sessionToken(), body),
     onSuccess: async (pack) => {
       trackEvent('travel_pack_built', { nights: pack.nights, count: pack.items.length });
       const share = travelPackSharePayload(pack.checklist);
@@ -844,43 +828,40 @@ export function useTravelPack() {
 }
 
 export function useWorkwearRotation() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: { weekStart?: string; commit?: boolean; unique?: boolean } = {}) =>
-      planWorkwearWeek(accessToken!, body),
+      planWorkwearWeek(sessionToken(), body),
     onSuccess: (res) => {
       trackEvent('workwear_rotation_planned', { days: res.days.length, unique: res.unique });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** N03 — calendar events → occasion outfits (+ optional night-before reminder). */
 export function useOutfitsFromCalendar() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: {
       events: Array<{ id?: string; title?: string; startAt: string; endAt?: string }>;
       remindNightBefore?: boolean;
       commit?: boolean;
-    }) => outfitsFromCalendar(accessToken!, body),
+    }) => outfitsFromCalendar(sessionToken(), body),
     onSuccess: (res) => {
       trackEvent('cal_event_outfit' as never, {
         count: res.events.length,
         occasions: res.events.map((e) => e.occasion).join(','),
       });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** N39 — wedding / festival multi-day planner. */
 export function useWeddingFestivalPlan() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: {
@@ -891,21 +872,20 @@ export function useWeddingFestivalPlan() {
       budgetLimitMinor?: number;
       plannedSpendMinor?: number;
       commit?: boolean;
-    }) => planWeddingFestival(accessToken!, body),
+    }) => planWeddingFestival(sessionToken(), body),
     onSuccess: (res) => {
       trackEvent('wedding_festival_planned' as never, {
         kind: res.kind,
         dayCount: res.dayCount,
       });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** N40 — save interview / ceremony kit. */
 export function useSaveInterviewKit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: {
@@ -915,21 +895,20 @@ export function useSaveInterviewKit() {
       eventAt: string;
       remindNightBefore?: boolean;
       commit?: boolean;
-    }) => saveInterviewKit(accessToken!, body),
+    }) => saveInterviewKit(sessionToken(), body),
     onSuccess: (res) => {
       trackEvent('interview_kit_saved' as never, {
         kind: res.kit.kind,
         reminded: res.kit.reminderScheduled,
       });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** W056 — edit / cancel night-before reminder. */
 export function usePatchInterviewKit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: {
@@ -939,46 +918,51 @@ export function usePatchInterviewKit() {
       remindNightBefore?: boolean;
     }) => {
       const { id, ...body } = input;
-      return patchInterviewKit(accessToken!, id, body);
+      return patchInterviewKit(sessionToken(), id, body);
     },
     onSuccess: (res) => {
       trackEvent('interview_kit_patched' as never, {
         kitId: res.kit.id,
         reminded: res.kit.reminderScheduled,
       });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useDeleteWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => deleteWardrobeItem(accessToken!, id),
+    mutationFn: (id: string) => deleteWardrobeItem(sessionToken(), id),
     onSuccess: (_void, id) => {
       trackEvent('wardrobe_item_deleted', { itemId: id });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useTodayOutfit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['today-outfit', accessToken],
-    queryFn: () => fetchTodayOutfit(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('today-outfit', userId),
+    queryFn: ({ signal }) => fetchTodayOutfit(sessionToken(), undefined, signal),
+    enabled: Boolean(userId),
   });
 }
 
+/** Another look for today. Cached per `alt` with today's outfit, so going back is instant. */
 export function useOutfitAlternative() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (alt: number) => fetchTodayOutfit(accessToken!, { alt }),
+    mutationFn: (alt: number) =>
+      queryClient.fetchQuery({
+        queryKey: closetKey('today-outfit', userId, 'alt', alt),
+        queryFn: ({ signal }) => fetchTodayOutfit(sessionToken(), { alt }, signal),
+      }),
     onSuccess: () => {
       trackEvent('outfit_alt_viewed' as never);
     },
@@ -986,43 +970,40 @@ export function useOutfitAlternative() {
 }
 
 export function useSelectTodayOutfit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { outfitId?: string; alt?: number }) => selectTodayOutfit(accessToken!, body),
+    mutationFn: (body: { outfitId?: string; alt?: number }) => selectTodayOutfit(sessionToken(), body),
     onSuccess: () => {
       trackEvent('outfit_selected' as never);
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
     },
   });
 }
 
 export function useWeekOutfits() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['week-outfits', accessToken],
-    queryFn: () => fetchWeekOutfits(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('week-outfits', userId),
+    queryFn: ({ signal }) => fetchWeekOutfits(sessionToken(), undefined, signal),
+    enabled: Boolean(userId),
   });
 }
 
 export function useGenerateWeekOutfit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: { date?: string; fillWeek?: boolean; preferCapsule?: boolean } = {}) =>
-      generateWeekOutfit(accessToken!, body),
+      generateWeekOutfit(sessionToken(), body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** W046 — tap-assign / drag-plan a look onto a week day. */
 export function usePatchWeekOutfit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (args: {
@@ -1030,96 +1011,93 @@ export function usePatchWeekOutfit() {
       itemIds?: string[];
       occasion?: string | null;
     }) =>
-      patchWeekDayOutfit(accessToken!, args.date, {
+      patchWeekDayOutfit(sessionToken(), args.date, {
         itemIds: args.itemIds,
         occasion: args.occasion,
       }),
     onSuccess: () => {
       trackEvent('outfit_selected' as never);
-      queryClient.invalidateQueries({ queryKey: ['week-outfits', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['week-outfits'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 export function useGoesWith(itemId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['goes-with', itemId, accessToken],
-    queryFn: () => fetchGoesWith(accessToken!, itemId!),
-    enabled: Boolean(accessToken) && Boolean(itemId),
+    queryKey: closetKey('goes-with', userId, itemId),
+    queryFn: () => fetchGoesWith(sessionToken(), itemId!),
+    enabled: Boolean(userId) && Boolean(itemId),
   });
 }
 
 /** N29 — shoe & bag rotation suggestions from wear_log. */
 export function useShoeBagRotation(kind: 'shoes' | 'bag' | 'all' = 'all') {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['shoe-bag-rotation', kind, accessToken],
-    queryFn: () => fetchShoeBagRotation(accessToken!, { kind, limit: 6 }),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('shoe-bag-rotation', userId, kind),
+    queryFn: () => fetchShoeBagRotation(sessionToken(), { kind, limit: 6 }),
+    enabled: Boolean(userId),
   });
 }
 
 /** N31 — missing-piece gaps → shopping list with affiliate URLs. */
 export function useMissingPieces(limit = 5) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['missing-pieces', limit, accessToken],
-    queryFn: () => fetchMissingPieces(accessToken!, limit),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('missing-pieces', userId, limit),
+    queryFn: () => fetchMissingPieces(sessionToken(), limit),
+    enabled: Boolean(userId),
   });
 }
 
 /** W070 — photo dump → tagged wardrobe items for batch review. */
 export function usePhotoDump() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (args: { imageUris: string[] }) =>
-      runPhotoDumpFromUris(accessToken!, args.imageUris),
+      runPhotoDumpFromUris(sessionToken(), args.imageUris),
     onSuccess: (res) => {
       trackEvent('wardrobe_photo_dump', { count: res.created, tagged: res.tagged });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 /** N32 — capsule membership. */
 export function useCapsule(opts?: { enabled?: boolean }) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['wardrobe-capsule', accessToken],
-    queryFn: () => fetchCapsule(accessToken!),
-    enabled: (opts?.enabled ?? true) && Boolean(accessToken),
+    queryKey: closetKey('wardrobe-capsule', userId),
+    queryFn: ({ signal }) => fetchCapsule(sessionToken(), signal),
+    enabled: (opts?.enabled ?? true) && Boolean(userId),
   });
 }
 
 export function useSaveCapsule() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (itemIds: string[]) => saveCapsule(accessToken!, itemIds),
+    mutationFn: (itemIds: string[]) => saveCapsule(sessionToken(), itemIds),
     onSuccess: () => {
       trackEvent('wardrobe_capsule_updated' as never);
-      queryClient.invalidateQueries({ queryKey: ['wardrobe-capsule', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe-capsule'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
     },
   });
 }
 
 /** N51 — replace worn-out twin candidates. */
 export function useReplaceTwins(itemId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['replace-twins', itemId, accessToken],
-    queryFn: () => fetchReplaceTwins(accessToken!, itemId!),
-    enabled: Boolean(accessToken) && Boolean(itemId),
+    queryKey: closetKey('replace-twins', userId, itemId),
+    queryFn: () => fetchReplaceTwins(sessionToken(), itemId!),
+    enabled: Boolean(userId) && Boolean(itemId),
   });
 }
 
 export function useReplaceTwinClick() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: ({
       itemId,
@@ -1129,22 +1107,21 @@ export function useReplaceTwinClick() {
       itemId: string;
       listingId: string;
       platform?: string;
-    }) => recordReplaceTwinClick(accessToken!, itemId, { listingId, platform }),
+    }) => recordReplaceTwinClick(sessionToken(), itemId, { listingId, platform }),
   });
 }
 
 /** N52 — complete-the-look owned + affiliate gaps. */
 export function useCompleteLook(itemIds?: string[]) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['complete-look', itemIds?.join(',') ?? 'auto', accessToken],
-    queryFn: () => fetchCompleteLook(accessToken!, itemIds),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('complete-look', userId, itemIds?.join(',') ?? 'auto'),
+    queryFn: () => fetchCompleteLook(sessionToken(), itemIds),
+    enabled: Boolean(userId),
   });
 }
 
 export function useLogWear() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: {
@@ -1158,10 +1135,10 @@ export function useLogWear() {
     }) => {
       let imageKey = body.imageKey ?? null;
       if (!imageKey && body.photoUri) {
-        const uploaded = await uploadWearPhoto(accessToken!, body.photoUri);
+        const uploaded = await uploadWearPhoto(sessionToken(), body.photoUri);
         imageKey = uploaded.imageKey;
       }
-      return logWear(accessToken!, {
+      return logWear(sessionToken(), {
         wardrobeItemId: body.wardrobeItemId,
         outfitId: body.outfitId,
         imageKey,
@@ -1182,21 +1159,21 @@ export function useLogWear() {
           }
         }
       }
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-dead', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['rewear-streak', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['today-outfit', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-dead'] });
+      queryClient.invalidateQueries({ queryKey: ['rewear-streak'] });
+      queryClient.invalidateQueries({ queryKey: ['today-outfit'] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 export function useWasteSummary() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['waste-summary', accessToken],
-    queryFn: () => fetchWasteSummary(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('waste-summary', userId),
+    queryFn: ({ signal }) => fetchWasteSummary(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 
@@ -1204,143 +1181,143 @@ export function useRewearStreak(opts?: {
   breakOnPurchase?: boolean;
   enabled?: boolean;
 }) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['rewear-streak', accessToken, opts?.breakOnPurchase ?? false],
+    queryKey: closetKey('rewear-streak', userId, opts?.breakOnPurchase ?? false),
     queryFn: () =>
-      fetchRewearStreak(accessToken!, {
+      fetchRewearStreak(sessionToken(), {
         breakOnPurchase: opts?.breakOnPurchase,
       }),
-    enabled: (opts?.enabled ?? true) && Boolean(accessToken),
+    enabled: (opts?.enabled ?? true) && Boolean(userId),
   });
 }
 
 export function useWasteDead() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['waste-dead', accessToken],
-    queryFn: () => fetchWasteDead(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('waste-dead', userId),
+    queryFn: ({ signal }) => fetchWasteDead(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 
 export function useDisposeWaste() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ itemId, mode }: { itemId: string; mode?: string }) => disposeWasteItem(accessToken!, itemId, { mode: mode ?? 'SELL' }),
+    mutationFn: ({ itemId, mode }: { itemId: string; mode?: string }) => disposeWasteItem(sessionToken(), itemId, { mode: mode ?? 'SELL' }),
     onSuccess: () => {
       trackEvent('waste_disposed');
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-dead', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['disposition', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-dead'] });
+      queryClient.invalidateQueries({ queryKey: ['disposition'] });
+      // A disposed item leaves the active wardrobe (MOB 6).
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 export function useStartWearChallenge() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (itemId: string) => startWearChallenge(accessToken!, itemId),
+    mutationFn: (itemId: string) => startWearChallenge(sessionToken(), itemId),
     onSuccess: (data) => {
       useClosetStore.getState().startWearChallenge(data.wardrobeItemId);
       trackEvent('wear_challenge_started' as never, { wardrobeItemId: data.wardrobeItemId });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-dead', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-dead'] });
     },
   });
 }
 
 export function useStartDeclutterChallenge() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (opts?: { target?: number }) => startDeclutterChallenge(accessToken!, opts ?? {}),
+    mutationFn: (opts?: { target?: number }) => startDeclutterChallenge(sessionToken(), opts ?? {}),
     onSuccess: (data) => {
       useClosetStore.getState().startDeclutterChallenge();
       trackEvent('declutter_challenge_started' as never, {
         progress: data.declutterChallenge.progress,
         target: data.declutterChallenge.target,
       });
-      queryClient.invalidateQueries({ queryKey: ['disposition', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['disposition'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
     },
   });
 }
 
 // --- Universe P3: accountant ---
 export function useAccountantSummary() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['accountant-summary', accessToken],
-    queryFn: () => fetchAccountantSummary(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('accountant-summary', userId),
+    queryFn: ({ signal }) => fetchAccountantSummary(sessionToken(), signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 export function useAccountantSeasonRoi(year?: number) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['accountant-roi-season', accessToken, year ?? 'current'],
-    queryFn: () => fetchAccountantSeasonRoi(accessToken!, year),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('accountant-roi-season', userId, year ?? 'current'),
+    queryFn: ({ signal }) => fetchAccountantSeasonRoi(sessionToken(), year, signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 export function useAccountantLedger() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['accountant-ledger', accessToken],
-    queryFn: () => fetchAccountantLedger(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('accountant-ledger', userId),
+    queryFn: ({ signal }) => fetchAccountantLedger(sessionToken(), signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 export function useBudgets() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['budgets', accessToken],
-    queryFn: () => fetchBudgets(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('budgets', userId),
+    queryFn: ({ signal }) => fetchBudgets(sessionToken(), signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 export function useCreateBudget() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { category: string; period: string; limitMinor: number }) => createBudget(accessToken!, body),
+    mutationFn: (body: { category: string; period: string; limitMinor: number }) => createBudget(sessionToken(), body),
     onSuccess: () => {
       trackEvent('budget_created');
-      queryClient.invalidateQueries({ queryKey: ['budgets', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['accountant-summary', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['budgets'] });
+      queryClient.invalidateQueries({ queryKey: ['accountant-summary'] });
     },
   });
 }
 
 export function useSetCpwGoal() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ itemId, targetCpwMinor }: { itemId: string; targetCpwMinor: number }) =>
-      setCpwGoal(accessToken!, itemId, targetCpwMinor),
+      setCpwGoal(sessionToken(), itemId, targetCpwMinor),
     onSuccess: (data) => {
       trackEvent('cpw_goal_set', {
         wardrobeItemId: data.wardrobeItemId,
         targetCpwMinor: data.targetCpwMinor,
       });
-      queryClient.invalidateQueries({ queryKey: ['accountant-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-summary', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['waste-dead', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['accountant-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['waste-dead'] });
+      queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 export function useExportAccountantCsv() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: async () => {
-      if (!accessToken) throw new Error('Sign in to export');
+      const accessToken = sessionToken('Sign in to export');
       const csv = await fetchAccountantExportCsv(accessToken);
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = localDayKey();
       const result = await shareTextFile({
         fileName: `worn-accountant-${stamp}.csv`,
         contents: csv,
@@ -1354,12 +1331,11 @@ export function useExportAccountantCsv() {
 }
 
 export function useExportVault() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: async () => {
-      if (!accessToken) throw new Error('Sign in to export');
+      const accessToken = sessionToken('Sign in to export');
       const data = await exportVaultData(accessToken);
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = localDayKey();
       const result = await shareTextFile({
         fileName: `worn-vault-export-${stamp}.json`,
         contents: JSON.stringify(data, null, 2),
@@ -1373,11 +1349,10 @@ export function useExportVault() {
 }
 
 export function useDeleteVault() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      if (!accessToken) throw new Error('Sign in to delete your account');
+      const accessToken = sessionToken('Sign in to delete your account');
       await deleteVault(accessToken);
     },
     onSuccess: () => {
@@ -1390,34 +1365,34 @@ export function useDeleteVault() {
 
 // --- Universe P3: returns ---
 export function useReturns() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['returns', accessToken],
-    queryFn: () => fetchReturns(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('returns', userId),
+    queryFn: ({ signal }) => fetchReturns(sessionToken(), signal),
+    enabled: Boolean(userId),
+    subscribed: useClosetSubscribed(),
   });
 }
 /** N16 — open refund ETA board (INITIATED→…→REFUNDED until ledger). */
 export function useRefundEtaBoard(opts?: { all?: boolean }) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const all = opts?.all === true;
   return useQuery({
-    queryKey: ['refund-eta-board', accessToken, all ? 'all' : 'open'],
+    queryKey: closetKey('refund-eta-board', userId, all ? 'all' : 'open'),
     queryFn: () =>
-      fetchRefundEtaBoard(accessToken!, { all }),
-    enabled: Boolean(accessToken),
+      fetchRefundEtaBoard(sessionToken(), { all }),
+    enabled: Boolean(userId),
   });
 }
 export function useReturnDetail(id: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['return-detail', id, accessToken],
-    queryFn: () => fetchReturnDetail(accessToken!, id),
-    enabled: Boolean(accessToken) && Boolean(id),
+    queryKey: closetKey('return-detail', userId, id),
+    queryFn: ({ signal }) => fetchReturnDetail(sessionToken(), id, signal),
+    enabled: Boolean(userId) && Boolean(id),
   });
 }
 export function useInitiateReturn() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1431,111 +1406,100 @@ export function useInitiateReturn() {
       reason?: string;
       orderedSize?: string;
       preferredSize?: string;
-    }) => initiateReturn(accessToken!, id, body),
-    onSuccess: (_data, vars) => {
+    }) => initiateReturn(sessionToken(), id, body),
+    onSuccess: () => {
       trackEvent('return_initiated');
-      queryClient.invalidateQueries({ queryKey: ['returns', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['return-detail', vars.id, accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['returns'] });
+      queryClient.invalidateQueries({ queryKey: ['return-detail'] });
       queryClient.invalidateQueries({ queryKey: ['refund-eta-board'] });
     },
   });
 }
 export function useConfirmReturn() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, tracking }: { id: string; tracking?: string }) => confirmReturn(accessToken!, id, { tracking }),
-    onSuccess: (_data, vars) => {
+    mutationFn: ({ id, tracking }: { id: string; tracking?: string }) => confirmReturn(sessionToken(), id, { tracking }),
+    onSuccess: () => {
       trackEvent('return_confirmed');
-      queryClient.invalidateQueries({ queryKey: ['returns', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['return-detail', vars.id, accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['returns'] });
+      queryClient.invalidateQueries({ queryKey: ['return-detail'] });
       queryClient.invalidateQueries({ queryKey: ['refund-eta-board'] });
     },
   });
 }
 /** WV01 / W033 — book logistics pickup slot. */
 export function useBookReturnPickup() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, pickupSlotAt }: { id: string; pickupSlotAt: string }) =>
-      bookReturnPickup(accessToken!, id, { pickupSlotAt }),
+      bookReturnPickup(sessionToken(), id, { pickupSlotAt }),
     onSuccess: (_data, vars) => {
       trackEvent('return_pickup_scheduled', { returnId: vars.id });
-      queryClient.invalidateQueries({ queryKey: ['returns', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['return-detail', vars.id, accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['returns'] });
+      queryClient.invalidateQueries({ queryKey: ['return-detail'] });
       queryClient.invalidateQueries({ queryKey: ['refund-eta-board'] });
     },
   });
 }
 
-function invalidateReturnQueries(
-  queryClient: ReturnType<typeof useQueryClient>,
-  accessToken: string | null,
-  id: string,
-) {
-  queryClient.invalidateQueries({ queryKey: ['returns', accessToken] });
-  queryClient.invalidateQueries({ queryKey: ['return-detail', id, accessToken] });
+function invalidateReturnQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['returns'] });
+  queryClient.invalidateQueries({ queryKey: ['return-detail'] });
   queryClient.invalidateQueries({ queryKey: ['refund-eta-board'] });
 }
 
 /** U019 — reschedule pickup. */
 export function useRescheduleReturnPickup() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, pickupSlotAt }: { id: string; pickupSlotAt: string }) =>
-      rescheduleReturnPickup(accessToken!, id, { pickupSlotAt }),
+      rescheduleReturnPickup(sessionToken(), id, { pickupSlotAt }),
     onSuccess: (_data, vars) => {
       trackEvent('return_pickup_rescheduled', { returnId: vars.id });
-      invalidateReturnQueries(queryClient, accessToken, vars.id);
+      invalidateReturnQueries(queryClient);
     },
   });
 }
 
 /** U019 — cancel pickup → INITIATED. */
 export function useCancelReturnPickup() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id }: { id: string }) => cancelReturnPickup(accessToken!, id),
+    mutationFn: ({ id }: { id: string }) => cancelReturnPickup(sessionToken(), id),
     onSuccess: (_data, vars) => {
       trackEvent('return_pickup_cancelled', { returnId: vars.id });
-      invalidateReturnQueries(queryClient, accessToken, vars.id);
+      invalidateReturnQueries(queryClient);
     },
   });
 }
 
 /** U020 — snooze refund chase. */
 export function useSnoozeRefundChase() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, days }: { id: string; days?: number }) =>
-      snoozeRefundChase(accessToken!, id, { days }),
+      snoozeRefundChase(sessionToken(), id, { days }),
     onSuccess: (_data, vars) => {
       trackEvent('return_chase_snoozed', { returnId: vars.id });
-      invalidateReturnQueries(queryClient, accessToken, vars.id);
+      invalidateReturnQueries(queryClient);
     },
   });
 }
 
 /** U020 — escalate refund chase. */
 export function useEscalateRefundChase() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id }: { id: string }) => escalateRefundChase(accessToken!, id),
+    mutationFn: ({ id }: { id: string }) => escalateRefundChase(sessionToken(), id),
     onSuccess: (_data, vars) => {
       trackEvent('return_chase_escalated', { returnId: vars.id });
-      invalidateReturnQueries(queryClient, accessToken, vars.id);
+      invalidateReturnQueries(queryClient);
     },
   });
 }
 
 /** U025 — correct return window. */
 export function useCorrectReturnWindow() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1546,25 +1510,24 @@ export function useCorrectReturnWindow() {
       id: string;
       windowDeadline: string;
       reason: string;
-    }) => correctReturnWindow(accessToken!, id, { windowDeadline, reason }),
+    }) => correctReturnWindow(sessionToken(), id, { windowDeadline, reason }),
     onSuccess: (_data, vars) => {
       trackEvent('return_window_corrected', { returnId: vars.id });
-      invalidateReturnQueries(queryClient, accessToken, vars.id);
+      invalidateReturnQueries(queryClient);
     },
   });
 }
 /** N17 / W036 — brand size inconsistency map. */
 export function useSizeMap() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['returns-size-map', accessToken],
-    queryFn: () => fetchSizeMap(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('returns-size-map', userId),
+    queryFn: () => fetchSizeMap(sessionToken()),
+    enabled: Boolean(userId),
   });
 }
 /** User marks merchant refund landed → money_ledger REFUND visible in Vault. */
 export function useMarkReturnRefunded() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1575,14 +1538,14 @@ export function useMarkReturnRefunded() {
       id: string;
       refundMinor?: number;
       destination: 'ORIGINAL_CARD' | 'STORE_CREDIT' | 'UPI';
-    }) => markReturnRefunded(accessToken!, id, { refundMinor, destination }),
-    onSuccess: (_data, vars) => {
+    }) => markReturnRefunded(sessionToken(), id, { refundMinor, destination }),
+    onSuccess: () => {
       trackEvent('return_refunded');
-      queryClient.invalidateQueries({ queryKey: ['returns', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['return-detail', vars.id, accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['returns'] });
+      queryClient.invalidateQueries({ queryKey: ['return-detail'] });
       queryClient.invalidateQueries({ queryKey: ['refund-eta-board'] });
-      queryClient.invalidateQueries({ queryKey: ['accountant-ledger', accessToken] });
-      queryClient.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      queryClient.invalidateQueries({ queryKey: ['accountant-ledger'] });
+      queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
       queryClient.invalidateQueries({ queryKey: ['returns-size-map'] });
     },
   });
@@ -1590,41 +1553,37 @@ export function useMarkReturnRefunded() {
 
 // --- Universe P4: gift ---
 export function useRecipients() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['recipients', accessToken], queryFn: () => fetchRecipients(accessToken!), enabled: Boolean(accessToken) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('recipients', userId), queryFn: ({ signal }) => fetchRecipients(sessionToken(), signal), enabled: Boolean(userId) });
 }
 export function useCreateRecipient() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return useMutation({ mutationFn: (body: { name: string; relationship?: string; region?: string; profile?: any }) => createRecipient(accessToken!, body), onSuccess: () => { trackEvent('recipient_created' as never); qc.invalidateQueries({ queryKey: ['recipients', accessToken] }); } });
+  return useMutation({ mutationFn: (body: { name: string; relationship?: string; region?: string; profile?: any }) => createRecipient(sessionToken(), body), onSuccess: () => { trackEvent('recipient_created' as never); qc.invalidateQueries({ queryKey: ['recipients'] }); } });
 }
 export function useRecipientIdeas(recipientId: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['recipient-ideas', recipientId, accessToken], queryFn: () => fetchRecipientIdeas(accessToken!, recipientId), enabled: Boolean(accessToken) && Boolean(recipientId) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('recipient-ideas', userId, recipientId), queryFn: ({ signal }) => fetchRecipientIdeas(sessionToken(), recipientId, undefined, signal), enabled: Boolean(userId) && Boolean(recipientId) });
 }
 export function useCreateGiftOrder() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (body: { recipientId: string; listingId?: string; occasion?: string }) => createGiftOrder(accessToken!, body), onSuccess: () => { trackEvent('gift_ordered' as never); qc.invalidateQueries({ queryKey: ['gifts', accessToken] }); } });
+  return useMutation({ mutationFn: (body: { recipientId: string; listingId?: string; occasion?: string }) => createGiftOrder(sessionToken(), body), onSuccess: () => { trackEvent('gift_ordered' as never); qc.invalidateQueries({ queryKey: ['gifts'] }); } });
 }
 
 // --- Universe P4: fit ---
 export function useMeasurements() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['measurements', accessToken], queryFn: () => fetchMeasurements(accessToken!), enabled: Boolean(accessToken) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('measurements', userId), queryFn: ({ signal }) => fetchMeasurements(sessionToken(), signal), enabled: Boolean(userId) });
 }
 export function useCreateMeasurement() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (body: { points: Record<string,number>; region?: string; unit?: string }) => createMeasurement(accessToken!, body), onSuccess: () => { trackEvent('measurement_saved' as never); qc.invalidateQueries({ queryKey: ['measurements', accessToken] }); } });
+  return useMutation({ mutationFn: (body: { points: Record<string,number>; region?: string; unit?: string }) => createMeasurement(sessionToken(), body), onSuccess: () => { trackEvent('measurement_saved' as never); qc.invalidateQueries({ queryKey: ['measurements'] }); } });
 }
 export function useTemplates(region?: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['templates', region, accessToken], queryFn: () => fetchTemplates(accessToken!, region), enabled: Boolean(accessToken) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('templates', userId, region), queryFn: ({ signal }) => fetchTemplates(sessionToken(), region, signal), enabled: Boolean(userId) });
 }
 export function useCreateTailoringOrder() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
@@ -1634,45 +1593,43 @@ export function useCreateTailoringOrder() {
       fabricRef?: string;
       fabricPhotoKeys?: string[];
       tailorSellerId?: string | null;
-    }) => createTailoringOrder(accessToken!, body),
+    }) => createTailoringOrder(sessionToken(), body),
     onSuccess: () => {
       trackEvent('tailoring_ordered' as never);
-      qc.invalidateQueries({ queryKey: ['tailoring-orders', accessToken] });
+      qc.invalidateQueries({ queryKey: ['tailoring-orders'] });
     },
   });
 }
 export function useReorderTailoringOrder() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (orderId: string) => reorderTailoringOrder(accessToken!, orderId),
+    mutationFn: (orderId: string) => reorderTailoringOrder(sessionToken(), orderId),
     onSuccess: () => {
       trackEvent('tailoring_reordered' as never);
-      qc.invalidateQueries({ queryKey: ['tailoring-orders', accessToken] });
+      qc.invalidateQueries({ queryKey: ['tailoring-orders'] });
     },
   });
 }
 export function useTailoringOrder(id: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['tailoring-order', id, accessToken], queryFn: () => fetchTailoringOrder(accessToken!, id), enabled: Boolean(accessToken) && Boolean(id) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('tailoring-order', userId, id), queryFn: () => fetchTailoringOrder(sessionToken(), id), enabled: Boolean(userId) && Boolean(id) });
 }
 export function useTailoringOrders() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['tailoring-orders', accessToken], queryFn: () => fetchTailoringOrders(accessToken!), enabled: Boolean(accessToken) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('tailoring-orders', userId), queryFn: () => fetchTailoringOrders(sessionToken()), enabled: Boolean(userId) });
 }
 export function useFitTailors() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['fit-tailors', accessToken],
-    queryFn: () => fetchFitTailors(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('fit-tailors', userId),
+    queryFn: ({ signal }) => fetchFitTailors(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 export function useFitPreview() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: (body: { templateId: string; selections?: Record<string, string> }) =>
-      previewFitCustomization(accessToken!, body),
+      previewFitCustomization(sessionToken(), body),
     onSuccess: () => {
       trackEvent('tailoring_previewed' as never);
     },
@@ -1681,22 +1638,20 @@ export function useFitPreview() {
 
 // --- Universe P4: disposition ---
 export function useDisposition() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  return useQuery({ queryKey: ['disposition', accessToken], queryFn: () => fetchDisposition(accessToken!), enabled: Boolean(accessToken) });
+  const userId = useSessionUserId();
+  return useQuery({ queryKey: closetKey('disposition', userId), queryFn: () => fetchDisposition(sessionToken()), enabled: Boolean(userId) });
 }
 export function useCreateDisposition() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (body: { wardrobeItemId: string; mode?: string; priceMinor?: number | null }) => createDisposition(accessToken!, body), onSuccess: () => { trackEvent('disposition_created' as never); qc.invalidateQueries({ queryKey: ['disposition', accessToken] }); qc.invalidateQueries({ queryKey: ['waste-summary', accessToken] }); qc.invalidateQueries({ queryKey: ['waste-dead', accessToken] }); } });
+  return useMutation({ mutationFn: (body: { wardrobeItemId: string; mode?: string; priceMinor?: number | null }) => createDisposition(sessionToken(), body), onSuccess: () => { trackEvent('disposition_created' as never); qc.invalidateQueries({ queryKey: ['disposition'] }); qc.invalidateQueries({ queryKey: ['waste-summary'] }); qc.invalidateQueries({ queryKey: ['waste-dead'] }); } });
 }
 
 /** N50 — Track this Play buy in Closet. */
 export function useTrackPlayBuy() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { orderId: string; seedWardrobe?: boolean }) => {
-      if (!accessToken) throw new Error('Sign in to track this purchase');
+      const accessToken = sessionToken('Sign in to track this purchase');
       return trackPlayBuyInCloset(accessToken, body.orderId, body.seedWardrobe ?? true);
     },
     onSuccess: (result) => {
@@ -1707,14 +1662,14 @@ export function useTrackPlayBuy() {
       });
       void qc.invalidateQueries({ queryKey: ['wardrobe'] });
       void qc.invalidateQueries({ queryKey: ['accountant-summary'] });
-      void qc.invalidateQueries({ queryKey: ['closet'] });
+      void qc.invalidateQueries({ queryKey: ['ingestion-sources'] });
+      void qc.invalidateQueries({ queryKey: ['ingestion-metrics'] });
     },
   });
 }
 
 /** N33 — Check my closet before Play checkout. */
 export function usePrebuyFit() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   return useMutation({
     mutationFn: (
       body:
@@ -1729,7 +1684,7 @@ export function usePrebuyFit() {
             }>;
           },
     ) => {
-      if (!accessToken) throw new Error('Sign in to check your closet');
+      const accessToken = sessionToken('Sign in to check your closet');
       return checkPrebuyFit(accessToken, body);
     },
     onSuccess: (result) => {
@@ -1744,20 +1699,19 @@ export function usePrebuyFit() {
 
 /** N09 — in-transit packages */
 export function usePackages(all = false, opts?: { enabled?: boolean }) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['packages', all, accessToken],
-    queryFn: () => fetchPackages(accessToken!, all),
-    enabled: (opts?.enabled ?? true) && Boolean(accessToken),
+    queryKey: closetKey('packages', userId, all),
+    queryFn: ({ signal }) => fetchPackages(sessionToken(), all, signal),
+    enabled: (opts?.enabled ?? true) && Boolean(userId),
   });
 }
 
 export function useMarkPackageDelivered() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, addToWardrobe }: { id: string; addToWardrobe?: boolean }) =>
-      markPackageDelivered(accessToken!, id, { addToWardrobe }),
+      markPackageDelivered(sessionToken(), id, { addToWardrobe }),
     onSuccess: () => {
       trackEvent('package_delivered' as never);
       void qc.invalidateQueries({ queryKey: ['packages'] });
@@ -1769,7 +1723,6 @@ export function useMarkPackageDelivered() {
 
 /** U018 — paste tracking / set status. */
 export function useUpdatePackage() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1781,7 +1734,7 @@ export function useUpdatePackage() {
       trackingCode?: string | null;
       carrier?: string | null;
       deliveryAddressNote?: string | null;
-    }) => updatePackage(accessToken!, id, body),
+    }) => updatePackage(sessionToken(), id, body),
     onSuccess: () => {
       trackEvent('package_tracking_saved' as never);
       void qc.invalidateQueries({ queryKey: ['packages'] });
@@ -1792,7 +1745,6 @@ export function useUpdatePackage() {
 
 /** U023 — RTO address fix. */
 export function useFixRtoAddress() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1803,7 +1755,7 @@ export function useFixRtoAddress() {
       purchaseId: string;
       deliveryAddressNote: string;
       reattempt?: boolean;
-    }) => fixRtoAddress(accessToken!, purchaseId, { deliveryAddressNote, reattempt }),
+    }) => fixRtoAddress(sessionToken(), purchaseId, { deliveryAddressNote, reattempt }),
     onSuccess: () => {
       trackEvent('rto_address_fixed' as never);
       void qc.invalidateQueries({ queryKey: ['packages'] });
@@ -1814,11 +1766,10 @@ export function useFixRtoAddress() {
 
 /** U024 — attach delivery proof. */
 export function useAttachDeliveryProof() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ purchaseId, imageKey }: { purchaseId: string; imageKey: string }) =>
-      attachDeliveryProof(accessToken!, purchaseId, { imageKey }),
+      attachDeliveryProof(sessionToken(), purchaseId, { imageKey }),
     onSuccess: () => {
       trackEvent('delivery_proof_attached' as never);
       void qc.invalidateQueries({ queryKey: ['packages'] });
@@ -1829,30 +1780,29 @@ export function useAttachDeliveryProof() {
 
 /** N10 — open exchange windows (≠ returns) */
 export function useExchanges() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['exchanges', accessToken],
-    queryFn: () => fetchExchanges(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('exchanges', userId),
+    queryFn: ({ signal }) => fetchExchanges(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 
 /** N15 / W037 — RTO recovery checklist board */
 export function useRtoRecovery(all = false) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['rto-recovery', all, accessToken],
-    queryFn: () => fetchRtoRecovery(accessToken!, all),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('rto-recovery', userId, all),
+    queryFn: () => fetchRtoRecovery(sessionToken(), all),
+    enabled: Boolean(userId),
   });
 }
 
 export function useStartRtoRefund() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ purchaseId, method }: { purchaseId: string; method?: string }) =>
-      startRtoRefund(accessToken!, purchaseId, { method }),
+      startRtoRefund(sessionToken(), purchaseId, { method }),
     onSuccess: () => {
       trackEvent('rto_refund_started');
       void qc.invalidateQueries({ queryKey: ['rto-recovery'] });
@@ -1865,11 +1815,10 @@ export function useStartRtoRefund() {
 
 /** W038 — open a return from exchange dual CTA */
 export function useCreateReturn() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { purchaseId?: string; purchaseItemId?: string; method?: string }) =>
-      createReturn(accessToken!, body),
+      createReturn(sessionToken(), body),
     onSuccess: () => {
       trackEvent('return_cta_from_exchange');
       void qc.invalidateQueries({ queryKey: ['returns'] });
@@ -1880,79 +1829,75 @@ export function useCreateReturn() {
 
 /** N37 — invite-only swap circles */
 export function useSwapCircles() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['swap-circles', accessToken],
-    queryFn: () => fetchSwapCircles(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('swap-circles', userId),
+    queryFn: ({ signal }) => fetchSwapCircles(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 
 export function useCreateSwapCircle() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) =>
-      createSwapCircle(accessToken!, name),
+      createSwapCircle(sessionToken(), name),
     onSuccess: () => {
       trackEvent('swap_circle_created' as never);
-      void qc.invalidateQueries({ queryKey: ['swap-circles', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['swap-circles'] });
     },
   });
 }
 
 export function useJoinSwapCircle() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (inviteCode: string) =>
-      joinSwapCircle(accessToken!, inviteCode),
+      joinSwapCircle(sessionToken(), inviteCode),
     onSuccess: () => {
       trackEvent('swap_circle_joined' as never);
-      void qc.invalidateQueries({ queryKey: ['swap-circles', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['swap-circles'] });
     },
   });
 }
 
 export function useSwapListings(circleId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['swap-listings', circleId, accessToken],
+    queryKey: closetKey('swap-listings', userId, circleId),
     queryFn: () =>
-      fetchSwapListings(accessToken!, circleId!),
-    enabled: Boolean(accessToken) && Boolean(circleId),
+      fetchSwapListings(sessionToken(), circleId!),
+    enabled: Boolean(userId) && Boolean(circleId),
   });
 }
 
 export function useBorrowSwapListing() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ circleId, listingId }: { circleId: string; listingId: string }) =>
-      borrowSwapListing(accessToken!, circleId, listingId),
-    onSuccess: (_d, vars) => {
+      borrowSwapListing(sessionToken(), circleId, listingId),
+    onSuccess: () => {
       trackEvent('swap_listing_borrowed' as never);
-      void qc.invalidateQueries({ queryKey: ['swap-listings', vars.circleId, accessToken] });
+      void qc.invalidateQueries({ queryKey: ['swap-listings'] });
     },
   });
 }
 
 /** N25 — lend / return */
 export function useLentWardrobe(due: 'all' | 'due' | 'overdue' = 'overdue') {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['wardrobe-lent', due, accessToken],
-    queryFn: () => fetchLentWardrobe(accessToken!, { due }),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('wardrobe-lent', userId, due),
+    queryFn: () => fetchLentWardrobe(sessionToken(), { due }),
+    enabled: Boolean(userId),
   });
 }
 
 export function useLendWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, lentTo, dueOn }: { id: string; lentTo: string; dueOn: string }) =>
-      lendWardrobeItem(accessToken!, id, { lentTo, dueOn }),
+      lendWardrobeItem(sessionToken(), id, { lentTo, dueOn }),
     onSuccess: () => {
       trackEvent('wardrobe_lent' as never);
       void qc.invalidateQueries({ queryKey: ['wardrobe'] });
@@ -1961,11 +1906,10 @@ export function useLendWardrobeItem() {
 }
 
 export function useReturnLentWardrobeItem() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      returnLentWardrobeItem(accessToken!, id),
+      returnLentWardrobeItem(sessionToken(), id),
     onSuccess: () => {
       trackEvent('wardrobe_lent_returned' as never);
       void qc.invalidateQueries({ queryKey: ['wardrobe'] });
@@ -1976,186 +1920,177 @@ export function useReturnLentWardrobeItem() {
 
 /** N26 — household */
 export function useHouseholds() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['households', accessToken],
-    queryFn: () => fetchHouseholds(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('households', userId),
+    queryFn: ({ signal }) => fetchHouseholds(sessionToken(), signal),
+    enabled: Boolean(userId),
   });
 }
 
 export function useCreateHousehold() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) =>
-      createHousehold(accessToken!, name),
+      createHousehold(sessionToken(), name),
     onSuccess: () => {
       trackEvent('household_created' as never);
-      void qc.invalidateQueries({ queryKey: ['households', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['households'] });
     },
   });
 }
 
 export function useJoinHousehold() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (inviteCode: string) =>
-      joinHousehold(accessToken!, inviteCode),
+      joinHousehold(sessionToken(), inviteCode),
     onSuccess: () => {
       trackEvent('household_joined' as never);
-      void qc.invalidateQueries({ queryKey: ['households', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['households'] });
     },
   });
 }
 
 export function useHouseholdWardrobe(householdId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['household-wardrobe', householdId, accessToken],
+    queryKey: closetKey('household-wardrobe', userId, householdId),
     queryFn: () =>
-      fetchHouseholdWardrobe(accessToken!, householdId!),
-    enabled: Boolean(accessToken) && Boolean(householdId),
+      fetchHouseholdWardrobe(sessionToken(), householdId!),
+    enabled: Boolean(userId) && Boolean(householdId),
   });
 }
 
 /** U015 — shared vault (redacted; no card numbers). */
 export function useHouseholdVault(householdId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['household-vault', householdId, accessToken],
-    queryFn: () => fetchHouseholdVault(accessToken!, householdId!),
-    enabled: Boolean(accessToken) && Boolean(householdId),
+    queryKey: closetKey('household-vault', userId, householdId),
+    queryFn: () => fetchHouseholdVault(sessionToken(), householdId!),
+    enabled: Boolean(userId) && Boolean(householdId),
   });
 }
 
 export function usePatchHouseholdVaultMember(householdId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
       userId: string;
       vaultAccess?: 'VIEW' | 'SPEND';
       spendCapMinor?: number | null;
-    }) => patchHouseholdVaultMember(accessToken!, householdId!, body),
+    }) => patchHouseholdVaultMember(sessionToken(), householdId!, body),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['household-vault', householdId, accessToken] });
+      void qc.invalidateQueries({ queryKey: ['household-vault'] });
     },
   });
 }
 
 export function useSpendHouseholdVault(householdId: string | null) {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
       accountId: string;
       amountMinor: number;
       idempotencyKey: string;
-    }) => spendHouseholdVault(accessToken!, householdId!, body),
+    }) => spendHouseholdVault(sessionToken(), householdId!, body),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['household-vault', householdId, accessToken] });
-      void qc.invalidateQueries({ queryKey: ['gift-cards', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['household-vault'] });
+      void qc.invalidateQueries({ queryKey: ['gift-cards'] });
     },
   });
 }
 
 /** N27 — closet profiles */
 export function useClosetProfiles() {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['closet-profiles', accessToken],
-    queryFn: () => fetchClosetProfiles(accessToken!),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('closet-profiles', userId),
+    queryFn: () => fetchClosetProfiles(sessionToken()),
+    enabled: Boolean(userId),
   });
 }
 
 export function useCreateClosetProfile() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { name: string; kind?: 'SELF' | 'PARTNER' | 'KID' | 'OTHER' }) =>
-      createClosetProfile(accessToken!, body),
+      createClosetProfile(sessionToken(), body),
     onSuccess: () => {
       trackEvent('closet_profile_created' as never);
-      void qc.invalidateQueries({ queryKey: ['closet-profiles', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['closet-profiles'] });
     },
   });
 }
 
 /** W065 — delete profile with confirm in UI. */
 export function useDeleteClosetProfile() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => deleteClosetProfile(accessToken!, id),
+    mutationFn: (id: string) => deleteClosetProfile(sessionToken(), id),
     onSuccess: () => {
       trackEvent('closet_profile_deleted' as never);
-      void qc.invalidateQueries({ queryKey: ['closet-profiles', accessToken] });
-      void qc.invalidateQueries({ queryKey: ['wardrobe', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['closet-profiles'] });
+      void qc.invalidateQueries({ queryKey: ['wardrobe'] });
     },
   });
 }
 
 /** W029 — scan owned-brand price drops for soft alert cards. */
 export function usePriceDropScan(enabled = true) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['price-drop-scan', accessToken],
-    queryFn: () => scanPriceDrops(accessToken!),
-    enabled: Boolean(accessToken) && enabled,
+    queryKey: closetKey('price-drop-scan', userId),
+    queryFn: () => scanPriceDrops(sessionToken()),
+    enabled: Boolean(userId) && enabled,
     staleTime: 5 * 60_000,
   });
 }
 
 /** U008 — create / reinforce a brand price watch from the act card. */
 export function useCreatePriceWatch() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: CreateBrandPriceWatchBody) =>
-      createBrandPriceWatch(accessToken!, body),
+      createBrandPriceWatch(sessionToken(), body),
     onSuccess: () => {
       trackEvent('price_watch_created');
-      void qc.invalidateQueries({ queryKey: ['price-drop-scan', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['price-drop-scan'] });
     },
   });
 }
 
 /** W030 — active EMI plans for don’t-miss cards. */
 export function useEmiPlans(status: 'ACTIVE' | 'PAID' | 'DEFAULTED' = 'ACTIVE') {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   return useQuery({
-    queryKey: ['emi-plans', accessToken, status],
-    queryFn: () => fetchEmiPlans(accessToken!, status),
-    enabled: Boolean(accessToken),
+    queryKey: closetKey('emi-plans', userId, status),
+    queryFn: () => fetchEmiPlans(sessionToken(), status),
+    enabled: Boolean(userId),
   });
 }
 
 export function usePayEmi() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { id: string; amountMinor?: number }) =>
-      payEmiPlan(accessToken!, input.id, { amountMinor: input.amountMinor }),
+      payEmiPlan(sessionToken(), input.id, { amountMinor: input.amountMinor }),
     onSuccess: () => {
       trackEvent('emi_marked_paid');
-      void qc.invalidateQueries({ queryKey: ['emi-plans', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['emi-plans'] });
     },
   });
 }
 
 /** U007 — create EMI plan from pasted SMS text. */
 export function useCreateEmiFromSms() {
-  const accessToken = useSessionStore((s) => s.accessToken);
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { body: string; from?: string; subject?: string }) =>
-      createEmiFromSms(accessToken!, input),
+      createEmiFromSms(sessionToken(), input),
     onSuccess: (plan) => {
       trackEvent('emi_from_sms', { planId: plan.id, provider: plan.provider });
-      void qc.invalidateQueries({ queryKey: ['emi-plans', accessToken] });
+      void qc.invalidateQueries({ queryKey: ['emi-plans'] });
     },
   });
 }

@@ -7,20 +7,46 @@ import {
   formatMinor as formatMinorShared,
   localeForCurrency,
 } from '@worn/shared';
+import { useCallback } from 'react';
+
+import { useClosetPrefsStore } from './closetPrefs';
 
 export const CLOSET_LOCALE = 'en-IN' as const;
 
 /**
  * Closet money label — uses picker locale for INR / USD / GBP (W003).
+ * Pass the amount's own currency when it has one. Without it, the user's chosen currency is used
+ * (INR until they pick one), never a hard-coded ₹ (MOB 27).
  * Explicit `locale` still wins when callers pass one.
  */
 export function formatMinor(
   minor: number,
-  currency = 'INR',
+  currency?: string | null,
   locale?: string,
 ): string {
-  const resolved = locale ?? localeForCurrency(currency);
-  return formatMinorShared(minor, currency, resolved);
+  const code = currency || useClosetPrefsStore.getState().preferredCurrency;
+  const resolved = locale ?? localeForCurrency(code);
+  return formatMinorShared(minor, code, resolved);
+}
+
+/** `formatMinor` for screens: re-renders when the user changes their currency. */
+export function useFormatMinor() {
+  const preferredCurrency = useClosetPrefsStore((s) => s.preferredCurrency);
+  return useCallback(
+    (minor: number, currency?: string | null, locale?: string) =>
+      formatMinor(minor, currency || preferredCurrency, locale),
+    [preferredCurrency],
+  );
+}
+
+/**
+ * The device's local day as `YYYY-MM-DD` (MOB 20). `toISOString().slice(0, 10)` is the UTC day,
+ * which in India is still yesterday until 05:30.
+ */
+export function localDayKey(date: Date = new Date()): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 /** Calendar date for Closet money surfaces (gift expiry, receipt purchase, ledger). */

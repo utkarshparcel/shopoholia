@@ -133,6 +133,7 @@ import {
   useWeekOutfits,
   useWorkwearRotation,
   useAccountantLedger,
+  useBulkUpdateWardrobe,
   useAccountantSummary,
   useWasteDead,
   useWasteSummary,
@@ -193,6 +194,7 @@ import {
   fetchSizeMap,
   fetchTodayOutfit,
   fetchWardrobe,
+  bulkUpdateWardrobeItems,
   fetchWarranties,
   fetchWasteDead,
   fetchWasteSummary,
@@ -243,6 +245,7 @@ import {
 } from '@/src/api/client';
 import { shareTextFile } from '@/src/lib/shareFile';
 import { useClosetStore } from '@/src/stores/closet';
+import { ClosetScreenFocus } from './keys';
 
 const sessionState = vi.hoisted(() => ({
   accessToken: 'test-token' as string | null,
@@ -256,11 +259,25 @@ vi.mock('@/src/stores/session', () => ({
   ),
 }));
 
+// Queries are keyed by the user id in the token; any token here belongs to one test user.
+vi.mock('@/src/lib/access-token', () => ({
+  userIdFromAccessToken: (token: string | null) => (token ? 'user-1' : null),
+}));
+
 vi.mock('@/src/lib/shareFile', () => ({
   shareTextFile: vi.fn(async () => ({ shared: true, uri: 'file://export' })),
 }));
 
 vi.mock('@/src/api/client', () => ({
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+      public code: string | null = null,
+    ) {
+      super(message);
+    }
+  },
   fetchCredits: vi.fn(async () => ({
     accounts: [
       {
@@ -472,6 +489,10 @@ vi.mock('@/src/api/client', () => ({
     id: 'w1',
     laundryStatus: 'CLEAN',
     closetStatus: 'ACTIVE',
+  })),
+  BULK_UPDATE_MAX_IDS: 200,
+  bulkUpdateWardrobeItems: vi.fn(async (_token: string, ids: string[]) => ({
+    items: ids.map((id) => ({ id, closetStatus: 'STORED' })),
   })),
   careOcrWardrobeItem: vi.fn(async () => ({ itemId: 'w1', care: 'dry-clean' })),
   careOcrWardrobePhoto: vi.fn(async () => ({ itemId: 'w1', care: 'hand-wash' })),
@@ -848,7 +869,7 @@ describe('useMuteMerchant', () => {
       await mutateAsync('SWIGGY');
     });
 
-    expect(fetchIngestionSources).toHaveBeenCalledWith('test-token');
+    expect(fetchIngestionSources).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
     expect(patchIngestionSource).toHaveBeenCalledWith(
       'test-token',
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -938,8 +959,8 @@ describe('useCloset', () => {
     await waitFor(() => {
       expect(screen.getByText('connected 42% 1')).toBeTruthy();
     });
-    expect(fetchIngestionSources).toHaveBeenCalledWith('test-token');
-    expect(fetchIngestionMetrics).toHaveBeenCalledWith('test-token');
+    expect(fetchIngestionSources).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+    expect(fetchIngestionMetrics).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
   });
 });
 
@@ -1122,10 +1143,15 @@ describe('closet query hooks', () => {
       expect(screen.getByText(/ward=yes/)).toBeTruthy();
     });
     expect(screen.getByText(/pkg=yes/)).toBeTruthy();
-    expect(fetchWardrobe).toHaveBeenCalledWith('test-token', undefined);
+    expect(fetchWardrobe).toHaveBeenCalledWith(
+      'test-token',
+      undefined,
+      { limit: 50, cursor: null },
+      expect.any(AbortSignal),
+    );
     expect(fetchWasteSummary).toHaveBeenCalled();
     expect(fetchReturns).toHaveBeenCalled();
-    expect(fetchPackages).toHaveBeenCalledWith('test-token', true);
+    expect(fetchPackages).toHaveBeenCalledWith('test-token', true, expect.any(AbortSignal));
   });
 });
 
@@ -1297,10 +1323,10 @@ describe('gift / outfit / accountant query surface', () => {
     });
     expect(screen.getByText(/today=yes/)).toBeTruthy();
     expect(screen.getByText(/acct=yes/)).toBeTruthy();
-    expect(fetchRecipients).toHaveBeenCalledWith('test-token');
-    expect(fetchTodayOutfit).toHaveBeenCalledWith('test-token');
+    expect(fetchRecipients).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+    expect(fetchTodayOutfit).toHaveBeenCalledWith('test-token', undefined, expect.any(AbortSignal));
     expect(fetchWarranties).toHaveBeenCalledWith('test-token');
-    expect(fetchAccountantSummary).toHaveBeenCalledWith('test-token');
+    expect(fetchAccountantSummary).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
 
     await act(async () => {
       await createRec({ name: 'Dad' });
@@ -1308,6 +1334,45 @@ describe('gift / outfit / accountant query surface', () => {
     });
     expect(createRecipient).toHaveBeenCalled();
     expect(createGiftOrder).toHaveBeenCalled();
+  });
+});
+
+describe('hidden tabs (MOB 30)', () => {
+  beforeEach(() => {
+    sessionState.accessToken = 'test-token';
+    vi.mocked(fetchAccountantSummary).mockClear();
+  });
+
+  it("doesn't refetch a hidden tab's queries until it shows again", async () => {
+    function Summary() {
+      const summary = useAccountantSummary();
+      return <span>{summary.data ? 'loaded' : 'loading'}</span>;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (focused: boolean) => (
+      <QueryClientProvider client={client}>
+        <ClosetScreenFocus.Provider value={focused}>
+          <Summary />
+        </ClosetScreenFocus.Provider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree(true));
+    await waitFor(() => {
+      expect(screen.getByText('loaded')).toBeTruthy();
+    });
+    expect(fetchAccountantSummary).toHaveBeenCalledTimes(1);
+
+    rerender(tree(false));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['accountant-summary'] });
+    });
+    expect(fetchAccountantSummary).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('loaded')).toBeTruthy();
+
+    rerender(tree(true));
+    await waitFor(() => {
+      expect(fetchAccountantSummary).toHaveBeenCalledTimes(2);
+    });
   });
 });
 
@@ -1364,12 +1429,12 @@ describe('purchases / returns / waste / packages / household surface', () => {
     expect(screen.getByText(/dead=yes/)).toBeTruthy();
     expect(screen.getByText(/streak=2/)).toBeTruthy();
     expect(screen.getByText(/ex=yes/)).toBeTruthy();
-    expect(fetchPurchases).toHaveBeenCalledWith('test-token');
-    expect(fetchWasteDead).toHaveBeenCalledWith('test-token');
+    expect(fetchPurchases).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+    expect(fetchWasteDead).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
     expect(fetchRewearStreak).toHaveBeenCalledWith('test-token', { breakOnPurchase: true });
-    expect(fetchBudgets).toHaveBeenCalledWith('test-token');
-    expect(fetchAccountantLedger).toHaveBeenCalledWith('test-token');
-    expect(fetchExchanges).toHaveBeenCalledWith('test-token');
+    expect(fetchBudgets).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+    expect(fetchAccountantLedger).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+    expect(fetchExchanges).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
   });
 
   it('merges/splits purchases, initiates/confirms returns, disposes waste, marks package, creates budget, logs wear with photo', async () => {
@@ -1492,7 +1557,7 @@ describe('receipts / warranties / cashback / balance surface', () => {
       expect(screen.getByText(/rc=1/)).toBeTruthy();
     }, { timeout: 5000 });
     expect(fetchReceipts).toHaveBeenCalledWith('test-token', { merchant: 'Amazon' });
-    expect(fetchReturnDetail).toHaveBeenCalledWith('test-token', 'ret1');
+    expect(fetchReturnDetail).toHaveBeenCalledWith('test-token', 'ret1', expect.any(AbortSignal));
 
     await act(async () => {
       await balance('11111111-1111-4111-8111-111111111111');
@@ -1609,7 +1674,7 @@ describe('wardrobe / outfit / capsule mutation matrix', () => {
     await waitFor(() => {
       expect(screen.getByText(/week=yes/)).toBeTruthy();
     }, { timeout: 5000 });
-    expect(fetchWeekOutfits).toHaveBeenCalledWith('test-token');
+    expect(fetchWeekOutfits).toHaveBeenCalledWith('test-token', undefined, expect.any(AbortSignal));
     expect(fetchGoesWith).toHaveBeenCalledWith('test-token', 'w1');
     expect(fetchShoeBagRotation).toHaveBeenCalled();
     expect(fetchMissingPieces).toHaveBeenCalledWith('test-token', 3);
@@ -1666,7 +1731,7 @@ describe('wardrobe / outfit / capsule mutation matrix', () => {
     expect(planWeddingFestival).toHaveBeenCalled();
     expect(saveInterviewKit).toHaveBeenCalled();
     expect(deleteWardrobeItem).toHaveBeenCalled();
-    expect(fetchTodayOutfit).toHaveBeenCalledWith('test-token', { alt: 1 });
+    expect(fetchTodayOutfit).toHaveBeenCalledWith('test-token', { alt: 1 }, expect.any(AbortSignal));
     expect(selectTodayOutfit).toHaveBeenCalled();
     expect(generateWeekOutfit).toHaveBeenCalled();
     expect(saveCapsule).toHaveBeenCalled();
@@ -2108,5 +2173,159 @@ describe('credits undo/merge + price-watch + EMI SMS + household vault', () => {
     expect(keys).toContain('price-drop-scan');
     expect(keys).toContain('emi-plans');
     expect(keys).toContain('household-vault');
+  });
+});
+
+describe('wardrobe paging, bulk edits and outfit alternatives', () => {
+  beforeEach(() => {
+    sessionState.accessToken = 'test-token';
+    vi.mocked(fetchWardrobe).mockReset();
+    vi.mocked(bulkUpdateWardrobeItems).mockClear();
+    vi.mocked(fetchTodayOutfit).mockClear();
+  });
+
+  function wardrobeItem(id: string) {
+    return { id, category: 'top', closetStatus: 'ACTIVE' } as never;
+  }
+
+  it('loads the wardrobe a page at a time and flattens the pages', async () => {
+    vi.mocked(fetchWardrobe)
+      .mockResolvedValueOnce({ items: [wardrobeItem('w1'), wardrobeItem('w2')], nextCursor: 'c2' })
+      .mockResolvedValueOnce({ items: [wardrobeItem('w3')], nextCursor: null });
+    let wardrobe!: ReturnType<typeof useWardrobe>;
+    function Probe() {
+      wardrobe = useWardrobe('p1', { limit: 2 });
+      return <span data-testid="count">{wardrobe.data?.items.length ?? 0}</span>;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('2'));
+    expect(wardrobe.hasNextPage).toBe(true);
+    await act(async () => {
+      await wardrobe.fetchNextPage();
+    });
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('3'));
+    expect(wardrobe.hasNextPage).toBe(false);
+    expect(vi.mocked(fetchWardrobe).mock.calls.map((c) => c[2])).toEqual([
+      { limit: 2, cursor: null },
+      { limit: 2, cursor: 'c2' },
+    ]);
+  });
+
+  it('keeps one cache entry per user and profile, not per token', async () => {
+    vi.mocked(fetchWardrobe).mockResolvedValue({ items: [] });
+    function Probe() {
+      useWardrobe('p1');
+      return null;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(fetchWardrobe).toHaveBeenCalled());
+    const keys = client.getQueryCache().getAll().map((q) => q.queryKey);
+    expect(keys).toEqual([['wardrobe', 'user-1', 'p1', 50]]);
+  });
+
+  it('sends a bulk edit in chunks of at most 200 unique ids', async () => {
+    let bulk!: ReturnType<typeof useBulkUpdateWardrobe>['mutateAsync'];
+    function Probe() {
+      bulk = useBulkUpdateWardrobe().mutateAsync;
+      return null;
+    }
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+    const ids = Array.from({ length: 450 }, (_, i) => `id-${i}`);
+
+    let result!: Awaited<ReturnType<typeof bulk>>;
+    await act(async () => {
+      result = await bulk({ ids: [...ids, 'id-0', 'id-1'], patch: { closetStatus: 'STORED' } });
+    });
+
+    const calls = vi.mocked(bulkUpdateWardrobeItems).mock.calls;
+    expect(calls.map((c) => c[1].length)).toEqual([200, 200, 50]);
+    expect(new Set(calls.flatMap((c) => c[1])).size).toBe(450);
+    expect(calls[0]![2]).toEqual({ closetStatus: 'STORED' });
+    expect(result.updated).toHaveLength(450);
+    expect(result.failedIds).toEqual([]);
+    const invalidated = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+    expect(invalidated).toContainEqual(['wardrobe']);
+  });
+
+  it('reports the ids of a chunk that failed and keeps the rest', async () => {
+    vi.mocked(bulkUpdateWardrobeItems)
+      .mockImplementationOnce(async (_t, ids) => ({ items: ids.map((id) => ({ id }) as never) }))
+      .mockRejectedValueOnce(new Error('Server error'));
+    let bulk!: ReturnType<typeof useBulkUpdateWardrobe>['mutateAsync'];
+    function Probe() {
+      bulk = useBulkUpdateWardrobe().mutateAsync;
+      return null;
+    }
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+    const ids = Array.from({ length: 250 }, (_, i) => `id-${i}`);
+
+    let result!: Awaited<ReturnType<typeof bulk>>;
+    await act(async () => {
+      result = await bulk({ ids, patch: { laundryStatus: 'DIRTY' } });
+    });
+    expect(result.updated).toHaveLength(200);
+    expect(result.failedIds).toEqual(ids.slice(200));
+  });
+
+  it('rejects a bulk edit when nothing was updated', async () => {
+    vi.mocked(bulkUpdateWardrobeItems).mockRejectedValueOnce(new Error('Server error'));
+    let bulk!: ReturnType<typeof useBulkUpdateWardrobe>['mutateAsync'];
+    function Probe() {
+      bulk = useBulkUpdateWardrobe().mutateAsync;
+      return null;
+    }
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+    await expect(bulk({ ids: ['a'], patch: { laundryStatus: 'DIRTY' } })).rejects.toThrow(
+      'Server error',
+    );
+  });
+
+  it('caches each outfit alternative so going back does not refetch', async () => {
+    let alt!: ReturnType<typeof useOutfitAlternative>['mutateAsync'];
+    function Probe() {
+      alt = useOutfitAlternative().mutateAsync;
+      return null;
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 60_000 }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <Probe />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await alt(1);
+      await alt(2);
+      await alt(1);
+    });
+    expect(vi.mocked(fetchTodayOutfit).mock.calls.map((c) => c[1])).toEqual([{ alt: 1 }, { alt: 2 }]);
   });
 });

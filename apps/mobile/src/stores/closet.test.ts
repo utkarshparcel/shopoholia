@@ -1,6 +1,7 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { useClosetStore } from './closet';
+import { CLOSET_STORE_KEY, useClosetStore } from './closet';
 
 describe('closet store — first delight flags', () => {
   beforeEach(() => useClosetStore.getState().clear());
@@ -135,5 +136,77 @@ describe('closet store — first delight flags', () => {
     useClosetStore.getState().clearLoyaltyJustAdded();
     expect(useClosetStore.getState().loyaltyJustAdded).toBe(false);
     expect(useClosetStore.getState().loyaltyCelebrationKind).toBeNull();
+  });
+});
+
+describe('closet store — persistence (Plan #11)', () => {
+  beforeEach(async () => {
+    useClosetStore.getState().clear();
+    await AsyncStorage.clear();
+  });
+
+  async function stored() {
+    const raw = await AsyncStorage.getItem(CLOSET_STORE_KEY);
+    return raw ? (JSON.parse(raw) as { state: Record<string, unknown>; version: number }) : null;
+  }
+
+  it('stores onboarding answers but not one-shot or session state', async () => {
+    const s = useClosetStore.getState();
+    s.markOnboardingSkipped();
+    s.connectEmail('me@example.com');
+    s.setSoonestFocusMode(true);
+    s.startWearChallenge('item-1');
+
+    const saved = await stored();
+    expect(saved?.version).toBe(1);
+    expect(saved?.state).toMatchObject({
+      onboardingSkipped: true,
+      onboardingCompleted: true,
+      emailPromptCompleted: true,
+      wearChallengeIds: ['item-1'],
+    });
+    expect(saved?.state).not.toHaveProperty('connectedSources');
+    expect(saved?.state).not.toHaveProperty('justConnected');
+    expect(saved?.state).not.toHaveProperty('soonestFocusMode');
+  });
+
+  it('restores the stored answers on launch and ignores malformed values', async () => {
+    await AsyncStorage.setItem(
+      CLOSET_STORE_KEY,
+      JSON.stringify({
+        state: {
+          onboardingCompleted: true,
+          notifPromptSkipped: 'yes',
+          wearChallengeIds: ['item-2', 7],
+          demoAccount: { id: 'x', isDemo: false },
+        },
+        version: 1,
+      }),
+    );
+
+    await useClosetStore.persist.rehydrate();
+
+    const s = useClosetStore.getState();
+    expect(s.onboardingCompleted).toBe(true);
+    expect(s.notifPromptSkipped).toBe(false);
+    expect(s.wearChallengeIds).toEqual(['item-2']);
+    expect(s.demoAccount).toBeNull();
+  });
+
+  it('finishes hydrating from a corrupt copy, with defaults', async () => {
+    await AsyncStorage.setItem(CLOSET_STORE_KEY, '{not json');
+
+    await useClosetStore.persist.rehydrate();
+
+    expect(useClosetStore.persist.hasHydrated()).toBe(true);
+    expect(useClosetStore.getState().onboardingCompleted).toBe(false);
+    expect(await AsyncStorage.getItem(CLOSET_STORE_KEY)).not.toBe('{not json');
+  });
+
+  it('clear() (sign-out) resets the stored copy', async () => {
+    useClosetStore.getState().markOnboardingCompleted();
+    useClosetStore.getState().clear();
+
+    expect((await stored())?.state).toMatchObject({ onboardingCompleted: false });
   });
 });

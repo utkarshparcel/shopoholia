@@ -1,17 +1,27 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  useCloset,
   useIngestionMetrics,
   useIngestionSources,
   useIngestionStatus,
 } from './useIngestion';
 import { fetchIngestionMetrics, fetchIngestionSources } from '@/src/api/client';
 
+const session = vi.hoisted(() => ({ accessToken: 'test-token' as string | null }));
+
 vi.mock('@/src/stores/session', () => ({
-  useSessionStore: (selector: (s: { accessToken: string | null }) => unknown) =>
-    selector({ accessToken: 'test-token' }),
+  useSessionStore: Object.assign(
+    (selector: (s: typeof session) => unknown) => selector(session),
+    { getState: () => session },
+  ),
+}));
+
+// Every token in these tests belongs to the same user.
+vi.mock('@/src/lib/access-token', () => ({
+  userIdFromAccessToken: (token: string | null) => (token ? 'user-1' : null),
 }));
 
 vi.mock('@/src/api/client', () => ({
@@ -117,5 +127,72 @@ describe('useIngestionSources / useIngestionMetrics', () => {
     });
     expect(fetchIngestionSources).toHaveBeenCalled();
     expect(fetchIngestionMetrics).toHaveBeenCalled();
+  });
+});
+
+describe('one fetch per user', () => {
+  beforeEach(() => {
+    session.accessToken = 'test-token';
+    vi.mocked(fetchIngestionSources).mockClear();
+    vi.mocked(fetchIngestionMetrics).mockClear();
+  });
+
+  function OverviewProbe() {
+    const { data } = useCloset();
+    return <span data-testid="overview">{data ? `sources:${data.sources.length}` : 'none'}</span>;
+  }
+
+  it('shares the two queries between the status chips and the overview', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <StatusProbe />
+        <OverviewProbe />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status').textContent).toBe('connected:1:90');
+      expect(screen.getByTestId('overview').textContent).toBe('sources:2');
+    });
+    expect(fetchIngestionSources).toHaveBeenCalledTimes(1);
+    expect(fetchIngestionMetrics).toHaveBeenCalledTimes(1);
+    expect(fetchIngestionSources).toHaveBeenCalledWith('test-token', expect.any(AbortSignal));
+  });
+
+  it('keeps the cache when the access token is renewed for the same user', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <StatusProbe />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('status').textContent).toBe('connected:1:90');
+    });
+
+    session.accessToken = 'renewed-token';
+    rerender(
+      <QueryClientProvider client={client}>
+        <StatusProbe />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('status').textContent).toBe('connected:1:90');
+    expect(fetchIngestionSources).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fetch when signed out', async () => {
+    session.accessToken = null;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <OverviewProbe />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId('overview').textContent).toBe('none');
+    expect(fetchIngestionSources).not.toHaveBeenCalled();
   });
 });

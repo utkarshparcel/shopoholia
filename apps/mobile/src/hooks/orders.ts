@@ -11,6 +11,7 @@ import {
 import { cartKey } from '@/src/hooks/catalog';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { trackEvent } from '@/src/lib/analytics';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { useSessionStore } from '@/src/stores/session';
 
 /** Keyed on the shopper, not their token, so a token renewal keeps the cache. */
@@ -19,10 +20,6 @@ export const orderKeys = {
   list: (userId: string | null) => ['orders', userId] as const,
   detail: (orderId: string, userId: string | null) => ['order', orderId, userId] as const,
 };
-
-function idempotencyKey() {
-  return globalThis.crypto?.randomUUID?.() ?? `idem-${Date.now()}`;
-}
 
 export function useCoinBalance() {
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
@@ -52,7 +49,7 @@ export function useCheckout() {
       if (!accessToken) throw new Error('Sign in to checkout');
       const tier = typeof input === 'string' ? input : input.tier;
       const coolingOffOverride = typeof input === 'string' ? undefined : input.coolingOffOverride;
-      return createOrder(accessToken, tier, idempotencyKey(), coolingOffOverride);
+      return createOrder(accessToken, tier, newIdempotencyKey(), coolingOffOverride);
     },
     onSuccess: async (order) => {
       trackEvent('checkout', { orderId: order.id, tier: order.tier, coinTotal: order.coinTotal });

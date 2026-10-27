@@ -7,12 +7,20 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "environment": "development",
+      "env": {
+        "WORN_RELEASE_BUILD": "0"
+      },
       "ios": {
         "simulator": true
       }
     },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "WORN_RELEASE_BUILD": "1"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -21,11 +29,18 @@
     "production": {
       "distribution": "store",
       "autoIncrement": true,
+      "environment": "production",
+      "env": {
+        "WORN_RELEASE_BUILD": "1"
+      },
       "channel": "production"
     },
     "testflight": {
       "extends": "preview",
       "distribution": "store",
+      "env": {
+        "WORN_RELEASE_BUILD": "1"
+      },
       "ios": {
         "simulator": false
       },
@@ -34,6 +49,9 @@
     "play-internal": {
       "extends": "preview",
       "distribution": "internal",
+      "env": {
+        "WORN_RELEASE_BUILD": "1"
+      },
       "android": {
         "buildType": "app-bundle"
       },

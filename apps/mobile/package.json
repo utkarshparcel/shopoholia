@@ -58,6 +58,7 @@
     "web": "expo start --web",
     "lint": "eslint app/ src/",
     "typecheck": "tsc --noEmit",
+    "check:release-bundle": "node scripts/check-release-bundle.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
