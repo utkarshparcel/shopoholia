@@ -18,6 +18,7 @@ import { Button } from '@/src/components/ui';
 import { useReplaceTwinClick, useReplaceTwins } from '@/src/hooks/closet/useCloset';
 import { replaceTwinSheetRows } from '@/src/lib/bridgeWow';
 import { trackEvent } from '@/src/lib/analytics';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   closet,
@@ -57,7 +58,7 @@ export function ReplaceTwinSheet({ wardrobeItemId, label }: Props) {
       });
       await Linking.openURL(row.affiliateUrl);
     } catch (e) {
-      Alert.alert('Could not open twin', (e as Error).message);
+      Alert.alert('Could not open twin', closetAlertText(e));
     }
   }
 

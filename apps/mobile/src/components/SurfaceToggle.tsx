@@ -61,7 +61,7 @@ export function SurfaceToggle() {
   const target: Surface = activeSurface === 'play' ? 'closet' : 'play';
 
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
+    <View style={styles.wrap}>
       <Pressable
         accessibilityLabel={`Switch to ${target} surface`}
         accessibilityRole="button"
@@ -107,6 +107,7 @@ const styles = StyleSheet.create({
   },
   wrap: {
     alignItems: 'flex-end',
+    pointerEvents: 'box-none',
     backgroundColor: 'transparent',
     paddingHorizontal: space3,
     paddingTop: 8,

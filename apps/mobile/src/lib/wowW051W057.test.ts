@@ -115,6 +115,18 @@ describe('W051–W057 Today/wardrobe occasion polish', () => {
     const span = defaultWeddingSpan(new Date('2026-08-26T12:00:00.000Z'));
     expect(span.startDate).toBe('2026-08-26');
     expect(span.endDate).toBe('2026-08-28');
+    expect(parseDateKey('2026-02-30')).toBeNull();
+    // 00:30 in India is still the 25th in UTC: the span starts on the local day.
+    const tz = process.env.TZ;
+    process.env.TZ = 'Asia/Kolkata';
+    try {
+      expect(defaultWeddingSpan(new Date('2026-08-25T19:00:00.000Z'))).toEqual({
+        startDate: '2026-08-26',
+        endDate: '2026-08-28',
+      });
+    } finally {
+      process.env.TZ = tz;
+    }
     expect(
       weddingFestivalPlanSummary({
         kind: 'wedding',

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatMinor, merchantReturnUrl, sizeMapTipForBrand, REFUND_DESTINATION_LABELS, buildPortalFieldChecklist, needsRefundChase, REFUND_CHASE_STEPS, SIZE_RETURN_REASONS, type RefundDestination } from '@worn/shared';
 import { useRouter } from 'expo-router';
 
@@ -22,9 +22,12 @@ import {
   useSnoozeRefundChase,
 } from '@/src/hooks/closet/useCloset';
 import { createReturnPoll } from '@/src/api/client';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { delightHapticRefundLanded } from '@/src/lib/delightHaptics';
 import { formatClosetDate, formatClosetDateTime } from '@/src/lib/format';
 import { gstInvoiceHrefFromReturn } from '@/src/lib/gstFromReturn';
+import { endOfDayKeyIso } from '@/src/lib/localDay';
 import { returnCountdown } from '@/src/lib/returnCountdown';
 import {
   markRefundedCelebration,
@@ -37,6 +40,7 @@ import {
 import { returnStatusTimeline } from '@/src/lib/returnTimeline';
 import { returnPollItemLabel } from '@/src/lib/socialPolls';
 import { trackEvent } from '@/src/lib/analytics';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import { ProgressivePermPrompt } from '@/src/components/ProgressivePermPrompt';
 import { useClosetStore } from '@/src/stores/closet';
 import { useSessionStore } from '@/src/stores/session';
@@ -66,6 +70,22 @@ export function useNow(intervalMs = 30_000) {
   return now;
 }
 
+const RETURN_STATE_LABEL: Record<string, string> = {
+  REQUESTED: 'Requested',
+  INITIATED: 'Started',
+  PICKUP_SCHEDULED: 'Pickup booked',
+  CONFIRMED: 'Sent back',
+  REFUNDED: 'Refunded',
+  EXPIRED: 'Expired',
+  CANCELLED: 'Cancelled',
+};
+
+/** "Pickup booked" for PICKUP_SCHEDULED; an unknown state reads in lower case, never as an enum. */
+export function returnStateLabel(state: string | null | undefined): string {
+  if (!state) return '—';
+  return RETURN_STATE_LABEL[state] ?? state.replace(/_/g, ' ').toLowerCase();
+}
+
 type ReturnsPanelProps = {
   /** When true, show recent REFUND ledger rows under the list (Vault). */
   showLedgerRefunds?: boolean;
@@ -82,6 +102,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
   const [expiredOpen, setExpiredOpen] = useState(false);
   const [celebration, setCelebration] = useState<string | null>(null);
   const now = useNow();
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
   const { data: ledger } = useAccountantLedger();
   const { data: etaBoard, isLoading: etaLoading } = useRefundEtaBoard({ all: true });
   const boardRows = etaBoard?.board ?? [];
@@ -123,7 +144,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
 
       <Text style={styles.sectionTitle}>Refund ETA</Text>
       <Text style={styles.boardHint}>
-        Track INITIATED → CONFIRMED → REFUNDED until credit lands in your ledger.
+        Each refund from started to sent back to refunded, until the money lands in your ledger.
       </Text>
       {etaLoading ? <Text style={styles.muted}>Loading board…</Text> : null}
       {!etaLoading && boardRows.length === 0 ? (
@@ -131,7 +152,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
       ) : null}
       {boardRows.map((row) => {
         const title =
-          row.itemTitle?.trim() || row.merchant?.trim() || row.returnId.slice(0, 8);
+          row.itemTitle?.trim() || row.merchant?.trim() || 'Return';
         const liveEta = refundEtaLiveLabel(row.etaAt, row.ledgerCredited, now);
         return (
           <View key={row.returnId} style={styles.card}>
@@ -143,7 +164,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
                   row.ledgerCredited ? styles.badgeOk : styles.badgeSoon,
                 ]}
               >
-                {row.ledgerCredited ? 'LEDGER' : row.state}
+                {row.ledgerCredited ? 'In ledger' : returnStateLabel(row.state)}
               </Text>
             </View>
             <Text style={styles.pipelineLine}>
@@ -152,7 +173,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
             {row.ledgerCredited ? (
               <Text style={styles.refundLanded} testID={`eta-landed-${row.returnId}`}>
                 {liveEta}
-                {row.ledgerAmountMinor != null ? ` · ${formatMinor(row.ledgerAmountMinor)}` : ''}
+                {row.ledgerAmountMinor != null ? ` · ${formatMinor(row.ledgerAmountMinor, currency)}` : ''}
               </Text>
             ) : (
               <Text style={styles.expiry} testID={`eta-live-${row.returnId}`}>
@@ -171,7 +192,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
       })}
 
       <Text style={styles.sectionTitle}>All returns</Text>
-      <ScrollView style={styles.list}>
+      <View style={styles.list}>
         {isLoading ? <Text style={styles.muted}>Loading…</Text> : null}
         {!isLoading && returns.length === 0 ? (
           <Text style={styles.muted}>No returns yet. Initiate one from a purchase.</Text>
@@ -198,23 +219,21 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
               : null}
           </View>
         ) : null}
-      </ScrollView>
+      </View>
 
       {showLedgerRefunds ? (
         <View>
           <Text style={styles.sectionTitle}>Refund ledger</Text>
           {refundEntries.length === 0 ? (
             <Text style={styles.muted}>
-              Mark a return refunded to post it to money_ledger — it shows here.
+              When you mark a return refunded, the refund shows here.
             </Text>
           ) : (
             refundEntries.slice(0, 8).map((e) => (
               <View key={e.id} style={styles.card} testID={`ledger-refund-${e.id}`}>
                 <Text style={styles.merchant}>{e.description}</Text>
-                <Text style={styles.balance}>{formatMinor(e.amountMinor)}</Text>
-                <Text style={styles.expiry}>
-                  {formatClosetDateTime(e.createdAt)} · money_ledger
-                </Text>
+                <Text style={styles.balance}>{formatMinor(e.amountMinor, currency)}</Text>
+                <Text style={styles.expiry}>{formatClosetDateTime(e.createdAt)} · in your ledger</Text>
               </View>
             ))
           )}
@@ -246,12 +265,8 @@ function ReturnListCard({
   onView: () => void;
 }) {
   const c = returnCountdown(r.windowDeadline, now);
-  const title =
-    r.itemTitle?.trim() ||
-    r.merchant?.trim() ||
-    r.purchaseId?.slice(0, 8) ||
-    r.purchaseItemId?.slice(0, 8) ||
-    r.id.slice(0, 8);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const title = r.itemTitle?.trim() || r.merchant?.trim() || 'Return';
   return (
     <View style={styles.card}>
       <View style={styles.cardRow}>
@@ -266,7 +281,7 @@ function ReturnListCard({
                 : styles.badgeSoon,
           ]}
         >
-          {r.state}
+          {returnStateLabel(r.state)}
         </Text>
       </View>
       <Text style={[styles.expiry, c.urgent ? styles.urgent : null]}>
@@ -275,7 +290,7 @@ function ReturnListCard({
       {r.tracking ? <Text style={styles.expiry}>Tracking: {r.tracking}</Text> : null}
       {r.state === 'REFUNDED' && r.refundMinor != null ? (
         <Text style={styles.refundLanded}>
-          Refund landed · {formatMinor(r.refundMinor)}
+          Refund landed · {formatMinor(r.refundMinor, currency)}
         </Text>
       ) : null}
       <Button label="View" size="sm" variant="secondary" onPress={onView} />
@@ -315,6 +330,9 @@ function ReturnDetail({
   const [portalReady, setPortalReady] = useState(false);
   const [windowEdit, setWindowEdit] = useState('');
   const [windowReason, setWindowReason] = useState('');
+  const [windowError, setWindowError] = useState<string | null>(null);
+  const [refundError, setRefundError] = useState<string | null>(null);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
   const router = useRouter();
 
   if (isLoading) return <Text style={styles.muted}>Loading…</Text>;
@@ -376,7 +394,7 @@ function ReturnDetail({
       await Share.share({ message: poll.shareText });
       trackEvent('return_poll_created', { pollId: poll.id });
     } catch (e) {
-      Alert.alert('Could not create poll', (e as Error).message);
+      Alert.alert('Could not create poll', closetAlertText(e));
     } finally {
       setAskingFriends(false);
     }
@@ -410,9 +428,9 @@ function ReturnDetail({
       <Button label="Back" size="sm" variant="ghost" onPress={onBack} />
       <View style={styles.card}>
         <Text style={styles.merchant}>
-          {r.itemTitle?.trim() || r.merchant?.trim() || `Return ${r.id.slice(0, 8)}`}
+          {r.itemTitle?.trim() || r.merchant?.trim() || 'Return'}
         </Text>
-        <Text style={styles.expiry}>State: {r.state}</Text>
+        <Text style={styles.expiry}>Status: {returnStateLabel(r.state)}</Text>
         <Text style={[styles.expiry, c.urgent ? styles.urgent : null]}>
           Deadline: {formatClosetDateTime(r.windowDeadline)} · {c.label}
         </Text>
@@ -423,7 +441,7 @@ function ReturnDetail({
         ) : null}
         {r.refundMinor != null && r.refundMinor > 0 ? (
           <Text style={styles.refundLanded}>
-            Refund: {formatMinor(r.refundMinor)}
+            Refund: {formatMinor(r.refundMinor, currency)}
             {r.state === 'REFUNDED' ? ' · landed in vault' : ''}
           </Text>
         ) : null}
@@ -448,14 +466,20 @@ function ReturnDetail({
           </View>
         ) : null}
         <View style={styles.form} testID="return-window-correct">
-          <Text style={styles.muted}>Correct window end date (merchant email override)</Text>
+          <Text style={styles.muted}>Merchant gave a different last day? Correct it here.</Text>
           <TextInput
             style={styles.input}
-            placeholder="New deadline ISO or YYYY-MM-DD"
+            placeholder="Last day to return (YYYY-MM-DD)"
             placeholderTextColor={textMuted}
             value={windowEdit}
-            onChangeText={setWindowEdit}
+            onChangeText={(v) => {
+              setWindowEdit(v);
+              setWindowError(null);
+            }}
             autoCapitalize="none"
+            keyboardType="numbers-and-punctuation"
+            maxLength={10}
+            accessibilityLabel="Last day to return"
           />
           <TextInput
             style={styles.input}
@@ -469,10 +493,12 @@ function ReturnDetail({
             size="sm"
             disabled={correctWindow.isPending || !windowEdit.trim() || !windowReason.trim()}
             onPress={() => {
-              const raw = windowEdit.trim();
-              const iso = raw.includes('T')
-                ? raw
-                : new Date(`${raw}T23:59:59.000Z`).toISOString();
+              // The end of that day on this phone; a bad date used to throw out of the handler.
+              const iso = endOfDayKeyIso(windowEdit);
+              if (!iso) {
+                setWindowError('Enter the date as YYYY-MM-DD, for example 2026-11-03.');
+                return;
+              }
               correctWindow.mutate(
                 { id, windowDeadline: iso, reason: windowReason.trim() },
                 {
@@ -481,11 +507,16 @@ function ReturnDetail({
                     setWindowReason('');
                     Alert.alert('Window updated', 'Deadline reminder rescheduled.');
                   },
-                  onError: (e) => Alert.alert('Failed', (e as Error).message),
+                  onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                 },
               );
             }}
           />
+          {windowError ? (
+            <Text style={[styles.expiry, styles.urgent]} testID="return-window-error" accessibilityLiveRegion="polite">
+              {windowError}
+            </Text>
+          ) : null}
         </View>
         {showChase ? (
           <View style={styles.form} testID="refund-chase-checklist">
@@ -504,7 +535,7 @@ function ReturnDetail({
               onPress={() =>
                 snoozeChase.mutate(
                   { id },
-                  { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                  { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
                 )
               }
             />
@@ -522,7 +553,7 @@ function ReturnDetail({
               onPress={() =>
                 escalateChase.mutate(
                   { id },
-                  { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                  { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
                 )
               }
             />
@@ -577,7 +608,7 @@ function ReturnDetail({
                     router.push(res.request.invoiceVaultHref as never);
                   }
                 } catch (e) {
-                  Alert.alert('Could not request invoice', (e as Error).message);
+                  Alert.alert('Could not request invoice', closetAlertText(e));
                 }
               })();
             }}
@@ -602,38 +633,14 @@ function ReturnDetail({
                       await markReturnLabelUsed(token, r.id);
                       trackEvent('return_label_used', { returnId: r.id });
                     } catch (e) {
-                      Alert.alert('Could not mark label', (e as Error).message);
+                      Alert.alert('Could not mark label', closetAlertText(e));
                     }
                   })();
                 }}
               />
             ) : null}
           </View>
-        ) : (
-          <Button
-            label="Attach return label"
-            size="sm"
-            variant="ghost"
-            testID="attach-return-label"
-            onPress={() => {
-              void (async () => {
-                const token = useSessionStore.getState().accessToken;
-                if (!token) return;
-                try {
-                  const { attachReturnLabel } = await import('@/src/api/client');
-                  // Stub key — real upload uses R2; agent can paste key from receipts flow.
-                  await attachReturnLabel(token, r.id, {
-                    imageKey: `returns/${r.userId}/${r.id}/label.jpg`,
-                  });
-                  trackEvent('return_label_uploaded', { returnId: r.id });
-                  Alert.alert('Label saved', 'Show this label to the pickup agent (offline once loaded).');
-                } catch (e) {
-                  Alert.alert('Could not save label', (e as Error).message);
-                }
-              })();
-            }}
-          />
-        )}
+        ) : null}
       </View>
 
       {tipVisible && sizeTip ? (
@@ -725,7 +732,7 @@ function ReturnDetail({
             onPress={() =>
               bookPickup.mutate(
                 { id, pickupSlotAt: slotIso },
-                { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
               )
             }
           />
@@ -742,7 +749,7 @@ function ReturnDetail({
             onPress={() =>
               confirm.mutate(
                 { id, tracking: tracking || undefined },
-                { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
               )
             }
           />
@@ -772,7 +779,7 @@ function ReturnDetail({
             onPress={() =>
               reschedulePickup.mutate(
                 { id, pickupSlotAt: slotIso },
-                { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
               )
             }
           />
@@ -784,7 +791,7 @@ function ReturnDetail({
             onPress={() =>
               cancelPickup.mutate(
                 { id },
-                { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
               )
             }
           />
@@ -801,7 +808,7 @@ function ReturnDetail({
             onPress={() =>
               confirm.mutate(
                 { id, tracking: tracking || undefined },
-                { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
               )
             }
           />
@@ -830,21 +837,31 @@ function ReturnDetail({
           </View>
           <TextInput
             style={styles.input}
-            placeholder="Refund amount ₹ (optional — defaults to purchase)"
+            placeholder={`Refund amount in ${currency} (optional, defaults to the purchase)`}
             placeholderTextColor={textMuted}
             keyboardType="decimal-pad"
             value={refundRupees}
-            onChangeText={setRefundRupees}
+            onChangeText={(v) => {
+              setRefundRupees(v);
+              setRefundError(null);
+            }}
+            accessibilityLabel="Refund amount"
           />
+          {refundError ? (
+            <Text style={[styles.expiry, styles.urgent]} testID="refund-amount-error" accessibilityLiveRegion="polite">
+              {refundError}
+            </Text>
+          ) : null}
           <Button
             label={refund.isPending ? 'Posting…' : 'Mark refunded'}
             disabled={refund.isPending}
             onPress={() => {
-              const parsed = Number(refundRupees);
-              const refundMinor =
-                refundRupees.trim() && Number.isFinite(parsed) && parsed > 0
-                  ? Math.round(parsed * 100)
-                  : undefined;
+              // Blank means "the purchase price"; anything else typed must be a real amount, never a silent default.
+              const refundMinor = refundRupees.trim() ? parseAmountInput(refundRupees, currency) : undefined;
+              if (refundMinor === null) {
+                setRefundError('Enter the refund as an amount above zero, or leave it blank.');
+                return;
+              }
               refund.mutate(
                 { id, refundMinor, destination: refundDestination },
                 {
@@ -856,7 +873,7 @@ function ReturnDetail({
                     Alert.alert(celeb.title, celeb.body);
                     onRefundCelebrated?.(celeb.body);
                   },
-                  onError: (e) => Alert.alert('Failed', (e as Error).message),
+                  onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                 },
               );
             }}
@@ -875,7 +892,7 @@ function ReturnDetail({
       {data.events.map((e) => (
         <View key={e.id} style={styles.card}>
           <Text style={styles.expiry}>
-            {e.fromState ?? '—'} → {e.toState}
+            {returnStateLabel(e.fromState)} → {returnStateLabel(e.toState)}
           </Text>
           <Text style={styles.expiry}>{formatClosetDateTime(e.createdAt)}</Text>
         </View>
@@ -893,7 +910,7 @@ function InitiateExisting({ id }: { id: string }) {
       onPress={() =>
         initiate.mutate(
           { id },
-          { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+          { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
         )
       }
     />
@@ -935,24 +952,14 @@ function InitiateForm() {
       markDeadlineSetup();
       Alert.alert('Return opened', 'Continue on this list — one initiate per item when split.');
     } catch (e) {
-      Alert.alert('Failed', (e as Error).message);
+      Alert.alert('Failed', closetAlertText(e));
     }
   }
 
   return (
     <View style={styles.form} testID="initiate-return-form">
       <Text style={styles.sectionTitle}>Initiate return</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Purchase ID (uuid) — or pick below"
-        placeholderTextColor={textMuted}
-        value={purchaseId}
-        onChangeText={(v) => {
-          setPurchaseId(v);
-          setSelectedItemIds([]);
-        }}
-        autoCapitalize="none"
-      />
+      {purchases.length === 0 ? <Text style={styles.muted}>Purchases you add show up here.</Text> : null}
       {purchases.slice(0, 6).map((row) => (
         <Button
           key={row.purchase.id}
@@ -984,7 +991,7 @@ function InitiateForm() {
         {SIZE_RETURN_REASONS.map((code) => (
           <Button
             key={code}
-            label={code.replace(/_/g, ' ')}
+            label={code.charAt(0) + code.slice(1).replace(/_/g, ' ').toLowerCase()}
             size="sm"
             variant={reason === code ? 'primary' : 'secondary'}
             onPress={() => setReason(code)}

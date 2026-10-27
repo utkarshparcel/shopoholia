@@ -40,7 +40,7 @@ describe('W001-DEMO-EXIT-CLEAR', () => {
   beforeEach(() => useClosetStore.getState().clear());
 
   it('exposes Demo badge and detects sample credit', () => {
-    expect(DEMO_BADGE_LABEL).toBe('Demo');
+    expect(DEMO_BADGE_LABEL).toBe('Sample');
     expect(
       isSampleCreditAccount({
         isDemo: true,

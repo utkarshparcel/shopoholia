@@ -6,6 +6,8 @@ import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { getPrivacyPolicyInAppDocument } from '@/src/lib/privacyPolicyContent';
 import { getPrivacyPolicyUrl } from '@/src/lib/privacyLinks';
+import { formatClosetDate } from '@/src/lib/format';
+import { CLOSET_OFF_SUBTITLE } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import {
   border,
@@ -22,7 +24,7 @@ import {
 
 /**
  * In-app privacy policy reader (W081-PRIVACY-IN-APP).
- * Opens draft markdown content without requiring store submit.
+ * Shows the policy summary and every outside service that receives data (Plan #13).
  */
 export default function PrivacyScreen() {
   const router = useRouter();
@@ -33,7 +35,7 @@ export default function PrivacyScreen() {
     return (
       <ClosetScreen
         title="Privacy"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to read the privacy policy."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -49,7 +51,7 @@ export default function PrivacyScreen() {
   return (
     <ClosetScreen
       title={doc.title}
-      subtitle={`Last updated (draft): ${doc.lastUpdated}. Readable in-app — no store submit required.`}
+      subtitle={`Last updated ${formatClosetDate(doc.lastUpdated)}`}
     >
       <View style={styles.banner}>
         <Text style={styles.bannerText}>{doc.banner}</Text>
@@ -61,6 +63,16 @@ export default function PrivacyScreen() {
           <Text style={styles.body}>{section.body}</Text>
         </View>
       ))}
+
+      <View style={styles.card} testID="privacy-subprocessors">
+        <Text style={styles.heading}>Who else receives your data</Text>
+        {doc.subprocessors.map((p) => (
+          <Text key={p.name} style={styles.body}>
+            <Text style={styles.subName}>{p.name}: </Text>
+            {p.receives}
+          </Text>
+        ))}
+      </View>
 
       <Button
         label="Open on web"
@@ -123,6 +135,10 @@ const styles = StyleSheet.create({
     color: text,
     fontFamily: fontSans,
     fontSize: fsBody,
+    fontWeight: '600',
+  },
+  subName: {
+    color: text,
     fontWeight: '600',
   },
 });

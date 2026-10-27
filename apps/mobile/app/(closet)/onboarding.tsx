@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -12,9 +12,12 @@ import type { AddCreditBody } from '@worn/shared';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
-import { addCredit, fetchConsents, fetchCredits, grantConsent } from '@/src/api/client';
+import { addCredit, fetchConsents, fetchCredits } from '@/src/api/client';
 import { trackEvent } from '@/src/lib/analytics';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
 import {
   SAMPLE_MYNTRA_CREDIT,
   VAULT_FOUND_MONEY_HREF,
@@ -74,6 +77,8 @@ export default function ClosetOnboardingScreen() {
   const [merchant, setMerchant] = useState('');
   const [balance, setBalance] = useState('');
   const [error, setError] = useState<string | null>(null);
+  /** One key per card, so a retried save never adds it twice. */
+  const addKeyRef = useRef<string | null>(null);
 
   const landVault = useCallback(
     (source: 'manual' | 'oauth' | 'demo') => {
@@ -119,12 +124,15 @@ export default function ClosetOnboardingScreen() {
         return;
       }
       try {
-        const [consents, credits] = await Promise.all([
-          fetchConsents(accessToken).catch(() => ({ grants: [] as Array<{ scope: string }> })),
-          fetchCredits(accessToken).catch(() => ({ accounts: [] as unknown[] })),
-        ]);
+        const consents = await fetchConsents(accessToken).catch(() => ({
+          grants: [] as Array<{ scope: string }>,
+        }));
         if (cancelled) return;
         const hasConsent = consents.grants.length > 0;
+        const credits = consents.grants.some((g) => g.scope === 'FINANCIAL')
+          ? await fetchCredits(accessToken).catch(() => ({ accounts: [] as unknown[] }))
+          : { accounts: [] as unknown[] };
+        if (cancelled) return;
         const hasAccounts = credits.accounts.length > 0;
         if (hasAccounts || hasConsent) {
           markOnboardingCompleted();
@@ -149,23 +157,24 @@ export default function ClosetOnboardingScreen() {
     return (
       <ClosetScreen
         title="Find forgotten credit"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 for Closet onboarding."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
 
-  async function ensureFinancialConsent() {
+  /** True when FINANCIAL is already granted; otherwise opens the consent screen, where only the user's tap grants it. */
+  async function hasFinancialConsent(): Promise<boolean> {
     if (!accessToken) throw new Error('Sign in to add a card.');
     const consents = await fetchConsents(accessToken);
-    const hasFinancial = consents.grants.some((g) => g.scope === 'FINANCIAL');
-    if (!hasFinancial) {
-      await grantConsent(accessToken, 'FINANCIAL', 'onboarding');
-    }
+    if (consents.grants.some((g) => g.scope === 'FINANCIAL')) return true;
+    setError('Allow "Money in your Vault" first, then save the card again.');
+    router.push('/(closet)/consent' as never);
+    return false;
   }
 
   async function submitCard() {
-    const balanceMinor = Math.round(Number(balance) * 100);
-    if (!merchant.trim() || !Number.isFinite(balanceMinor) || balanceMinor <= 0) {
+    const balanceMinor = parseAmountInput(balance, preferredCurrency);
+    if (!merchant.trim() || balanceMinor === null) {
       Alert.alert('Enter a merchant and a valid balance');
       return;
     }
@@ -176,47 +185,28 @@ export default function ClosetOnboardingScreen() {
     setBusy(true);
     setError(null);
     try {
-      await ensureFinancialConsent();
+      if (!(await hasFinancialConsent())) return;
       const payload: AddCreditBody = {
         kind: 'GIFT_CARD',
         merchant: merchant.trim(),
         currency: preferredCurrency,
         balanceMinor,
+        idempotencyKey: (addKeyRef.current ??= newIdempotencyKey()),
       };
       await addCredit(accessToken, payload);
+      addKeyRef.current = null;
       landVault('manual');
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setBusy(false);
     }
   }
 
-  async function trySample() {
-    setBusy(true);
+  function trySample() {
     setError(null);
-    try {
-      if (accessToken) {
-        try {
-          await ensureFinancialConsent();
-          await addCredit(accessToken, {
-            kind: SAMPLE_MYNTRA_CREDIT.kind,
-            merchant: SAMPLE_MYNTRA_CREDIT.merchant,
-            currency: SAMPLE_MYNTRA_CREDIT.currency,
-            balanceMinor: SAMPLE_MYNTRA_CREDIT.balanceMinor,
-            demo: true,
-          });
-          landVault('demo');
-          return;
-        } catch {
-          // Fall through to local seed for offline / consent edge cases.
-        }
-      }
-      seedDemoGiftCard();
-      landVault('demo');
-    } finally {
-      setBusy(false);
-    }
+    seedDemoGiftCard();
+    landVault('demo');
   }
 
   function skip() {
@@ -348,7 +338,7 @@ export default function ClosetOnboardingScreen() {
             block
             variant="ghost"
             disabled={busy}
-            onPress={() => void trySample()}
+            onPress={trySample}
           />
           <Button label="Skip for now" variant="ghost" block disabled={busy} onPress={skip} />
         </View>

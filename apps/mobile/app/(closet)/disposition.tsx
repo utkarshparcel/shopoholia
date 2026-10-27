@@ -1,11 +1,12 @@
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, Share, StyleSheet, Text, View } from 'react-native';
 import { formatMinor } from '@worn/shared';
 import { useRouter } from 'expo-router';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { ClosetVirtualList } from '@/src/components/ClosetVirtualList';
+import { usePrompt } from '@/src/components/PromptSheet';
 import { DeclutterProgressRing } from '@/src/components/DeclutterProgressRing';
 import { ReplaceTwinSheet } from '@/src/components/ReplaceTwinSheet';
 import {
@@ -15,10 +16,13 @@ import {
   useLogWear,
   useStartDeclutterChallenge,
   useStartWearChallenge,
+  useWardrobe,
   useWasteDead,
   useWasteSummary,
 } from '@/src/hooks/closet/useCloset';
 import { wasteRestyleCta } from '@/src/lib/bridgeWow';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { buildNeverWornShareFromMetrics, neverWornCostMinor, shareNeverWornCard } from '@/src/lib/wasteMoney';
 import {
@@ -41,6 +45,7 @@ import {
   fontSans,
   fsBody,
   fsCaption,
+  fsMicro,
   radiusMd,
   space4,
   surface,
@@ -48,11 +53,29 @@ import {
   textMuted,
 } from '@/src/theme/tokens';
 
+const FILTERS = [
+  { value: 'ALL', label: 'All' },
+  { value: 'SELL', label: 'Sell' },
+  { value: 'DONATE', label: 'Donate' },
+  { value: 'BARTER', label: 'Barter' },
+] as const;
+
+const MODE_LABEL: Record<string, string> = { SELL: 'For sale', DONATE: 'To donate', BARTER: 'To swap' };
+const STATUS_LABEL: Record<string, string> = {
+  ACTIVE: 'Listed',
+  SOLD: 'Sold',
+  DONATED: 'Donated',
+  BARTERED: 'Swapped',
+  CANCELLED: 'Withdrawn',
+};
+
 export default function DispositionMarketplaceScreen() {
   const router = useRouter();
   const { data, isLoading, refetch } = useDisposition();
   const waste = useWasteSummary();
   const dead = useWasteDead();
+  // Listings carry only the item id; the closet (usually already cached) names them.
+  const wardrobe = useWardrobe();
   const create = useCreateDisposition();
   const dispose = useDisposeWaste();
   const challenge = useStartWearChallenge();
@@ -63,16 +86,20 @@ export default function DispositionMarketplaceScreen() {
   const [filter, setFilter] = useState<'ALL' | 'SELL' | 'DONATE' | 'BARTER'>('ALL');
   const [sharing, setSharing] = useState(false);
   const [sharingDeclutter, setSharingDeclutter] = useState(false);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const { ask, promptElement } = usePrompt();
 
+  const refetchWaste = waste.refetch;
+  const refetchDead = dead.refetch;
   const onRefresh = useCallback(async () => {
-    await Promise.all([refetch(), waste.refetch(), dead.refetch()]);
-  }, [refetch, waste, dead]);
+    await Promise.all([refetch(), refetchWaste(), refetchDead()]);
+  }, [refetch, refetchWaste, refetchDead]);
 
   if (!FEATURE_CLOSET) {
     return (
       <ClosetScreen
         title="Marketplace"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to view disposition market."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -80,6 +107,12 @@ export default function DispositionMarketplaceScreen() {
   const listings = data?.listings ?? [];
   const filtered = filter === 'ALL' ? listings : listings.filter((l) => l.mode === filter);
   const deadItems = dead.data?.items ?? [];
+  const pieceName = (it: { brand?: string | null; category?: string | null } | undefined) =>
+    `${it?.brand ? `${it.brand} · ` : ''}${it?.category ?? 'Unnamed piece'}`;
+  const itemNames = new Map<string, string>([
+    ...(wardrobe.data?.items ?? []).map((it) => [it.id, pieceName(it)] as const),
+    ...deadItems.map((m) => [m.wardrobeItemId, pieceName(m.item)] as const),
+  ]);
   const metrics = waste.data?.metrics ?? deadItems;
   const neverWorn =
     waste.data?.neverWornCostMinor ?? neverWornCostMinor(metrics);
@@ -102,13 +135,47 @@ export default function DispositionMarketplaceScreen() {
       modes: listings.map((l) => l.mode),
     });
 
+  // Listing is the step that puts a piece in front of buyers or a charity: ask first, on every platform.
+  async function disposeDead(m: (typeof deadItems)[number], mode: 'SELL' | 'DONATE') {
+    const name = itemNames.get(m.wardrobeItemId) ?? 'this piece';
+    const ok = await ask({
+      title: mode === 'SELL' ? 'Sell this piece?' : 'Donate this piece?',
+      message:
+        mode === 'SELL'
+          ? `${name} goes up for resale. You can withdraw it from this screen.`
+          : `${name} is marked for donation. You can withdraw it from this screen.`,
+      fields: [],
+      confirmLabel: mode === 'SELL' ? 'List for sale' : 'Donate',
+    });
+    if (!ok) return;
+    dispose.mutate(
+      { itemId: m.wardrobeItemId, mode },
+      {
+        onSuccess: () => {
+          const next = declutterChallengeProgress(
+            countDisposedItems([...listings, { wardrobeItemId: m.wardrobeItemId, mode, status: 'ACTIVE' }]),
+            { started: declutterStarted || declutterChallenge.started },
+          );
+          if (next.completed) {
+            Alert.alert('Declutter complete', declutterChallengeCelebrateCopy(next.target));
+            useClosetStore.getState().completeDeclutterChallenge();
+            trackEvent('declutter_challenge_completed' as never);
+          } else {
+            Alert.alert(mode === 'SELL' ? 'Listed' : 'Marked for donation', mode === 'SELL' ? 'Ready for buyers.' : name);
+          }
+        },
+        onError: (e) => Alert.alert(mode === 'SELL' ? 'Could not list it' : 'Could not mark it', closetAlertText(e)),
+      },
+    );
+  }
+
   async function shareNeverWornCardAction() {
     setSharing(true);
     try {
       await shareNeverWornCard(shareCard);
       trackEvent('waste_share_card' as never);
     } catch (e) {
-      Alert.alert('Share failed', (e as Error).message);
+      Alert.alert('Share failed', closetAlertText(e));
     } finally {
       setSharing(false);
     }
@@ -127,7 +194,7 @@ export default function DispositionMarketplaceScreen() {
         trackEvent('declutter_challenge_completed' as never);
       }
     } catch (e) {
-      Alert.alert('Share failed', (e as Error).message);
+      Alert.alert('Share failed', closetAlertText(e));
     } finally {
       setSharingDeclutter(false);
     }
@@ -203,7 +270,7 @@ export default function DispositionMarketplaceScreen() {
                 declutter.mutate(undefined, {
                   onSuccess: (res) =>
                     Alert.alert('Challenge on', declutterChallengeNudgeCopy(res.declutterChallenge)),
-                  onError: (e) => Alert.alert('Failed', (e as Error).message),
+                  onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                 })
               }
             />
@@ -221,14 +288,16 @@ export default function DispositionMarketplaceScreen() {
         </View>
       </View>
 
-      <View style={styles.row}>
-        {(['ALL', 'SELL', 'DONATE', 'BARTER'] as const).map((k) => (
+      <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="Show listings">
+        {FILTERS.map((f) => (
           <Button
-            key={k}
-            label={k}
+            key={f.value}
+            label={f.label}
             size="sm"
-            variant={filter === k ? 'primary' : 'secondary'}
-            onPress={() => setFilter(k)}
+            variant={filter === f.value ? 'primary' : 'secondary'}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: filter === f.value }}
+            onPress={() => setFilter(f.value)}
           />
         ))}
       </View>
@@ -237,22 +306,19 @@ export default function DispositionMarketplaceScreen() {
         <View style={styles.banner}>
           <Text style={styles.title}>Clear dead inventory</Text>
           <Text style={styles.muted}>Wear it 3× first — or list in one tap.</Text>
-          <ScrollView>
+          <View>
             {deadItems.slice(0, 5).map((m) => {
               const started = wearChallengeIds.includes(m.wardrobeItemId);
               const progress = wearChallengeProgress(m.wearCount, m.status, { started });
               const label = m.item?.brand || m.item?.category || null;
               return (
                 <View key={m.wardrobeItemId} style={styles.card}>
-                  <Text style={styles.title}>
-                    {m.item?.brand ? `${m.item.brand} · ` : ''}
-                    {m.item?.category ?? m.wardrobeItemId.slice(0, 8)}
-                  </Text>
+                  <Text style={styles.title}>{itemNames.get(m.wardrobeItemId)}</Text>
                   <Text style={styles.muted}>
-                    {m.item?.costMinor != null ? formatMinor(m.item.costMinor) : '—'} · worn{' '}
-                    {m.wearCount}×
+                    {m.item?.costMinor ? `${formatMinor(m.item.costMinor, currency)} · ` : ''}
+                    {m.wearCount === 0 ? 'never worn' : `worn ${m.wearCount}×`}
                     {m.costPerWearMinor != null
-                      ? ` · ${formatMinor(m.costPerWearMinor)}/wear`
+                      ? ` · ${formatMinor(m.costPerWearMinor, currency)}/wear`
                       : ''}
                   </Text>
                   {progress.eligible || started ? (
@@ -282,7 +348,7 @@ export default function DispositionMarketplaceScreen() {
                           challenge.mutate(m.wardrobeItemId, {
                             onSuccess: () =>
                               Alert.alert('Challenge on', wearChallengeNudgeCopy(progress, label)),
-                            onError: (e) => Alert.alert('Failed', (e as Error).message),
+                            onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                           })
                         }
                       />
@@ -308,7 +374,7 @@ export default function DispositionMarketplaceScreen() {
                                   Alert.alert('Challenge complete', wearChallengeCelebrateCopy(label));
                                 }
                               },
-                              onError: (e) => Alert.alert('Failed', (e as Error).message),
+                              onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                             },
                           )
                         }
@@ -319,78 +385,20 @@ export default function DispositionMarketplaceScreen() {
                       size="sm"
                       variant="primary"
                       disabled={dispose.isPending || create.isPending}
-                      onPress={() =>
-                        dispose.mutate(
-                          { itemId: m.wardrobeItemId, mode: 'SELL' },
-                          {
-                            onSuccess: () => {
-                              const next = declutterChallengeProgress(
-                                countDisposedItems([
-                                  ...listings,
-                                  {
-                                    wardrobeItemId: m.wardrobeItemId,
-                                    mode: 'SELL',
-                                    status: 'ACTIVE',
-                                  },
-                                ]),
-                                { started: declutterStarted || declutterChallenge.started },
-                              );
-                              if (next.completed) {
-                                Alert.alert(
-                                  'Declutter complete',
-                                  declutterChallengeCelebrateCopy(next.target),
-                                );
-                                useClosetStore.getState().completeDeclutterChallenge();
-                                trackEvent('declutter_challenge_completed' as never);
-                              } else {
-                                Alert.alert('Listed', 'Ready for buyers.');
-                              }
-                            },
-                            onError: (e) => Alert.alert('Failed', (e as Error).message),
-                          },
-                        )
-                      }
+                      onPress={() => void disposeDead(m, 'SELL')}
                     />
                     <Button
                       label="Donate"
                       size="sm"
                       variant="ghost"
                       disabled={dispose.isPending}
-                      onPress={() =>
-                        dispose.mutate(
-                          { itemId: m.wardrobeItemId, mode: 'DONATE' },
-                          {
-                            onSuccess: () => {
-                              const next = declutterChallengeProgress(
-                                countDisposedItems([
-                                  ...listings,
-                                  {
-                                    wardrobeItemId: m.wardrobeItemId,
-                                    mode: 'DONATE',
-                                    status: 'ACTIVE',
-                                  },
-                                ]),
-                                { started: declutterStarted || declutterChallenge.started },
-                              );
-                              if (next.completed) {
-                                Alert.alert(
-                                  'Declutter complete',
-                                  declutterChallengeCelebrateCopy(next.target),
-                                );
-                                useClosetStore.getState().completeDeclutterChallenge();
-                                trackEvent('declutter_challenge_completed' as never);
-                              }
-                            },
-                            onError: (e) => Alert.alert('Failed', (e as Error).message),
-                          },
-                        )
-                      }
+                      onPress={() => void disposeDead(m, 'DONATE')}
                     />
                   </View>
                 </View>
               );
             })}
-          </ScrollView>
+          </View>
         </View>
       ) : null}
 
@@ -399,7 +407,6 @@ export default function DispositionMarketplaceScreen() {
         <ClosetVirtualList
           data={filtered}
           keyExtractor={(l) => l.id}
-          estimatedItemSize={88}
           testID="disposition-listings"
           ListEmptyComponent={
             !isLoading ? (
@@ -409,16 +416,17 @@ export default function DispositionMarketplaceScreen() {
           renderItem={({ item: l }) => (
             <View style={styles.card}>
               <Text style={styles.title}>
-                {l.mode} · {l.status}
+                {MODE_LABEL[l.mode] ?? l.mode.toLowerCase()} · {STATUS_LABEL[l.status] ?? l.status.toLowerCase()}
               </Text>
               <Text style={styles.muted}>
-                Item {l.wardrobeItemId.slice(0, 8)}
-                {l.priceMinor != null ? ` · ${formatMinor(l.priceMinor)}` : ''}
+                {itemNames.get(l.wardrobeItemId) ?? 'A piece from your closet'}
+                {l.priceMinor != null ? ` · ${formatMinor(l.priceMinor, currency)}` : ''}
               </Text>
             </View>
           )}
         />
       </View>
+      {promptElement}
     </ClosetScreen>
   );
 }
@@ -484,8 +492,7 @@ const styles = StyleSheet.create({
   watermark: {
     color: textMuted,
     fontFamily: fontSans,
-    fontSize: 11,
+    fontSize: fsMicro,
     marginTop: 6,
-    opacity: 0.55,
   },
 });

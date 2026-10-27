@@ -1,5 +1,7 @@
 /** W041 — deep-link from a return item into Vault GST / invoice search. */
 
+import { localDayKey } from './localDay';
+
 export type GstFromReturnInput = {
   merchant?: string | null;
   /** ISO datetime — used to seed a ±45d search window around the return. */
@@ -17,7 +19,7 @@ export type GstInvoiceSearchPrefill = {
 function ymd(iso: string): string | null {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return null;
-  return new Date(t).toISOString().slice(0, 10);
+  return localDayKey(new Date(t));
 }
 
 /** Prefill merchant + date range for receipts search (export stays on Receipts tab). */
@@ -29,8 +31,9 @@ export function gstInvoiceSearchPrefill(input: GstFromReturnInput): GstInvoiceSe
   const center = Date.parse(anchor);
   if (Number.isNaN(center)) return { merchant };
 
-  const from = new Date(center - 45 * 86_400_000).toISOString().slice(0, 10);
-  const to = new Date(center + 14 * 86_400_000).toISOString().slice(0, 10);
+  // Days where the user is (MOB 20): the UTC day is still yesterday in India until 05:30.
+  const from = localDayKey(new Date(center), -45);
+  const to = localDayKey(new Date(center), 14);
   return { merchant, from, to };
 }
 

@@ -6,7 +6,7 @@ import { getCopyPack, type CopyPackId } from '@worn/shared';
 export const EMPTY_DEMO_FLAG = 'closet_empty_demo' as const;
 
 /** Unmistakable sample badge label (W001). */
-export const DEMO_BADGE_LABEL = 'Demo' as const;
+export const DEMO_BADGE_LABEL = 'Sample' as const;
 
 export type EmptyDemoSurface =
   | 'vault'

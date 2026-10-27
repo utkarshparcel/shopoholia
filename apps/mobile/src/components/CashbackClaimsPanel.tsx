@@ -8,7 +8,11 @@ import {
   useMarkCashbackClaimed,
 } from '@/src/hooks/closet/useCloset';
 import { trackEvent } from '@/src/lib/analytics';
-import { formatMinor } from '@/src/lib/format';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { formatClosetDate, formatMinor } from '@/src/lib/format';
+import { endOfDayKeyIso } from '@/src/lib/localDay';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import { cashbackClaimStartUrl } from '@worn/shared';
 import {
   border,
@@ -27,6 +31,9 @@ export function CashbackClaimsPanel() {
   const claims = useCashbackClaims('UNCLAIMED');
   const create = useCreateCashbackClaim();
   const mark = useMarkCashbackClaimed();
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  /** Rows with a "Claimed" request in flight, so each row has its own busy state. */
+  const [markingIds, setMarkingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [source, setSource] = useState('');
   const [amount, setAmount] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
@@ -50,7 +57,7 @@ export function CashbackClaimsPanel() {
         />
         <TextInput
           style={styles.input}
-          placeholder="Amount (₹)"
+          placeholder={`Amount in ${currency}`}
           placeholderTextColor={textMuted}
           keyboardType="numeric"
           value={amount}
@@ -60,6 +67,8 @@ export function CashbackClaimsPanel() {
           style={styles.input}
           placeholder="Claim by (YYYY-MM-DD)"
           placeholderTextColor={textMuted}
+          keyboardType="numbers-and-punctuation"
+          maxLength={10}
           value={expiresAt}
           onChangeText={setExpiresAt}
         />
@@ -72,28 +81,31 @@ export function CashbackClaimsPanel() {
           onChangeText={setClaimUrl}
         />
         <Button
-          label="Add claim"
+          label={create.isPending ? 'Adding…' : 'Add claim'}
           size="sm"
+          disabled={create.isPending}
           onPress={() => {
-            const rupees = Number.parseFloat(amount);
-            if (!source.trim() || !Number.isFinite(rupees) || rupees <= 0) {
-              Alert.alert('Enter source and amount');
+            const amountMinor = parseAmountInput(amount, currency);
+            if (!source.trim() || amountMinor === null) {
+              Alert.alert('Enter source and amount', `An amount in ${currency} above zero.`);
               return;
             }
             let expiresIso: string | undefined;
             if (expiresAt.trim()) {
-              const d = new Date(`${expiresAt.trim()}T23:59:59.000Z`);
-              if (Number.isNaN(d.getTime())) {
+              // The end of that day where the user is, not in UTC.
+              const iso = endOfDayKeyIso(expiresAt);
+              if (!iso) {
                 Alert.alert('Use YYYY-MM-DD for claim-by date');
                 return;
               }
-              expiresIso = d.toISOString();
+              expiresIso = iso;
             }
             const url = claimUrl.trim();
             create.mutate(
               {
                 source: source.trim(),
-                amountMinor: Math.round(rupees * 100),
+                amountMinor,
+                currency,
                 expiresAt: expiresIso,
                 claimUrl: url || undefined,
               },
@@ -104,6 +116,7 @@ export function CashbackClaimsPanel() {
                   setExpiresAt('');
                   setClaimUrl('');
                 },
+                onError: (e) => Alert.alert('Could not add the claim', closetAlertText(e)),
               },
             );
           }}
@@ -115,9 +128,9 @@ export function CashbackClaimsPanel() {
       ) : (
         rows.map((c) => {
           const startUrl = cashbackClaimStartUrl(c.source, c.claimUrl ?? null);
-          const claimBy = c.expiresAt
-            ? new Date(c.expiresAt).toISOString().slice(0, 10)
-            : null;
+          // formatClosetDate shows "—" for a date it cannot read instead of throwing mid-render.
+          const claimBy = c.expiresAt ? formatClosetDate(c.expiresAt) : null;
+          const marking = markingIds.has(c.id);
           return (
             <View key={c.id} style={styles.row}>
               <View style={{ flex: 1 }}>
@@ -140,10 +153,24 @@ export function CashbackClaimsPanel() {
                   />
                 ) : null}
                 <Button
-                  label="Claimed"
+                  label={marking ? 'Saving…' : 'Claimed'}
                   size="sm"
                   variant="secondary"
-                  onPress={() => mark.mutate(c.id)}
+                  disabled={marking}
+                  onPress={async () => {
+                    setMarkingIds((prev) => new Set(prev).add(c.id));
+                    try {
+                      await mark.mutateAsync(c.id);
+                    } catch (e) {
+                      Alert.alert('Could not mark it claimed', closetAlertText(e));
+                    } finally {
+                      setMarkingIds((prev) => {
+                        const next = new Set(prev);
+                        next.delete(c.id);
+                        return next;
+                      });
+                    }
+                  }}
                 />
               </View>
             </View>

@@ -2,7 +2,7 @@
  * W083 — Track Play buy success sheet (Closet confirm; vault + wardrobe links).
  */
 
-import { Modal, Pressable, StyleSheet, Text } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/src/components/ui';
 import { trackBuySuccessCopy } from '@/src/lib/bridgeWow';
@@ -40,19 +40,21 @@ export function TrackBuySuccessSheet({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button">
+      <View style={styles.backdrop}>
         <Pressable
-          style={styles.sheet}
-          onPress={(e) => e.stopPropagation()}
-          testID="track-buy-success-sheet"
-        >
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.sheet} testID="track-buy-success-sheet">
           <Text style={styles.title}>{copy.title}</Text>
           <Text style={styles.body}>{copy.body}</Text>
           <Button label={copy.wardrobeLabel} onPress={onOpenWardrobe} variant="primary" block />
           <Button label={copy.vaultLabel} onPress={onOpenVault} variant="secondary" block />
           <Button label="Stay on order" size="sm" variant="ghost" onPress={onClose} />
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

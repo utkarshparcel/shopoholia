@@ -3,6 +3,7 @@ import { Text } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { ClosetScreen } from '@/src/components/ClosetScreen';
+import { CLOSET_OFF_SUBTITLE } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { VAULT_RETURNS_HREF } from '@/src/lib/firstDelight';
 import { textMuted, fontSans, fsBody } from '@/src/theme/tokens';
@@ -23,7 +24,7 @@ export default function ClosetReturnsScreen() {
     return (
       <ClosetScreen
         title="Returns"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to track return windows."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }

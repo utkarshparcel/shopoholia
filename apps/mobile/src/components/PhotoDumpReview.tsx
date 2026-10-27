@@ -20,6 +20,7 @@ import {
   isPhotoDumpPending,
   photoDumpReviewProgress,
 } from '@/src/lib/photoDumpReview';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   closet,
@@ -63,7 +64,7 @@ export function PhotoDumpReview() {
           );
           void wardrobe.refetch();
         },
-        onError: (e) => Alert.alert('Photo dump failed', (e as Error).message),
+        onError: (e) => Alert.alert('Photo dump failed', closetAlertText(e)),
       },
     );
   }
@@ -79,7 +80,7 @@ export function PhotoDumpReview() {
         },
         onError: (e) => {
           setBusyId(null);
-          Alert.alert('Could not confirm', (e as Error).message);
+          Alert.alert('Could not confirm', closetAlertText(e));
         },
       },
     );
@@ -94,7 +95,7 @@ export function PhotoDumpReview() {
       },
       onError: (e) => {
         setBusyId(null);
-        Alert.alert('Could not reject', (e as Error).message);
+        Alert.alert('Could not reject', closetAlertText(e));
       },
     });
   }

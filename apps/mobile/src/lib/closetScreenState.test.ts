@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  closetAlertText,
   closetErrorText,
   isNetInfoOffline,
   resolveClosetContentMode,
@@ -123,5 +124,46 @@ describe('shouldShowSkeleton', () => {
     expect(shouldShowSkeleton(true, false)).toBe(true);
     expect(shouldShowSkeleton(true, true)).toBe(false);
     expect(shouldShowSkeleton(false, false)).toBe(false);
+  });
+});
+
+describe('closetAlertText (MOB 18)', () => {
+  class FakeApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+
+  it('passes the API message through when it is written for people', () => {
+    expect(closetAlertText(new FakeApiError(409, 'That card is already in your Vault.'))).toBe(
+      'That card is already in your Vault.',
+    );
+    expect(closetAlertText(new Error('Sign in to add a card.'))).toBe('Sign in to add a card.');
+  });
+
+  it('never shows a schema dump, a gateway page or a parse error', () => {
+    expect(closetAlertText(new FakeApiError(400, 'body/relationship Invalid enum value'))).toBe(
+      'Some details were not accepted. Check them and try again.',
+    );
+    expect(closetAlertText(new FakeApiError(502, '<html>Bad gateway</html>'))).toBe(
+      'The server had a problem. Try again in a moment.',
+    );
+    expect(closetAlertText(new SyntaxError("JSON Parse error: Unexpected character '<'"))).toBe(
+      'The server sent a response the app could not read.',
+    );
+  });
+
+  it('names network failures, rate limits and ended sessions plainly', () => {
+    expect(closetAlertText(new TypeError('Network request failed'))).toMatch(/Check your connection/);
+    expect(closetAlertText(new FakeApiError(429, 'Too Many Requests'))).toMatch(/Too many tries/);
+    expect(closetAlertText(new FakeApiError(401, 'Unauthorized'))).toMatch(/Sign in again/);
+  });
+
+  it('falls back when there is nothing to show', () => {
+    expect(closetAlertText(undefined)).toBe('Something went wrong. Try again.');
+    expect(closetAlertText(new Error(''), 'Could not save')).toBe('Could not save');
   });
 });

@@ -121,6 +121,8 @@ export function ButtonComponent({
 
   // Animated scale for press feedback
   const scale = useSharedValue(1);
+  // An Animated component drops a style function, so the pressed look comes from state.
+  const [pressed, setPressed] = React.useState(false);
 
   const animatedStyle = useAnimatedStyle(() => {
     return {
@@ -130,6 +132,7 @@ export function ButtonComponent({
 
   const handlePressIn = () => {
     if (disabled || loading) return;
+    setPressed(true);
     if (!reducedMotion) {
       scale.value = withSpring(0.97, springPresets.snappy);
     }
@@ -139,6 +142,7 @@ export function ButtonComponent({
   };
 
   const handlePressOut = () => {
+    setPressed(false);
     if (disabled || loading) return;
     if (!reducedMotion) {
       scale.value = withSpring(1.0, springPresets.standard);
@@ -158,7 +162,7 @@ export function ButtonComponent({
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       onPress={handlePress}
-      style={({ pressed }: { pressed: boolean }) => [
+      style={[
         styles.base,
         v.default,
         s.container,
@@ -166,7 +170,7 @@ export function ButtonComponent({
         pressed && !disabled && !loading && v.pressed,
         (disabled || loading) && styles.disabled,
         animatedStyle,
-        style as ViewStyle,
+        (typeof style === 'function' ? style({ pressed }) : style) as ViewStyle,
       ]}
       hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
       pressRetentionOffset={{ top: 16, bottom: 16, left: 24, right: 24 }}

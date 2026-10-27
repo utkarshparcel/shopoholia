@@ -5,6 +5,8 @@
  * and wedding/festival date-span planning.
  */
 
+import { localDayKey, parseDayKey } from '@/src/lib/localDay';
+
 /** W051 — Camera → upload → wear must stay within this app-tap budget. */
 export const WEAR_PHOTO_MAX_TAPS = 3;
 
@@ -199,14 +201,11 @@ export function defaultWeddingSpan(now = new Date()): {
   startDate: string;
   endDate: string;
 } {
-  const start = new Date(now);
-  const end = new Date(now.getTime() + 2 * 86_400_000);
-  const toKey = (d: Date) => d.toISOString().slice(0, 10);
-  return { startDate: toKey(start), endDate: toKey(end) };
+  // The device's calendar days: the UTC day is still yesterday in India until 05:30.
+  return { startDate: localDayKey(now), endDate: localDayKey(now, 2) };
 }
 
+/** A typed YYYY-MM-DD that names a real day (2026-02-30 is null). */
 export function parseDateKey(raw: string): string | null {
-  const t = raw.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
-  return t;
+  return parseDayKey(raw);
 }

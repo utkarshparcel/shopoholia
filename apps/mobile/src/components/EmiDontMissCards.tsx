@@ -14,6 +14,7 @@ import {
 } from '@/src/hooks/closet/useCloset';
 import { emiDontMissCardsFromPlans } from '@/src/lib/emiDontMiss';
 import { trackEvent } from '@/src/lib/analytics';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import { formatMinor, nextDueSchedule } from '@worn/shared';
 import {
   border,
@@ -81,7 +82,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
           );
         },
         onError: (e) =>
-          Alert.alert('Could not parse SMS', (e as Error).message),
+          Alert.alert('Could not parse SMS', closetAlertText(e)),
       },
     );
   }
@@ -163,7 +164,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                         );
                       },
                       onError: (e) =>
-                        Alert.alert('Could not mark paid', (e as Error).message),
+                        Alert.alert('Could not mark paid', closetAlertText(e)),
                     },
                   )
                 }
@@ -201,7 +202,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                       Alert.alert('Marked paid', 'EMI installment recorded.');
                     },
                     onError: (e) =>
-                      Alert.alert('Could not mark paid', (e as Error).message),
+                      Alert.alert('Could not mark paid', closetAlertText(e)),
                   },
                 )
               }

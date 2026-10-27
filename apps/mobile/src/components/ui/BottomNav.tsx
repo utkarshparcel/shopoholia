@@ -4,10 +4,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   accent,
   border,
-  fontMono,
+  fontSans,
   sale,
   shadowSm,
   surface,
+  tapTargetAndroid,
   textMuted,
 } from '@/src/theme/tokens';
 
@@ -29,7 +30,7 @@ export function BottomNav({ items, activeKey, onPress, style, ...props }: Bottom
 
   return (
     <View style={[styles.wrapper, shadowSm, style]} {...props}>
-      <View style={[styles.nav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      <View accessibilityRole="tablist" style={[styles.nav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         {items.map((item) => {
           const isActive = item.key === activeKey;
           return (
@@ -37,16 +38,30 @@ export function BottomNav({ items, activeKey, onPress, style, ...props }: Bottom
               key={item.key}
               accessibilityRole="tab"
               accessibilityState={{ selected: isActive }}
+              // The glyph means nothing read aloud: the label (and any count) is the tab's name.
+              accessibilityLabel={item.badge ? `${item.label}, ${item.badge} new` : item.label}
               onPress={() => onPress(item.key)}
               style={styles.navItem}
             >
               {item.badge ? (
                 <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{item.badge}</Text>
+                  <Text style={styles.badgeText} maxFontSizeMultiplier={1.3}>
+                    {item.badge}
+                  </Text>
                 </View>
               ) : null}
-              <Text style={[styles.icon, isActive && styles.iconActive]}>{item.icon}</Text>
-              <Text style={[styles.label, isActive && styles.labelActive]}>{item.label}</Text>
+              <Text style={[styles.icon, isActive && styles.iconActive]} maxFontSizeMultiplier={1.3}>
+                {item.icon}
+              </Text>
+              <Text
+                style={[styles.label, isActive && styles.labelActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+                maxFontSizeMultiplier={1.3}
+              >
+                {item.label}
+              </Text>
             </Pressable>
           );
         })}
@@ -60,9 +75,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: sale,
     borderRadius: 999,
-    height: 16,
+    height: 18,
     justifyContent: 'center',
-    minWidth: 16,
+    minWidth: 18,
     paddingHorizontal: 4,
     position: 'absolute',
     right: '50%',
@@ -72,7 +87,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     color: '#fff',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: '600',
   },
   icon: {
@@ -83,12 +98,12 @@ const styles = StyleSheet.create({
   iconActive: {
     color: accent,
   },
+  // Seven tabs share the width: an uppercase mono 'WARDROBE' is cut off on a 390pt phone at 11px,
+  // so labels are in the narrower sans face (fits a 360pt phone).
   label: {
     color: textMuted,
-    fontFamily: fontMono,
-    fontSize: 9,
-    letterSpacing: 0.72,
-    textTransform: 'uppercase',
+    fontFamily: fontSans,
+    fontSize: 11,
   },
   labelActive: {
     color: accent,
@@ -100,13 +115,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingHorizontal: 6,
+    paddingHorizontal: 2,
     paddingTop: 10,
   },
   navItem: {
     alignItems: 'center',
     flex: 1,
     gap: 4,
+    justifyContent: 'center',
+    minHeight: tapTargetAndroid,
     position: 'relative',
   },
   wrapper: {

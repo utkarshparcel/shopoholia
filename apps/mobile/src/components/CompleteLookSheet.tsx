@@ -62,12 +62,14 @@ export function CompleteLookSheet({ visible, onClose, itemIds }: Props) {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button">
+      <View style={styles.backdrop}>
         <Pressable
-          style={styles.sheet}
-          onPress={(e) => e.stopPropagation()}
-          testID="complete-look-sheet"
-        >
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.sheet} testID="complete-look-sheet">
           <Text style={styles.title}>{model?.title ?? 'Complete your look'}</Text>
           <Text style={styles.lead}>
             {model?.subtitle ??
@@ -125,8 +127,8 @@ export function CompleteLookSheet({ visible, onClose, itemIds }: Props) {
           <View style={styles.actions}>
             <Button label="Done" block onPress={onClose} />
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

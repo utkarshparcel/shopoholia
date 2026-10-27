@@ -3,7 +3,7 @@ import {
   AccessibilityInfo,
   Alert,
   Animated,
-  Image,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -16,7 +16,9 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Button } from '@/src/components/ui';
 import { AvatarOutfitReveal } from '@/src/components/AvatarOutfitReveal';
+import { CachedClosetImage } from '@/src/components/CachedClosetImage';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
+import { usePrompt } from '@/src/components/PromptSheet';
 import {
   useCapsule,
   useGenerateWeekOutfit,
@@ -44,8 +46,11 @@ import { GoesWithSheet } from '@/src/components/GoesWithSheet';
 import { PriceDropAlertCards } from '@/src/components/PriceDropAlertCards';
 import { AccessorySlotToday } from '@/src/components/AccessorySlotToday';
 import { RewearStreakCelebrate } from '@/src/components/RewearStreakCelebrate';
-import { buildDryCleanHomeTile, getCopyPack } from '@worn/shared';
+import { buildDryCleanHomeTile, getCopyPack, mapLimit } from '@worn/shared';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { formatDayKey, localDayKey } from '@/src/lib/localDay';
 import {
   beginClosetColdStart,
   markClosetInteractive,
@@ -94,10 +99,21 @@ import {
   fontSans,
   fsBody,
   fsCaption,
+  fsMicro,
   radiusMd,
   space3,
   space4,
 } from '@/src/theme/tokens';
+
+/** " · 31° · light rain" from the outfit's weather, or '' when there is none (no weather key, or a failed lookup). */
+function weatherLine(ctx: unknown): string {
+  if (!ctx || typeof ctx !== 'object') return '';
+  const { tempC, condition } = ctx as { tempC?: unknown; condition?: unknown };
+  const parts: string[] = [];
+  if (typeof tempC === 'number' && Number.isFinite(tempC)) parts.push(`${Math.round(tempC)}°`);
+  if (typeof condition === 'string' && condition.trim()) parts.push(condition.replace(/_/g, ' ').toLowerCase());
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
 
 export default function ClosetTodayScreen() {
   const params = useLocalSearchParams<{ focus?: string; reveal?: string; url?: string }>();
@@ -113,11 +129,13 @@ export default function ClosetTodayScreen() {
   const [laundryDismissed, setLaundryDismissed] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const altSlideX = useRef(new Animated.Value(0)).current;
-  const dryCleanTile = buildDryCleanHomeTile(wardrobe.data?.items ?? []);
+  const dryCleanTile = useMemo(() => buildDryCleanHomeTile(wardrobe.data?.items ?? []), [wardrobe.data]);
   const generateWeek = useGenerateWeekOutfit();
   const travelPack = useTravelPack();
   const workwear = useWorkwearRotation();
   const fromCalendar = useOutfitsFromCalendar();
+  /** Why "From calendar" could not read events, shown under the buttons (alerts don't show on web). */
+  const [calendarNote, setCalendarNote] = useState<string | null>(null);
   const weddingFestival = useWeddingFestivalPlan();
   const interviewKit = useSaveInterviewKit();
   const patchInterview = usePatchInterviewKit();
@@ -139,6 +157,8 @@ export default function ClosetTodayScreen() {
   const [altHasMore, setAltHasMore] = useState<boolean | null>(null);
   const preferCapsuleToday = useClosetPrefsStore((s) => s.preferCapsuleToday);
   const setPreferCapsuleToday = useClosetPrefsStore((s) => s.setPreferCapsuleToday);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const { ask, promptElement } = usePrompt();
   const hasMoreAlts = altIndex === 0 ? Boolean(data?.hasMore) : Boolean(altHasMore);
 
   useEffect(() => {
@@ -170,12 +190,12 @@ export default function ClosetTodayScreen() {
   const todayEmpty = emptyStateCopy('today', emptyCopyVariant, copyPackId);
   const workStrip = workwearStripDays(days);
   const hasCapsule = (capsule.data?.itemIds?.length ?? 0) > 0;
-  const laundryPrompt = laundryStarvationPrompt(wardrobe.data?.items ?? []);
+  const laundryPrompt = useMemo(() => laundryStarvationPrompt(wardrobe.data?.items ?? []), [wardrobe.data]);
   const weatherCopy = weatherRerollBannerCopy();
   const plannedForDate =
     (outfit as { plannedFor?: string | null } | null)?.plannedFor ??
     selectedDay?.date ??
-    new Date().toISOString().slice(0, 10);
+    localDayKey();
 
   useEffect(() => {
     let alive = true;
@@ -236,7 +256,7 @@ export default function ClosetTodayScreen() {
               Alert.alert('Logged', 'Wear logged with photo.');
             },
             onError: (e) => {
-              const copy = wearPhotoErrorCopy((e as Error).message);
+              const copy = wearPhotoErrorCopy(closetAlertText(e));
               Alert.alert(copy.title, copy.body, [
                 { text: 'OK', style: 'cancel' },
                 {
@@ -251,7 +271,7 @@ export default function ClosetTodayScreen() {
                           Alert.alert('Logged', 'Wear logged with photo.');
                         },
                         onError: (err) =>
-                          Alert.alert(copy.title, wearPhotoErrorCopy((err as Error).message).body),
+                          Alert.alert(copy.title, wearPhotoErrorCopy(closetAlertText(err)).body),
                       },
                     ),
                 },
@@ -261,7 +281,7 @@ export default function ClosetTodayScreen() {
         );
       }
     } catch (e) {
-      const copy = wearPhotoErrorCopy((e as Error).message);
+      const copy = wearPhotoErrorCopy(closetAlertText(e));
       Alert.alert(copy.title, copy.body);
     }
   }
@@ -277,7 +297,7 @@ export default function ClosetTodayScreen() {
           Alert.alert('Logged', photoUri ? 'Wear logged with photo.' : 'Wear logged.');
         },
         onError: (e) => {
-          const copy = wearPhotoErrorCopy((e as Error).message);
+          const copy = wearPhotoErrorCopy(closetAlertText(e));
           Alert.alert(copy.title, copy.body, [
             { text: 'OK', style: 'cancel' },
             { text: copy.retryLabel, onPress: logWoreIt },
@@ -298,7 +318,7 @@ export default function ClosetTodayScreen() {
           void refetch();
           void week.refetch();
         },
-        onError: (e) => Alert.alert('Could not regenerate', (e as Error).message),
+        onError: (e) => Alert.alert('Could not regenerate', closetAlertText(e)),
       },
     );
   }
@@ -339,7 +359,7 @@ export default function ClosetTodayScreen() {
           setAltOutfit(res.outfit);
           setAltHasMore(Boolean(res.hasMore));
         },
-        onError: (e) => Alert.alert('Could not load alternative', (e as Error).message),
+        onError: (e) => Alert.alert('Could not load alternative', closetAlertText(e)),
       });
     };
     runAltSwipeMotion(delta, apply);
@@ -357,7 +377,7 @@ export default function ClosetTodayScreen() {
           void week.refetch();
           Alert.alert('Saved', 'This look is your outfit for today.');
         },
-        onError: (e) => Alert.alert('Could not save look', (e as Error).message),
+        onError: (e) => Alert.alert('Could not save look', closetAlertText(e)),
       },
     );
   }
@@ -375,7 +395,7 @@ export default function ClosetTodayScreen() {
           void week.refetch();
           Alert.alert(weatherCopy.cta, 'Weather-updated look is set for today.');
         },
-        onError: (e) => Alert.alert('Could not save look', (e as Error).message),
+        onError: (e) => Alert.alert('Could not save look', closetAlertText(e)),
       },
     );
   }
@@ -395,9 +415,9 @@ export default function ClosetTodayScreen() {
         setSelectedDate(date);
         void week.refetch();
         void refetch();
-        Alert.alert('Planned', `Look assigned to ${date}.`);
+        Alert.alert('Planned', `Look assigned to ${formatDayKey(date)}.`);
       },
-      onError: (e) => Alert.alert('Could not plan day', (e as Error).message),
+      onError: (e) => Alert.alert('Could not plan day', closetAlertText(e)),
     });
   }
 
@@ -405,13 +425,12 @@ export default function ClosetTodayScreen() {
   async function markLaundryClean() {
     const ids = dirtyWardrobeItemIds(wardrobe.data?.items ?? []);
     try {
-      await Promise.all(
-        ids.map((id) => updateWardrobe.mutateAsync({ id, patch: { laundryStatus: 'CLEAN' } })),
-      );
+      // A few requests at a time, not one per piece all at once.
+      await mapLimit(ids, 4, (id) => updateWardrobe.mutateAsync({ id, patch: { laundryStatus: 'CLEAN' } }));
       setLaundryDismissed(true);
       regenerateDay();
     } catch (e) {
-      Alert.alert('Could not mark clean', (e as Error).message);
+      Alert.alert('Could not mark clean', closetAlertText(e));
     }
   }
 
@@ -436,7 +455,44 @@ export default function ClosetTodayScreen() {
           void week.refetch();
           trackEvent('wardrobe_goes_with' as never, { matchId: match.id });
         },
-        onError: (e) => Alert.alert('Could not try on', (e as Error).message),
+        onError: (e) => Alert.alert('Could not try on', closetAlertText(e)),
+      },
+    );
+  }
+
+  async function editInterviewDate(kit: { id: string; eventAt: string }) {
+    const values = await ask({
+      title: 'Event date',
+      message: 'We remind you the night before.',
+      fields: [
+        {
+          key: 'date',
+          label: 'Date (YYYY-MM-DD)',
+          defaultValue: localDayKey(new Date(kit.eventAt)),
+          keyboardType: 'numbers-and-punctuation',
+          maxLength: 10,
+        },
+      ],
+      confirmLabel: 'Save',
+      validate: (v) => {
+        if (!parseDateKey(v.date!)) return 'Enter the date as YYYY-MM-DD.';
+        return v.date! < localDayKey() ? 'That date has already passed.' : null;
+      },
+    });
+    if (!values) return;
+    const next = parseInterviewEventAt(values.date!);
+    if (!next) return;
+    patchInterview.mutate(
+      { id: kit.id, eventAt: next, remindNightBefore: true },
+      {
+        onSuccess: (res) =>
+          Alert.alert(
+            'Updated',
+            res.kit.remindAt
+              ? `Reminder moved to ${new Date(res.kit.remindAt).toLocaleString()}.`
+              : 'Event updated — reminder window passed.',
+          ),
+        onError: (e) => Alert.alert('Could not edit', closetAlertText(e)),
       },
     );
   }
@@ -456,42 +512,7 @@ export default function ClosetTodayScreen() {
     if (confirm.canEdit) {
       buttons.push({
         text: 'Edit date',
-        onPress: () => {
-          const apply = (raw?: string) => {
-            const next = parseInterviewEventAt(raw ?? '', kit.eventAt);
-            if (!next) {
-              Alert.alert('Invalid date', 'Use YYYY-MM-DD or an ISO datetime.');
-              return;
-            }
-            patchInterview.mutate(
-              { id: kit.id, eventAt: next, remindNightBefore: true },
-              {
-                onSuccess: (res) =>
-                  Alert.alert(
-                    'Updated',
-                    res.kit.remindAt
-                      ? `Reminder moved to ${new Date(res.kit.remindAt).toLocaleString()}.`
-                      : 'Event updated — reminder window passed.',
-                  ),
-                onError: (e) => Alert.alert('Could not edit', (e as Error).message),
-              },
-            );
-          };
-          if (typeof Alert.prompt === 'function') {
-            Alert.prompt(
-              'Event date',
-              'YYYY-MM-DD',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Save', onPress: apply },
-              ],
-              'plain-text',
-              kit.eventAt.slice(0, 10),
-            );
-          } else {
-            apply(kit.eventAt.slice(0, 10));
-          }
-        },
+        onPress: () => void editInterviewDate(kit),
       });
     }
     if (confirm.canCancel) {
@@ -503,7 +524,7 @@ export default function ClosetTodayScreen() {
             { id: kit.id, cancelReminder: true },
             {
               onSuccess: () => Alert.alert('Reminder canceled', 'Kit stays saved without a nudge.'),
-              onError: (e) => Alert.alert('Could not cancel', (e as Error).message),
+              onError: (e) => Alert.alert('Could not cancel', closetAlertText(e)),
             },
           ),
       });
@@ -511,106 +532,74 @@ export default function ClosetTodayScreen() {
     Alert.alert(confirm.title, confirm.body, buttons);
   }
 
-  function runWeddingPlanner() {
+  async function planWeddingFestival(kind: 'wedding' | 'festival') {
     const defaults = defaultWeddingSpan();
-    const run = (startDate: string, endDate: string, kind: 'wedding' | 'festival', budget?: number) => {
-      const daysN = weddingFestivalDayCount(startDate, endDate);
-      if (daysN < 1) {
-        Alert.alert('Invalid dates', 'End date must be on or after start date (YYYY-MM-DD).');
-        return;
-      }
-      weddingFestival.mutate(
+    const values = await ask({
+      title: kind === 'wedding' ? 'Plan a wedding' : 'Plan a festival week',
+      message: 'One look per day from your closet.',
+      fields: [
         {
-          startDate,
-          endDate,
-          kind,
-          label: kind === 'wedding' ? 'Upcoming wedding' : 'Festival week',
-          budgetLimitMinor: budget,
-          plannedSpendMinor: 0,
-          commit: true,
+          key: 'startDate',
+          label: 'First day (YYYY-MM-DD)',
+          defaultValue: defaults.startDate,
+          keyboardType: 'numbers-and-punctuation',
+          maxLength: 10,
         },
         {
-          onSuccess: (plan) => {
-            void week.refetch();
-            Alert.alert('Planner ready', weddingFestivalPlanSummary(plan));
-          },
-          onError: (e) =>
-            Alert.alert('Could not plan wedding/festival', (e as Error).message),
+          key: 'endDate',
+          label: 'Last day (YYYY-MM-DD)',
+          defaultValue: defaults.endDate,
+          keyboardType: 'numbers-and-punctuation',
+          maxLength: 10,
         },
-      );
-    };
-
-    const afterKind = (kind: 'wedding' | 'festival') => {
-      const askBudget = (startDate: string, endDate: string) => {
-        if (typeof Alert.prompt === 'function') {
-          Alert.prompt(
-            'Spend envelope (optional)',
-            'Budget in ₹ (blank = skip)',
-            [
-              {
-                text: 'Skip',
-                style: 'cancel',
-                onPress: () => run(startDate, endDate, kind),
-              },
-              {
-                text: 'Plan',
-                onPress: (raw?: string) => {
-                  const n = Number(raw);
-                  const budget =
-                    Number.isFinite(n) && n > 0 ? Math.round(n * 100) : undefined;
-                  run(startDate, endDate, kind, budget);
-                },
-              },
-            ],
-            'plain-text',
-            '',
-          );
-        } else {
-          run(startDate, endDate, kind, 50_000_00);
+        {
+          key: 'budget',
+          label: `Spend limit in ${currency} (optional)`,
+          placeholder: 'Leave blank for no limit',
+          keyboardType: 'decimal-pad',
+        },
+      ],
+      confirmLabel: 'Plan',
+      validate: (v) => {
+        if (!parseDateKey(v.startDate!) || !parseDateKey(v.endDate!)) {
+          return 'Enter both days as YYYY-MM-DD.';
         }
-      };
+        if (v.startDate! < localDayKey()) return 'The first day has already passed.';
+        if (weddingFestivalDayCount(v.startDate!, v.endDate!) < 1) {
+          return 'The last day must be on or after the first day.';
+        }
+        if (v.budget && !parseAmountInput(v.budget, currency)) {
+          return 'Enter the spend limit as an amount above zero, or leave it blank.';
+        }
+        return null;
+      },
+    });
+    if (!values) return;
+    weddingFestival.mutate(
+      {
+        startDate: values.startDate!,
+        endDate: values.endDate!,
+        kind,
+        label: kind === 'wedding' ? 'Upcoming wedding' : 'Festival week',
+        budgetLimitMinor: values.budget ? (parseAmountInput(values.budget, currency) ?? undefined) : undefined,
+        plannedSpendMinor: 0,
+        commit: true,
+      },
+      {
+        onSuccess: (plan) => {
+          void week.refetch();
+          Alert.alert('Planner ready', weddingFestivalPlanSummary(plan));
+        },
+        onError: (e) => Alert.alert('Could not plan wedding/festival', closetAlertText(e)),
+      },
+    );
+  }
 
-      if (typeof Alert.prompt === 'function') {
-        Alert.prompt(
-          'Start date',
-          'YYYY-MM-DD',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Next',
-              onPress: (startRaw?: string) => {
-                const startDate = parseDateKey(startRaw ?? '') ?? defaults.startDate;
-                Alert.prompt?.(
-                  'End date',
-                  'YYYY-MM-DD',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Next',
-                      onPress: (endRaw?: string) => {
-                        const endDate = parseDateKey(endRaw ?? '') ?? defaults.endDate;
-                        askBudget(startDate, endDate);
-                      },
-                    },
-                  ],
-                  'plain-text',
-                  defaults.endDate,
-                );
-              },
-            },
-          ],
-          'plain-text',
-          defaults.startDate,
-        );
-      } else {
-        askBudget(defaults.startDate, defaults.endDate);
-      }
-    };
-
+  function runWeddingPlanner() {
     Alert.alert('Wedding / festival', 'Plan multi-day outfits from your closet.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Wedding', onPress: () => afterKind('wedding') },
-      { text: 'Festival', onPress: () => afterKind('festival') },
+      { text: 'Wedding', onPress: () => void planWeddingFestival('wedding') },
+      { text: 'Festival', onPress: () => void planWeddingFestival('festival') },
     ]);
   }
 
@@ -676,26 +665,24 @@ export default function ClosetTodayScreen() {
         optionCount: options.length,
       });
     } catch (e) {
-      Alert.alert('Could not create poll', (e as Error).message);
+      Alert.alert('Could not create poll', closetAlertText(e));
     }
   }
 
   if (!FEATURE_CLOSET) {
     return (
-      <ClosetScreen
-        title="Today"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to see your morning outfit."
-      />
+      <ClosetScreen title="Today" subtitle={CLOSET_OFF_SUBTITLE} />
     );
   }
 
   return (
+    <>
     <ClosetScreen
       title={copyPack.today.title}
       subtitle={copyPack.today.subtitle}
       loading={loading}
       loadingLabel="Building today’s look…"
-      error={isError ? ((error as Error)?.message ?? true) : null}
+      error={isError ? closetAlertText(error) : null}
       onRetry={() => {
         void refetch();
         void week.refetch();
@@ -746,11 +733,14 @@ export default function ClosetTodayScreen() {
           onPress={() => setShowCompleteLook(true)}
         />
       </View>
-      <CompleteLookSheet
-        visible={showCompleteLook}
-        onClose={() => setShowCompleteLook(false)}
-        itemIds={outfit?.itemIds}
-      />
+      {/* Mounted only while open: the sheet's query would otherwise run on every visit. */}
+      {showCompleteLook ? (
+        <CompleteLookSheet
+          visible
+          onClose={() => setShowCompleteLook(false)}
+          itemIds={outfit?.itemIds}
+        />
+      ) : null}
       {(packages.data?.packages?.length ?? 0) > 0 ? (
         <View style={styles.packageCard}>
           <Text style={styles.packageTitle}>Arriving soon</Text>
@@ -806,6 +796,9 @@ export default function ClosetTodayScreen() {
                   onPress={() => setSelectedDate(d.date)}
                   onLongPress={() => assignLookToDay(d.date)}
                   delayLongPress={280}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${d.weekday} ${formatDayKey(d.date)}${d.outfit ? ', look planned' : ', no look yet'}${workBadge ? `, ${workBadge}` : ''}`}
+                  accessibilityState={{ selected: active }}
                   accessibilityHint={weekStripPlanHint()}
                   style={[
                     styles.dayChip,
@@ -852,7 +845,7 @@ export default function ClosetTodayScreen() {
                         `${res.days.length} weekdays · ${res.unique ? 'unique pieces' : 'best-effort reuse'}.`,
                       );
                     },
-                    onError: (e) => Alert.alert('Could not plan workwear', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not plan workwear', closetAlertText(e)),
                   })
                 }
               />
@@ -867,7 +860,10 @@ export default function ClosetTodayScreen() {
               onPress={() =>
                 generateWeek.mutate(
                   capsuleBody({ fillWeek: true }),
-                  { onSuccess: () => void week.refetch() },
+                  {
+                    onSuccess: () => void week.refetch(),
+                    onError: (e) => Alert.alert('Could not plan the week', closetAlertText(e)),
+                  },
                 )
               }
             />
@@ -889,7 +885,7 @@ export default function ClosetTodayScreen() {
                         `${res.days.length} weekdays planned${res.unique ? ' · unique pieces' : ''}.`,
                       );
                     },
-                    onError: (e) => Alert.alert('Could not plan workwear', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not plan workwear', closetAlertText(e)),
                   },
                 )
               }
@@ -901,18 +897,23 @@ export default function ClosetTodayScreen() {
               disabled={fromCalendar.isPending}
               onPress={() => {
                 void (async () => {
+                  setCalendarNote(null);
+                  // The web has no device calendar, so there is nothing to read and no sample events.
+                  if (Platform.OS === 'web') {
+                    setCalendarNote('Calendar not connected. The calendar can only be read in the WORN app on your phone.');
+                    return;
+                  }
                   const status = await requestCalendarPermission();
                   if (!isCalendarPermissionGranted(status)) {
-                    Alert.alert(
-                      'Calendar needed',
-                      'Allow calendar access to dress for interviews, weddings, and office days.',
+                    setCalendarNote(
+                      'Calendar not connected. Allow calendar access in Settings to dress for interviews, weddings and office days.',
                     );
                     return;
                   }
                   try {
                     const events = await listUpcomingCalendarEvents({ daysAhead: 14, limit: 5 });
                     if (!events.length) {
-                      Alert.alert('No upcoming events', 'Nothing on your calendar in the next two weeks.');
+                      setCalendarNote('Nothing on your calendar in the next two weeks.');
                       return;
                     }
                     fromCalendar.mutate(
@@ -924,11 +925,16 @@ export default function ClosetTodayScreen() {
                           Alert.alert(copy.title, copy.body);
                         },
                         onError: (e) =>
-                          Alert.alert('Could not map calendar', (e as Error).message),
+                          Alert.alert('Could not map calendar', closetAlertText(e)),
                       },
                     );
                   } catch (e) {
-                    Alert.alert('Calendar error', (e as Error).message);
+                    // CalendarNotConnectedError carries its own plain message ("Your calendar isn't connected…").
+                    setCalendarNote(
+                      e instanceof Error && e.name === 'CalendarNotConnectedError'
+                        ? e.message
+                        : `Could not read your calendar. ${closetAlertText(e)}`,
+                    );
                   }
                 })();
               }}
@@ -939,18 +945,16 @@ export default function ClosetTodayScreen() {
               variant="ghost"
               disabled={travelPack.isPending}
               onPress={() => {
-                const start = new Date();
-                const end = new Date(start.getTime() + 3 * 86_400_000);
-                const toKey = (d: Date) => d.toISOString().slice(0, 10);
+                const now = new Date();
                 travelPack.mutate(
-                  { startDate: toKey(start), endDate: toKey(end), maxItems: 12 },
+                  { startDate: localDayKey(now), endDate: localDayKey(now, 3), maxItems: 12 },
                   {
                     onSuccess: (pack) =>
                       Alert.alert(
                         'Travel pack shared',
-                        `${pack.items.length} pieces for ${pack.nights} days — checklist has no account PII.`,
+                        `${pack.items.length} pieces for ${pack.nights} days.`,
                       ),
-                    onError: (e) => Alert.alert('Could not build pack', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not build pack', closetAlertText(e)),
                   },
                 );
               }}
@@ -988,12 +992,17 @@ export default function ClosetTodayScreen() {
                       void week.refetch();
                       confirmInterviewKit(res.kit);
                     },
-                    onError: (e) => Alert.alert('Could not save kit', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not save kit', closetAlertText(e)),
                   },
                 );
               }}
             />
           </View>
+          {calendarNote ? (
+            <Text style={styles.muted} testID="today-calendar-note" accessibilityLiveRegion="polite">
+              {calendarNote}
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -1037,13 +1046,11 @@ export default function ClosetTodayScreen() {
           <Text style={styles.title}>
             {selectedDay && !selectedDay.isToday ? `${selectedDay.weekday} · ` : ''}
             {outfit.occasion ?? 'CASUAL'}
-            {outfit.weatherCtx && typeof outfit.weatherCtx === 'object'
-              ? ` · ${String((outfit.weatherCtx as { tempC?: number }).tempC ?? '')}° · ${String((outfit.weatherCtx as { condition?: string }).condition ?? '').replace(/_/g, ' ')}`
-              : ''}
+            {weatherLine(outfit.weatherCtx)}
           </Text>
           <Text style={styles.muted}>
             Generated {new Date(outfit.generatedAt).toLocaleTimeString()}
-            {outfit.plannedFor ? ` · ${outfit.plannedFor}` : ''}
+            {outfit.plannedFor ? ` · ${formatDayKey(outfit.plannedFor)}` : ''}
           </Text>
 
           {avoidChips.length > 0 ? (
@@ -1078,8 +1085,9 @@ export default function ClosetTodayScreen() {
                 accessibilityLabel={`What goes with ${it.category}`}
               >
                 {(it.garmentImageUrl ?? it.imageUrls?.[0]) ? (
-                  <Image
-                    source={{ uri: (it.garmentImageUrl ?? it.imageUrls?.[0]) as string }}
+                  <CachedClosetImage
+                    uri={(it.garmentImageUrl ?? it.imageUrls?.[0]) as string}
+                    recyclingKey={it.id}
                     style={styles.thumb}
                   />
                 ) : null}
@@ -1099,8 +1107,7 @@ export default function ClosetTodayScreen() {
                 brand: it.brand,
               }))}
               plannedFor={
-                (outfit.plannedFor as string | null | undefined) ??
-                new Date().toISOString().slice(0, 10)
+                (outfit.plannedFor as string | null | undefined) ?? localDayKey()
               }
               disabled={wear.isPending}
               onUpdated={() => {
@@ -1114,7 +1121,7 @@ export default function ClosetTodayScreen() {
             <>
               {photoUri ? (
                 <View style={styles.photoPreview}>
-                  <Image source={{ uri: photoUri }} style={styles.wearThumb} />
+                  <CachedClosetImage uri={photoUri} cachePolicy="none" style={styles.wearThumb} />
                   <Button label="Remove photo" size="sm" variant="ghost" onPress={() => setPhotoUri(null)} />
                 </View>
               ) : null}
@@ -1218,6 +1225,8 @@ export default function ClosetTodayScreen() {
       />
       </PremiumGate>
     </ClosetScreen>
+    {promptElement}
+    </>
   );
 }
 
@@ -1283,7 +1292,7 @@ const styles = StyleSheet.create({
   dayDotActive: { backgroundColor: closet.surface },
   dayDotFilled: { backgroundColor: closet.accent },
   dayTextActive: { color: closet.surface },
-  dayWeekday: { color: closet.muted, fontFamily: fontSans, fontSize: 11 },
+  dayWeekday: { color: closet.muted, fontFamily: fontSans, fontSize: fsMicro },
   itemChip: { alignItems: 'center', gap: 4 },
   muted: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption },
   photoPreview: { alignItems: 'flex-start', gap: space4, marginTop: space4 },
@@ -1369,7 +1378,7 @@ const styles = StyleSheet.create({
   workBadge: {
     color: closet.accent,
     fontFamily: fontSans,
-    fontSize: 9,
+    fontSize: fsMicro,
     fontWeight: '700',
     letterSpacing: 0.4,
   },

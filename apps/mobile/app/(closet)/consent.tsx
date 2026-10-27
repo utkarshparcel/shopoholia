@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
+import { usePrompt } from '@/src/components/PromptSheet';
 import { QuietHoursEditor } from '@/src/components/QuietHoursEditor';
 import { VaultPrivacyActions } from '@/src/components/VaultPrivacyActions';
 import {
@@ -20,6 +21,7 @@ import {
   useGrantConsent,
   useRevokeConsent,
 } from '@/src/hooks/closet/useConsent';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import {
   CONSENT_PLAIN_CARDS,
@@ -62,6 +64,20 @@ const POINTS = [
 
 const SCOPES = CONSENT_SCOPES;
 const NOTIF_CATEGORIES = ['returns', 'warranty', 'credits', 'outfits', 'digest'] as const;
+const NOTIF_CATEGORY_LABEL: Record<(typeof NOTIF_CATEGORIES)[number], string> = {
+  returns: 'Return deadlines',
+  warranty: 'Warranties',
+  credits: 'Gift cards and credits',
+  outfits: 'Outfit ideas',
+  digest: 'Digest',
+};
+const SOURCE_KIND_LABEL: Record<string, string> = { EMAIL: 'Email', SMS: 'SMS', RECEIPT: 'Receipts' };
+
+/** "Gmail · Email" rather than the stored "gmail · EMAIL". */
+function sourceLabel(provider: string, kind: string): string {
+  const name = provider === 'gmail' ? 'Gmail' : provider.charAt(0).toUpperCase() + provider.slice(1);
+  return `${name} · ${SOURCE_KIND_LABEL[kind] ?? kind}`;
+}
 
 export default function ConsentScreen() {
   const router = useRouter();
@@ -71,8 +87,10 @@ export default function ConsentScreen() {
   const grant = useGrantConsent();
   const revokeMut = useRevokeConsent();
   const disconnectMut = useDisconnectSource();
+  const { ask, promptElement } = usePrompt();
 
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(['EMAIL']));
+  // Nothing is ticked for the user: every scope is an explicit choice.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [busyScope, setBusyScope] = useState<string | null>(null);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const [reconnectBusy, setReconnectBusy] = useState(false);
@@ -80,12 +98,22 @@ export default function ConsentScreen() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [prefsBusy, setPrefsBusy] = useState(false);
 
+  // A load that finishes after the screen closed must not set state on it.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const loadPrefs = useCallback(async () => {
     if (!accessToken) return;
     try {
-      setPrefs(await fetchNotificationPreferences(accessToken));
+      const next = await fetchNotificationPreferences(accessToken);
+      if (mountedRef.current) setPrefs(next);
     } catch (e) {
-      setError((e as Error).message);
+      if (mountedRef.current) setError(closetAlertText(e));
     }
   }, [accessToken]);
 
@@ -97,7 +125,7 @@ export default function ConsentScreen() {
     return (
       <ClosetScreen
         title="Your consent"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to manage consent."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -109,6 +137,8 @@ export default function ConsentScreen() {
     connectedSources.map((s) => [s.id, toAccountHealthRow(s)] as const),
   );
   const loading = consents.isLoading || sources.isLoading;
+  // WORN never reads SMS (MOB 7): the scope shows only so an old grant can still be revoked.
+  const shownScope = (scope: string) => scope !== 'SMS' || active.has(scope);
 
   function toggleSelected(scope: string) {
     setSelected((prev) => {
@@ -119,14 +149,23 @@ export default function ConsentScreen() {
     });
   }
 
+  // Revoking stops syncing and disconnecting drops a source: both ask first, on every platform.
   async function revoke(scope: string) {
     if (!accessToken) return;
+    const card = CONSENT_PLAIN_CARDS[scope as ConsentScopeId];
+    const ok = await ask({
+      title: `Revoke ${card?.title ?? 'this permission'}?`,
+      message: 'WORN stops using this data straight away. You can grant it again here later.',
+      fields: [],
+      confirmLabel: 'Revoke',
+    });
+    if (!ok) return;
     setBusyScope(scope);
     setError(null);
     try {
       await revokeMut.mutateAsync(scope);
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setBusyScope(null);
     }
@@ -134,12 +173,19 @@ export default function ConsentScreen() {
 
   async function disconnectSource(sourceId: string) {
     if (!accessToken) return;
+    const ok = await ask({
+      title: 'Disconnect this source?',
+      message: 'WORN stops syncing from it. What is already in your Vault stays until you delete it.',
+      fields: [],
+      confirmLabel: 'Disconnect',
+    });
+    if (!ok) return;
     setBusySourceId(sourceId);
     setError(null);
     try {
       await disconnectMut.mutateAsync(sourceId);
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setBusySourceId(null);
     }
@@ -189,9 +235,16 @@ export default function ConsentScreen() {
           await grant.mutateAsync({ scope, source: 'consent-center' });
         }
       }
-      router.replace('/(closet)/connect-email' as never);
+      // Email goes on to connecting an inbox; anything else returns to where the user came from.
+      if (selected.has('EMAIL')) {
+        router.replace('/(closet)/connect-email' as never);
+      } else if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(closet)/vault' as never);
+      }
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     }
   }
 
@@ -205,7 +258,7 @@ export default function ConsentScreen() {
       });
       setPrefs(next);
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setPrefsBusy(false);
     }
@@ -220,7 +273,7 @@ export default function ConsentScreen() {
       });
       setPrefs(next);
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setPrefsBusy(false);
     }
@@ -232,8 +285,8 @@ export default function ConsentScreen() {
 
   const loadError =
     error ??
-    (consents.isError ? (consents.error as Error).message : null) ??
-    (sources.isError ? (sources.error as Error).message : null);
+    (consents.isError ? closetAlertText(consents.error) : null) ??
+    (sources.isError ? closetAlertText(sources.error) : null);
 
   return (
     <ClosetScreen
@@ -273,7 +326,7 @@ export default function ConsentScreen() {
 
       <View style={styles.grantsCard}>
         <Text style={styles.grantsTitle}>{retention.title}</Text>
-        {retention.lines.map((line) => (
+        {retention.lines.filter((line) => shownScope(line.kind)).map((line) => (
           <View key={line.kind} style={styles.point}>
             <Text style={styles.bullet}>•</Text>
             <Text style={styles.pointText}>{line.sentence}</Text>
@@ -291,7 +344,7 @@ export default function ConsentScreen() {
       <View style={styles.grantsCard}>
         <Text style={styles.grantsTitle}>Connected sources</Text>
         {connectedSources.length === 0 ? (
-          <Text style={styles.hint}>No inbox or SMS sources connected yet.</Text>
+          <Text style={styles.hint}>No inbox connected yet.</Text>
         ) : (
           connectedSources.map((source) => {
             const busy = busySourceId === source.id;
@@ -300,7 +353,7 @@ export default function ConsentScreen() {
               <View key={source.id} style={styles.grantRow}>
                 <View style={styles.grantMeta}>
                   <Text style={styles.grantScope}>
-                    {source.provider} · {source.kind}
+                    {sourceLabel(source.provider, source.kind)}
                   </Text>
                   <Text style={styles.grantStatus}>
                     {health?.label ?? source.status} · Last sync{' '}
@@ -342,7 +395,7 @@ export default function ConsentScreen() {
       <View style={styles.grantsCard}>
         <Text style={styles.grantsTitle}>What you allow</Text>
         <Text style={styles.hint}>Plain-language permissions — revoke any one in a single tap.</Text>
-        {CONSENT_TRUST_SCOPES.map((scope) => {
+        {CONSENT_TRUST_SCOPES.filter(shownScope).map((scope) => {
           const card = CONSENT_PLAIN_CARDS[scope];
           const isActive = active.has(scope);
           const isSelected = selected.has(scope);
@@ -426,7 +479,7 @@ export default function ConsentScreen() {
           />
           {NOTIF_CATEGORIES.map((key) => (
             <View key={key} style={styles.grantRow}>
-              <Text style={styles.grantScope}>{key}</Text>
+              <Text style={styles.grantScope}>{NOTIF_CATEGORY_LABEL[key]}</Text>
               <Button
                 label={prefs.categories[key] ? 'On' : 'Off'}
                 size="sm"
@@ -449,6 +502,7 @@ export default function ConsentScreen() {
       <Button label="Cancel" onPress={cancel} variant="ghost" block disabled={grant.isPending} />
 
       <VaultPrivacyActions />
+      {promptElement}
     </ClosetScreen>
   );
 }

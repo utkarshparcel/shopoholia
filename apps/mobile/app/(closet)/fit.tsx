@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
 import {
@@ -12,17 +12,33 @@ import {
   useFitTailors,
   useFitPreview,
 } from '@/src/hooks/closet/useCloset';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { initialSelections, optionGroups, parseTemplateOptions, selectionSummary } from '@/src/lib/fitOptions';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { bg, border, radiusMd, fontSans, fsBody, fsCaption, text, textMuted, surface, space4 } from '@/src/theme/tokens';
+
+const ORDER_STATE_LABEL: Record<string, string> = {
+  PENDING: 'Waiting for the tailor',
+  CONFIRMED: 'Confirmed',
+  IN_STITCHING: 'Being stitched',
+  SHIPPED: 'On the way',
+  DELIVERED: 'Delivered',
+  CANCELLED: 'Cancelled',
+};
+
+/** A typed measurement in cm, or null when it is not a positive number. */
+function parseCm(raw: string): number | null {
+  const n = Number(raw.trim().replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n < 400 ? n : null;
+}
 
 export default function FitVaultScreen() {
   const preferredFitRegion = useClosetPrefsStore((s) => s.preferredFitRegion);
   const { data: mData } = useMeasurements();
   const { data: tData } = useTemplates(preferredFitRegion);
   const { data: oData } = useTailoringOrders();
-  const { data: tailorData } = useFitTailors();
+  const { data: tailorData, isLoading: tailorsLoading } = useFitTailors();
   const createM = useCreateMeasurement();
   const createO = useCreateTailoringOrder();
   const reorder = useReorderTailoringOrder();
@@ -41,6 +57,8 @@ export default function FitVaultScreen() {
   const activeTemplate = templates.find((t) => t.id === selectedTemplate);
   const schema = parseTemplateOptions(activeTemplate?.optionsSchema as Record<string, unknown> | undefined);
   const groups = optionGroups(schema);
+  const templateNames = useMemo(() => new Map(templates.map((t) => [t.id, t.name])), [templates]);
+  const tailorNames = useMemo(() => new Map(tailors.map((t) => [t.id, t.shopName])), [tailors]);
 
   useEffect(() => {
     if (!selectedTemplate || !activeTemplate) return;
@@ -49,17 +67,21 @@ export default function FitVaultScreen() {
   }, [selectedTemplate]);
 
   if (!FEATURE_CLOSET) {
-    return <ClosetScreen title="Fit Vault" subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to view fit vault." />;
+    return <ClosetScreen title="Fit Vault" subtitle={CLOSET_OFF_SUBTITLE} />;
   }
 
   function handleSaveMeasurements() {
     const points: Record<string, number> = {};
-    if (bust) points.bust = Number(bust);
-    if (waist) points.waist = Number(waist);
-    if (Object.keys(points).length === 0) return Alert.alert('Add at least one point');
+    for (const [key, raw] of [['bust', bust], ['waist', waist]] as const) {
+      if (!raw.trim()) continue;
+      const cm = parseCm(raw);
+      if (cm == null) return Alert.alert('Check the measurement', `Enter ${key} in cm, for example 86.`);
+      points[key] = cm;
+    }
+    if (Object.keys(points).length === 0) return Alert.alert('Add at least one measurement');
     createM.mutate(
       { points, region: preferredFitRegion, unit: 'CM' },
-      { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+      { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
     );
   }
 
@@ -75,7 +97,7 @@ export default function FitVaultScreen() {
               : `Avatar preview ready — ${res.summary}`,
           );
         },
-        onError: (e) => Alert.alert('Preview failed', (e as Error).message),
+        onError: (e) => Alert.alert('Preview failed', closetAlertText(e)),
       },
     );
   }
@@ -89,14 +111,14 @@ export default function FitVaultScreen() {
         selections,
         tailorSellerId: selectedTailor,
       },
-      { onError: (e) => Alert.alert('Order failed', (e as Error).message) },
+      { onError: (e) => Alert.alert('Order failed', closetAlertText(e)) },
     );
   }
 
   function handleReorder(orderId: string) {
     reorder.mutate(orderId, {
       onSuccess: () => Alert.alert('Reordered', 'New draft with the same selections — one tap.'),
-      onError: (e) => Alert.alert('Reorder failed', (e as Error).message),
+      onError: (e) => Alert.alert('Reorder failed', closetAlertText(e)),
     });
   }
 
@@ -105,8 +127,8 @@ export default function FitVaultScreen() {
       title="Fit & Customization Vault"
       subtitle={`Region ${preferredFitRegion} · pick neckline, sleeve & pattern. Preview on avatar. Reorder in one tap.`}
     >
-      <ScrollView>
-        <Text style={styles.section}>Measurements (from avatar bodyMeta + manual)</Text>
+      <View>
+        <Text style={styles.section}>Measurements</Text>
         <View style={styles.form}>
           <TextInput
             style={styles.input}
@@ -136,7 +158,11 @@ export default function FitVaultScreen() {
             <Text style={styles.title}>
               {m.region} · {m.unit}
             </Text>
-            <Text style={styles.muted}>{JSON.stringify(m.points)}</Text>
+            <Text style={styles.muted}>
+              {Object.entries(m.points)
+                .map(([k, v]) => `${k} ${v}`)
+                .join(' · ')}
+            </Text>
           </View>
         ))}
         {measurements.length === 0 ? <Text style={styles.muted}>No measurements yet.</Text> : null}
@@ -158,7 +184,7 @@ export default function FitVaultScreen() {
 
         {selectedTemplate && groups.length > 0 ? (
           <View style={styles.form}>
-            <Text style={styles.section}>Customize (preview assets)</Text>
+            <Text style={styles.section}>Customize</Text>
             {groups.map(({ key, group }) => (
               <View key={key} style={styles.pickerBlock}>
                 <Text style={styles.title}>{group.label}</Text>
@@ -172,9 +198,9 @@ export default function FitVaultScreen() {
                         onPress={() => setSelections((s) => ({ ...s, [key]: opt.value }))}
                         accessibilityRole="button"
                         accessibilityLabel={`${group.label} ${opt.label}`}
+                        accessibilityState={{ selected: active }}
                       >
                         <Text style={[styles.chipText, active ? styles.chipTextActive : null]}>{opt.label}</Text>
-                        <Text style={styles.chipPreview}>{opt.preview ?? opt.imageKey}</Text>
                       </Pressable>
                     );
                   })}
@@ -214,18 +240,20 @@ export default function FitVaultScreen() {
             />
           </View>
         ))}
-        {tailors.length === 0 ? <Text style={styles.muted}>Loading tailors…</Text> : null}
+        {tailors.length === 0 ? (
+          <Text style={styles.muted}>{tailorsLoading ? 'Loading tailors…' : 'No tailors near you yet.'}</Text>
+        ) : null}
 
-        <Text style={[styles.section, { marginTop: space4 }]}>Tailoring orders (state machine)</Text>
+        <Text style={[styles.section, { marginTop: space4 }]}>Tailoring orders</Text>
         {orders.map((o) => (
           <View key={o.id} style={styles.card}>
             <Text style={styles.title}>
-              {o.id.slice(0, 8)} · {o.state}
+              {(o.templateId && templateNames.get(o.templateId)) || 'Tailoring order'} ·{' '}
+              {ORDER_STATE_LABEL[o.state] ?? o.state.toLowerCase()}
             </Text>
-            <Text style={styles.muted}>
-              Template {o.templateId}
-              {o.tailorSellerId ? ` · tailor ${o.tailorSellerId.slice(0, 8)}` : ''}
-            </Text>
+            {o.tailorSellerId && tailorNames.get(o.tailorSellerId) ? (
+              <Text style={styles.muted}>{tailorNames.get(o.tailorSellerId)}</Text>
+            ) : null}
             <Button
               label={reorder.isPending ? 'Reordering…' : 'Reorder one-tap'}
               size="sm"
@@ -236,7 +264,7 @@ export default function FitVaultScreen() {
           </View>
         ))}
         {orders.length === 0 ? <Text style={styles.muted}>No orders yet.</Text> : null}
-      </ScrollView>
+      </View>
     </ClosetScreen>
   );
 }
@@ -280,6 +308,5 @@ const styles = StyleSheet.create({
   chipActive: { borderColor: '#6aa6ff', backgroundColor: surface },
   chipText: { color: text, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
   chipTextActive: { color: '#6aa6ff' },
-  chipPreview: { color: textMuted, fontFamily: fontSans, fontSize: 10, marginTop: 2 },
   previewNote: { color: text, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
 });

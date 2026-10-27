@@ -15,7 +15,7 @@ import {
 describe('emptyDemo (ONB-EMPTY-DEMO + W001/W004)', () => {
   it('exposes demo mode flag key and Demo badge', () => {
     expect(EMPTY_DEMO_FLAG).toBe('closet_empty_demo');
-    expect(DEMO_BADGE_LABEL).toBe('Demo');
+    expect(DEMO_BADGE_LABEL).toBe('Sample');
   });
 
   it('isDemoModeActive tracks sample card presence', () => {

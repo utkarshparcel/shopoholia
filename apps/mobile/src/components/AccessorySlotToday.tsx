@@ -17,6 +17,7 @@ import {
   withAccessoryOnOutfit,
 } from '@/src/lib/accessories';
 import { trackEvent } from '@/src/lib/analytics';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   closet,
@@ -81,7 +82,7 @@ export function AccessorySlotToday({
           onUpdated?.();
         },
         onError: (e) =>
-          Alert.alert('Could not update accessory', (e as Error).message),
+          Alert.alert('Could not update accessory', closetAlertText(e)),
       },
     );
   }

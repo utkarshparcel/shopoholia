@@ -2,14 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
+  type ScrollView,
 } from 'react-native';
 import { formatMinor } from '@worn/shared';
 
@@ -31,6 +28,8 @@ import {
 } from '@/src/hooks/closet/useCloset';
 import { createIngestionSource } from '@/src/api/client';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { toAccountHealthRow } from '@/src/lib/accountHealth';
 import { trackEvent } from '@/src/lib/analytics';
 import {
@@ -45,7 +44,6 @@ import {
 import { useSessionStore } from '@/src/stores/session';
 import {
   border,
-  closet,
   fontSans,
   fsBody,
   fsCaption,
@@ -339,6 +337,7 @@ function PurchaseTrustCard({
 export default function ClosetMetricsScreen() {
   const params = useLocalSearchParams<{ focus?: string }>();
   const accessToken = useSessionStore((s) => s.accessToken);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
   const openFeed = shouldOpenSyncFeed(params);
   const { data, isLoading, isError, error, refetch } = useIngestionMetrics();
   const activity = useIngestionActivity();
@@ -359,32 +358,29 @@ export default function ClosetMetricsScreen() {
   const [purchaseNote, setPurchaseNote] = useState<string | null>(null);
   const [reconnectBusy, setReconnectBusy] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
-  const [feedY, setFeedY] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const feedRef = useRef<View>(null);
+  const scrolledToFeed = useRef(false);
   const trackedFeedOpen = useRef(false);
 
+  const refetchActivity = activity.refetch;
+  const refetchSources = sources.refetch;
+  const refetchPurchases = purchases.refetch;
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        refetch(),
-        activity.refetch(),
-        sources.refetch(),
-        purchases.refetch(),
-      ]);
-    } finally {
-      setRefreshing(false);
+    await Promise.all([refetch(), refetchActivity(), refetchSources(), refetchPurchases()]);
+  }, [refetch, refetchActivity, refetchSources, refetchPurchases]);
+
+  const sourceRows = sources.data?.sources;
+  const muted = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of sourceRows ?? []) {
+      const list = (s.meta as { mutedMerchants?: string[] } | null | undefined)?.mutedMerchants;
+      for (const m of list ?? []) set.add(m.trim().toUpperCase());
     }
-  }, [refetch, activity, sources, purchases]);
+    return set;
+  }, [sourceRows]);
 
-  const muted = new Set<string>();
-  for (const s of sources.data?.sources ?? []) {
-    const list = (s.meta as { mutedMerchants?: string[] } | null | undefined)?.mutedMerchants;
-    for (const m of list ?? []) muted.add(m.trim().toUpperCase());
-  }
-
-  const healthRows = (sources.data?.sources ?? []).map((s) => toAccountHealthRow(s));
+  const healthRows = useMemo(() => (sourceRows ?? []).map((s) => toAccountHealthRow(s)), [sourceRows]);
 
   const safeActivityItems = useMemo(
     () => (activity.data?.items ?? []).filter((item) => activityRowIsBodySafe(item)),
@@ -399,17 +395,28 @@ export default function ClosetMetricsScreen() {
     if (!openFeed || trackedFeedOpen.current) return;
     trackedFeedOpen.current = true;
     trackEvent('ingestion_activity_viewed' as never, { source: 'sync_feed_after' });
-    if (feedY > 0) {
-      scrollRef.current?.scrollTo({ y: Math.max(0, feedY - 12), animated: true });
-    }
-  }, [openFeed, feedY]);
+  }, [openFeed]);
+
+  const aboveFeedLoading = isLoading || sources.isLoading || purchases.isLoading;
+  // After a sync, bring "What we read" into view once the cards above it have their final height.
+  // The card moves when they load, and each move fires onLayout again.
+  function onFeedLayout() {
+    if (!openFeed || scrolledToFeed.current || aboveFeedLoading) return;
+    const content = scrollRef.current?.getInnerViewNode?.();
+    if (!content || !feedRef.current) return;
+    feedRef.current.measureLayout(
+      content,
+      (_x, y) => {
+        scrolledToFeed.current = true;
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+      },
+      () => undefined,
+    );
+  }
 
   if (!FEATURE_CLOSET) {
     return (
-      <ClosetScreen
-        title="Ingestion metrics"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to view ingestion coverage and cost."
-      />
+      <ClosetScreen title="Ingestion metrics" subtitle={CLOSET_OFF_SUBTITLE} />
     );
   }
 
@@ -418,7 +425,7 @@ export default function ClosetMetricsScreen() {
     const built = buildInlineFixBody({
       merchant: fixMerchant,
       totalMajor: fixTotal,
-      currency: item.currency ?? 'INR',
+      currency: item.currency ?? currency,
     });
     if (!built.ok) {
       setFixError(built.error);
@@ -433,7 +440,7 @@ export default function ClosetMetricsScreen() {
       setFixTotal('');
       setFixMerchant('');
     } catch (e) {
-      setFixError((e as Error).message);
+      setFixError(closetAlertText(e));
     }
   }
 
@@ -443,7 +450,7 @@ export default function ClosetMetricsScreen() {
       await mute.mutateAsync(merchant);
       setMuteNote(`Muted ${merchant} — skipped on future syncs.`);
     } catch (e) {
-      setMuteNote((e as Error).message);
+      setMuteNote(closetAlertText(e));
     }
   }
 
@@ -467,7 +474,7 @@ export default function ClosetMetricsScreen() {
       setSelectedPurchaseIds([]);
       setPurchaseNote('Merged — duplicate marked and items combined.');
     } catch (e) {
-      setPurchaseNote((e as Error).message);
+      setPurchaseNote(closetAlertText(e));
     }
   }
 
@@ -480,7 +487,7 @@ export default function ClosetMetricsScreen() {
       setSplitItemIds([]);
       setPurchaseNote('Split — items moved to a new purchase.');
     } catch (e) {
-      setPurchaseNote((e as Error).message);
+      setPurchaseNote(closetAlertText(e));
     }
   }
 
@@ -511,32 +518,16 @@ export default function ClosetMetricsScreen() {
     }
   }
 
-  function onScroll(_e: NativeSyntheticEvent<NativeScrollEvent>) {
-    // reserved for future sticky feed header
-  }
-
   return (
     <ClosetScreen
       title="Ingestion metrics"
-      subtitle="Coverage, cost, and what we read — fix wrong totals here."
+      subtitle="Coverage and what we read — fix wrong totals here."
+      scrollRef={scrollRef}
+      onRefresh={onRefresh}
     >
       {isLoading ? <Text style={styles.muted}>Loading…</Text> : null}
-      {isError ? <Text style={styles.muted}>Could not load metrics: {(error as Error).message}</Text> : null}
-      <ScrollView
-        ref={scrollRef}
-        style={styles.list}
-        contentContainerStyle={{ gap: space4, paddingBottom: 24 }}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void onRefresh()}
-            tintColor={closet.accent}
-            colors={[closet.accent]}
-          />
-        }
-      >
+      {isError ? <Text style={styles.muted}>Could not load metrics: {closetAlertText(error)}</Text> : null}
+      <View style={styles.list}>
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Connected accounts</Text>
           <Text style={styles.note}>
@@ -592,8 +583,10 @@ export default function ClosetMetricsScreen() {
             />
             {muteNote ? <Text style={styles.note}>{muteNote}</Text> : null}
 
+            {/* A parse-only estimate for the team: not a cost anyone pays. */}
+            {__DEV__ ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Cost estimate (stub)</Text>
+              <Text style={styles.cardTitle}>Cost estimate</Text>
               <StatRow
                 label="Per message"
                 value={formatMinor(data.costEstimate.perMessageMinor, data.costEstimate.currency)}
@@ -604,6 +597,7 @@ export default function ClosetMetricsScreen() {
               />
               <Text style={styles.note}>{data.note}</Text>
             </View>
+            ) : null}
           </>
         ) : null}
 
@@ -636,8 +630,9 @@ export default function ClosetMetricsScreen() {
         />
 
         <View
+          ref={feedRef}
           style={[styles.card, openFeed ? styles.feedHighlight : null]}
-          onLayout={(e) => setFeedY(e.nativeEvent.layout.y)}
+          onLayout={onFeedLayout}
         >
           <Text style={styles.cardTitle}>What we read</Text>
           <Text style={styles.note}>
@@ -663,7 +658,6 @@ export default function ClosetMetricsScreen() {
           <ClosetVirtualList
             data={safeActivityItems}
             keyExtractor={(item) => item.id}
-            estimatedItemSize={96}
             testID="metrics-activity-list"
             renderItem={({ item }) => (
               <ActivityRow
@@ -693,7 +687,7 @@ export default function ClosetMetricsScreen() {
             )}
           />
         </View>
-      </ScrollView>
+      </View>
     </ClosetScreen>
   );
 }
@@ -751,7 +745,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space3,
     paddingVertical: space3,
   },
-  list: { marginTop: space4 },
+  list: { gap: space4 },
   merchantRow: {
     borderTopColor: border,
     borderTopWidth: 1,

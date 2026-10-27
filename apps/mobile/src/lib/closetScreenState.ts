@@ -5,6 +5,9 @@
 
 export type ClosetContentMode = 'skeleton' | 'error' | 'empty' | 'content';
 
+/** Subtitle for a Closet screen opened while the Closet feature is off in this build. */
+export const CLOSET_OFF_SUBTITLE = 'Closet is not available in this version of WORN yet.';
+
 export type ClosetContentModeInput = {
   /** Initial or blocking load (no paint-able data yet). */
   isLoading: boolean;
@@ -53,6 +56,35 @@ export function closetErrorText(
   if (error == null || error === false) return null;
   if (typeof error === 'string' && error.trim()) return error;
   return errorMessage ?? 'Something went wrong. Try again.';
+}
+
+/** Fastify's schema check: "body/relationship Invalid enum value…", never meant for people. */
+const SCHEMA_ERROR_RE = /^(body|querystring|params|headers)[/.\s]/;
+const NETWORK_ERROR_RE = /network request failed|failed to fetch|load failed|networkerror|timed? ?out|aborted/i;
+
+/**
+ * Alert text for a caught error (MOB 18), through the same fallback as {@link closetErrorText}.
+ * The API's own messages are written for people and pass through; schema dumps, gateway pages,
+ * parse errors and network failures become plain sentences.
+ */
+export function closetAlertText(error: unknown, fallback?: string): string {
+  const message = error instanceof Error ? error.message.trim() : '';
+  const status = typeof (error as { status?: unknown } | null)?.status === 'number'
+    ? (error as { status: number }).status
+    : null;
+  if (status !== null) {
+    if (status >= 500) return 'The server had a problem. Try again in a moment.';
+    if (status === 429) return 'Too many tries. Wait a moment and try again.';
+    if (status === 401) return 'Your session ended. Sign in again.';
+    if (status === 400 && SCHEMA_ERROR_RE.test(message)) {
+      return 'Some details were not accepted. Check them and try again.';
+    }
+  }
+  if (error instanceof SyntaxError) return 'The server sent a response the app could not read.';
+  if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError' || NETWORK_ERROR_RE.test(message))) {
+    return 'Could not reach WORN. Check your connection and try again.';
+  }
+  return closetErrorText(message || true, fallback) as string;
 }
 
 /** Whether to show skeleton vs keep content during a pull-to-refresh. */

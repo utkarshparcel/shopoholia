@@ -5,8 +5,8 @@ import * as WebBrowser from 'expo-web-browser';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
-import { IosForwardWizard } from '@/src/components/IosForwardWizard';
 import { createIngestionSource } from '@/src/api/client';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { toAccountHealthRow } from '@/src/lib/accountHealth';
 import {
@@ -17,9 +17,7 @@ import {
 import { trackEvent } from '@/src/lib/analytics';
 import { getLimitedUseDisclosure } from '@/src/lib/limitedUse';
 import { reconnectButtonLabel, startGmailReconnect } from '@/src/lib/healthReconnect';
-import { getAndroidSmsPermCopy } from '@/src/lib/smsPermCopy';
-import { supportsSmsInboxRead, syncSmsInbox } from '@/src/lib/sms';
-import { hrefAfterSyncSuccess, METRICS_SYNC_FEED_HREF } from '@/src/lib/syncFeedAfter';
+import { METRICS_SYNC_FEED_HREF } from '@/src/lib/syncFeedAfter';
 import { useIngestionSources } from '@/src/hooks/closet/useCloset';
 import { useClosetStore } from '@/src/stores/closet';
 import { useSessionStore } from '@/src/stores/session';
@@ -41,13 +39,10 @@ import {
 WebBrowser.maybeCompleteAuthSession();
 
 const limitedUse = getLimitedUseDisclosure();
-const androidSmsCopy = getAndroidSmsPermCopy();
 
 export default function ConnectEmailScreen() {
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
-  const sessionEmail = useSessionStore((s) => s.email);
-  const sessionPhone = useSessionStore((s) => s.phone);
   const sourcesQuery = useIngestionSources();
   const markJustConnected = useClosetStore((s) => s.markJustConnected);
   const startDelightClock = useClosetStore((s) => s.startDelightClock);
@@ -56,9 +51,7 @@ export default function ConnectEmailScreen() {
   const skipEmailPrompt = useClosetStore((s) => s.skipEmailPrompt);
   const completeEmailPrompt = useClosetStore((s) => s.completeEmailPrompt);
   const [busy, setBusy] = useState(false);
-  const [smsBusy, setSmsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [smsHint, setSmsHint] = useState<string | null>(null);
 
   const healthRows = (sourcesQuery.data?.sources ?? []).map((s) => toAccountHealthRow(s));
   const needsAttention = healthRows.filter((r) => r.needsReconnect || r.error);
@@ -67,7 +60,7 @@ export default function ConnectEmailScreen() {
     return (
       <ClosetScreen
         title="Connect email"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to connect your inbox."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -112,44 +105,9 @@ export default function ConnectEmailScreen() {
         router.replace(VAULT_FOUND_MONEY_HREF as never);
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(closetAlertText(e));
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function syncAndroidSms() {
-    if (!accessToken) {
-      setError('Sign in to sync SMS.');
-      return;
-    }
-    setSmsBusy(true);
-    setError(null);
-    setSmsHint(null);
-    try {
-      const { ensureAndroidSmsInboxAdapterRegistered } = await import(
-        '@/src/lib/smsAndroidAdapter'
-      );
-      ensureAndroidSmsInboxAdapterRegistered();
-      const ids = await syncSmsInbox(accessToken);
-      setSmsHint(
-        ids.length > 0
-          ? `Synced ${ids.length} order text${ids.length === 1 ? '' : 's'}.`
-          : androidSmsCopy.deniedHint,
-      );
-      if (ids.length > 0) {
-        trackEvent('sms_ingested', { count: ids.length });
-        markJustConnected('manual');
-        const feedHref = hrefAfterSyncSuccess({ ingestedCount: ids.length });
-        if (feedHref) {
-          router.replace(feedHref as never);
-          return;
-        }
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSmsBusy(false);
     }
   }
 
@@ -209,25 +167,6 @@ export default function ConnectEmailScreen() {
           export or delete everything we&apos;ve stored about you there too.
         </Text>
       </View>
-
-      {!supportsSmsInboxRead() ? (
-        <IosForwardWizard userKey={sessionEmail ?? sessionPhone} />
-      ) : (
-        <View style={styles.note}>
-          <Text style={styles.noteTitle}>Android SMS</Text>
-          <Text style={styles.noteBody}>{androidSmsCopy.uiBody}</Text>
-          <View style={styles.copyRow}>
-            <Button
-              label={smsBusy ? 'Syncing SMS…' : 'Sync order SMS'}
-              size="sm"
-              variant="secondary"
-              onPress={() => void syncAndroidSms()}
-              disabled={smsBusy || !accessToken}
-            />
-          </View>
-          {smsHint ? <Text style={styles.hint}>{smsHint}</Text> : null}
-        </View>
-      )}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 

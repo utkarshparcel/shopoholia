@@ -22,6 +22,7 @@ import {
   filterVaultAccounts,
   findNearDuplicateCredits,
   formatMinor,
+  fractionDigits,
   getCopyPack,
   giftCardCapturePrefill,
   merchantDeepLink,
@@ -35,6 +36,7 @@ import {
   type WarrantyCategory,
 } from '@worn/shared';
 import { shareTextFile } from '@/src/lib/shareFile';
+import { shareDataUrlFile } from '@/src/lib/shareDataUrlFile';
 
 import {
   delightHapticFoundMoney,
@@ -42,6 +44,9 @@ import {
 } from '@/src/lib/delightHaptics';
 import { formatClosetDate } from '@/src/lib/format';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
+import { addMonthsToDayKey, endOfDayKeyIso, localDayKey, parseDayKey } from '@/src/lib/localDay';
 import { celebrationVariantForSource } from '@/src/lib/celebrationVariants';
 import {
   gstInvoiceSearchPrefill,
@@ -97,6 +102,7 @@ import {
   pickReceiptSnapImage,
 } from '@/src/lib/receiptSnap';
 import { expiryBadge } from '@/src/lib/expiryBadge';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { warrantyBadge } from '@/src/lib/warrantyBadge';
 import {
@@ -115,7 +121,7 @@ import {
   whatsAppStatusAssetFromAccounts,
 } from '@/src/lib/foundMoney';
 import { delightBarcodeCaptureSuccess } from '@/src/lib/barcodeCaptureDelight';
-import { getMyReferral, fetchConsents, grantConsent, recordClosetAffiliateClick, addCredit } from '@/src/api/client';
+import { ApiRequestError, getMyReferral, recordClosetAffiliateClick, addCredit } from '@/src/api/client';
 import {
   SAMPLE_MYNTRA_CREDIT,
   VAULT_FOUND_MONEY_HREF,
@@ -256,6 +262,8 @@ function ConfidenceBadge({ confidence }: { confidence: number | null | undefined
 type EditItem = {
   title: string;
   priceMinor: number;
+  /** What the user typed; "12." must survive a re-render, so it is parsed only on save. */
+  priceText: string;
   warranty: boolean;
   coverageUntil: string;
   claimContact: string;
@@ -352,21 +360,27 @@ export default function ClosetVaultScreen() {
     }
   }, [params.focus, params.merchant, params.from, params.to]);
 
+  // The refetch functions are stable; the query objects are new on every render.
+  const refetchGifts = gifts.refetch;
+  const refetchReturns = returns.refetch;
+  const refetchReceipts = receipts.refetch;
+  const refetchWarranties = warranties.refetch;
+  const refetchIngestion = ingestion.refetch;
   const onRefresh = useCallback(() => {
     void Promise.all([
-      gifts.refetch(),
-      returns.refetch(),
-      receipts.refetch(),
-      warranties.refetch(),
-      ingestion.refetch(),
+      refetchGifts(),
+      refetchReturns(),
+      refetchReceipts(),
+      refetchWarranties(),
+      refetchIngestion(),
     ]);
-  }, [gifts, returns, receipts, warranties, ingestion]);
+  }, [refetchGifts, refetchReturns, refetchReceipts, refetchWarranties, refetchIngestion]);
 
   if (!FEATURE_CLOSET) {
     return (
       <ClosetScreen
         title="Vault"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to open your vault."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -395,7 +409,7 @@ export default function ClosetVaultScreen() {
       loading={primaryLoading}
       loadingLabel="Opening your vault…"
       hasContent={hasAnyVaultContent || (gifts.isFetched && !primaryError)}
-      error={primaryError ? ((gifts.error as Error)?.message ?? true) : null}
+      error={primaryError ? closetAlertText(gifts.error) : null}
       onRetry={onRefresh}
       onRefresh={onRefresh}
       refreshing={
@@ -527,7 +541,9 @@ function CreditsKindTab({
   const { isOffline } = useNetworkStatus();
   const [pendingQueue, setPendingQueue] = useState<QueuedVaultAdd[]>([]);
   const [flushError, setFlushError] = useState<string | null>(null);
-  const [shareViaLabel, setShareViaLabel] = useState('shared via worn.app/r/…');
+  const [shareViaLabel, setShareViaLabel] = useState<string | null>(null);
+  /** The user's own referral code once fetched, so sharing does not ask the API again. */
+  const [myReferralCode, setMyReferralCode] = useState<string | null>(null);
   const markFoundMoneyTracked = useClosetStore((s) => s.markFoundMoneyTracked);
   const markDeadlineSetup = useClosetStore((s) => s.markDeadlineSetup);
   const startDelightClock = useClosetStore((s) => s.startDelightClock);
@@ -554,6 +570,7 @@ function CreditsKindTab({
     void getMyReferral(token)
       .then((me) => {
         if (cancelled || !me.referralCode || me.referralCode === 'PENDING') return;
+        setMyReferralCode(me.referralCode);
         setShareViaLabel(familyShareViaLabel(`https://worn.app/r/${me.referralCode}`));
       })
       .catch(() => undefined);
@@ -627,7 +644,6 @@ function CreditsKindTab({
   );
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
   const [recheckAmount, setRecheckAmount] = useState('');
-  const [demoBusy, setDemoBusy] = useState(false);
   const [deeplinkToast, setDeeplinkToast] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchQ, setSearchQ] = useState('');
@@ -638,6 +654,8 @@ function CreditsKindTab({
     'all',
   );
   const pendingDeeplink = useRef<PendingDeeplinkOpen | null>(null);
+  /** One key per card being added, so a retried save never mints a second card. */
+  const addKeyRef = useRef<string | null>(null);
   const highlightExpiry = isExpiryHeroFocus(params.focus);
 
   useEffect(() => {
@@ -645,17 +663,21 @@ function CreditsKindTab({
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const apiAccounts = (data?.accounts ?? [])
-    .filter((a) => {
-      if (tab === 'gift') {
-        return a.kind === 'GIFT_CARD' || a.kind === 'STORE_CREDIT';
-      }
-      return true;
-    })
-    .filter((a) => {
-      if (!demoSampleDismissed) return true;
-      return !isSampleCreditAccount(a);
-    });
+  const apiAccounts = useMemo(
+    () =>
+      (data?.accounts ?? [])
+        .filter((a) => {
+          if (tab === 'gift') {
+            return a.kind === 'GIFT_CARD' || a.kind === 'STORE_CREDIT';
+          }
+          return true;
+        })
+        .filter((a) => {
+          if (!demoSampleDismissed) return true;
+          return !isSampleCreditAccount(a);
+        }),
+    [data?.accounts, tab, demoSampleDismissed],
+  );
   const showDemo =
     tab === 'gift' &&
     Boolean(demoAccount) &&
@@ -664,14 +686,18 @@ function CreditsKindTab({
         a.merchant === demoAccount!.merchant &&
         a.balanceCacheMinor === demoAccount!.balanceCacheMinor,
     );
-  const pendingAccounts =
-    tab === 'gift' ? pendingQueue.map(queuedAddAsPendingAccount) : [];
-  const rawAccounts = [
-    ...(showDemo && demoAccount ? [demoAccount] : []),
-    ...pendingAccounts,
-    ...apiAccounts,
-  ];
-  const focusedAccounts = applySoonestFocusMode(rawAccounts, soonestFocusMode && tab === 'gift');
+  const rawAccounts = useMemo(
+    () => [
+      ...(showDemo && demoAccount ? [demoAccount] : []),
+      ...(tab === 'gift' ? pendingQueue.map(queuedAddAsPendingAccount) : []),
+      ...apiAccounts,
+    ],
+    [showDemo, demoAccount, tab, pendingQueue, apiAccounts],
+  );
+  const focusedAccounts = useMemo(
+    () => applySoonestFocusMode(rawAccounts, soonestFocusMode && tab === 'gift'),
+    [rawAccounts, soonestFocusMode, tab],
+  );
   const searchFilters = useMemo(
     () => ({
       q: searchQ,
@@ -758,9 +784,15 @@ function CreditsKindTab({
   }
 
   function submitAdd(opts?: { forceDuplicate?: boolean; nearDuplicateOf?: string }) {
-    const balanceMinor = Math.round(Number(balance) * 100);
-    if (!merchant.trim() || !Number.isFinite(balanceMinor) || balanceMinor <= 0) {
+    const balanceMinor = parseAmountInput(balance, preferredCurrency);
+    if (!merchant.trim() || balanceMinor === null) {
       Alert.alert('Enter a merchant and a valid balance');
+      return;
+    }
+    // The card lapses at the end of that day on this phone; `new Date('31/12')` was Invalid Date and threw.
+    const expiresAt = expiry.trim() ? endOfDayKeyIso(expiry) : null;
+    if (expiry.trim() && !expiresAt) {
+      Alert.alert('Check the expiry date', 'Enter it as YYYY-MM-DD, for example 2026-12-31.');
       return;
     }
     if (!opts?.forceDuplicate) {
@@ -798,7 +830,8 @@ function CreditsKindTab({
       merchant: merchant.trim(),
       currency: preferredCurrency,
       balanceMinor,
-      expiresAt: expiry ? new Date(expiry).toISOString() : null,
+      expiresAt,
+      idempotencyKey: (addKeyRef.current ??= newIdempotencyKey()),
       ...(opts?.forceDuplicate
         ? {
             forceDuplicate: true,
@@ -827,6 +860,7 @@ function CreditsKindTab({
     };
 
     const finishLocalSuccess = () => {
+      addKeyRef.current = null;
       clearDemoGiftCard();
       if (tab === 'loyalty' || tab === 'coupons') {
         markLoyaltyJustAdded(tab);
@@ -864,17 +898,25 @@ function CreditsKindTab({
     addGiftCard.mutate(payload, {
       onSuccess: () => finishLocalSuccess(),
       onError: (e) => {
-        if (tab === 'gift') {
+        // A 4xx is an answer (bad input, no consent): queueing it would retry forever
+        // and show a "pending" card that never lands. Network failures, 5xx, 408 and 429 retry.
+        const answered =
+          e instanceof ApiRequestError &&
+          e.status >= 400 &&
+          e.status < 500 &&
+          e.status !== 408 &&
+          e.status !== 429;
+        if (tab === 'gift' && !answered) {
           void enqueueVaultAdd(payload).then((item) => {
             setPendingQueue((prev) =>
               prev.some((p) => p.id === item.id) ? prev : [...prev, item],
             );
-            setFlushError((e as Error).message);
+            setFlushError(closetAlertText(e));
             finishLocalSuccess();
           });
           return;
         }
-        Alert.alert(`Could not add ${meta.noun}`, (e as Error).message);
+        Alert.alert(`Could not add ${meta.noun}`, closetAlertText(e));
       },
     });
   }
@@ -920,7 +962,7 @@ function CreditsKindTab({
             );
           });
         },
-        onError: (e) => Alert.alert('Could not scan', (e as Error).message),
+        onError: (e) => Alert.alert('Could not scan', closetAlertText(e)),
       },
     );
   }
@@ -961,50 +1003,20 @@ function CreditsKindTab({
             );
           });
         },
-        onError: (e) => Alert.alert('Could not read card', (e as Error).message),
+        onError: (e) => Alert.alert('Could not read card', closetAlertText(e)),
       },
     );
   }
 
-  async function trySample() {
-    setDemoBusy(true);
-    try {
-      if (accessToken) {
-        try {
-          const consents = await fetchConsents(accessToken);
-          if (!consents.grants.some((g) => g.scope === 'FINANCIAL')) {
-            await grantConsent(accessToken, 'FINANCIAL', 'demo');
-          }
-          await new Promise<void>((resolve, reject) => {
-            addGiftCard.mutate(
-              {
-                kind: SAMPLE_MYNTRA_CREDIT.kind,
-                merchant: SAMPLE_MYNTRA_CREDIT.merchant,
-                currency: SAMPLE_MYNTRA_CREDIT.currency,
-                balanceMinor: SAMPLE_MYNTRA_CREDIT.balanceMinor,
-                demo: true,
-              },
-              {
-                onSuccess: () => resolve(),
-                onError: (e) => reject(e),
-              },
-            );
-          });
-          clearDemoGiftCard();
-          markJustConnected('demo');
-          trackDelight('demo');
-          router.replace(VAULT_FOUND_MONEY_HREF as never);
-          return;
-        } catch {
-          // local fallback below
-        }
-      }
-      seedDemoGiftCard();
-      trackDelight('demo');
-      router.replace(VAULT_FOUND_MONEY_HREF as never);
-    } finally {
-      setDemoBusy(false);
-    }
+  function trySample() {
+    // The sample lives on this phone only: it records no consent and writes nothing to the server.
+    seedDemoGiftCard();
+    trackDelight('demo');
+    router.replace(VAULT_FOUND_MONEY_HREF as never);
+  }
+
+  function currencyOf(id: string): string {
+    return rawAccounts.find((a) => a.id === id)?.currency ?? preferredCurrency;
   }
 
   function submitSpend(id: string) {
@@ -1012,8 +1024,8 @@ function CreditsKindTab({
       Alert.alert('Sample card', 'Add a real card to track spends.');
       return;
     }
-    const amountMinor = Math.round(Number(spendAmount) * 100);
-    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
+    const amountMinor = parseAmountInput(spendAmount, currencyOf(id));
+    if (amountMinor === null) {
       Alert.alert('Enter a valid amount');
       return;
     }
@@ -1030,7 +1042,7 @@ function CreditsKindTab({
             until: Date.now() + CREDIT_SPEND_UNDO_WINDOW_MS,
           });
         },
-        onError: (e) => Alert.alert('Could not spend', (e as Error).message),
+        onError: (e) => Alert.alert('Could not spend', closetAlertText(e)),
       },
     );
   }
@@ -1045,7 +1057,7 @@ function CreditsKindTab({
       { id: undoSpend.accountId, idempotencyKey: undoSpend.idempotencyKey },
       {
         onSuccess: () => setUndoSpend(null),
-        onError: (e) => Alert.alert('Could not undo', (e as Error).message),
+        onError: (e) => Alert.alert('Could not undo', closetAlertText(e)),
       },
     );
   }
@@ -1070,7 +1082,7 @@ function CreditsKindTab({
               },
               {
                 onError: (e) =>
-                  Alert.alert('Could not merge', (e as Error).message),
+                  Alert.alert('Could not merge', closetAlertText(e)),
               },
             ),
         },
@@ -1091,7 +1103,7 @@ function CreditsKindTab({
         if (result.mode === 'api' && result.refreshed) {
           Alert.alert(
             'Balance updated',
-            `${merchantName}: ${formatMinor(result.balanceMinor, 'INR')}`,
+            `${merchantName}: ${formatMinor(result.balanceMinor, currencyOf(id))}`,
           );
           return;
         }
@@ -1123,7 +1135,7 @@ function CreditsKindTab({
         setRecheckingId(id);
         setRecheckAmount(String(result.balanceMinor / 100));
       },
-      onError: (e) => Alert.alert('Balance check failed', (e as Error).message),
+      onError: (e) => Alert.alert('Balance check failed', closetAlertText(e)),
     });
   }
 
@@ -1276,8 +1288,11 @@ function CreditsKindTab({
   }
 
   function submitRecheck(id: string) {
-    const balanceMinor = Math.round(Number(recheckAmount) * 100);
-    if (!Number.isFinite(balanceMinor) || balanceMinor < 0) {
+    // A spent-down card is a real answer, so "0" is allowed here.
+    const balanceMinor = /^0+([.,]0*)?$/.test(recheckAmount.trim())
+      ? 0
+      : parseAmountInput(recheckAmount, currencyOf(id));
+    if (balanceMinor === null) {
       Alert.alert('Enter a valid balance');
       return;
     }
@@ -1289,7 +1304,7 @@ function CreditsKindTab({
           setRecheckAmount('');
         },
         onError: (e) =>
-          Alert.alert('Could not save balance', (e as Error).message),
+          Alert.alert('Could not save balance', closetAlertText(e)),
       },
     );
   }
@@ -1310,29 +1325,39 @@ function CreditsKindTab({
       : null;
 
   async function shareFoundMoney() {
-    if (totalMinor <= 0) return;
+    // A sample card is not money the user found; it never goes into a share.
+    const shareAccounts = accounts.filter((a) => !isSampleCreditAccount(a));
+    if (preferredCurrencyTotalMinor(shareAccounts, preferredCurrency) <= 0) {
+      Alert.alert('Nothing to share yet', 'Add a real card first. The sample card is not shared.');
+      return;
+    }
     try {
       const token = useSessionStore.getState().accessToken;
-      let referralCode = 'WORN01';
-      if (token) {
+      // Without the user's own code the share carries no referral link; it never borrows a made-up one.
+      let referralCode: string | null = myReferralCode;
+      if (!referralCode && token) {
         try {
           const me = await getMyReferral(token);
           if (me.referralCode && me.referralCode !== 'PENDING') {
             referralCode = me.referralCode;
+            setMyReferralCode(me.referralCode);
           }
         } catch {
           // share still works without live referral fetch
         }
       }
-      const family = familyFoundMoneyShareFromAccounts(accounts, referralCode);
-      const wa = whatsAppInFoundMoneyShareFromAccounts(accounts, {
-        deepLink: family.deepLink,
+      const family = referralCode
+        ? familyFoundMoneyShareFromAccounts(shareAccounts, referralCode)
+        : null;
+      const plain = family ?? foundMoneyShareFromAccounts(shareAccounts);
+      const wa = whatsAppInFoundMoneyShareFromAccounts(shareAccounts, {
+        deepLink: family?.deepLink ?? null,
       });
-      const reels = foundMoneyShareFromAccounts(accounts, { blurPreset: 'reels' });
-      const status = whatsAppStatusAssetFromAccounts(accounts, {
-        deepLink: family.deepLink,
+      const reels = foundMoneyShareFromAccounts(shareAccounts, { blurPreset: 'reels' });
+      const status = whatsAppStatusAssetFromAccounts(shareAccounts, {
+        deepLink: family?.deepLink ?? null,
       });
-      setShareViaLabel(familyShareViaLabel(family.deepLink));
+      setShareViaLabel(family ? familyShareViaLabel(family.deepLink) : null);
       Alert.alert(
         copyPack.vault.shareCta,
         'WhatsApp / Reels / Status blur totals — no merchants or card digits.',
@@ -1345,7 +1370,7 @@ function CreditsKindTab({
               });
               trackEvent('found_money_wa_share', {
                 totalMinor: wa.totalMinor,
-                accountCount: accounts.length,
+                accountCount: shareAccounts.length,
               });
             },
           },
@@ -1369,8 +1394,8 @@ function CreditsKindTab({
                   onPress: () => {
                     void Share.share({ message: status.shareText, title: status.headline });
                     trackEvent('found_money_share_card', {
-                      totalMinor: family.totalMinor,
-                      accountCount: accounts.length,
+                      totalMinor: plain.totalMinor,
+                      accountCount: shareAccounts.length,
                       blurPreset: 'wa_status',
                     });
                   },
@@ -1378,15 +1403,17 @@ function CreditsKindTab({
                 {
                   text: 'Share sheet',
                   onPress: () => {
-                    void Share.share({ message: family.shareText });
+                    void Share.share({ message: plain.shareText });
                     trackEvent('found_money_share_card', {
-                      totalMinor: family.totalMinor,
-                      accountCount: family.accountCount,
+                      totalMinor: plain.totalMinor,
+                      accountCount: plain.accountCount,
                     });
-                    trackEvent('family_found_money_share', {
-                      totalMinor: family.totalMinor,
-                      referralCode: family.referralCode,
-                    });
+                    if (family) {
+                      trackEvent('family_found_money_share', {
+                        totalMinor: family.totalMinor,
+                        referralCode: family.referralCode,
+                      });
+                    }
                   },
                 },
                 { text: 'Cancel', style: 'cancel' },
@@ -1397,7 +1424,7 @@ function CreditsKindTab({
         ],
       );
     } catch (e) {
-      Alert.alert('Could not share', (e as Error).message);
+      Alert.alert('Could not share', closetAlertText(e));
     }
   }
 
@@ -1544,7 +1571,12 @@ function CreditsKindTab({
               size="sm"
               variant="secondary"
               disabled={markExpiryHandled.isPending}
-              onPress={() =>
+              onPress={() => {
+                // The sample card lives on this phone only; the API has no reminder to snooze.
+                if (isSampleCreditAccount(expiryChecklistAccount)) {
+                  Alert.alert('Sample card', 'Add a real card to get expiry reminders.');
+                  return;
+                }
                 markExpiryHandled.mutate(expiryChecklistAccount.id, {
                   onSuccess: (res) => {
                     setExpiryHandledIds((prev) => new Set(prev).add(expiryChecklistAccount.id));
@@ -1554,9 +1586,9 @@ function CreditsKindTab({
                     );
                   },
                   onError: (e) =>
-                    Alert.alert('Could not mark handled', (e as Error).message),
-                })
-              }
+                    Alert.alert('Could not mark handled', closetAlertText(e)),
+                });
+              }}
             />
           </View>
         ) : null}
@@ -1629,7 +1661,7 @@ function CreditsKindTab({
               variant="secondary"
               onPress={() => void shareFoundMoney()}
             />
-            <Text style={styles.muted}>{shareViaLabel}</Text>
+            {shareViaLabel ? <Text style={styles.muted}>{shareViaLabel}</Text> : null}
           </View>
         ) : null}
       </View>
@@ -1740,13 +1772,12 @@ function CreditsKindTab({
               label={vaultEmpty.demoCta ?? SAMPLE_MYNTRA_CREDIT.label}
               block
               variant="secondary"
-              disabled={demoBusy}
               onPress={() => {
                 trackEvent(
                   'empty_cta_tap',
                   emptyCtaTapProps('vault', emptyCopyVariant, 'demo'),
                 );
-                void trySample();
+                trySample();
               }}
             />
           ) : null}
@@ -1802,7 +1833,7 @@ function CreditsKindTab({
           {tab === 'gift' ? (
             <TextInput
               style={styles.input}
-              placeholder="Barcode (Merchant|CODE or AMZN-…)"
+              placeholder="Barcode number (optional)"
               placeholderTextColor={textMuted}
               value={barcodeRaw}
               onChangeText={(v) => {
@@ -1839,7 +1870,7 @@ function CreditsKindTab({
               />
               {capture ? (
                 <Text style={styles.muted}>
-                  Capture: {capture.source}
+                  From {capture.source === 'BARCODE' ? 'the barcode' : 'the photo'}
                   {capture.last4 ? ` · ···${capture.last4}` : ''}
                 </Text>
               ) : null}
@@ -1859,6 +1890,9 @@ function CreditsKindTab({
             placeholderTextColor={textMuted}
             value={expiry}
             onChangeText={setExpiry}
+            keyboardType="numbers-and-punctuation"
+            maxLength={10}
+            accessibilityLabel="Expiry date"
           />
           <Button
             label={`Save ${meta.noun}`}
@@ -1874,7 +1908,6 @@ function CreditsKindTab({
         <ClosetVirtualList
           data={accounts}
           keyExtractor={(account) => account.id}
-          estimatedItemSize={140}
           renderItem={({ item: account }) => (
           <View style={styles.card}>
             <View style={styles.cardRow}>
@@ -1886,7 +1919,7 @@ function CreditsKindTab({
                     : account.merchant}
               </Text>
               {isSampleCreditAccount(account) ? (
-                <Text style={[styles.badge, styles.badgeSoon]} accessibilityLabel="Demo sample">
+                <Text style={[styles.badge, styles.badgeSoon]} accessibilityLabel="Sample card">
                   {DEMO_BADGE_LABEL}
                 </Text>
               ) : null}
@@ -1905,7 +1938,7 @@ function CreditsKindTab({
               <View style={styles.form}>
                 <TextInput
                   style={styles.input}
-                  placeholder="Amount spent (₹)"
+                  placeholder={`Amount spent in ${account.currency}`}
                   placeholderTextColor={textMuted}
                   keyboardType="decimal-pad"
                   value={spendAmount}
@@ -1932,7 +1965,7 @@ function CreditsKindTab({
               <View style={styles.form}>
                 <TextInput
                   style={styles.input}
-                  placeholder="Current balance (₹)"
+                  placeholder={`Current balance in ${account.currency}`}
                   placeholderTextColor={textMuted}
                   keyboardType="decimal-pad"
                   value={recheckAmount}
@@ -2110,8 +2143,11 @@ function ReceiptsTab({
   function applyParsed(parsed: ReceiptParsed) {
     setPending(parsed);
     setMerchant(parsed.merchant);
-    setPurchasedAt(parsed.purchasedAt.slice(0, 10));
-    setTotalRupees(String(parsed.totalMinor / 100));
+    // The purchase day on this phone; slicing the ISO string gave the UTC day.
+    const purchaseDay = localDayKey(new Date(parsed.purchasedAt));
+    const unit = 10 ** fractionDigits(parsed.currency);
+    setPurchasedAt(purchaseDay);
+    setTotalRupees(String(parsed.totalMinor / unit));
     setOverrideLowConfidence(false);
     const hint = parsed.warrantyHint;
     const claimHint = parsed.claimContactHint ?? '';
@@ -2127,17 +2163,13 @@ function ReceiptsTab({
         const autoWarranty =
           hint?.itemIndex === idx || Boolean(preset);
         const months = hint?.itemIndex === idx ? hint.months : preset?.months;
+        // Real calendar months: 12 x 30 days ended a one-year warranty 5 days early.
         const coverageUntil =
-          autoWarranty && months
-            ? new Date(
-                Date.parse(parsed.purchasedAt) + months * 30 * 86_400_000,
-              )
-                .toISOString()
-                .slice(0, 10)
-            : '';
+          autoWarranty && months ? (addMonthsToDayKey(purchaseDay, months) ?? '') : '';
         return {
           title: i.title,
           priceMinor: i.priceMinor,
+          priceText: String(i.priceMinor / unit),
           warranty: autoWarranty,
           coverageUntil,
           claimContact: autoWarranty ? claimHint : '',
@@ -2152,7 +2184,7 @@ function ReceiptsTab({
     if (!picked) return;
     upload.mutate(picked.uri, {
       onSuccess: (parsed) => applyParsed(parsed),
-      onError: (e) => Alert.alert('Could not read receipt', (e as Error).message),
+      onError: (e) => Alert.alert('Could not read receipt', closetAlertText(e)),
     });
   }
 
@@ -2167,32 +2199,42 @@ function ReceiptsTab({
     setEditItems((items) => items.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   }
 
-  function buildConfirmBody(override: boolean): ConfirmReceiptBody | null {
+  /** The body to save, or what the user has to fix first. Bad dates used to throw out of the handler. */
+  function buildConfirmBody(override: boolean): ConfirmReceiptBody | string | null {
     if (!pending) return null;
-    const items = editItems.map((i) => ({
-      title: i.title.trim() || 'Item',
-      priceMinor: Math.round(i.priceMinor),
-    }));
-    const warranties = editItems
-      .map((i, idx) =>
-        i.warranty
-          ? {
-              itemIndex: idx,
-              coverageUntil: new Date(i.coverageUntil).toISOString(),
-              claimContact: i.claimContact || undefined,
-              category: i.category ?? undefined,
-            }
-          : null,
-      )
-      .filter((w): w is NonNullable<typeof w> => w !== null);
+    const currency = pending.currency;
+    const items: ConfirmReceiptBody['items'] = [];
+    for (const i of editItems) {
+      const t = i.priceText.trim();
+      const priceMinor = /^0+([.,]0*)?$/.test(t) ? 0 : parseAmountInput(t, currency);
+      if (priceMinor === null) {
+        return `Check the price of ${i.title.trim() || 'each item'}.`;
+      }
+      items.push({ title: i.title.trim() || 'Item', priceMinor });
+    }
+    const warranties: NonNullable<ConfirmReceiptBody['warranties']> = [];
+    for (const [idx, i] of editItems.entries()) {
+      if (!i.warranty) continue;
+      const coverageUntil = endOfDayKeyIso(i.coverageUntil);
+      if (!coverageUntil) {
+        return `Enter the warranty end for ${i.title.trim() || 'each item'} as YYYY-MM-DD.`;
+      }
+      warranties.push({
+        itemIndex: idx,
+        coverageUntil,
+        claimContact: i.claimContact || undefined,
+        category: i.category ?? undefined,
+      });
+    }
 
-    const parsedTotal = Math.round(Number(totalRupees) * 100);
-    const totalMinor = Number.isFinite(parsedTotal)
-      ? parsedTotal
-      : items.reduce((sum, i) => sum + i.priceMinor, 0);
-    const dateIso = purchasedAt
-      ? new Date(`${purchasedAt}T12:00:00.000Z`).toISOString()
-      : pending.purchasedAt;
+    // Blank total means "the items added up"; anything typed must be a real amount.
+    const typedTotal = totalRupees.trim() ? parseAmountInput(totalRupees, currency) : undefined;
+    if (typedTotal === null) return 'Check the total.';
+    const totalMinor = typedTotal ?? items.reduce((sum, i) => sum + i.priceMinor, 0);
+    const day = purchasedAt.trim() ? parseDayKey(purchasedAt) : undefined;
+    if (day === null) return 'Enter the purchase date as YYYY-MM-DD.';
+    // Noon UTC is the same calendar day from UTC-11 to UTC+11, so the day key survives the round trip.
+    const dateIso = day ? new Date(`${day}T12:00:00.000Z`).toISOString() : pending.purchasedAt;
 
     return {
       merchant: merchant.trim() || pending.merchant,
@@ -2230,6 +2272,10 @@ function ReceiptsTab({
 
     const body = buildConfirmBody(needsOverride || forceOverride || overrideLowConfidence);
     if (!body) return;
+    if (typeof body === 'string') {
+      Alert.alert('Check the receipt', body);
+      return;
+    }
     confirm.mutate(
       { id: pending.id, body },
       {
@@ -2238,7 +2284,7 @@ function ReceiptsTab({
           setEditItems([]);
           setOverrideLowConfidence(false);
         },
-        onError: (e) => Alert.alert('Could not save receipt', (e as Error).message),
+        onError: (e) => Alert.alert('Could not save receipt', closetAlertText(e)),
       },
     );
   }
@@ -2273,7 +2319,7 @@ function ReceiptsTab({
         />
         <TextInput
           style={styles.input}
-          placeholder="Total (₹)"
+          placeholder={`Total in ${pending.currency}`}
           placeholderTextColor={textMuted}
           keyboardType="decimal-pad"
           value={totalRupees}
@@ -2290,11 +2336,11 @@ function ReceiptsTab({
             />
             <TextInput
               style={styles.input}
-              placeholder="Price (₹)"
+              placeholder={`Price in ${pending.currency}`}
               placeholderTextColor={textMuted}
               keyboardType="decimal-pad"
-              value={String(item.priceMinor / 100)}
-              onChangeText={(v) => updateItem(idx, { priceMinor: Number(v) * 100 })}
+              value={item.priceText}
+              onChangeText={(v) => updateItem(idx, { priceText: v })}
             />
             <Button
               label={item.warranty ? 'Warranty on' : 'Add warranty'}
@@ -2370,14 +2416,20 @@ function ReceiptsTab({
         <Button
           label="Search"
           size="sm"
-          onPress={() =>
+          onPress={() => {
+            const from = searchFrom.trim() ? parseDayKey(searchFrom) : undefined;
+            const to = searchTo.trim() ? parseDayKey(searchTo) : undefined;
+            if (from === null || to === null) {
+              Alert.alert('Check the dates', 'Enter them as YYYY-MM-DD, for example 2026-10-01.');
+              return;
+            }
             setApplied({
               merchant: searchMerchant.trim() || undefined,
               gstin: searchGstin.trim() || undefined,
-              from: searchFrom.trim() || undefined,
-              to: searchTo.trim() || undefined,
-            })
-          }
+              from,
+              to,
+            });
+          }}
         />
       </View>
       <View style={styles.list}>
@@ -2385,7 +2437,6 @@ function ReceiptsTab({
         <ClosetVirtualList
           data={receipts}
           keyExtractor={(r) => r.id}
-          estimatedItemSize={120}
           ListEmptyComponent={
             !isLoading ? (
               <Text style={styles.muted}>{emptyStateCopy('receipts').message}</Text>
@@ -2419,7 +2470,7 @@ function ReceiptsTab({
                           Alert.alert('Export ready', res.filename),
                         );
                       },
-                      onError: (e) => Alert.alert('Export failed', (e as Error).message),
+                      onError: (e) => Alert.alert('Export failed', closetAlertText(e)),
                     },
                   );
                 }}
@@ -2435,17 +2486,16 @@ function ReceiptsTab({
                     {
                       onSuccess: async (res) => {
                         try {
-                          await shareTextFile({
-                            fileName: res.filename.replace(/\.pdf$/i, '.txt'),
-                            contents: `Invoice: ${res.merchant}\nGSTIN: ${res.gstin ?? '—'}\nPDF: ${res.downloadUrl.slice(0, 64)}…`,
-                            mimeType: 'text/plain',
+                          await shareDataUrlFile({
+                            fileName: res.filename,
+                            dataUrl: res.downloadUrl,
                             dialogTitle: 'Share invoice',
                           });
-                        } catch {
-                          Alert.alert('PDF ready', res.filename);
+                        } catch (e) {
+                          Alert.alert('Could not share the PDF', closetAlertText(e));
                         }
                       },
-                      onError: (e) => Alert.alert('Export failed', (e as Error).message),
+                      onError: (e) => Alert.alert('Export failed', closetAlertText(e)),
                     },
                   );
                 }}
@@ -2495,7 +2545,7 @@ function WarrantiesTab() {
           ) : null}
           {w.state === 'CLAIMED' || justClaimedId === w.id ? (
             <View style={styles.row}>
-              <Text style={styles.muted}>CLAIMED — claim rail opened</Text>
+              <Text style={styles.muted}>Claim started</Text>
               <Button
                 label="Undo"
                 size="sm"
@@ -2504,7 +2554,7 @@ function WarrantiesTab() {
                 onPress={() =>
                   unclaim.mutate(w.id, {
                     onSuccess: () => setJustClaimedId(null),
-                    onError: (e) => Alert.alert('Could not undo', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not undo', closetAlertText(e)),
                   })
                 }
               />
@@ -2523,7 +2573,7 @@ function WarrantiesTab() {
                           `We'll nudge again around ${formatClosetDate(res.snoozedUntil)}.`,
                         ),
                       onError: (e) =>
-                        Alert.alert('Could not snooze', (e as Error).message),
+                        Alert.alert('Could not snooze', closetAlertText(e)),
                     },
                   )
                 }
@@ -2557,18 +2607,18 @@ function WarrantiesTab() {
                       if (res.claimUrl) {
                         Linking.openURL(res.claimUrl).catch(() => {
                           Alert.alert(
-                            'CLAIMED',
+                            'Claim started',
                             'Claim packet ready — open your email or merchant portal to finish. Undo within 24h.',
                           );
                         });
                       } else {
                         Alert.alert(
-                          'CLAIMED',
+                          'Claim started',
                           'Warranty marked claimed. Share the packet, then undo within 24h if needed.',
                         );
                       }
                     },
-                    onError: (e) => Alert.alert('Could not claim', (e as Error).message),
+                    onError: (e) => Alert.alert('Could not claim', closetAlertText(e)),
                   })
                 }
               />
@@ -2587,7 +2637,7 @@ function WarrantiesTab() {
                           `We'll nudge again around ${formatClosetDate(res.snoozedUntil)}.`,
                         ),
                       onError: (e) =>
-                        Alert.alert('Could not snooze', (e as Error).message),
+                        Alert.alert('Could not snooze', closetAlertText(e)),
                     },
                   )
                 }

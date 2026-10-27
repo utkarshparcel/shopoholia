@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { formatMinor, matchesRefundDestinationFilter, type RefundDestination } from '@worn/shared';
+import { formatMinor, matchesRefundDestinationFilter, REFUND_DESTINATION_LABELS, type RefundDestination } from '@worn/shared';
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { ClosetVirtualList } from '@/src/components/ClosetVirtualList';
@@ -14,17 +14,41 @@ import {
   useExportAccountantCsv,
 } from '@/src/hooks/closet/useCloset';
 import { trackEvent } from '@/src/lib/analytics';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { emptyStateCopy } from '@/src/lib/emptyDemo';
 import { PremiumGate } from '@/src/components/PremiumGate';
 import { EmiDontMissCards } from '@/src/components/EmiDontMissCards';
 import { RepairSpendChip } from '@/src/components/RepairSpendChip';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { cpwGoalNudgeCopy } from '@/src/lib/cpwGoals';
 import { formatClosetDate } from '@/src/lib/format';
-import { bg, border, fontSans, fsBody, fsCaption, radiusMd, space4, space6, surface, text, textMuted } from '@/src/theme/tokens';
+import { accent, bg, border, fontSans, fsBody, fsCaption, radiusMd, space3, space4, space6, surface, text, textMuted } from '@/src/theme/tokens';
 
 const CATEGORIES = ['APPAREL', 'FOOTWEAR', 'ACCESSORIES', 'BEAUTY', 'GENERAL'] as const;
 const PERIODS = ['MONTHLY', 'QUARTERLY'] as const;
+const CATEGORY_LABEL: Record<(typeof CATEGORIES)[number], string> = {
+  APPAREL: 'Clothes',
+  FOOTWEAR: 'Footwear',
+  ACCESSORIES: 'Accessories',
+  BEAUTY: 'Beauty',
+  GENERAL: 'Everything else',
+};
+const PERIOD_LABEL: Record<(typeof PERIODS)[number], string> = {
+  MONTHLY: 'Monthly',
+  QUARTERLY: 'Quarterly',
+};
+
+/** "Clothes" for APPAREL; a category the app has no label for reads in sentence case, never as an enum. */
+function categoryLabel(raw: string | null | undefined): string {
+  if (!raw) return 'Other';
+  return (CATEGORY_LABEL as Record<string, string>)[raw] ?? raw.charAt(0) + raw.slice(1).replace(/_/g, ' ').toLowerCase();
+}
+
+function periodLabel(raw: string): string {
+  return (PERIOD_LABEL as Record<string, string>)[raw] ?? raw.toLowerCase();
+}
 
 export default function ClosetAccountantScreen() {
   const params = useLocalSearchParams<{ focus?: string; plan?: string }>();
@@ -62,9 +86,12 @@ export default function ClosetAccountantScreen() {
   } = useBudgets();
   const createBudget = useCreateBudget();
   const exportCsv = useExportAccountantCsv();
+  // The summary carries no currency, so amounts show in the user's chosen one (MOB 27).
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const money = (minor: number) => formatMinor(minor, currency);
 
-  const [category, setCategory] = useState('GENERAL');
-  const [period, setPeriod] = useState('MONTHLY');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>('GENERAL');
+  const [period, setPeriod] = useState<(typeof PERIODS)[number]>('MONTHLY');
   const [limit, setLimit] = useState('');
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportNote, setExportNote] = useState<string | null>(null);
@@ -102,7 +129,7 @@ export default function ClosetAccountantScreen() {
     return (
       <ClosetScreen
         title="Accountant"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to view spend and budgets."
+        subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
   }
@@ -125,14 +152,14 @@ export default function ClosetAccountantScreen() {
   const envelopeWarn = summary?.budgets?.filter((b) => b.envelopeStatus === "WARN") ?? [];
 
   function submitBudget() {
-    const limitMinor = Math.round(Number(limit) * 100);
-    if (!CATEGORIES.includes(category as never) || !PERIODS.includes(period as never) || !Number.isFinite(limitMinor) || limitMinor <= 0) {
-      Alert.alert('Enter a valid category, period and limit');
+    const limitMinor = parseAmountInput(limit, currency);
+    if (limitMinor === null) {
+      Alert.alert('Enter a valid limit', `An amount in ${currency} above zero, for example 5000.`);
       return;
     }
     createBudget.mutate({ category, period, limitMinor }, {
       onSuccess: () => setLimit(''),
-      onError: (e) => Alert.alert('Could not create budget', (e as Error).message),
+      onError: (e) => Alert.alert('Could not create budget', closetAlertText(e)),
     });
   }
 
@@ -142,19 +169,43 @@ export default function ClosetAccountantScreen() {
     exportCsv.mutate(undefined, {
       onSuccess: (result) => {
         if (!result.shared) {
-          setExportNote(`Saved locally at ${result.uri}`);
+          setExportNote('Sharing is not available on this device, so the CSV was not sent anywhere.');
         }
       },
-      onError: (e) => setExportError((e as Error).message),
+      onError: (e) => setExportError(closetAlertText(e)),
     });
   }
 
   const budgetForm = (
     <View style={styles.form}>
       <Text style={styles.cardLabel}>Add budget</Text>
-      <TextInput style={styles.input} placeholder="Category (APPAREL, GENERAL…)" placeholderTextColor={textMuted} value={category} onChangeText={setCategory} autoCapitalize="characters" />
-      <TextInput style={styles.input} placeholder="Period (MONTHLY or QUARTERLY)" placeholderTextColor={textMuted} value={period} onChangeText={setPeriod} autoCapitalize="characters" />
-      <TextInput style={styles.input} placeholder="Limit (₹)" placeholderTextColor={textMuted} keyboardType="decimal-pad" value={limit} onChangeText={setLimit} />
+      <View style={styles.chips} accessibilityRole="radiogroup" accessibilityLabel="Category">
+        {CATEGORIES.map((c) => (
+          <Pressable
+            key={c}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: category === c }}
+            onPress={() => setCategory(c)}
+            style={[styles.chip, category === c && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, category === c && styles.chipTextOn]}>{CATEGORY_LABEL[c]}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={styles.chips} accessibilityRole="radiogroup" accessibilityLabel="Period">
+        {PERIODS.map((p) => (
+          <Pressable
+            key={p}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: period === p }}
+            onPress={() => setPeriod(p)}
+            style={[styles.chip, period === p && styles.chipOn]}
+          >
+            <Text style={[styles.chipText, period === p && styles.chipTextOn]}>{PERIOD_LABEL[p]}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <TextInput style={styles.input} placeholder={`Limit in ${currency}`} placeholderTextColor={textMuted} keyboardType="decimal-pad" value={limit} onChangeText={setLimit} accessibilityLabel="Budget limit" />
       <Button label="Save budget" block disabled={createBudget.isPending} onPress={submitBudget} />
     </View>
   );
@@ -187,23 +238,23 @@ export default function ClosetAccountantScreen() {
         {exceeded.length > 0 ? (
           <View style={styles.nudge}>
             <Text style={styles.nudgeText}>
-              Budget exceeded for {exceeded.map((b) => b.category).join(', ')} — Play checkout shows a soft spend-awareness nudge.
+              Over budget for {exceeded.map((b) => categoryLabel(b.category)).join(', ')}. You will see a reminder at checkout.
             </Text>
           </View>
         ) : envelopeWarn.length > 0 ? (
           <View style={styles.nudge}>
             <Text style={styles.nudgeText}>
-              Mid-period alert: {envelopeWarn.map((b) => b.category).join(', ')} at 80%+ of envelope — slow the haul before the cap.
+              {envelopeWarn.map((b) => categoryLabel(b.category)).join(', ')}: 80% of the budget spent, with time still left in the period.
             </Text>
           </View>
         ) : null}
 
         <View style={styles.banner}>
           <Text style={styles.bannerLabel}>Closet P&L · {summary?.monthLabel ?? '—'}</Text>
-          <Text style={styles.bannerValue}>{summary ? formatMinor(summary.totalSpendMinor) : '—'}</Text>
+          <Text style={styles.bannerValue}>{summary ? money(summary.totalSpendMinor) : '—'}</Text>
           <Text style={styles.bannerSub}>
             {summary
-              ? `This month ${formatMinor(summary.monthlySpendMinor)} · ${summary.spendByCategory.length} categories`
+              ? `This month ${money(summary.monthlySpendMinor)} · ${summary.spendByCategory.length} categories`
               : 'No purchases yet'}
           </Text>
           <RepairSpendChip
@@ -222,11 +273,11 @@ export default function ClosetAccountantScreen() {
           <View key={s.season} style={styles.card}>
             <Text style={styles.merchant}>{s.label}</Text>
             <Text style={styles.balance}>
-              {s.wears} wears · worn {formatMinor(s.costWornMinor)} · idle {formatMinor(s.costIdleMinor)}
+              {s.wears} wears · worn {money(s.costWornMinor)} · idle {money(s.costIdleMinor)}
             </Text>
             <Text style={styles.expiry}>
               {s.itemsWorn} worn · {s.itemsIdle} idle
-              {s.costPerWearMinor != null ? ` · ${formatMinor(s.costPerWearMinor)}/wear` : ''}
+              {s.costPerWearMinor != null ? ` · ${money(s.costPerWearMinor)}/wear` : ''}
             </Text>
           </View>
         )) : <Text style={styles.muted}>Wear items to see seasonal ROI.</Text>}
@@ -246,7 +297,7 @@ export default function ClosetAccountantScreen() {
             <Text style={styles.cardLabel}>Cost per wear</Text>
             <Text style={styles.cardValue}>
               {(summary?.costPerWearMinor ?? summary?.avgCostPerWearMinor) != null
-                ? formatMinor(summary?.costPerWearMinor ?? summary!.avgCostPerWearMinor!)
+                ? money(summary?.costPerWearMinor ?? summary!.avgCostPerWearMinor!)
                 : '—'}
             </Text>
           </View>
@@ -259,8 +310,8 @@ export default function ClosetAccountantScreen() {
         <Text style={styles.sectionTitle}>Spend by category</Text>
         {summary?.spendByCategory?.length ? summary.spendByCategory.map((r) => (
           <View key={r.category} style={styles.card}>
-            <Text style={styles.merchant}>{r.category}</Text>
-            <Text style={styles.balance}>{formatMinor(r.totalMinor)}</Text>
+            <Text style={styles.merchant}>{categoryLabel(r.category)}</Text>
+            <Text style={styles.balance}>{money(r.totalMinor)}</Text>
           </View>
         )) : <Text style={styles.muted}>No spend yet</Text>}
 
@@ -269,8 +320,8 @@ export default function ClosetAccountantScreen() {
           const summaryB = summary?.budgets?.find((s) => s.category === b.category && s.period === b.period);
           return (
             <View key={b.id} style={styles.card}>
-              <Text style={styles.merchant}>{b.category} · {b.period}</Text>
-              <Text style={styles.balance}>Limit {formatMinor(b.limitMinor)}</Text>
+              <Text style={styles.merchant}>{categoryLabel(b.category)} · {periodLabel(b.period)}</Text>
+              <Text style={styles.balance}>Limit {money(b.limitMinor)}</Text>
               {summaryB ? (
                 <Text
                   style={[
@@ -279,11 +330,11 @@ export default function ClosetAccountantScreen() {
                     summaryB.envelopeStatus === 'WARN' && !summaryB.exceeded && { color: '#7a4a00' },
                   ]}
                 >
-                  Spent {formatMinor(summaryB.actualMinor)}
+                  Spent {money(summaryB.actualMinor)}
                   {summaryB.exceeded
-                    ? ' · exceeded'
+                    ? ' · over budget'
                     : summaryB.envelopeStatus === 'WARN'
-                      ? ' · 80% envelope'
+                      ? ' · 80% spent'
                       : ''}
                 </Text>
               ) : null}
@@ -298,8 +349,8 @@ export default function ClosetAccountantScreen() {
           summary.cpwGoals.map((g) => (
             <View key={g.wardrobeItemId} style={styles.card}>
               <Text style={styles.merchant}>
-                {g.brand || g.category || 'Item'} · target{' '}
-                {g.cpwGoal.targetCpwMinor != null ? formatMinor(g.cpwGoal.targetCpwMinor) : '—'}/wear
+                {g.brand || categoryLabel(g.category)} · target{' '}
+                {g.cpwGoal.targetCpwMinor != null ? money(g.cpwGoal.targetCpwMinor) : '—'}/wear
               </Text>
               <Text style={styles.balance}>{g.cpwGoal.label}</Text>
               <Text style={styles.expiry}>{cpwGoalNudgeCopy(g.cpwGoal, g.brand || g.category)}</Text>
@@ -311,13 +362,13 @@ export default function ClosetAccountantScreen() {
 
         <Text style={styles.sectionTitle}>
           Ledger{showRepairsOnly ? ' · repairs' : ''}
-          {refundDestFilter !== 'ALL' ? ` · ${refundDestFilter}` : ''}
+          {refundDestFilter !== 'ALL' ? ` · ${REFUND_DESTINATION_LABELS[refundDestFilter]}` : ''}
         </Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
           {(['ALL', 'ORIGINAL_CARD', 'STORE_CREDIT', 'UPI'] as const).map((d) => (
             <Button
               key={d}
-              label={d === 'ALL' ? 'All refunds' : d.replace('_', ' ')}
+              label={d === 'ALL' ? 'All refunds' : REFUND_DESTINATION_LABELS[d]}
               size="sm"
               variant={refundDestFilter === d ? 'primary' : 'ghost'}
               onPress={() => setRefundDestFilter(d)}
@@ -338,16 +389,15 @@ export default function ClosetAccountantScreen() {
         <ClosetVirtualList
           data={ledgerEntries}
           keyExtractor={(e) => e.id}
-          estimatedItemSize={88}
           ListEmptyComponent={<Text style={styles.muted}>{emptyStateCopy('accountant').message}</Text>}
           renderItem={({ item: e }) => (
             <View style={styles.card}>
               <Text style={styles.merchant}>{e.description}</Text>
               <Text style={[styles.balance, e.amountMinor < 0 && { color: '#b3261e' }]}>
-                {formatMinor(e.amountMinor)}
+                {money(e.amountMinor)}
               </Text>
               <Text style={styles.expiry}>
-                {formatClosetDate(e.createdAt)} · {e.kind}
+                {formatClosetDate(e.createdAt)} · {e.kind.charAt(0) + e.kind.slice(1).replace(/_/g, ' ').toLowerCase()}
               </Text>
             </View>
           )}
@@ -377,5 +427,10 @@ const styles = StyleSheet.create({
   balance: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600', marginTop: 2 },
   expiry: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 2 },
   form: { gap: space4, marginTop: space4 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space3 },
+  chip: { borderColor: border, borderRadius: radiusMd, borderWidth: 1, justifyContent: 'center', minHeight: 44, paddingHorizontal: space3 },
+  chipOn: { backgroundColor: surface, borderColor: accent },
+  chipText: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
+  chipTextOn: { color: text, fontWeight: '600' },
   input: { backgroundColor: bg, borderColor: border, borderRadius: radiusMd, borderWidth: 1, color: text, fontFamily: fontSans, fontSize: fsBody, paddingHorizontal: 12, paddingVertical: 10 },
 });

@@ -57,12 +57,14 @@ export function AutotagConfirmSheet({ visible, drafts, onCancel, onConfirm }: Pr
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <Pressable style={styles.backdrop} onPress={onCancel} accessibilityRole="button">
+      <View style={styles.backdrop}>
         <Pressable
-          style={styles.sheet}
-          onPress={(e) => e.stopPropagation()}
-          testID="autotag-confirm-sheet"
-        >
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onCancel}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.sheet} testID="autotag-confirm-sheet">
           <Text style={styles.title}>Confirm tags</Text>
           <Text style={styles.lead}>
             Edit category, color, or brand before saving
@@ -127,8 +129,8 @@ export function AutotagConfirmSheet({ visible, drafts, onCancel, onConfirm }: Pr
             />
             <Button label="Cancel" block variant="ghost" onPress={onCancel} />
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

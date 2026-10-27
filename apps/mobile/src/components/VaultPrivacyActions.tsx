@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Linking,
   Pressable,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
+import { usePrompt } from '@/src/components/PromptSheet';
 import { Button } from '@/src/components/ui';
 import { useDeleteVault, useExportVault } from '@/src/hooks/closet/useCloset';
 import {
@@ -24,6 +24,7 @@ import {
   getDataDashboardLinks,
   getPrivacyPolicyUrl,
 } from '@/src/lib/privacyLinks';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import { useSessionStore } from '@/src/stores/session';
 import {
   border,
@@ -49,6 +50,8 @@ export function VaultPrivacyActions() {
   const deleteVaultMut = useDeleteVault();
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ExportProgressState>(INITIAL_EXPORT_PROGRESS);
+  // Alert.alert does nothing on web, so the delete confirm is a sheet on every platform.
+  const { ask, promptElement } = usePrompt();
 
   const busy = exportVault.isPending || deleteVaultMut.isPending;
   const privacyUrl = getPrivacyPolicyUrl();
@@ -76,36 +79,30 @@ export function VaultPrivacyActions() {
         );
       },
       onError: (e) => {
-        const message = (e as Error).message;
+        const message = closetAlertText(e);
         setError(message);
         setProgress(reduceExportProgress(INITIAL_EXPORT_PROGRESS, { type: 'fail', message }));
       },
     });
   }
 
-  function onDelete() {
+  async function onDelete() {
     if (!accessToken) {
       setError('Sign in to delete your account.');
       return;
     }
-    Alert.alert(
-      'Delete your account?',
-      'This permanently erases your Vault and Closet data. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            setError(null);
-            deleteVaultMut.mutate(undefined, {
-              onSuccess: () => router.replace('/(auth)/login' as never),
-              onError: (e) => setError((e as Error).message),
-            });
-          },
-        },
-      ],
-    );
+    const ok = await ask({
+      title: 'Delete your account?',
+      message: 'This permanently erases your Vault and Closet data. This cannot be undone.',
+      fields: [],
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    setError(null);
+    deleteVaultMut.mutate(undefined, {
+      onSuccess: () => router.replace('/(auth)/login' as never),
+      onError: (e) => setError(closetAlertText(e)),
+    });
   }
 
   function openPrivacy() {
@@ -175,13 +172,14 @@ export function VaultPrivacyActions() {
         block
         variant="ghost"
         disabled={busy || !accessToken}
-        onPress={onDelete}
+        onPress={() => void onDelete()}
       />
       {error && progress.phase !== 'error' ? <Text style={styles.error}>{error}</Text> : null}
       {progress.phase === 'error' && progress.message ? (
         <Text style={styles.error}>{progress.message}</Text>
       ) : null}
       {!accessToken ? <Text style={styles.hint}>Sign in to manage your data.</Text> : null}
+      {promptElement}
     </View>
   );
 }

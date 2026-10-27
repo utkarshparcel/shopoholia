@@ -1,36 +1,21 @@
 /**
- * UX-PERF-LISTS — when Closet lists grow past this threshold, switch to a
- * windowed FlatList so low-end Android stays smooth.
+ * UX-PERF-LISTS — bounded list rendering for Closet screens.
  *
- * Perf checklist (PR / QA):
- * - [x] Wardrobe clean + laundry lists virtualize at >50 items
- * - [x] Vault credits + receipts virtualize at >50 items
- * - [x] Accountant ledger virtualizes at >50 (no hard slice-20)
- * - [x] Item thumbs use CachedClosetImage (disk/memory cache hint)
- * - [x] Nested ScrollView lists use a bounded window height so recycling works
- * - [x] W098 — disposition listings, packages panels, metrics activity at >50
+ * - A screen whose main content is one long list (Wardrobe) passes it to ClosetScreen's `list`,
+ *   which makes the whole screen one virtualized SectionList.
+ * - Other lists sit inside the screen's single ScrollView and draw a page of rows at a time
+ *   (ClosetVirtualList), never a FlatList nested in a ScrollView with guessed row heights.
  */
 
-/** Virtualize when item count exceeds this (acceptance: >50). */
-export const LIST_VIRTUALIZE_THRESHOLD = 50;
+/** Rows a ClosetVirtualList draws at first, and adds per "Show more". */
+export const LIST_PAGE_SIZE = 30;
 
-/** Default row estimate for getItemLayout / window height. */
-export const LIST_ESTIMATED_ITEM_SIZE = 120;
-
-/** Visible rows inside a nested ScrollView window. */
-export const LIST_NESTED_WINDOW_ROWS = 6;
-
-export function shouldVirtualizeList(
-  count: number,
-  threshold: number = LIST_VIRTUALIZE_THRESHOLD,
-): boolean {
-  return count > threshold;
-}
-
-/** Bounded height so FlatList can recycle while nested in ClosetScreen ScrollView. */
-export function nestedVirtualListHeight(
-  estimatedItemSize: number = LIST_ESTIMATED_ITEM_SIZE,
-  windowRows: number = LIST_NESTED_WINDOW_ROWS,
+/** The next number of rows to draw: one more page, capped at the total. */
+export function nextVisibleCount(
+  visible: number,
+  total: number,
+  pageSize: number = LIST_PAGE_SIZE,
 ): number {
-  return Math.max(estimatedItemSize, estimatedItemSize * windowRows);
+  const page = Number.isInteger(pageSize) && pageSize > 0 ? pageSize : LIST_PAGE_SIZE;
+  return Math.min(Math.max(0, total), Math.max(0, visible) + page);
 }

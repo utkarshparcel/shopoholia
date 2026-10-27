@@ -1,14 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   Alert,
   Animated,
   LayoutAnimation,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
-  UIManager,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -18,7 +16,6 @@ import {
   bulkImportCanCancel,
   bulkImportProgressLabel,
   canDeleteClosetProfile,
-  formatMinor,
   inferWardrobeAutoTag,
   INITIAL_BULK_IMPORT_PROGRESS,
   profileDeleteConfirmCopy,
@@ -28,12 +25,15 @@ import {
 } from '@worn/shared';
 import { Button } from '@/src/components/ui';
 import { AutotagConfirmSheet } from '@/src/components/AutotagConfirmSheet';
-import { CachedClosetImage } from '@/src/components/CachedClosetImage';
-import { CareLabelBadge } from '@/src/components/CareLabelBadge';
-import { ClosetScreen } from '@/src/components/ClosetScreen';
-import { ClosetVirtualList } from '@/src/components/ClosetVirtualList';
+import { ClosetScreen, type ClosetListSection } from '@/src/components/ClosetScreen';
 import { CompleteLookSheet } from '@/src/components/CompleteLookSheet';
-import { formatClosetDate } from '@/src/lib/format';
+import { usePrompt } from '@/src/components/PromptSheet';
+import {
+  WardrobeItemActionsSheet,
+  WardrobeItemCard,
+  type WardrobeCardAction,
+} from '@/src/components/WardrobeItemCard';
+import { formatMinor } from '@/src/lib/format';
 import { formatNeverWornAmount } from '@/src/lib/wasteMoney';
 import { delightHapticSeasonalSwap } from '@/src/lib/delightHaptics';
 import { seasonalSwapFeedback } from '@/src/lib/todayOccasionWow';
@@ -64,11 +64,15 @@ import {
   useUploadWardrobeItem,
   useWasteSummary,
 } from '@/src/hooks/closet/useCloset';
-import type { WardrobeItem } from '@/src/api/client';
+import type { WardrobeItem, WasteMetricRow } from '@/src/api/client';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { emptyCtaTapProps, emptyStateCopy } from '@/src/lib/emptyDemo';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { trackEvent } from '@/src/lib/analytics';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { formatDayKey, localDayKey, parseDayKey } from '@/src/lib/localDay';
+import { preparePhotosForUpload } from '@/src/lib/photoPrep';
 import {
   wearChallengeCelebrateCopy,
   wearChallengeNudgeCopy,
@@ -82,19 +86,13 @@ import { PhotoDumpReview } from '@/src/components/PhotoDumpReview';
 import { useClosetStore } from '@/src/stores/closet';
 import { closet, fontSans, fsBody, fsCaption, radiusMd, space4 } from '@/src/theme/tokens';
 
-function laundryLabel(status: WardrobeItem['laundryStatus'] | undefined) {
-  switch (status) {
-    case 'DIRTY':
-      return 'Dirty';
-    case 'IN_LAUNDRY':
-      return 'In laundry';
-    default:
-      return 'Clean';
-  }
-}
+/** Photos picked at once; each is resized before upload. */
+const PICK_LIMIT = 20;
 
-function closetLabel(status: WardrobeItem['closetStatus'] | undefined) {
-  return status === 'STORED' ? 'Stored' : 'Active';
+function dayKeyError(value: string, label: string): string | null {
+  if (!parseDayKey(value)) return `Enter the ${label} as YYYY-MM-DD.`;
+  if (value < localDayKey()) return `The ${label} has already passed.`;
+  return null;
 }
 
 export default function ClosetWardrobeScreen() {
@@ -126,62 +124,114 @@ export default function ClosetWardrobeScreen() {
   const wearChallengeIds = useClosetStore((s) => s.wearChallengeIds);
   const seedDemoGiftCard = useClosetStore((s) => s.seedDemoGiftCard);
   const markJustConnected = useClosetStore((s) => s.markJustConnected);
-  const capsuleIds = new Set(capsule.data?.itemIds ?? []);
+  const emptyCopyVariant = useClosetPrefsStore((s) => s.emptyCopyVariant);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const capsuleIds = useMemo(() => new Set(capsule.data?.itemIds ?? []), [capsule.data]);
+  const { ask, promptElement } = usePrompt();
 
   const [category, setCategory] = useState('shirt');
   const [brand, setBrand] = useState('');
   const [cost, setCost] = useState('');
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({});
   const [bulkProgress, setBulkProgress] = useState<BulkImportProgressState>(INITIAL_BULK_IMPORT_PROGRESS);
   const cancelBulkRef = useRef(false);
   const [autotagDrafts, setAutotagDrafts] = useState<AutotagConfirmDraft[]>([]);
   const [showAutotag, setShowAutotag] = useState(false);
   const [showCompleteLook, setShowCompleteLook] = useState(false);
+  const [moreItemId, setMoreItemId] = useState<string | null>(null);
+  // Actions in flight, as "<itemId>:<action>" (or "capsule" for the shared capsule list).
+  // A ref mirrors the state so a second tap is ignored before React re-renders.
+  const busyRef = useRef(new Set<string>());
+  const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(() => new Set());
   const router = useRouter();
   const ingestion = useIngestionStatus();
-  const overdueBanner = buildLentOverdueBanner(lentOverdue.data?.items ?? [], new Date().toISOString().slice(0, 10));
+  const overdueBanner = buildLentOverdueBanner(lentOverdue.data?.items ?? [], localDayKey());
   const swapPulse = useRef(new Animated.Value(1)).current;
 
-  if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-    UIManager.setLayoutAnimationEnabledExperimental(true);
-  }
-
+  const refetchWaste = waste.refetch;
+  const refetchIngestion = ingestion.refetch;
+  const refetchImportable = importable.refetch;
+  const refetchCapsule = capsule.refetch;
   const onRefresh = useCallback(() => {
-    void Promise.all([
-      refetch(),
-      waste.refetch(),
-      ingestion.refetch(),
-      importable.refetch(),
-      capsule.refetch(),
-    ]);
-  }, [refetch, waste, ingestion, importable, capsule]);
+    void Promise.all([refetch(), refetchWaste(), refetchIngestion(), refetchImportable(), refetchCapsule()]);
+  }, [refetch, refetchWaste, refetchIngestion, refetchImportable, refetchCapsule]);
 
-  if (!FEATURE_CLOSET) {
-    return (
-      <ClosetScreen title="Wardrobe" subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to view your wardrobe." />
-    );
-  }
+  /** Runs one action unless the same one is already in flight, and reports a failure once. */
+  const track = useCallback(async (key: string, errorTitle: string, run: () => Promise<void>) => {
+    if (busyRef.current.has(key)) return;
+    busyRef.current.add(key);
+    setBusyKeys(new Set(busyRef.current));
+    try {
+      await run();
+    } catch (e) {
+      Alert.alert(errorTitle, closetAlertText(e));
+    } finally {
+      busyRef.current.delete(key);
+      setBusyKeys(new Set(busyRef.current));
+    }
+  }, []);
+
+  const items = useMemo(() => data?.items ?? [], [data]);
+  const metricsById = useMemo(() => {
+    const map = new Map<string, WasteMetricRow>();
+    for (const m of waste.data?.metrics ?? []) map.set(m.wardrobeItemId, m);
+    return map;
+  }, [waste.data]);
+  const busyByItem = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const key of busyKeys) {
+      const at = key.indexOf(':');
+      if (at < 0) continue;
+      const id = key.slice(0, at);
+      map.set(id, [...(map.get(id) ?? []), key.slice(at + 1)]);
+    }
+    return map;
+  }, [busyKeys]);
+  const { cleanItems, laundryBasket } = useMemo(() => {
+    const clean: WardrobeItem[] = [];
+    const laundry: WardrobeItem[] = [];
+    for (const i of items) {
+      if ((i.laundryStatus ?? 'CLEAN') === 'CLEAN') clean.push(i);
+      else laundry.push(i);
+    }
+    return { cleanItems: clean, laundryBasket: laundry };
+  }, [items]);
 
   async function pickAndAdd() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
+      quality: 1,
       allowsMultipleSelection: true,
-      selectionLimit: 20,
+      selectionLimit: PICK_LIMIT,
     });
     if (result.canceled || !result.assets?.length) return;
-    const uris = result.assets.map((a) => a.uri).filter(Boolean);
+    let uris: string[];
+    setPreparingPhotos(true);
+    try {
+      uris = await preparePhotosForUpload(result.assets.slice(0, PICK_LIMIT).filter((a) => Boolean(a.uri)));
+    } catch (e) {
+      Alert.alert('Could not read a photo', closetAlertText(e));
+      return;
+    } finally {
+      setPreparingPhotos(false);
+    }
+    const typedCost = cost.trim() ? parseAmountInput(cost, currency) : 0;
+    if (typedCost == null) {
+      Alert.alert('Check the cost', 'Enter the cost as a number, for example 1499 or 1499.50.');
+      return;
+    }
     const fallbackMeta = {
       category: isAccessoryCategory(category)
         ? createAccessoryCategory(category)
         : category.trim() || 'other',
       brand: brand || null,
-      costMinor: Math.round(Number(cost) * 100) || 0,
+      costMinor: typedCost,
     };
     if (uris.length === 1) {
       upload.mutate(
         { imageUri: uris[0]!, meta: fallbackMeta },
-        { onError: (e) => Alert.alert('Could not add item', (e as Error).message) },
+        { onError: (e) => Alert.alert('Could not add item', closetAlertText(e)) },
       );
       return;
     }
@@ -204,7 +254,7 @@ export default function ClosetWardrobeScreen() {
   function runBulkImport(drafts: AutotagConfirmDraft[]) {
     cancelBulkRef.current = false;
     setBulkProgress(reduceBulkImportProgress(INITIAL_BULK_IMPORT_PROGRESS, { type: 'start', total: drafts.length }));
-    const costMinor = Math.round(Number(cost) * 100) || 0;
+    const costMinor = (cost.trim() ? parseAmountInput(cost, currency) : 0) ?? 0;
     bulkUpload.mutate(
       {
         imageUris: drafts.map((d) => d.imageUri),
@@ -244,34 +294,11 @@ export default function ClosetWardrobeScreen() {
           setBulkProgress((prev) => ({
             ...prev,
             phase: 'done',
-            errors: [...prev.errors, { index: prev.completed, message: (e as Error).message }],
+            errors: [...prev.errors, { index: prev.completed, message: closetAlertText(e) }],
           }));
-          Alert.alert('Could not bulk import', (e as Error).message);
+          Alert.alert('Could not bulk import', closetAlertText(e));
         },
       },
-    );
-  }
-
-  async function doTryon(id: string) {
-    const res = await tryon.mutateAsync(id);
-    if (res.previewUrl) setPreviewMap((m) => ({ ...m, [id]: res.previewUrl! }));
-  }
-
-  function toggleLaundry(item: WardrobeItem) {
-    const next: WardrobeItem['laundryStatus'] =
-      item.laundryStatus === 'CLEAN' || !item.laundryStatus ? 'DIRTY' : 'CLEAN';
-    updateItem.mutate(
-      { id: item.id, patch: { laundryStatus: next } },
-      { onError: (e) => Alert.alert('Could not update laundry', (e as Error).message) },
-    );
-  }
-
-  function toggleCloset(item: WardrobeItem) {
-    const next: NonNullable<WardrobeItem['closetStatus']> =
-      item.closetStatus === 'STORED' ? 'ACTIVE' : 'STORED';
-    updateItem.mutate(
-      { id: item.id, patch: { closetStatus: next } },
-      { onError: (e) => Alert.alert('Could not update closet', (e as Error).message) },
     );
   }
 
@@ -299,7 +326,7 @@ export default function ClosetWardrobeScreen() {
             `${season}: ${res.active} active · ${res.stored} stored. Today prefers active pieces.`,
           );
         },
-        onError: (e) => Alert.alert('Could not swap season', (e as Error).message),
+        onError: (e) => Alert.alert('Could not swap season', closetAlertText(e)),
       },
     );
   }
@@ -317,89 +344,240 @@ export default function ClosetWardrobeScreen() {
             quality: 0.85,
           });
     if (result.canceled || !result.assets?.[0]?.uri) return;
-    careOcr.mutate(
-      { id: item.id, imageUri: result.assets[0].uri },
-      {
-        onSuccess: (res) => {
-          const r = res.careRules;
-          Alert.alert(
-            'Care label saved',
-            `Wash ${r.wash} · Dry ${r.dry} · Iron ${r.iron} · Dry-clean ${r.dryClean}`,
-          );
-        },
-        onError: (e) => Alert.alert('Could not read care tag', (e as Error).message),
-      },
-    );
-  }
-
-  function sendToDryClean(item: WardrobeItem) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 2);
-    const defaultPickup = tomorrow.toISOString().slice(0, 10);
-
-    const submit = (ticket: string, pickupOn: string) => {
-      const t = ticket.trim();
-      const p = pickupOn.trim();
-      if (!t || !/^\d{4}-\d{2}-\d{2}$/.test(p)) {
-        Alert.alert('Need ticket + pickup date (YYYY-MM-DD)');
-        return;
-      }
-      dryCleanDrop.mutate(
-        { id: item.id, ticket: t, pickupOn: p },
-        {
-          onSuccess: () =>
-            Alert.alert('At the cleaner', `Ticket ${t} · pickup ${p}. We’ll nudge you that morning.`),
-          onError: (e) => Alert.alert('Could not log dry clean', (e as Error).message),
-        },
-      );
-    };
-
-    if (typeof Alert.prompt === 'function') {
-      Alert.prompt('Dry-clean ticket', 'Ticket number from the cleaner', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Next',
-          onPress: (ticket?: string) => {
-            Alert.prompt?.(
-              'Pickup date',
-              'YYYY-MM-DD',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Send',
-                  onPress: (pickupOn?: string) => submit(ticket ?? '', pickupOn ?? defaultPickup),
-                },
-              ],
-              'plain-text',
-              defaultPickup,
-            );
-          },
-        },
-      ]);
-      return;
-    }
-    submit(`DC-${item.category.slice(0, 4).toUpperCase()}`, defaultPickup);
-  }
-
-  function confirmDryCleanPickup(item: WardrobeItem) {
-    dryCleanDone.mutate(item.id, {
-      onSuccess: () => Alert.alert('Back in closet', 'Marked clean — ready to wear.'),
-      onError: (e) => Alert.alert('Could not confirm pickup', (e as Error).message),
+    const imageUri = result.assets[0].uri;
+    await track(`${item.id}:care`, 'Could not read care tag', async () => {
+      const res = await careOcr.mutateAsync({ id: item.id, imageUri });
+      const r = res.careRules;
+      Alert.alert('Care label saved', `Wash ${r.wash} · Dry ${r.dry} · Iron ${r.iron} · Dry-clean ${r.dryClean}`);
     });
   }
 
-  const items = data?.items ?? [];
+  async function sendToDryClean(item: WardrobeItem) {
+    const values = await ask({
+      title: 'Send to dry clean',
+      message: 'From the ticket the cleaner gave you.',
+      fields: [
+        { key: 'ticket', label: 'Ticket number', placeholder: 'e.g. 4821', maxLength: 40 },
+        {
+          key: 'pickupOn',
+          label: 'Pickup date (YYYY-MM-DD)',
+          defaultValue: localDayKey(new Date(), 2),
+          keyboardType: 'numbers-and-punctuation',
+          maxLength: 10,
+        },
+      ],
+      confirmLabel: 'Send',
+      validate: (v) => (v.ticket ? dayKeyError(v.pickupOn!, 'pickup date') : 'Enter the ticket number.'),
+    });
+    if (!values) return;
+    const ticket = values.ticket!;
+    const pickupOn = values.pickupOn!;
+    await track(`${item.id}:dryClean`, 'Could not log dry clean', async () => {
+      await dryCleanDrop.mutateAsync({ id: item.id, ticket, pickupOn });
+      Alert.alert('At the cleaner', `Ticket ${ticket} · pickup ${formatDayKey(pickupOn)}. We'll nudge you that morning.`);
+    });
+  }
+
+  async function lend(item: WardrobeItem) {
+    const values = await ask({
+      title: 'Lend this piece',
+      fields: [
+        { key: 'lentTo', label: 'Who borrowed it?', placeholder: 'Name', maxLength: 60 },
+        {
+          key: 'dueOn',
+          label: 'Due back (YYYY-MM-DD)',
+          defaultValue: localDayKey(new Date(), 7),
+          keyboardType: 'numbers-and-punctuation',
+          maxLength: 10,
+        },
+      ],
+      confirmLabel: 'Lend',
+      validate: (v) => (v.lentTo ? dayKeyError(v.dueOn!, 'due date') : 'Enter who borrowed it.'),
+    });
+    if (!values) return;
+    const lentTo = values.lentTo!;
+    const dueOn = values.dueOn!;
+    await track(`${item.id}:lend`, 'Could not lend', async () => {
+      await lendItem.mutateAsync({ id: item.id, lentTo, dueOn });
+      Alert.alert('Lent', `${lentTo} · due ${formatDayKey(dueOn)}.`);
+    });
+  }
+
+  async function askCpwGoal(item: WardrobeItem, label: string) {
+    const values = await ask({
+      title: 'Cost-per-wear goal',
+      message: `What should each wear of ${label} cost you? Wear it until it gets there.`,
+      fields: [{ key: 'amount', label: `Target per wear (${currency})`, placeholder: 'e.g. 500', keyboardType: 'decimal-pad' }],
+      confirmLabel: 'Set goal',
+      validate: (v) => (parseAmountInput(v.amount!, currency) ? null : 'Enter an amount above zero, for example 500.'),
+    });
+    if (!values) return;
+    const targetCpwMinor = parseAmountInput(values.amount!, currency)!;
+    await track(`${item.id}:cpw`, 'Could not set the goal', async () => {
+      const res = await setCpw.mutateAsync({ itemId: item.id, targetCpwMinor });
+      Alert.alert('Goal set', cpwGoalNudgeCopy(res.cpwGoal, label));
+    });
+  }
+
+  async function addKidProfile() {
+    const values = await ask({
+      title: 'Add a kids profile',
+      message: 'Keep a child’s clothes in their own closet.',
+      fields: [{ key: 'name', label: 'Name', placeholder: 'Name', maxLength: 40 }],
+      confirmLabel: 'Add',
+      validate: (v) => (v.name ? null : 'Enter a name.'),
+    });
+    if (!values) return;
+    const name = values.name!;
+    await track('profile:create', 'Could not add the profile', async () => {
+      const p = await createProfile.mutateAsync({ name, kind: 'KID' });
+      setActiveProfileId(p.id);
+    });
+  }
+
+  // The prompt sheet, not Alert: it asks on web too, where Alert.alert shows nothing.
+  async function confirmDispose(item: WardrobeItem, label: string) {
+    const ok = await ask({
+      title: 'Sell this piece?',
+      message: `This lists ${label} for resale. You can manage it under Sell & donate.`,
+      fields: [],
+      confirmLabel: 'List it',
+    });
+    if (!ok) return;
+    await track(`${item.id}:dispose`, 'Could not list it', async () => {
+      await dispose.mutateAsync({ itemId: item.id, mode: 'SELL' });
+      Alert.alert('Listed', `${label} is listed for resale.`);
+    });
+  }
+
+  function handleAction(action: WardrobeCardAction, item: WardrobeItem) {
+    const metric = metricsById.get(item.id);
+    const label = item.brand || item.category;
+    const started = wearChallengeIds.includes(item.id);
+    switch (action) {
+      case 'more':
+        setMoreItemId(item.id);
+        return;
+      case 'tryon':
+        void track(`${item.id}:tryon`, 'Could not start try-on', async () => {
+          const res = await tryon.mutateAsync(item.id);
+          if (res.previewUrl) setPreviewMap((m) => ({ ...m, [item.id]: res.previewUrl! }));
+        });
+        return;
+      case 'wear':
+        void track(`${item.id}:wear`, 'Could not log the wear', async () => {
+          const wearCount = metric?.wearCount ?? 0;
+          await wear.mutateAsync({ wardrobeItemId: item.id, priorWearCount: wearCount });
+          if (!started) return;
+          if (wearChallengeProgress(wearCount + 1, metric?.status, { started: true }).completed) {
+            Alert.alert('Challenge complete', wearChallengeCelebrateCopy(label));
+          }
+          const goalNext = cpwGoalProgress(
+            item.costMinor,
+            wearCount + 1,
+            metric?.targetCpwMinor ?? metric?.cpwGoal?.targetCpwMinor ?? null,
+          );
+          if (goalNext.active && goalNext.completed) Alert.alert('CPW goal hit', cpwGoalCelebrateCopy(label));
+        });
+        return;
+      case 'challenge':
+        void track(`${item.id}:challenge`, 'Could not start the challenge', async () => {
+          await challenge.mutateAsync(item.id);
+          const progress = wearChallengeProgress(metric?.wearCount ?? 0, metric?.status, { started: true });
+          Alert.alert('Challenge on', wearChallengeNudgeCopy(progress, label));
+        });
+        return;
+      case 'capsule': {
+        // The whole capsule list is saved at once, so toggles run one at a time.
+        void track('capsule', 'Could not update the capsule', async () => {
+          const next = capsuleIds.has(item.id)
+            ? [...capsuleIds].filter((id) => id !== item.id)
+            : [...capsuleIds, item.id];
+          await saveCapsuleMut.mutateAsync(next);
+        });
+        return;
+      }
+      case 'cpw':
+        void askCpwGoal(item, label);
+        return;
+      case 'laundry': {
+        const next: WardrobeItem['laundryStatus'] =
+          item.laundryStatus === 'CLEAN' || !item.laundryStatus ? 'DIRTY' : 'CLEAN';
+        void track(`${item.id}:laundry`, 'Could not update laundry', async () => {
+          await updateItem.mutateAsync({ id: item.id, patch: { laundryStatus: next } });
+        });
+        return;
+      }
+      case 'care':
+        void snapCareTag(item);
+        return;
+      case 'dryClean':
+        void sendToDryClean(item);
+        return;
+      case 'pickedUp':
+        void track(`${item.id}:pickedUp`, 'Could not confirm pickup', async () => {
+          await dryCleanDone.mutateAsync(item.id);
+          Alert.alert('Back in closet', 'Marked clean and ready to wear.');
+        });
+        return;
+      case 'lend':
+        void lend(item);
+        return;
+      case 'returned':
+        void track(`${item.id}:returned`, 'Could not mark returned', async () => {
+          await returnLent.mutateAsync(item.id);
+        });
+        return;
+      case 'store': {
+        const next: NonNullable<WardrobeItem['closetStatus']> =
+          item.closetStatus === 'STORED' ? 'ACTIVE' : 'STORED';
+        void track(`${item.id}:store`, 'Could not update closet', async () => {
+          await updateItem.mutateAsync({ id: item.id, patch: { closetStatus: next } });
+        });
+        return;
+      }
+      case 'dispose':
+        void confirmDispose(item, label);
+        return;
+    }
+  }
+
+  // Cards get one stable callback, so a re-render here doesn't re-render every card.
+  const actionRef = useRef(handleAction);
+  useEffect(() => {
+    actionRef.current = handleAction;
+  });
+  const onAction = useCallback((action: WardrobeCardAction, item: WardrobeItem) => actionRef.current(action, item), []);
+
+  const renderCard = useCallback(
+    (item: WardrobeItem) => {
+      const metric = metricsById.get(item.id);
+      return (
+        <WardrobeItemCard
+          item={item}
+          metric={metric}
+          preview={previewMap[item.id] ?? item.garmentImageUrl ?? item.imageUrls?.[0]}
+          currency={currency}
+          started={wearChallengeIds.includes(item.id)}
+          isDead={metric?.status === 'DEAD'}
+          busy={(busyByItem.get(item.id) ?? []).join(',')}
+          onAction={onAction}
+        />
+      );
+    },
+    [metricsById, previewMap, currency, wearChallengeIds, busyByItem, onAction],
+  );
+
+  if (!FEATURE_CLOSET) {
+    return <ClosetScreen title="Wardrobe" subtitle={CLOSET_OFF_SUBTITLE} />;
+  }
+
   const hasContent = items.length > 0;
   const isEmpty = !isLoading && !isError && items.length === 0;
-  const metrics = waste.data?.metrics ?? [];
-  const deadIds = new Set(metrics.filter((m) => m.status === 'DEAD').map((m) => m.wardrobeItemId));
-  const cleanItems = items.filter((i) => (i.laundryStatus ?? 'CLEAN') === 'CLEAN');
-  const laundryBasket = items.filter((i) => {
-    const s = i.laundryStatus ?? 'CLEAN';
-    return s === 'DIRTY' || s === 'IN_LAUNDRY';
-  });
-
   const pendingPurchases = (importable.data?.items ?? []).filter((i) => !i.alreadyInWardrobe);
+  const moreItem = moreItemId ? (items.find((i) => i.id === moreItemId) ?? null) : null;
+  const wardrobeEmpty = emptyStateCopy('wardrobe', emptyCopyVariant);
+  const uploading = preparingPhotos || upload.isPending || bulkUpload.isPending;
 
   const addForm = (
     <View style={styles.form}>
@@ -419,7 +597,7 @@ export default function ClosetWardrobeScreen() {
       />
       <TextInput
         style={styles.input}
-        placeholder="Cost ₹ (optional)"
+        placeholder={`Cost in ${currency} (optional)`}
         placeholderTextColor={closet.muted}
         keyboardType="decimal-pad"
         value={cost}
@@ -427,12 +605,14 @@ export default function ClosetWardrobeScreen() {
       />
       <Button
         label={
-          upload.isPending || bulkUpload.isPending
-            ? `Uploading ${bulkImportProgressLabel(bulkProgress)}…`
-            : 'Add photos (multi-select)'
+          preparingPhotos
+            ? 'Preparing photos…'
+            : upload.isPending || bulkUpload.isPending
+              ? `Uploading ${bulkImportProgressLabel(bulkProgress)}…`
+              : 'Add photos (multi-select)'
         }
         block
-        disabled={upload.isPending || bulkUpload.isPending}
+        disabled={uploading}
         onPress={pickAndAdd}
       />
       {bulkProgress.phase === 'running' || bulkProgress.phase === 'cancelled' || bulkProgress.errors.length > 0 ? (
@@ -499,7 +679,7 @@ export default function ClosetWardrobeScreen() {
           </Text>
           {pendingPurchases.slice(0, 5).map((p) => (
             <Text key={p.purchaseItemId} style={styles.muted}>
-              · {p.title} · {p.merchant} · {formatMinor(p.priceMinor)}
+              · {p.title} · {p.merchant} · {formatMinor(p.priceMinor, currency)}
             </Text>
           ))}
           <Button
@@ -517,7 +697,7 @@ export default function ClosetWardrobeScreen() {
                 {
                   onSuccess: (res) =>
                     Alert.alert('Imported', `Added ${res.created} from purchases.`),
-                  onError: (e) => Alert.alert('Could not import', (e as Error).message),
+                  onError: (e) => Alert.alert('Could not import', closetAlertText(e)),
                 },
               )
             }
@@ -527,282 +707,48 @@ export default function ClosetWardrobeScreen() {
     </View>
   );
 
-  function renderItemCard(item: WardrobeItem) {
-    const metric = metrics.find((m) => m.wardrobeItemId === item.id);
-    const preview = previewMap[item.id] ?? item.garmentImageUrl ?? item.imageUrls?.[0];
-    const isDirty = (item.laundryStatus ?? 'CLEAN') !== 'CLEAN';
-    const started = wearChallengeIds.includes(item.id);
-    const progress = wearChallengeProgress(metric?.wearCount ?? 0, metric?.status, { started });
-    const label = item.brand || item.category;
-    const showChallenge =
-      started ||
-      metric?.status === 'DEAD' ||
-      metric?.status === 'DORMANT' ||
-      (metric != null && metric.wearCount === 0);
-    return (
-      <View
-        style={[styles.card, deadIds.has(item.id) ? styles.cardDead : null, isDirty ? styles.cardDirty : null]}
-      >
-        {preview ? <CachedClosetImage uri={preview} style={styles.thumb} /> : null}
-        <Text style={styles.merchant}>
-          {item.category} {item.brand ? `· ${item.brand}` : ''}
-        </Text>
-        <Text style={styles.muted}>
-          {item.colors?.join(', ') || 'no colors'} · {formatMinor(item.costMinor)} ·{' '}
-          {laundryLabel(item.laundryStatus)} · {closetLabel(item.closetStatus)}
-          {item.dryCleanTicket ? ` · DC ${item.dryCleanTicket}` : ''}
-          {item.dryCleanPickupOn ? ` · pickup ${formatClosetDate(item.dryCleanPickupOn)}` : ''}
-          {item.lentTo ? ` · lent to ${item.lentTo}` : ''}
-          {item.lentDueOn ? ` · due ${formatClosetDate(item.lentDueOn)}` : ''}
-        </Text>
-        <CareLabelBadge careRules={item.careRules} />
-        {metric ? (
-          <Text style={styles.muted}>
-            Worn {metric.wearCount}× ·{' '}
-            {metric.costPerWearMinor != null ? `${formatMinor(metric.costPerWearMinor)}/wear` : '—'} ·{' '}
-            {metric.status}
+  const sections: ClosetListSection<WardrobeItem>[] = [
+    ...(laundryBasket.length > 0
+      ? [
+          {
+            key: 'laundry',
+            header: (
+              <View style={styles.sectionHead}>
+                <Text style={styles.sectionTitle} accessibilityRole="header">
+                  Laundry basket
+                </Text>
+                <Text style={styles.muted}>
+                  {laundryBasket.length} piece{laundryBasket.length === 1 ? '' : 's'} waiting — outfit
+                  generator uses clean only.
+                </Text>
+              </View>
+            ),
+            data: laundryBasket,
+          },
+        ]
+      : []),
+    {
+      key: 'clean',
+      header: (
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle} accessibilityRole="header">
+            Clean & ready
           </Text>
-        ) : null}
-        {showChallenge && !progress.completed ? (
-          <Text style={styles.challenge}>{wearChallengeNudgeCopy(progress, label)}</Text>
-        ) : null}
-        {progress.completed && started ? (
-          <Text style={styles.challenge}>{wearChallengeCelebrateCopy(label)}</Text>
-        ) : null}
-        {(() => {
-          const goal =
-            metric?.cpwGoal ??
-            cpwGoalProgress(item.costMinor, metric?.wearCount ?? 0, metric?.targetCpwMinor ?? null);
-          if (!goal.active) return null;
-          return (
-            <Text style={styles.challenge}>
-              {goal.completed ? cpwGoalCelebrateCopy(label) : cpwGoalNudgeCopy(goal, label)}
-            </Text>
-          );
-        })()}
-        <View style={styles.row}>
-          <Button
-            label="Try on"
-            size="sm"
-            variant="secondary"
-            disabled={tryon.isPending}
-            onPress={() => doTryon(item.id)}
-          />
-          <Button
-            label="Wore it"
-            size="sm"
-            variant="ghost"
-            disabled={wear.isPending}
-            onPress={() =>
-              wear.mutate(
-                { wardrobeItemId: item.id, priorWearCount: metric?.wearCount ?? 0 },
-                {
-                  onSuccess: () => {
-                    if (!started) return;
-                    const next = wearChallengeProgress((metric?.wearCount ?? 0) + 1, metric?.status, {
-                      started: true,
-                    });
-                    if (next.completed) {
-                      Alert.alert('Challenge complete', wearChallengeCelebrateCopy(label));
-                    }
-                    const goalNext = cpwGoalProgress(
-                      item.costMinor,
-                      (metric?.wearCount ?? 0) + 1,
-                      metric?.targetCpwMinor ?? metric?.cpwGoal?.targetCpwMinor ?? null,
-                    );
-                    if (goalNext.active && goalNext.completed) {
-                      Alert.alert('CPW goal hit', cpwGoalCelebrateCopy(label));
-                    }
-                  },
-                },
-              )
-            }
-          />
-          {showChallenge && !started && !progress.completed ? (
-            <Button
-              label="Wear it 3×"
-              size="sm"
-              variant="secondary"
-              disabled={challenge.isPending}
-              onPress={() =>
-                challenge.mutate(item.id, {
-                  onSuccess: () =>
-                    Alert.alert('Challenge on', wearChallengeNudgeCopy(progress, label)),
-                  onError: (e) => Alert.alert('Failed', (e as Error).message),
-                })
-              }
-            />
-          ) : null}
-          <Button
-            label={capsuleIds.has(item.id) ? 'In capsule' : 'Capsule'}
-            size="sm"
-            variant={capsuleIds.has(item.id) ? 'secondary' : 'ghost'}
-            disabled={saveCapsuleMut.isPending}
-            onPress={() => {
-              const next = capsuleIds.has(item.id)
-                ? [...capsuleIds].filter((id) => id !== item.id)
-                : [...capsuleIds, item.id];
-              saveCapsuleMut.mutate(next, {
-                onError: (e) => Alert.alert('Capsule', (e as Error).message),
-              });
-            }}
-          />
-          {!(metric?.cpwGoal?.active || (metric?.targetCpwMinor != null && metric.targetCpwMinor > 0)) ? (
-            <Button
-              label="CPW goal"
-              size="sm"
-              variant="secondary"
-              disabled={setCpw.isPending}
-              onPress={() => {
-                Alert.prompt?.(
-                  'Cost-per-wear goal',
-                  'Target ₹ per wear (e.g. 500)',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Set',
-                      onPress: (value?: string) => {
-                        const rupees = Number(value);
-                        if (!Number.isFinite(rupees) || rupees <= 0) {
-                          Alert.alert('Enter a valid amount');
-                          return;
-                        }
-                        setCpw.mutate(
-                          { itemId: item.id, targetCpwMinor: Math.round(rupees * 100) },
-                          {
-                            onSuccess: (data) =>
-                              Alert.alert('Goal set', cpwGoalNudgeCopy(data.cpwGoal, label)),
-                            onError: (e) => Alert.alert('Failed', (e as Error).message),
-                          },
-                        );
-                      },
-                    },
-                  ],
-                  'plain-text',
-                  '',
-                  'decimal-pad',
-                );
-                // Android fallback when Alert.prompt is unavailable
-                if (typeof Alert.prompt !== 'function') {
-                  const suggested = item.costMinor > 0 ? Math.max(1, Math.round(item.costMinor / 10 / 100)) : 500;
-                  setCpw.mutate(
-                    { itemId: item.id, targetCpwMinor: suggested * 100 },
-                    {
-                      onSuccess: (data) =>
-                        Alert.alert('Goal set', cpwGoalNudgeCopy(data.cpwGoal, label)),
-                      onError: (e) => Alert.alert('Failed', (e as Error).message),
-                    },
-                  );
-                }
-              }}
-            />
-          ) : null}
-          <Button
-            label={isDirty ? 'Mark clean' : 'Mark dirty'}
-            size="sm"
-            variant="ghost"
-            disabled={updateItem.isPending}
-            onPress={() => toggleLaundry(item)}
-          />
-          <Button
-            label={item.careRules ? 'Re-scan care' : 'Snap care tag'}
-            size="sm"
-            variant="ghost"
-            disabled={careOcr.isPending}
-            onPress={() => void snapCareTag(item)}
-          />
-          {item.dryCleanTicket && item.laundryStatus === 'IN_LAUNDRY' ? (
-            <Button
-              label="Picked up"
-              size="sm"
-              variant="secondary"
-              disabled={dryCleanDone.isPending}
-              onPress={() => confirmDryCleanPickup(item)}
-            />
-          ) : (
-            <Button
-              label="Dry clean"
-              size="sm"
-              variant="ghost"
-              disabled={dryCleanDrop.isPending}
-              onPress={() => sendToDryClean(item)}
-            />
-          )}
-          {item.lentTo ? (
-            <Button
-              label="Returned"
-              size="sm"
-              variant="secondary"
-              disabled={returnLent.isPending}
-              onPress={() =>
-                returnLent.mutate(item.id, {
-                  onError: (e) => Alert.alert('Could not mark returned', (e as Error).message),
-                })
-              }
-            />
-          ) : (
-            <Button
-              label="Lend"
-              size="sm"
-              variant="ghost"
-              disabled={lendItem.isPending}
-              onPress={() => {
-                const due = new Date();
-                due.setDate(due.getDate() + 7);
-                const dueOn = due.toISOString().slice(0, 10);
-                if (typeof Alert.prompt === 'function') {
-                  Alert.prompt('Lend to', 'Who borrowed this?', (lentTo) => {
-                    if (!lentTo?.trim()) return;
-                    lendItem.mutate(
-                      { id: item.id, lentTo: lentTo.trim(), dueOn },
-                      {
-                        onError: (e) => Alert.alert('Could not lend', (e as Error).message),
-                      },
-                    );
-                  });
-                } else {
-                  lendItem.mutate(
-                    { id: item.id, lentTo: 'Friend', dueOn },
-                    {
-                      onSuccess: () => Alert.alert('Lent', `Due ${dueOn}`),
-                      onError: (e) => Alert.alert('Could not lend', (e as Error).message),
-                    },
-                  );
-                }
-              }}
-            />
-          )}
-          <Button
-            label={item.closetStatus === 'STORED' ? 'Activate' : 'Store'}
-            size="sm"
-            variant="ghost"
-            disabled={updateItem.isPending}
-            onPress={() => toggleCloset(item)}
-          />
-          {deadIds.has(item.id) ? (
-            <Button
-              label="Dispose"
-              size="sm"
-              variant="primary"
-              onPress={() => dispose.mutate({ itemId: item.id, mode: 'SELL' })}
-            />
-          ) : null}
         </View>
-      </View>
-    );
-  }
-
-  const emptyCopyVariant = useClosetPrefsStore((s) => s.emptyCopyVariant);
-  const wardrobeEmpty = emptyStateCopy('wardrobe', emptyCopyVariant);
+      ),
+      data: cleanItems,
+      empty: <Text style={styles.muted}>Nothing clean — mark laundry done or add pieces.</Text>,
+    },
+  ];
 
   return (
-    <ClosetScreen
+    <ClosetScreen<WardrobeItem>
       title="Wardrobe"
       subtitle="Every piece you own. Tap try-on to see it styled, log a wear, or clear dead inventory."
       loading={isLoading}
       loadingLabel="Loading your closet…"
       hasContent={hasContent}
-      error={isError ? ((error as Error)?.message ?? true) : null}
+      error={isError ? closetAlertText(error) : null}
       onRetry={() => refetch()}
       empty={isEmpty}
       emptyTitle={wardrobeEmpty.title}
@@ -826,11 +772,13 @@ export default function ClosetWardrobeScreen() {
               }}
             />
           ) : null}
+          {promptElement}
         </View>
       }
       onRefresh={onRefresh}
       refreshing={isRefetching || waste.isRefetching || ingestion.isRefetching}
       skeletonRows={6}
+      list={{ sections, keyExtractor: (item) => item.id, renderItem: renderCard }}
     >
       {addForm}
 
@@ -864,7 +812,7 @@ export default function ClosetWardrobeScreen() {
                       onSuccess: () => {
                         if (activeProfileId === p.id) setActiveProfileId(null);
                       },
-                      onError: (e) => Alert.alert('Failed', (e as Error).message),
+                      onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                     }),
                 },
               ]);
@@ -875,29 +823,9 @@ export default function ClosetWardrobeScreen() {
           label="+ Kid"
           size="sm"
           variant="ghost"
-          disabled={createProfile.isPending}
-          onPress={() => {
-            if (typeof Alert.prompt === 'function') {
-              Alert.prompt('Kids profile', 'Name', (name) => {
-                if (!name?.trim()) return;
-                createProfile.mutate(
-                  { name: name.trim(), kind: 'KID' },
-                  {
-                    onSuccess: (p) => setActiveProfileId(p.id),
-                    onError: (e) => Alert.alert('Failed', (e as Error).message),
-                  },
-                );
-              });
-            } else {
-              createProfile.mutate(
-                { name: 'Kid', kind: 'KID' },
-                {
-                  onSuccess: (p) => setActiveProfileId(p.id),
-                  onError: (e) => Alert.alert('Failed', (e as Error).message),
-                },
-              );
-            }
-          }}
+          accessibilityLabel="Add a kids profile"
+          disabled={busyKeys.has('profile:create')}
+          onPress={() => void addKidProfile()}
         />
         <Button
           label="Household"
@@ -920,7 +848,7 @@ export default function ClosetWardrobeScreen() {
               if (!overdueBanner.primaryItemId) return;
               returnLent.mutate(overdueBanner.primaryItemId, {
                 onSuccess: () => void lentOverdue.refetch(),
-                onError: (e) => Alert.alert('Could not mark returned', (e as Error).message),
+                onError: (e) => Alert.alert('Could not mark returned', closetAlertText(e)),
               });
             }}
           />
@@ -932,7 +860,7 @@ export default function ClosetWardrobeScreen() {
           <Text style={styles.bannerLabel}>Cost-per-wear</Text>
           <Text style={styles.bannerValue}>
             {waste.data.avgCostPerWearMinor != null
-              ? formatMinor(waste.data.avgCostPerWearMinor)
+              ? formatMinor(waste.data.avgCostPerWearMinor, currency)
               : '—'}
           </Text>
           <Text style={styles.muted}>
@@ -959,7 +887,9 @@ export default function ClosetWardrobeScreen() {
       <PhotoDumpReview />
       <ShoeBagRotationNudge />
       <MissingPieceShopSheet />
-      <CompleteLookSheet visible={showCompleteLook} onClose={() => setShowCompleteLook(false)} />
+      {showCompleteLook ? (
+        <CompleteLookSheet visible onClose={() => setShowCompleteLook(false)} />
+      ) : null}
       <AutotagConfirmSheet
         visible={showAutotag}
         drafts={autotagDrafts}
@@ -973,6 +903,16 @@ export default function ClosetWardrobeScreen() {
           runBulkImport(drafts);
         }}
       />
+      <WardrobeItemActionsSheet
+        item={moreItem}
+        metric={moreItem ? metricsById.get(moreItem.id) : undefined}
+        inCapsule={moreItem ? capsuleIds.has(moreItem.id) : false}
+        isDead={moreItem ? metricsById.get(moreItem.id)?.status === 'DEAD' : false}
+        busy={[...(moreItem ? (busyByItem.get(moreItem.id) ?? []) : []), ...(busyKeys.has('capsule') ? ['capsule'] : [])].join(',')}
+        onAction={onAction}
+        onClose={() => setMoreItemId(null)}
+      />
+      {promptElement}
 
       <View style={styles.banner}>
         <Text style={styles.bannerLabel}>Ingestion</Text>
@@ -984,45 +924,16 @@ export default function ClosetWardrobeScreen() {
               : 'Not connected'}
           {ingestion.data ? ` · coverage ${(ingestion.data.coverage * 100).toFixed(1)}%` : ''}
         </Text>
-        <View style={{ marginTop: space4 }}>
-          <Button
-            label="View ingestion metrics →"
-            size="sm"
-            variant="secondary"
-            onPress={() => router.push('/(closet)/metrics' as never)}
-          />
-        </View>
-      </View>
-
-      {laundryBasket.length > 0 ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Laundry basket</Text>
-          <Text style={styles.muted}>
-            {laundryBasket.length} piece{laundryBasket.length === 1 ? '' : 's'} waiting — outfit generator
-            uses clean only.
-          </Text>
-          <ClosetVirtualList
-            data={laundryBasket}
-            keyExtractor={(item) => item.id}
-            estimatedItemSize={220}
-            renderItem={({ item }) => renderItemCard(item)}
-            style={styles.list}
-          />
-        </View>
-      ) : null}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Clean & ready</Text>
-        <ClosetVirtualList
-          data={cleanItems}
-          keyExtractor={(item) => item.id}
-          estimatedItemSize={220}
-          renderItem={({ item }) => renderItemCard(item)}
-          style={styles.list}
-          ListEmptyComponent={
-            <Text style={styles.muted}>Nothing clean — mark laundry done or add pieces.</Text>
-          }
-        />
+        {__DEV__ ? (
+          <View style={{ marginTop: space4 }}>
+            <Button
+              label="View ingestion metrics →"
+              size="sm"
+              variant="secondary"
+              onPress={() => router.push('/(closet)/metrics' as never)}
+            />
+          </View>
+        ) : null}
       </View>
     </ClosetScreen>
   );
@@ -1039,23 +950,6 @@ const styles = StyleSheet.create({
   },
   bannerLabel: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption },
   bannerValue: { color: closet.ink, fontFamily: fontSans, fontSize: 24, fontWeight: '700' },
-  card: {
-    backgroundColor: closet.surface,
-    borderColor: closet.rule,
-    borderRadius: radiusMd,
-    borderWidth: 1,
-    marginBottom: space4,
-    padding: space4,
-  },
-  cardDead: { borderColor: '#f0a0a0', backgroundColor: '#fff6f6' },
-  cardDirty: { borderColor: '#c4a574', backgroundColor: '#faf6f0' },
-  challenge: {
-    color: closet.ink,
-    fontFamily: fontSans,
-    fontSize: fsCaption,
-    fontWeight: '600',
-    marginTop: 6,
-  },
   form: { gap: space4, marginBottom: space4 },
   importBox: {
     backgroundColor: closet.accentBg,
@@ -1074,22 +968,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  list: { marginTop: space4 },
-  merchant: { color: closet.ink, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
   muted: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 2 },
   row: { flexDirection: 'row', gap: space4, marginTop: space4, flexWrap: 'wrap' },
-  section: { marginTop: space4 },
+  sectionHead: { marginBottom: space4, marginTop: space4 },
   sectionTitle: {
     color: closet.ink,
     fontFamily: fontSans,
     fontSize: fsBody,
     fontWeight: '700',
-  },
-  thumb: {
-    width: '100%',
-    height: 180,
-    borderRadius: radiusMd,
-    marginBottom: space4,
-    backgroundColor: closet.mist,
   },
 });

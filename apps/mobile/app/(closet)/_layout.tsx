@@ -4,11 +4,14 @@ import { View } from 'react-native';
 import { BottomNav, type BottomNavItem } from '@/src/components/ui';
 import { bg } from '@/src/theme/tokens';
 
+/** A render error in one Closet screen shows a retry here instead of taking down the whole app (MOB 24). */
+export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
+
 const NAV_ITEMS: BottomNavItem[] = [
   { key: 'today', label: 'Today', icon: '◷' },
   { key: 'wardrobe', label: 'Wardrobe', icon: '▤' },
   { key: 'vault', label: 'Vault', icon: '◰' },
-  { key: 'accountant', label: 'Accountant', icon: '∑' },
+  { key: 'accountant', label: 'Money', icon: '∑' },
   { key: 'recipients', label: 'Gifts', icon: '♡' },
   { key: 'fit', label: 'Fit', icon: '✂' },
   { key: 'disposition', label: 'Market', icon: '⇄' },
@@ -27,6 +30,8 @@ export default function ClosetLayout() {
         screenOptions={{
           headerShown: false,
           tabBarStyle: { display: 'none' },
+          // A tab the user left stops re-rendering until they come back to it (MOB 30).
+          freezeOnBlur: true,
         }}
       >
         <Tabs.Screen name="today" />

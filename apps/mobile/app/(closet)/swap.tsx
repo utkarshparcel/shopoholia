@@ -1,7 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
-  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -9,9 +8,11 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
+import { createSwapListing, fetchSwapInvite } from '@/src/api/client';
 import {
   useBorrowSwapListing,
   useCreateSwapCircle,
@@ -20,6 +21,7 @@ import {
   useSwapListings,
   useWardrobe,
 } from '@/src/hooks/closet/useCloset';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -34,6 +36,13 @@ import {
   textMuted,
 } from '@/src/theme/tokens';
 
+const LISTING_STATUS_LABEL: Record<string, string> = {
+  LISTED: 'Available',
+  BORROWED: 'Borrowed',
+  RETURNED: 'Returned',
+  CANCELLED: 'Withdrawn',
+};
+
 export default function SwapCircleScreen() {
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
@@ -46,13 +55,45 @@ export default function SwapCircleScreen() {
   const [code, setCode] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const listings = useSwapListings(activeId);
+  const queryClient = useQueryClient();
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const listItem = useMutation({
+    mutationFn: ({ circleId, itemId }: { circleId: string; itemId: string }) => {
+      if (!accessToken) throw new Error('Sign in again to list items.');
+      return createSwapListing(accessToken, circleId, itemId);
+    },
+    onSuccess: () => {
+      // By prefix: the listings key's later parts (user, token) differ between hook versions.
+      void queryClient.invalidateQueries({ queryKey: ['swap-listings'] });
+    },
+  });
+  const itemNames = useMemo(
+    () =>
+      new Map(
+        (wardrobe.data?.items ?? []).map((it) => [it.id, `${it.brand ? `${it.brand} · ` : ''}${it.category}`]),
+      ),
+    [wardrobe.data],
+  );
+
+  async function shareInvite(circleId: string) {
+    if (!accessToken) {
+      Alert.alert('Sign in again', 'Sign in again to share an invite.');
+      return;
+    }
+    setSharingId(circleId);
+    try {
+      const inv = await fetchSwapInvite(accessToken, circleId);
+      await Share.share({ message: `Join my WORN swap circle: ${inv.inviteUrl}` });
+    } catch (e) {
+      Alert.alert('Could not share the invite', closetAlertText(e));
+    } finally {
+      setSharingId(null);
+    }
+  }
 
   if (!FEATURE_CLOSET) {
     return (
-      <ClosetScreen
-        title="Swap circle"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to barter with friends."
-      />
+      <ClosetScreen title="Swap circle" subtitle={CLOSET_OFF_SUBTITLE} />
     );
   }
 
@@ -66,7 +107,7 @@ export default function SwapCircleScreen() {
       loading={isLoading && circles.length === 0}
       hasContent={circles.length > 0 || Boolean(name)}
     >
-      <ScrollView contentContainerStyle={styles.pad}>
+      <View style={styles.pad}>
         <View style={styles.card}>
           <Text style={styles.label}>Create circle</Text>
           <TextInput
@@ -86,7 +127,7 @@ export default function SwapCircleScreen() {
                   setActiveId(c.id);
                   Alert.alert('Circle ready', `Invite code ${c.inviteCode}`);
                 },
-                onError: (e) => Alert.alert('Failed', (e as Error).message),
+                onError: (e) => Alert.alert('Failed', closetAlertText(e)),
               })
             }
           />
@@ -114,7 +155,7 @@ export default function SwapCircleScreen() {
                   setCode('');
                   Alert.alert('Joined', d.circle.name);
                 },
-                onError: (e) => Alert.alert('Failed', (e as Error).message),
+                onError: (e) => Alert.alert('Failed', closetAlertText(e)),
               })
             }
           />
@@ -124,7 +165,8 @@ export default function SwapCircleScreen() {
           <View key={c.id} style={styles.card}>
             <Text style={styles.title}>{c.name}</Text>
             <Text style={styles.muted}>
-              {c.memberCount ?? '?'} members · code {c.inviteCode}
+              {c.memberCount != null ? `${c.memberCount} member${c.memberCount === 1 ? '' : 's'} · ` : ''}
+              code {c.inviteCode}
             </Text>
             <View style={styles.row}>
               <Button
@@ -137,18 +179,8 @@ export default function SwapCircleScreen() {
                 label="Share invite"
                 size="sm"
                 variant="secondary"
-                onPress={async () => {
-                  try {
-                    const inv = await import('@/src/api/client').then((m) =>
-                      m.fetchSwapInvite(accessToken!, c.id),
-                    );
-                    await Share.share({
-                      message: `Join my WORN swap circle: ${inv.inviteUrl}`,
-                    });
-                  } catch (e) {
-                    Alert.alert('Failed', (e as Error).message);
-                  }
-                }}
+                disabled={sharingId === c.id}
+                onPress={() => void shareInvite(c.id)}
               />
             </View>
           </View>
@@ -166,14 +198,15 @@ export default function SwapCircleScreen() {
                 <Button
                   label="List"
                   size="sm"
+                  disabled={listItem.isPending}
                   onPress={() =>
-                    import('@/src/api/client')
-                      .then((m) => m.createSwapListing(accessToken!, activeId, it.id))
-                      .then(() => {
-                        void listings.refetch();
-                        Alert.alert('Listed', 'Friends in the circle can borrow it.');
-                      })
-                      .catch((e) => Alert.alert('Failed', (e as Error).message))
+                    listItem.mutate(
+                      { circleId: activeId, itemId: it.id },
+                      {
+                        onSuccess: () => Alert.alert('Listed', 'Friends in the circle can borrow it.'),
+                        onError: (e) => Alert.alert('Could not list it', closetAlertText(e)),
+                      },
+                    )
                   }
                 />
               </View>
@@ -182,7 +215,7 @@ export default function SwapCircleScreen() {
             {(listings.data?.listings ?? []).map((l) => (
               <View key={l.id} style={styles.row}>
                 <Text style={styles.body}>
-                  {l.status} · {l.wardrobeItemId.slice(0, 8)}
+                  {itemNames.get(l.wardrobeItemId) ?? 'A friend’s piece'} · {LISTING_STATUS_LABEL[l.status] ?? l.status.toLowerCase()}
                 </Text>
                 {l.status === 'LISTED' ? (
                   <Button
@@ -194,7 +227,7 @@ export default function SwapCircleScreen() {
                         { circleId: activeId, listingId: l.id },
                         {
                           onSuccess: () => Alert.alert('Borrowed', 'Enjoy — return when done.'),
-                          onError: (e) => Alert.alert('Failed', (e as Error).message),
+                          onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                         },
                       )
                     }
@@ -211,13 +244,13 @@ export default function SwapCircleScreen() {
           variant="secondary"
           onPress={() => router.push('/(closet)/disposition' as never)}
         />
-      </ScrollView>
+      </View>
     </ClosetScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  pad: { paddingBottom: 48 },
+  pad: { paddingBottom: space4 },
   card: {
     backgroundColor: surface,
     borderColor: border,

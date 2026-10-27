@@ -1,30 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  LIST_VIRTUALIZE_THRESHOLD,
-  nestedVirtualListHeight,
-  shouldVirtualizeList,
-} from './listVirtualization';
-import { cachedImageSource } from './cachedImage';
+import { LIST_PAGE_SIZE, nextVisibleCount } from './listVirtualization';
 
 describe('listVirtualization (UX-PERF-LISTS)', () => {
-  it('virtualizes only when count exceeds 50', () => {
-    expect(LIST_VIRTUALIZE_THRESHOLD).toBe(50);
-    expect(shouldVirtualizeList(50)).toBe(false);
-    expect(shouldVirtualizeList(51)).toBe(true);
-    expect(shouldVirtualizeList(0)).toBe(false);
+  it('reveals one page at a time, capped at the total', () => {
+    expect(nextVisibleCount(30, 500)).toBe(30 + LIST_PAGE_SIZE);
+    expect(nextVisibleCount(480, 500)).toBe(500);
+    expect(nextVisibleCount(500, 500)).toBe(500);
+    expect(nextVisibleCount(10, 100, 25)).toBe(35);
   });
 
-  it('bounds nested window height for ScrollView nesting', () => {
-    expect(nestedVirtualListHeight(100, 6)).toBe(600);
-  });
-});
-
-describe('cachedImageSource', () => {
-  it('adds force-cache hint for Closet thumbs', () => {
-    expect(cachedImageSource('https://cdn.example/a.jpg')).toEqual({
-      uri: 'https://cdn.example/a.jpg',
-      cache: 'force-cache',
-    });
+  it('never goes negative and ignores a bad page size', () => {
+    expect(nextVisibleCount(-5, 10, 3)).toBe(3);
+    expect(nextVisibleCount(0, -1)).toBe(0);
+    expect(nextVisibleCount(0, 100, 0)).toBe(LIST_PAGE_SIZE);
+    expect(nextVisibleCount(0, 100, Number.NaN)).toBe(LIST_PAGE_SIZE);
   });
 });

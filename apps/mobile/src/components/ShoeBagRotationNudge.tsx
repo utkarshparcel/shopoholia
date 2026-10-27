@@ -8,6 +8,7 @@ import { Button } from '@/src/components/ui';
 import { useLogWear, useShoeBagRotation } from '@/src/hooks/closet/useCloset';
 import { trackEvent } from '@/src/lib/analytics';
 import { shoeBagNudgeCardsFromSuggestions } from '@/src/lib/shoeBagNudge';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   closet,
@@ -52,7 +53,7 @@ export function ShoeBagRotationNudge() {
                     Alert.alert('Logged', 'Wear counted toward rotation metrics.');
                   },
                   onError: (e) =>
-                    Alert.alert('Could not log wear', (e as Error).message),
+                    Alert.alert('Could not log wear', closetAlertText(e)),
                 },
               )
             }

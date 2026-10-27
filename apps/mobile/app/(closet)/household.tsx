@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   Alert,
-  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -18,6 +17,8 @@ import {
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
+import { usePrompt } from '@/src/components/PromptSheet';
+import { laundryLabel } from '@/src/components/WardrobeItemCard';
 import {
   useCreateHousehold,
   useHouseholdVault,
@@ -27,7 +28,11 @@ import {
   usePatchHouseholdVaultMember,
   useSpendHouseholdVault,
 } from '@/src/hooks/closet/useCloset';
+import { parseAmountInput } from '@/src/lib/amountInput';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
 import {
   border,
   fontSans,
@@ -40,9 +45,16 @@ import {
   textMuted,
 } from '@/src/theme/tokens';
 
+/** Suggested spend cap when a member is first allowed to spend: 5,000 in the major unit. */
+const DEFAULT_SPEND_CAP_MAJOR = '5000';
+
+function accessLabel(access: 'VIEW' | 'SPEND' | undefined) {
+  return access === 'SPEND' ? 'can spend' : 'view only';
+}
+
 export default function HouseholdScreen() {
   const router = useRouter();
-  const { data, isLoading } = useHouseholds();
+  const { data, isLoading, isError, error, refetch } = useHouseholds();
   const create = useCreateHousehold();
   const join = useJoinHousehold();
   const [name, setName] = useState('Our home');
@@ -52,6 +64,8 @@ export default function HouseholdScreen() {
   const vault = useHouseholdVault(activeId);
   const patchVault = usePatchHouseholdVaultMember(activeId);
   const spendVault = useSpendHouseholdVault(activeId);
+  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const { ask, promptElement } = usePrompt();
   const households = data?.households ?? [];
   const activeHousehold = useMemo(
     () => households.find((x) => x.id === activeId) ?? null,
@@ -65,17 +79,84 @@ export default function HouseholdScreen() {
     : null;
 
   if (!FEATURE_CLOSET) {
-    return (
-      <ClosetScreen
-        title="Household"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 to share a closet."
-      />
-    );
+    return <ClosetScreen title="Household" subtitle={CLOSET_OFF_SUBTITLE} />;
   }
 
   const items = wardrobe.data?.items ?? [];
   const vaultAccounts = vault.data?.accounts ?? [];
   const vaultMembers = vault.data?.members ?? [];
+
+  async function allowSpend(userId: string, label: string) {
+    const values = await ask({
+      title: `Let ${label} spend?`,
+      message: 'They can mark shared credits as spent, up to this total.',
+      fields: [
+        {
+          key: 'cap',
+          label: `Spend cap in ${currency}`,
+          defaultValue: DEFAULT_SPEND_CAP_MAJOR,
+          keyboardType: 'decimal-pad',
+        },
+      ],
+      confirmLabel: 'Allow spend',
+      validate: (v) => (parseAmountInput(v.cap!, currency) ? null : 'Enter a cap above zero, for example 5000.'),
+    });
+    if (!values) return;
+    patchVault.mutate(
+      { userId, vaultAccess: 'SPEND', spendCapMinor: parseAmountInput(values.cap!, currency)! },
+      {
+        onError: (e) => Alert.alert('Could not update', friendlyHouseholdVaultAclCopy(closetAlertText(e))),
+      },
+    );
+  }
+
+  function makeViewOnly(userId: string, label: string) {
+    Alert.alert(`Make ${label} view-only?`, 'They will still see balances but can’t mark credits spent.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Make view-only',
+        onPress: () =>
+          patchVault.mutate(
+            { userId, vaultAccess: 'VIEW' },
+            {
+              onError: (e) =>
+                Alert.alert('Could not update', friendlyHouseholdVaultAclCopy(closetAlertText(e))),
+            },
+          ),
+      },
+    ]);
+  }
+
+  /** One confirmed spend. A retry re-sends the same key, so the server applies it once. */
+  function sendSpend(accountId: string, amountMinor: number, idempotencyKey: string) {
+    spendVault.mutate(
+      { accountId, amountMinor, idempotencyKey },
+      {
+        onError: (e) =>
+          Alert.alert('Spend not recorded', friendlyHouseholdVaultAclCopy(closetAlertText(e)), [
+            { text: 'OK', style: 'cancel' },
+            { text: 'Try again', onPress: () => sendSpend(accountId, amountMinor, idempotencyKey) },
+          ]),
+      },
+    );
+  }
+
+  async function markSpent(account: { id: string; merchant: string; currency: string; balanceCacheMinor: number }) {
+    const balance = formatMinor(account.balanceCacheMinor, account.currency);
+    const values = await ask({
+      title: `Spent at ${account.merchant}`,
+      message: `Balance ${balance}. How much did you use?`,
+      fields: [{ key: 'amount', label: `Amount in ${account.currency}`, placeholder: 'e.g. 250', keyboardType: 'decimal-pad' }],
+      confirmLabel: 'Mark spent',
+      validate: (v) => {
+        const minor = parseAmountInput(v.amount!, account.currency);
+        if (!minor) return 'Enter an amount above zero.';
+        return minor > account.balanceCacheMinor ? `That is more than the ${balance} balance.` : null;
+      },
+    });
+    if (!values) return;
+    sendSpend(account.id, parseAmountInput(values.amount!, account.currency)!, newIdempotencyKey());
+  }
 
   return (
     <ClosetScreen
@@ -83,8 +164,10 @@ export default function HouseholdScreen() {
       subtitle="Invite a partner — shared laundry, inventory & vault (view-only by default)."
       loading={isLoading && households.length === 0}
       hasContent={households.length > 0 || Boolean(name)}
+      error={isError ? closetAlertText(error) : null}
+      onRetry={() => void refetch()}
     >
-      <ScrollView contentContainerStyle={styles.pad}>
+      <View style={styles.pad}>
         <View style={styles.card} testID="active-household">
           <Text style={styles.label}>Switcher</Text>
           <Text style={styles.title}>{activeHouseholdSwitcherLabel(activeHousehold)}</Text>
@@ -113,7 +196,7 @@ export default function HouseholdScreen() {
                   Alert.alert('Household ready', `Invite code ${h.inviteCode}`);
                 },
                 onError: (e) =>
-                  Alert.alert('Failed', friendlyHouseholdAclCopy((e as Error).message)),
+                  Alert.alert('Failed', friendlyHouseholdAclCopy(closetAlertText(e))),
               })
             }
           />
@@ -140,7 +223,7 @@ export default function HouseholdScreen() {
                   Alert.alert('Joined', d.household.name);
                 },
                 onError: (e) =>
-                  Alert.alert('Could not join', friendlyHouseholdAclCopy((e as Error).message)),
+                  Alert.alert('Could not join', friendlyHouseholdAclCopy(closetAlertText(e))),
               })
             }
           />
@@ -150,7 +233,8 @@ export default function HouseholdScreen() {
           <View key={h.id} style={styles.card}>
             <Text style={styles.title}>{h.name}</Text>
             <Text style={styles.muted}>
-              {h.memberCount ?? '?'} members · code {h.inviteCode}
+              {h.memberCount != null ? `${h.memberCount} member${h.memberCount === 1 ? '' : 's'} · ` : ''}
+              code {h.inviteCode}
             </Text>
             <View style={styles.row}>
               <Button label={activeId === h.id ? "Active" : "Open"} size="sm" variant={activeId === h.id ? "secondary" : undefined} onPress={() => setActiveId(h.id)} />
@@ -182,7 +266,7 @@ export default function HouseholdScreen() {
               items.slice(0, 20).map((item) => (
                 <Text key={item.id} style={styles.item}>
                   {item.category}
-                  {item.brand ? ` · ${item.brand}` : ''} · {item.laundryStatus ?? 'CLEAN'}
+                  {item.brand ? ` · ${item.brand}` : ''} · {laundryLabel(item.laundryStatus)}
                 </Text>
               ))
             )}
@@ -199,10 +283,9 @@ export default function HouseholdScreen() {
           <View style={styles.card} testID="household-vault">
             <Text style={styles.label}>Shared vault</Text>
             <Text style={styles.muted}>
-              Balances only — no card numbers. Your access:{' '}
-              {vault.data?.myAccess ?? 'VIEW'}
+              Balances only — no card numbers. You {vault.data?.myAccess === 'SPEND' ? 'can spend' : 'can view'}
               {vault.data?.mySpendCapMinor != null
-                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor)}`
+                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor, currency)}`
                 : ''}
             </Text>
             {vaultAclError ? (
@@ -210,12 +293,14 @@ export default function HouseholdScreen() {
                 {vaultAclError}
               </Text>
             ) : null}
-            {vaultMembers.map((m) => (
+            {vaultMembers.map((m, i) => {
+              const label = `member ${i + 1}`;
+              return (
                 <View key={m.userId} style={styles.row}>
                   <Text style={styles.item}>
-                    Member · {m.vaultAccess}
-                    {m.spendCapMinor != null
-                      ? ` · cap ${formatMinor(m.spendCapMinor)}`
+                    Member {i + 1} · {accessLabel(m.vaultAccess)}
+                    {m.vaultAccess === 'SPEND' && m.spendCapMinor != null
+                      ? ` · cap ${formatMinor(m.spendCapMinor, currency)}`
                       : ''}
                   </Text>
                   <Button
@@ -224,24 +309,12 @@ export default function HouseholdScreen() {
                     variant="ghost"
                     disabled={patchVault.isPending}
                     onPress={() =>
-                      patchVault.mutate(
-                        {
-                          userId: m.userId,
-                          vaultAccess: m.vaultAccess === 'SPEND' ? 'VIEW' : 'SPEND',
-                          spendCapMinor: m.spendCapMinor ?? 500000,
-                        },
-                        {
-                          onError: (e) =>
-                            Alert.alert(
-                              'Could not update',
-                              friendlyHouseholdVaultAclCopy((e as Error).message),
-                            ),
-                        },
-                      )
+                      m.vaultAccess === 'SPEND' ? makeViewOnly(m.userId, label) : void allowSpend(m.userId, label)
                     }
                   />
                 </View>
-              ))}
+              );
+            })}
             {vaultAccounts.length === 0 ? (
               <Text style={styles.muted}>No shared credits yet.</Text>
             ) : (
@@ -250,35 +323,13 @@ export default function HouseholdScreen() {
                   <Text style={styles.item}>
                     {a.merchant} · {formatMinor(a.balanceCacheMinor, a.currency)}
                   </Text>
-                  {vault.data?.myAccess === 'SPEND' ? (
+                  {vault.data?.myAccess === 'SPEND' && a.balanceCacheMinor > 0 ? (
                     <Button
                       label="Mark spent"
                       size="sm"
                       variant="ghost"
                       disabled={spendVault.isPending}
-                      onPress={() => {
-                        const amountMinor = Math.min(10000, a.balanceCacheMinor);
-                        if (amountMinor <= 0) {
-                          Alert.alert('Nothing to spend');
-                          return;
-                        }
-                        spendVault.mutate(
-                          {
-                            accountId: a.id,
-                            amountMinor,
-                            idempotencyKey:
-                              globalThis.crypto?.randomUUID?.() ??
-                              '00000000-0000-4000-8000-000000000001',
-                          },
-                          {
-                            onError: (e) =>
-                              Alert.alert(
-                                'Spend blocked',
-                                friendlyHouseholdVaultAclCopy((e as Error).message),
-                              ),
-                          },
-                        );
-                      }}
+                      onPress={() => void markSpent(a)}
                     />
                   ) : null}
                 </View>
@@ -286,13 +337,14 @@ export default function HouseholdScreen() {
             )}
           </View>
         ) : null}
-      </ScrollView>
+      </View>
+      {promptElement}
     </ClosetScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  pad: { padding: space4, gap: space4 },
+  pad: { gap: space4 },
   card: {
     backgroundColor: surface,
     borderRadius: radiusMd,

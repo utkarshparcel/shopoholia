@@ -13,6 +13,7 @@ import {
 } from '@/src/hooks/closet/useCloset';
 import { priceDropAlertFromHit } from '@/src/lib/priceDropAlert';
 import { trackEvent } from '@/src/lib/analytics';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   PRICE_DROP_DISMISS_REASONS,
   type PriceDropDismissReason,
@@ -106,7 +107,7 @@ export function PriceDropAlertCards({ enabled = true }: Props) {
                     onSuccess: () =>
                       Alert.alert('Watching', `Keeping an eye on ${card.brand}.`),
                     onError: (e) =>
-                      Alert.alert('Could not watch', (e as Error).message),
+                      Alert.alert('Could not watch', closetAlertText(e)),
                   },
                 );
               }}

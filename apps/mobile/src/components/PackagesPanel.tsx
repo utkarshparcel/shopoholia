@@ -13,7 +13,6 @@ import { useRouter } from 'expo-router';
 import { Button } from '@/src/components/ui';
 import { ClosetVirtualList } from '@/src/components/ClosetVirtualList';
 import {
-  useAttachDeliveryProof,
   useCreateReturn,
   useExchanges,
   useFixRtoAddress,
@@ -26,6 +25,7 @@ import {
 } from '@/src/hooks/closet/useCloset';
 import { trackEvent } from '@/src/lib/analytics';
 import { formatClosetDate } from '@/src/lib/format';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   fontSans,
@@ -49,7 +49,6 @@ export function PackagesPanel() {
   const createReturn = useCreateReturn();
   const updatePkg = useUpdatePackage();
   const fixAddress = useFixRtoAddress();
-  const attachProof = useAttachDeliveryProof();
   const { data: sizeMap } = useSizeMap();
   const router = useRouter();
   const inTransit = packages.data?.packages ?? [];
@@ -72,7 +71,6 @@ export function PackagesPanel() {
       <ClosetVirtualList
         data={rtoBoard}
         keyExtractor={(row) => row.purchaseId}
-        estimatedItemSize={160}
         testID="packages-rto-list"
         renderItem={({ item: row }) => {
           const openRefund = row.checklist.find((s) => s.id === 'OPEN_REFUND');
@@ -143,31 +141,7 @@ export function PackagesPanel() {
                         {
                           onSuccess: () =>
                             Alert.alert('Reattempt queued', 'Status set to shipped for redelivery.'),
-                          onError: (e) => Alert.alert('Failed', (e as Error).message),
-                        },
-                      )
-                    }
-                  />
-                  <Button
-                    label={
-                      attachProof.isPending ? 'Attaching…' : 'Attach delivery photo proof (stub key)'
-                    }
-                    size="sm"
-                    variant="ghost"
-                    disabled={attachProof.isPending}
-                    onPress={() =>
-                      attachProof.mutate(
-                        {
-                          purchaseId: row.purchaseId,
-                          imageKey: `delivery-proof/${row.purchaseId}/${Date.now()}.jpg`,
-                        },
-                        {
-                          onSuccess: (res) =>
-                            Alert.alert(
-                              'Proof attached',
-                              `Claim packet has ${res.claimPacket.proofKeys.length} photo(s).`,
-                            ),
-                          onError: (e) => Alert.alert('Failed', (e as Error).message),
+                          onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                         },
                       )
                     }
@@ -191,7 +165,7 @@ export function PackagesPanel() {
                         onSuccess: () =>
                           Alert.alert('Refund opened', 'Track progress on the Returns tab.'),
                         onError: (e) =>
-                          Alert.alert('Could not start refund', (e as Error).message),
+                          Alert.alert('Could not start refund', closetAlertText(e)),
                       },
                     )
                   }
@@ -218,7 +192,6 @@ export function PackagesPanel() {
       <ClosetVirtualList
         data={inTransit}
         keyExtractor={(p) => p.id}
-        estimatedItemSize={180}
         testID="packages-in-transit-list"
         renderItem={({ item: p }) => {
           const timeline = packageDeliveryTimeline(p.deliveryStatus);
@@ -317,7 +290,7 @@ export function PackagesPanel() {
                             ]);
                           }
                         },
-                        onError: (e) => Alert.alert('Failed', (e as Error).message),
+                        onError: (e) => Alert.alert('Failed', closetAlertText(e)),
                       },
                     );
                   }}
@@ -332,7 +305,7 @@ export function PackagesPanel() {
                       onPress={() =>
                         updatePkg.mutate(
                           { id: p.id, deliveryStatus: status },
-                          { onError: (e) => Alert.alert('Failed', (e as Error).message) },
+                          { onError: (e) => Alert.alert('Failed', closetAlertText(e)) },
                         )
                       }
                     />
@@ -348,7 +321,7 @@ export function PackagesPanel() {
                     { id: p.id, addToWardrobe: true },
                     {
                       onSuccess: () => Alert.alert('Delivered', 'Added to wardrobe when possible.'),
-                      onError: (e) => Alert.alert('Could not update', (e as Error).message),
+                      onError: (e) => Alert.alert('Could not update', closetAlertText(e)),
                     },
                   )
                 }
@@ -369,7 +342,6 @@ export function PackagesPanel() {
       <ClosetVirtualList
         data={exchangeRows}
         keyExtractor={(e) => e.purchaseId}
-        estimatedItemSize={140}
         testID="packages-exchange-list"
         renderItem={({ item: e }) => {
           const prefill = buildExchangeSizePrefill({
@@ -441,7 +413,7 @@ export function PackagesPanel() {
                             router.push('/(closet)/vault?focus=returns' as never);
                           },
                           onError: (err) =>
-                            Alert.alert('Could not start return', (err as Error).message),
+                            Alert.alert('Could not start return', closetAlertText(err)),
                         },
                       )
                     }

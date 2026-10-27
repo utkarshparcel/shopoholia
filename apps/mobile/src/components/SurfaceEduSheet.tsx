@@ -36,8 +36,15 @@ export function SurfaceEduSheet({ visible, onContinue, onSkip }: Props) {
       animationType="fade"
       onRequestClose={onSkip}
     >
-      <Pressable style={styles.backdrop} onPress={onSkip} accessibilityRole="button">
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+      <View style={styles.backdrop}>
+        {/* A sibling behind the sheet, not a wrapper: on web a role="button" wrapper nests the sheet's buttons. */}
+        <Pressable
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onSkip}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.sheet}>
           <Text style={styles.title}>Two sides of WORN</Text>
           <Text style={styles.lead}>
             Play and Closet are separate on purpose — switch when you need each job.
@@ -58,8 +65,8 @@ export function SurfaceEduSheet({ visible, onContinue, onSkip }: Props) {
             <Button label="Got it" block onPress={onContinue} />
             <Button label="Skip" block variant="ghost" onPress={onSkip} />
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

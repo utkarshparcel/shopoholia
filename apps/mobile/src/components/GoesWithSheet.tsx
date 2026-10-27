@@ -1,5 +1,6 @@
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { CachedClosetImage } from '@/src/components/CachedClosetImage';
 import { Button } from '@/src/components/ui';
 import { useGoesWith } from '@/src/hooks/closet/useCloset';
 import type { WardrobeItem } from '@/src/api/client';
@@ -31,8 +32,14 @@ export function GoesWithSheet({ visible, anchor, onClose, onTryOnToday }: Props)
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button">
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+      <View style={styles.backdrop}>
+        <Pressable
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.sheet}>
           <Text style={styles.title}>What goes with</Text>
           <Text style={styles.lead}>
             {anchor
@@ -55,8 +62,9 @@ export function GoesWithSheet({ visible, anchor, onClose, onTryOnToday }: Props)
                   accessibilityLabel={`Try ${m.category} on today`}
                 >
                   {(m.garmentImageUrl ?? m.imageUrls?.[0]) ? (
-                    <Image
-                      source={{ uri: (m.garmentImageUrl ?? m.imageUrls?.[0]) as string }}
+                    <CachedClosetImage
+                      uri={(m.garmentImageUrl ?? m.imageUrls?.[0]) as string}
+                      recyclingKey={m.id}
                       style={styles.thumb}
                     />
                   ) : (
@@ -68,7 +76,7 @@ export function GoesWithSheet({ visible, anchor, onClose, onTryOnToday }: Props)
                       {m.brand ? ` · ${m.brand}` : ''}
                     </Text>
                     <Text style={styles.muted}>
-                      {m.slot}
+                      {m.slot.charAt(0).toUpperCase() + m.slot.slice(1)}
                       {m.reasons?.[0] ? ` · ${m.reasons[0]}` : ''}
                     </Text>
                   </View>
@@ -79,8 +87,8 @@ export function GoesWithSheet({ visible, anchor, onClose, onTryOnToday }: Props)
           )}
 
           <Button label="Close" block variant="ghost" onPress={onClose} />
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

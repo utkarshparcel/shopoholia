@@ -18,6 +18,7 @@ import {
 } from '@/src/lib/foundMoney';
 import { trackEvent } from '@/src/lib/analytics';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { closetAlertText } from '@/src/lib/closetScreenState';
 import { fontSans, fsBody, fsCaption, space4, text, textMuted } from '@/src/theme/tokens';
 
 export default function FamilyShareConfirmScreen() {
@@ -55,7 +56,7 @@ export default function FamilyShareConfirmScreen() {
       .catch((e: unknown) => {
         if (cancelled) return;
         setStatus('error');
-        setError(e instanceof Error ? e.message : 'Could not credit share');
+        setError(closetAlertText(e, 'Could not credit share'));
       });
     return () => {
       cancelled = true;

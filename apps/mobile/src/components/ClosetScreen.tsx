@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactElement, type ReactNode, type Ref } from 'react';
 import {
   Pressable,
   RefreshControl,
   ScrollView,
+  SectionList,
   StyleSheet,
   Text,
   View,
@@ -61,6 +62,27 @@ export type ClosetScreenState = {
   skeletonRows?: number;
 };
 
+/** One section of the screen's main list, drawn below the screen's other content. */
+export type ClosetListSection<T> = {
+  key: string;
+  header?: ReactElement | null;
+  data: readonly T[];
+  /** Shown in place of the rows when `data` is empty. */
+  empty?: ReactElement | null;
+};
+
+/**
+ * The screen's main list. The whole screen then scrolls as one virtualized SectionList with the
+ * header, states and children above the rows, so long lists are never nested in a ScrollView.
+ */
+export type ClosetScreenList<T> = {
+  sections: readonly ClosetListSection<T>[];
+  keyExtractor: (item: T) => string;
+  renderItem: (item: T) => ReactElement | null;
+  /** Called as the rows near their end, e.g. to load the next page. */
+  onEndReached?: () => void;
+};
+
 function ClosetSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <View
@@ -88,7 +110,7 @@ function RetryLink({ onPress }: { onPress: () => void }) {
   );
 }
 
-export function ClosetScreen({
+export function ClosetScreen<T = never>({
   title,
   subtitle,
   children,
@@ -108,10 +130,15 @@ export function ClosetScreen({
   offlineQueuedCount: offlineQueuedCountProp,
   onOfflineRetry,
   skeletonRows = 3,
+  list,
+  scrollRef,
 }: {
   title: string;
   subtitle?: string;
   children?: ReactNode;
+  list?: ClosetScreenList<T>;
+  /** The screen's ScrollView, for screens that scroll to a section (not used with `list`). */
+  scrollRef?: Ref<ScrollView>;
 } & ClosetScreenState) {
   const insets = useSafeAreaInsets();
   const { isOffline: netOffline } = useNetworkStatus();
@@ -235,40 +262,63 @@ export function ClosetScreen({
     </>
   );
 
-  if (onRefresh) {
+  // One scroller per screen, always: a plain View clipped everything below the fold.
+  const refreshControl = onRefresh ? (
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={() => void handleRefresh()}
+      tintColor={closet.accent}
+      colors={[closet.accent]}
+    />
+  ) : undefined;
+  const scrollStyle = [styles.scroll, { paddingTop: insets.top + space6 }];
+  const contentStyle = { paddingBottom: insets.bottom + 100, paddingHorizontal: space4 };
+
+  if (list) {
     return (
-      <ScrollView
-        style={[styles.scroll, { paddingTop: insets.top + space6 }]}
-        contentContainerStyle={{
-          paddingBottom: insets.bottom + 100,
-          paddingHorizontal: space4,
-        }}
+      <SectionList<T, ClosetListSection<T>>
+        style={scrollStyle}
+        contentContainerStyle={contentStyle}
         keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => void handleRefresh()}
-            tintColor={closet.accent}
-            colors={[closet.accent]}
-          />
+        automaticallyAdjustKeyboardInsets
+        refreshControl={refreshControl}
+        ListHeaderComponent={
+          <>
+            {header}
+            {body}
+          </>
         }
-      >
-        {header}
-        {body}
-      </ScrollView>
+        sections={mode === 'content' ? list.sections : []}
+        keyExtractor={list.keyExtractor}
+        renderItem={({ item }) => list.renderItem(item)}
+        renderSectionHeader={({ section }) => section.header ?? null}
+        renderSectionFooter={({ section }) =>
+          section.data.length === 0 ? (section.empty ?? null) : null
+        }
+        stickySectionHeadersEnabled={false}
+        onEndReached={list.onEndReached}
+        onEndReachedThreshold={0.5}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={9}
+        testID="closet-screen-list"
+      />
     );
   }
 
   return (
-    <View
-      style={[
-        styles.screen,
-        { paddingTop: insets.top + space6, paddingBottom: insets.bottom + 100 },
-      ]}
+    <ScrollView
+      ref={scrollRef}
+      style={scrollStyle}
+      contentContainerStyle={contentStyle}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
+      refreshControl={refreshControl}
+      testID="closet-screen-scroll"
     >
       {header}
       {body}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -322,11 +372,6 @@ const styles = StyleSheet.create({
     fontSize: fsCaption,
     fontWeight: '600',
     marginTop: space4,
-  },
-  screen: {
-    backgroundColor: closet.bg,
-    flex: 1,
-    paddingHorizontal: space4,
   },
   scroll: {
     backgroundColor: closet.bg,
