@@ -24,6 +24,7 @@ import {
   closet,
   fontDisplay,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   fsDisplayM,
@@ -271,54 +272,60 @@ export function ClosetScreen<T = never>({
       colors={[closet.accent]}
     />
   ) : undefined;
-  const scrollStyle = [styles.scroll, { paddingTop: insets.top + space6 }];
+  // The band above the scroller is fixed, so scrolled content stops below the status bar and the
+  // surface pill instead of sliding under them.
+  const frameStyle = [styles.frame, { paddingTop: insets.top + space6 }];
   const contentStyle = { paddingBottom: insets.bottom + 100, paddingHorizontal: space4 };
 
   if (list) {
     return (
-      <SectionList<T, ClosetListSection<T>>
-        style={scrollStyle}
-        contentContainerStyle={contentStyle}
-        keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
-        refreshControl={refreshControl}
-        ListHeaderComponent={
-          <>
-            {header}
-            {body}
-          </>
-        }
-        sections={mode === 'content' ? list.sections : []}
-        keyExtractor={list.keyExtractor}
-        renderItem={({ item }) => list.renderItem(item)}
-        renderSectionHeader={({ section }) => section.header ?? null}
-        renderSectionFooter={({ section }) =>
-          section.data.length === 0 ? (section.empty ?? null) : null
-        }
-        stickySectionHeadersEnabled={false}
-        onEndReached={list.onEndReached}
-        onEndReachedThreshold={0.5}
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={9}
-        testID="closet-screen-list"
-      />
+      <View style={frameStyle}>
+        <SectionList<T, ClosetListSection<T>>
+          style={styles.scroll}
+          contentContainerStyle={contentStyle}
+          keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          refreshControl={refreshControl}
+          ListHeaderComponent={
+            <>
+              {header}
+              {body}
+            </>
+          }
+          sections={mode === 'content' ? list.sections : []}
+          keyExtractor={list.keyExtractor}
+          renderItem={({ item }) => list.renderItem(item)}
+          renderSectionHeader={({ section }) => section.header ?? null}
+          renderSectionFooter={({ section }) =>
+            section.data.length === 0 ? (section.empty ?? null) : null
+          }
+          stickySectionHeadersEnabled={false}
+          onEndReached={list.onEndReached}
+          onEndReachedThreshold={0.5}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={9}
+          testID="closet-screen-list"
+        />
+      </View>
     );
   }
 
   return (
-    <ScrollView
-      ref={scrollRef}
-      style={scrollStyle}
-      contentContainerStyle={contentStyle}
-      keyboardShouldPersistTaps="handled"
-      automaticallyAdjustKeyboardInsets
-      refreshControl={refreshControl}
-      testID="closet-screen-scroll"
-    >
-      {header}
-      {body}
-    </ScrollView>
+    <View style={frameStyle}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={contentStyle}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+        refreshControl={refreshControl}
+        testID="closet-screen-scroll"
+      >
+        {header}
+        {body}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -329,18 +336,20 @@ const styles = StyleSheet.create({
   emptyAction: {
     marginTop: space4,
   },
+  frame: {
+    backgroundColor: closet.bg,
+    flex: 1,
+  },
   emptyTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
     marginBottom: 4,
   },
   errorTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
     marginBottom: 4,
   },
   offlineBanner: {
@@ -360,17 +369,15 @@ const styles = StyleSheet.create({
   },
   offlineQueued: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     lineHeight: 18,
     marginTop: 4,
   },
   retry: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginTop: space4,
   },
   scroll: {

@@ -16,6 +16,8 @@ import {
   bulkImportCanCancel,
   bulkImportProgressLabel,
   canDeleteClosetProfile,
+  formatCareRulesExpanded,
+  type CareRules,
   inferWardrobeAutoTag,
   INITIAL_BULK_IMPORT_PROGRESS,
   profileDeleteConfirmCopy,
@@ -84,7 +86,7 @@ import { ShoeBagRotationNudge } from '@/src/components/ShoeBagRotationNudge';
 import { MissingPieceShopSheet } from '@/src/components/MissingPieceShopSheet';
 import { PhotoDumpReview } from '@/src/components/PhotoDumpReview';
 import { useClosetStore } from '@/src/stores/closet';
-import { closet, fontSans, fsBody, fsCaption, radiusMd, space4 } from '@/src/theme/tokens';
+import { closet, fontSans, fontSansSemiBold, fsBody, fsCaption, radiusMd, space4 } from '@/src/theme/tokens';
 
 /** Photos picked at once; each is resized before upload. */
 const PICK_LIMIT = 20;
@@ -130,7 +132,8 @@ export default function ClosetWardrobeScreen() {
   const capsuleIds = useMemo(() => new Set(capsule.data?.itemIds ?? []), [capsule.data]);
   const { ask, promptElement } = usePrompt();
 
-  const [category, setCategory] = useState('shirt');
+  // Empty, so the placeholder shows: a preset 'shirt' read as typed text and tagged every photo a shirt.
+  const [category, setCategory] = useState('');
   const [brand, setBrand] = useState('');
   const [cost, setCost] = useState('');
   const [preparingPhotos, setPreparingPhotos] = useState(false);
@@ -201,7 +204,7 @@ export default function ClosetWardrobeScreen() {
 
   async function pickAndAdd() {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 1,
       allowsMultipleSelection: true,
       selectionLimit: PICK_LIMIT,
@@ -337,19 +340,18 @@ export default function ClosetWardrobeScreen() {
     const result =
       cam.status === 'granted'
         ? await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.85,
           })
         : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.85,
           });
     if (result.canceled || !result.assets?.[0]?.uri) return;
     const imageUri = result.assets[0].uri;
     await track(`${item.id}:care`, 'Could not read care tag', async () => {
       const res = await careOcr.mutateAsync({ id: item.id, imageUri });
-      const r = res.careRules;
-      Alert.alert('Care label saved', `Wash ${r.wash} · Dry ${r.dry} · Iron ${r.iron} · Dry-clean ${r.dryClean}`);
+      Alert.alert('Care label saved', formatCareRulesExpanded(res.careRules as CareRules));
     });
   }
 
@@ -708,6 +710,29 @@ export default function ClosetWardrobeScreen() {
     </View>
   );
 
+  // The empty state draws the add form but not the screen's children, so the sheets its buttons open
+  // go with the form; otherwise a first import or "Complete look" on an empty closet showed nothing.
+  const addSheets = (
+    <>
+      {showCompleteLook ? (
+        <CompleteLookSheet visible onClose={() => setShowCompleteLook(false)} />
+      ) : null}
+      <AutotagConfirmSheet
+        visible={showAutotag}
+        drafts={autotagDrafts}
+        onCancel={() => {
+          setShowAutotag(false);
+          setAutotagDrafts([]);
+        }}
+        onConfirm={(drafts) => {
+          setShowAutotag(false);
+          setAutotagDrafts([]);
+          runBulkImport(drafts);
+        }}
+      />
+    </>
+  );
+
   const sections: ClosetListSection<WardrobeItem>[] = [
     ...(laundryBasket.length > 0
       ? [
@@ -774,6 +799,7 @@ export default function ClosetWardrobeScreen() {
             />
           ) : null}
           {promptElement}
+          {addSheets}
         </View>
       }
       onRefresh={onRefresh}
@@ -795,7 +821,7 @@ export default function ClosetWardrobeScreen() {
         <Button
           label="All"
           size="sm"
-          variant={activeProfileId == null ? 'secondary' : 'ghost'}
+          variant={activeProfileId == null ? 'primary' : 'ghost'}
           onPress={() => setActiveProfileId(null)}
         />
         {(profiles.data?.profiles ?? []).map((p) => (
@@ -803,7 +829,7 @@ export default function ClosetWardrobeScreen() {
             key={p.id}
             label={p.name}
             size="sm"
-            variant={activeProfileId === p.id ? 'secondary' : 'ghost'}
+            variant={activeProfileId === p.id ? 'primary' : 'ghost'}
             onPress={() => setActiveProfileId(p.id)}
             onLongPress={() => {
               if (!canDeleteClosetProfile(p)) {
@@ -896,22 +922,7 @@ export default function ClosetWardrobeScreen() {
       <PhotoDumpReview />
       <ShoeBagRotationNudge />
       <MissingPieceShopSheet />
-      {showCompleteLook ? (
-        <CompleteLookSheet visible onClose={() => setShowCompleteLook(false)} />
-      ) : null}
-      <AutotagConfirmSheet
-        visible={showAutotag}
-        drafts={autotagDrafts}
-        onCancel={() => {
-          setShowAutotag(false);
-          setAutotagDrafts([]);
-        }}
-        onConfirm={(drafts) => {
-          setShowAutotag(false);
-          setAutotagDrafts([]);
-          runBulkImport(drafts);
-        }}
-      />
+      {addSheets}
       <WardrobeItemActionsSheet
         item={moreItem}
         metric={moreItem ? metricsById.get(moreItem.id) : undefined}
@@ -958,7 +969,7 @@ const styles = StyleSheet.create({
     padding: space4,
   },
   bannerLabel: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption },
-  bannerValue: { color: closet.ink, fontFamily: fontSans, fontSize: 24, fontWeight: '700' },
+  bannerValue: { color: closet.ink, fontFamily: fontSansSemiBold, fontSize: 24 },
   form: { gap: space4, marginBottom: space4 },
   importBox: {
     backgroundColor: closet.accentBg,
@@ -978,12 +989,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   muted: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 2 },
-  row: { flexDirection: 'row', gap: space4, marginTop: space4, flexWrap: 'wrap' },
+  row: { flexDirection: 'row', gap: 8, marginTop: space4, flexWrap: 'wrap' },
   sectionHead: { marginBottom: space4, marginTop: space4 },
   sectionTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
 });

@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
     width: 80,
   },
   emptyIconText: {
-    color: '#888078',
+    color: '#6e6861',
     fontSize: 32,
   },
   emptyState: {

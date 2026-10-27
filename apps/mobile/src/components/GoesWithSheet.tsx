@@ -7,6 +7,7 @@ import type { WardrobeItem } from '@/src/api/client';
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -101,9 +102,8 @@ const styles = StyleSheet.create({
   },
   cta: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
   lead: {
     color: closet.muted,
@@ -127,9 +127,8 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, gap: 2 },
   rowTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
   },
   sheet: {
     backgroundColor: closet.bg,
@@ -149,8 +148,7 @@ const styles = StyleSheet.create({
   thumbEmpty: { borderColor: closet.rule, borderWidth: 1 },
   title: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
 });

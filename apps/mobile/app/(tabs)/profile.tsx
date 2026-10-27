@@ -451,7 +451,7 @@ const styles = StyleSheet.create({
     color: '#3a7d5c',
   },
   stateText: {
-    color: '#9c7a4e',
+    color: '#806440',
     fontFamily: fontMono,
     fontSize: 9,
     letterSpacing: 1,

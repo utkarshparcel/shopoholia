@@ -12,6 +12,7 @@ import {
   accentSoft,
   border,
   fontSans,
+  fontSansSemiBold,
   fsCaption,
   radiusPill,
   text,
@@ -74,9 +75,8 @@ const styles = StyleSheet.create({
   active: { borderColor: accentSoft },
   label: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
   activeLabel: { color: accent },
   sub: { color: textMuted, fontFamily: fontSans, fontSize: 11 },

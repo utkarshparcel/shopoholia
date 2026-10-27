@@ -16,7 +16,7 @@ import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenStat
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { initialSelections, optionGroups, parseTemplateOptions, selectionSummary } from '@/src/lib/fitOptions';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
-import { bg, border, radiusMd, fontSans, fsBody, fsCaption, text, textMuted, surface, space4 } from '@/src/theme/tokens';
+import { accent, accentBg, bg, border, radiusMd, fontSans, fontSansSemiBold, fsBody, fsCaption, text, textMuted, surface, space4 } from '@/src/theme/tokens';
 
 const ORDER_STATE_LABEL: Record<string, string> = {
   PENDING: 'Waiting for the tailor',
@@ -270,7 +270,7 @@ export default function FitVaultScreen() {
 }
 
 const styles = StyleSheet.create({
-  section: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '700', marginBottom: space4 },
+  section: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody, marginBottom: space4 },
   form: { gap: space4, marginBottom: space4 },
   input: {
     backgroundColor: bg,
@@ -291,8 +291,8 @@ const styles = StyleSheet.create({
     padding: space4,
     marginBottom: space4,
   },
-  cardActive: { borderColor: '#6aa6ff' },
-  title: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  cardActive: { borderColor: accent },
+  title: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
   muted: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   pickerBlock: { gap: 8 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -305,8 +305,8 @@ const styles = StyleSheet.create({
     backgroundColor: bg,
     maxWidth: '48%',
   },
-  chipActive: { borderColor: '#6aa6ff', backgroundColor: surface },
-  chipText: { color: text, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
-  chipTextActive: { color: '#6aa6ff' },
-  previewNote: { color: text, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
+  chipActive: { borderColor: accent, backgroundColor: accentBg },
+  chipText: { color: text, fontFamily: fontSansSemiBold, fontSize: fsCaption },
+  chipTextActive: { color: accent },
+  previewNote: { color: text, fontFamily: fontSansSemiBold, fontSize: fsCaption },
 });

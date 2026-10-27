@@ -17,6 +17,7 @@ import { cashbackClaimStartUrl } from '@worn/shared';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -183,7 +184,7 @@ export function CashbackClaimsPanel() {
 
 const styles = StyleSheet.create({
   wrap: { gap: space4, marginTop: space4 },
-  heading: { fontFamily: fontSans, fontSize: fsBody, color: text, fontWeight: '600' },
+  heading: { fontFamily: fontSansSemiBold, fontSize: fsBody, color: text },
   sub: { fontFamily: fontSans, fontSize: fsCaption, color: textMuted },
   form: { gap: space4, marginVertical: space4 },
   input: {

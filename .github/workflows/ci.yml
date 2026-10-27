@@ -102,6 +102,18 @@ jobs:
       - name: Pentest readiness (threat model; no fake third-party report)
         run: node scripts/check-pentest-readiness.mjs
 
+      # A release export needs packages/shared/dist (built above) and babel-preset-expo; this
+      # catches either going missing, and any local URL left in the bundle.
+      - name: Mobile release bundle (ios export, no local URLs)
+        working-directory: apps/mobile
+        run: |
+          pnpm exec expo export --platform ios --no-bytecode --source-maps --output-dir dist-release
+          pnpm run check:release-bundle dist-release
+        env:
+          EXPO_PUBLIC_API_URL: https://api.example.com
+          WORN_RELEASE_BUILD: "1"
+          EXPO_NO_TELEMETRY: "1"
+
   migrations:
     runs-on: ubuntu-latest
     steps:

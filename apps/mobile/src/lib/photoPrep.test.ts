@@ -7,12 +7,15 @@ const calls = vi.hoisted(() => ({
   active: 0,
   maxActive: 0,
   failUri: null as string | null,
+  /** What decoding the photo finds, for callers that pass no size. */
+  decoded: { width: 1, height: 1 },
 }));
 
 vi.mock('expo-image-manipulator', () => ({
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
   ImageManipulator: {
-    manipulate: (uri: string) => {
+    manipulate: (source: string | { uri: string }) => {
+      const uri = typeof source === 'string' ? source : source.uri;
       const context = {
         resize: (size: unknown) => {
           calls.resize.push(size);
@@ -25,6 +28,8 @@ vi.mock('expo-image-manipulator', () => ({
           calls.active -= 1;
           if (uri === calls.failUri) throw new Error('decode failed');
           return {
+            uri,
+            ...calls.decoded,
             saveAsync: async (opts: unknown) => {
               calls.save.push(opts);
               return { uri: `${uri}.jpg`, width: 1, height: 1 };
@@ -58,6 +63,7 @@ beforeEach(() => {
   calls.active = 0;
   calls.maxActive = 0;
   calls.failUri = null;
+  calls.decoded = { width: 1, height: 1 };
 });
 
 describe('uploadResize', () => {
@@ -76,6 +82,22 @@ describe('preparePhotoForUpload', () => {
       'file:///a.jpg',
     );
     expect(calls.resize).toEqual([{ width: UPLOAD_LONG_EDGE }]);
+    expect(calls.save).toEqual([{ format: 'jpeg', compress: 0.8 }]);
+    expect(calls.released).toBe(2);
+  });
+
+  it('resizes a photo passed without its size once decoding shows it is too big', async () => {
+    calls.decoded = { width: 3024, height: 4032 };
+    await expect(preparePhotoForUpload({ uri: 'file:///big' })).resolves.toBe('file:///big.jpg');
+    expect(calls.resize).toEqual([{ height: UPLOAD_LONG_EDGE }]);
+    expect(calls.save).toEqual([{ format: 'jpeg', compress: 0.8 }]);
+    expect(calls.released).toBe(4);
+  });
+
+  it('re-encodes a small photo passed without its size, without resizing it', async () => {
+    calls.decoded = { width: 800, height: 600 };
+    await expect(preparePhotoForUpload({ uri: 'file:///small' })).resolves.toBe('file:///small.jpg');
+    expect(calls.resize).toEqual([]);
     expect(calls.save).toEqual([{ format: 'jpeg', compress: 0.8 }]);
     expect(calls.released).toBe(2);
   });

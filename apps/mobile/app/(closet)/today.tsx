@@ -96,11 +96,14 @@ import {
 } from '@/src/lib/todayWow';
 import {
   closet,
+  fontMono,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   fsMicro,
   radiusMd,
+  space2,
   space3,
   space4,
 } from '@/src/theme/tokens';
@@ -238,11 +241,11 @@ export default function ClosetTodayScreen() {
       const result =
         cam.status === 'granted'
           ? await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              mediaTypes: ['images'],
               quality: 0.8,
             })
           : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              mediaTypes: ['images'],
               quality: 0.8,
             });
       if (result.canceled || !result.assets?.[0]?.uri) return;
@@ -1062,7 +1065,7 @@ export default function ClosetTodayScreen() {
             {weatherLine(outfit.weatherCtx)}
           </Text>
           <Text style={styles.muted}>
-            Generated {new Date(outfit.generatedAt).toLocaleTimeString()}
+            Generated {new Date(outfit.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             {outfit.plannedFor ? ` · ${formatDayKey(outfit.plannedFor)}` : ''}
           </Text>
 
@@ -1248,9 +1251,8 @@ const styles = StyleSheet.create({
   altLabel: {
     color: closet.muted,
     flex: 1,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     textAlign: 'center',
   },
   swipeRow: {
@@ -1295,7 +1297,7 @@ const styles = StyleSheet.create({
   dayChipWork: {
     borderColor: closet.accent,
   },
-  dayDate: { color: closet.ink, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
+  dayDate: { color: closet.ink, fontFamily: fontSansSemiBold, fontSize: fsCaption },
   dayDot: {
     backgroundColor: closet.mist,
     borderRadius: 3,
@@ -1319,9 +1321,8 @@ const styles = StyleSheet.create({
   },
   avoidChipText: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
   },
   chipRow: {
     flexDirection: 'row',
@@ -1340,9 +1341,8 @@ const styles = StyleSheet.create({
   },
   rerollBanner: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
   },
   rerollBannerBtn: {
     backgroundColor: closet.accentBg,
@@ -1355,9 +1355,8 @@ const styles = StyleSheet.create({
   },
   rerollCta: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
   row: { marginTop: space4 },
   thumb: {
@@ -1368,9 +1367,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   wearThumb: {
     width: '100%',
@@ -1378,21 +1376,21 @@ const styles = StyleSheet.create({
     borderRadius: radiusMd,
     backgroundColor: closet.mist,
   },
+  // The site's eyebrow: DM Mono, uppercase, wide tracking.
   weekLabel: {
-    color: closet.muted,
-    fontFamily: fontSans,
-    fontSize: fsCaption,
-    fontWeight: '600',
-    marginBottom: 8,
+    color: closet.accent,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: fsMicro * 0.2,
+    textTransform: 'uppercase',
   },
   weekRow: { gap: space4, marginBottom: space4 },
   weekStrip: { gap: 8 },
-  weekActions: { flexDirection: 'row', flexWrap: 'wrap', gap: space4 },
+  weekActions: { flexDirection: 'row', flexWrap: 'wrap', gap: space2 },
   workBadge: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsMicro,
-    fontWeight: '700',
     letterSpacing: 0.4,
   },
   workwearBanner: {
@@ -1412,9 +1410,8 @@ const styles = StyleSheet.create({
   },
   packageTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   whyBox: {
     backgroundColor: closet.accentBg,
@@ -1424,9 +1421,8 @@ const styles = StyleSheet.create({
   },
   whyLabel: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
     marginBottom: 4,
   },
   whyLine: {

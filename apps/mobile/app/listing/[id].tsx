@@ -418,7 +418,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   tagText: {
-    color: '#9c7a4e',
+    color: '#806440',
     fontFamily: fontMono,
     fontSize: 8,
     letterSpacing: 0.8,

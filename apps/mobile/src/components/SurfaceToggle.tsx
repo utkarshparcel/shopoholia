@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SurfaceEduSheet } from '@/src/components/SurfaceEduSheet';
 import { FEATURE_CLOSET } from '@/src/lib/features';
@@ -23,6 +24,7 @@ function closetLandingHref(): '/(closet)/onboarding' | '/(closet)/today' {
 
 export function SurfaceToggle() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const activeSurface = useSessionStore((s) => s.activeSurface);
   const setActiveSurface = useSessionStore((s) => s.setActiveSurface);
   const surfaceEduSeen = useClosetPrefsStore((s) => s.surfaceEduSeen);
@@ -61,7 +63,8 @@ export function SurfaceToggle() {
   const target: Surface = activeSurface === 'play' ? 'closet' : 'play';
 
   return (
-    <View style={styles.wrap}>
+    // Below the status bar: there it covered the clock or battery and taps never reached it.
+    <View style={[styles.wrap, { paddingTop: insets.top }]}>
       <Pressable
         accessibilityLabel={`Switch to ${target} surface`}
         accessibilityRole="button"
@@ -110,7 +113,6 @@ const styles = StyleSheet.create({
     pointerEvents: 'box-none',
     backgroundColor: 'transparent',
     paddingHorizontal: space3,
-    paddingTop: 8,
     position: 'absolute',
     right: 0,
     top: 0,

@@ -13,6 +13,7 @@ import {
   border,
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -68,9 +69,8 @@ const styles = StyleSheet.create({
   wrap: { gap: space3, marginBottom: space4 },
   section: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
   lead: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   card: {
@@ -83,9 +83,8 @@ const styles = StyleSheet.create({
   },
   headline: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   body: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
 });

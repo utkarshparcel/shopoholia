@@ -40,6 +40,7 @@ import { useSessionStore } from '@/src/stores/session';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   space4,
@@ -546,9 +547,8 @@ const styles = StyleSheet.create({
   },
   grantsTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   grantRow: {
     flexDirection: 'row',
@@ -571,9 +571,8 @@ const styles = StyleSheet.create({
   },
   grantScope: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   grantStatus: {
     color: textMuted,

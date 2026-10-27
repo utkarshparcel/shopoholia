@@ -29,6 +29,7 @@ import { useSessionStore } from '@/src/stores/session';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusCard,
@@ -207,9 +208,8 @@ const styles = StyleSheet.create({
   },
   link: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     textDecorationLine: 'underline',
   },
   linkRow: {
@@ -222,8 +222,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
 });

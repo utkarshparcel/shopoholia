@@ -24,7 +24,7 @@ import { SurfaceToggle } from '@/src/components/SurfaceToggle';
 import { PurchasesRoot } from '@/src/lib/purchases/PurchasesRoot';
 import { useClosetStore } from '@/src/stores/closet';
 import { startSessionTokenPersistence, useSessionStore } from '@/src/stores/session';
-import { bg, closet, fontSans, fsCaption, space3, space4 } from '@/src/theme/tokens';
+import { bg, closet, fontSans, fontSansSemiBold, fsCaption, space3, space4 } from '@/src/theme/tokens';
 
 export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
 
@@ -134,12 +134,11 @@ export default function RootLayout() {
       void m.initDelightHaptics();
     });
     // Android: Closet notification channels per category (NOTIF-RICH).
-    void import('react-native').then(({ Platform }) => {
-      if (Platform.OS !== 'android') return;
+    if (Platform.OS === 'android') {
       void import('@/src/lib/androidChannels').then((m) => {
         void m.ensureAndroidNotificationChannels();
       });
-    });
+    }
     void trackInstallOnce();
   }, []);
 
@@ -248,9 +247,8 @@ export default function RootLayout() {
                 onPress={clearRestoreFallbackToast}
                 style={{
                   color: closet.found,
-                  fontFamily: fontSans,
+                  fontFamily: fontSansSemiBold,
                   fontSize: fsCaption,
-                  fontWeight: '700',
                 }}
               >
                 Dismiss

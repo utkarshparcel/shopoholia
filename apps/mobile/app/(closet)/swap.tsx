@@ -28,6 +28,7 @@ import { useSessionStore } from '@/src/stores/session';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -283,9 +284,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   body: {
     color: text,

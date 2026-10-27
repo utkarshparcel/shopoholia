@@ -18,6 +18,7 @@ import { useClosetStore } from '@/src/stores/closet';
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -145,8 +146,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
 });

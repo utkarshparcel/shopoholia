@@ -12,9 +12,10 @@ const NAV_ITEMS: BottomNavItem[] = [
   { key: 'today', label: 'Today', icon: '◷' },
   { key: 'wardrobe', label: 'Wardrobe', icon: '▤' },
   { key: 'vault', label: 'Vault', icon: '◰' },
-  { key: 'accountant', label: 'Money', icon: '∑' },
+  { key: 'accountant', label: 'Accountant', icon: '∑' },
   { key: 'recipients', label: 'Gifts', icon: '♡' },
-  { key: 'fit', label: 'Fit', icon: '✂' },
+  // U+FE0E asks for the text glyph: iOS otherwise draws ✂ as a red emoji among line icons.
+  { key: 'fit', label: 'Fit', icon: '✂︎' },
   { key: 'disposition', label: 'Market', icon: '⇄' },
 ];
 

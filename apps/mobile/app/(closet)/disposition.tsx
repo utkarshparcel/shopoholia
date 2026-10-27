@@ -40,9 +40,12 @@ import {
 import { trackEvent } from '@/src/lib/analytics';
 import { useClosetStore } from '@/src/stores/closet';
 import {
+  accent,
   accentBg,
   border,
+  fontMono,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   fsMicro,
@@ -433,10 +436,11 @@ export default function DispositionMarketplaceScreen() {
 
 const styles = StyleSheet.create({
   banner: {
-    backgroundColor: '#f6fff6',
-    borderColor: '#b6e1b6',
+    backgroundColor: surface,
+    borderColor: border,
     borderRadius: radiusMd,
     borderWidth: 1,
+    marginBottom: space4,
     marginTop: space4,
     padding: space4,
   },
@@ -459,9 +463,8 @@ const styles = StyleSheet.create({
   },
   challenge: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginTop: 6,
   },
   hero: {
@@ -472,23 +475,23 @@ const styles = StyleSheet.create({
     marginBottom: space4,
     padding: space4,
   },
+  // The site's eyebrow: DM Mono, uppercase, wide tracking.
   heroLabel: {
-    color: textMuted,
-    fontFamily: fontSans,
-    fontSize: fsCaption,
-    letterSpacing: 0.6,
+    color: accent,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: fsMicro * 0.2,
     textTransform: 'uppercase',
   },
   heroValue: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: 32,
-    fontWeight: '700',
     marginTop: 4,
   },
   muted: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, lineHeight: 18, marginTop: 4 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: space4 },
-  title: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  title: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
   watermark: {
     color: textMuted,
     fontFamily: fontSans,

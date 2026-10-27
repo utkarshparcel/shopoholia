@@ -12,6 +12,7 @@ import { FEATURE_CLOSET } from '@/src/lib/features';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusCard,
@@ -133,9 +134,8 @@ const styles = StyleSheet.create({
   },
   heading: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   subName: {
     color: text,

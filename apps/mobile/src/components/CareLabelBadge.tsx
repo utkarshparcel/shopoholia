@@ -9,6 +9,7 @@ import { careLabelBadge, formatCareRulesExpanded, type CareRules } from '@worn/s
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsCaption,
   radiusMd,
   space1,
@@ -69,9 +70,8 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
   },
   expanded: {
     color: closet.muted,

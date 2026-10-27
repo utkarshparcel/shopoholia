@@ -29,6 +29,8 @@ import { closetAlertText } from '@/src/lib/closetScreenState';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
+  fontSansMedium,
   fsBody,
   fsCaption,
   radiusMd,
@@ -430,10 +432,9 @@ export function PackagesPanel() {
 
 const styles = StyleSheet.create({
   sectionTitle: {
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
     color: text,
-    fontWeight: '600',
     marginBottom: space4,
   },
   hint: {
@@ -458,10 +459,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   merchant: {
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
     color: text,
-    fontWeight: '600',
   },
   meta: {
     fontFamily: fontSans,
@@ -474,10 +474,9 @@ const styles = StyleSheet.create({
     color: text,
   },
   differ: {
-    fontFamily: fontSans,
+    fontFamily: fontSansMedium,
     fontSize: fsCaption,
     color: text,
-    fontWeight: '500',
   },
   ctaRow: {
     gap: 8,
@@ -503,9 +502,8 @@ const styles = StyleSheet.create({
   },
   timelineLabel: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginLeft: 12,
     paddingBottom: 8,
   },

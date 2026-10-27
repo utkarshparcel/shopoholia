@@ -25,6 +25,7 @@ import {
   border,
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -47,7 +48,7 @@ export function PhotoDumpReview() {
 
   async function startDump() {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
       allowsMultipleSelection: true,
       selectionLimit: 50,
@@ -160,9 +161,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   muted: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   body: { color: text, fontFamily: fontSans, fontSize: fsCaption },

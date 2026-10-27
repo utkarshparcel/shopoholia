@@ -166,6 +166,7 @@ import { useSessionStore } from '@/src/stores/session';
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -969,11 +970,11 @@ function CreditsKindTab({
 
   async function photoCaptureCard() {
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.7,
     }).catch(async () =>
       ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         quality: 0.7,
       }),
     );
@@ -2685,24 +2686,21 @@ const styles = StyleSheet.create({
   },
   bannerLabel: {
     color: closet.found,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
   bannerTotal: {
     color: closet.found,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: 36,
-    fontWeight: '700',
     marginTop: space4,
   },
   bannerValue: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     lineHeight: 26,
     marginTop: 6,
   },
@@ -2736,9 +2734,8 @@ const styles = StyleSheet.create({
   },
   balance: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
     marginTop: 4,
   },
   empty: {
@@ -2752,9 +2749,8 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   expiry: {
     color: textMuted,
@@ -2788,9 +2784,8 @@ const styles = StyleSheet.create({
   },
   merchant: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
     flexShrink: 1,
     paddingRight: 8,
   },
@@ -2807,9 +2802,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     marginBottom: space4,
   },
   tabs: {
@@ -2829,9 +2823,8 @@ const styles = StyleSheet.create({
   },
   connectTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   urgency: {
     backgroundColor: '#fff8eb',
@@ -2876,8 +2869,7 @@ const styles = StyleSheet.create({
   },
   recheckTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
 });

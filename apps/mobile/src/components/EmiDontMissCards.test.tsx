@@ -28,6 +28,10 @@ vi.mock('@/src/lib/analytics', () => ({
   trackEvent: vi.fn(),
 }));
 
+vi.mock('@/src/lib/closetAlert', () => ({
+  alertClosetError: vi.fn(),
+}));
+
 describe('EmiDontMissCards (W030 / U007)', () => {
   it('renders SMS paste + due board with mark paid', () => {
     const now = new Date('2026-08-26T12:00:00.000Z');

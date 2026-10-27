@@ -25,7 +25,7 @@ import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenStat
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { cpwGoalNudgeCopy } from '@/src/lib/cpwGoals';
 import { formatClosetDate } from '@/src/lib/format';
-import { accent, bg, border, fontSans, fsBody, fsCaption, radiusMd, space3, space4, space6, surface, text, textMuted } from '@/src/theme/tokens';
+import { accent, bg, border, fontSans, fontSansSemiBold, fsBody, fsCaption, radiusMd, space3, space4, space6, surface, text, textMuted } from '@/src/theme/tokens';
 
 const CATEGORIES = ['APPAREL', 'FOOTWEAR', 'ACCESSORIES', 'BEAUTY', 'GENERAL'] as const;
 const PERIODS = ['MONTHLY', 'QUARTERLY'] as const;
@@ -139,10 +139,7 @@ export default function ClosetAccountantScreen() {
 
   const isLoading = summaryLoading || ledgerLoading;
   const isError = summaryError || ledgerError;
-  const errorMessage =
-    (summaryErr as Error | undefined)?.message ??
-    (ledgerErr as Error | undefined)?.message ??
-    true;
+  const errorMessage = closetAlertText(summaryErr ?? ledgerErr);
   const hasSpend = (summary?.totalSpendMinor ?? 0) > 0 || (summary?.spendByCategory?.length ?? 0) > 0;
   const hasLedger = (ledger?.entries?.length ?? 0) > 0;
   const hasBudgets = (budgetsData?.budgets?.length ?? 0) > 0 || (summary?.budgets?.length ?? 0) > 0;
@@ -413,21 +410,21 @@ export default function ClosetAccountantScreen() {
 
 const styles = StyleSheet.create({
   nudge: { backgroundColor: '#fff1d6', borderRadius: radiusMd, padding: space4, marginBottom: space4, borderWidth: 1, borderColor: '#ffd99e' },
-  nudgeText: { color: '#7a4a00', fontFamily: fontSans, fontSize: fsCaption, fontWeight: '600' },
+  nudgeText: { color: '#7a4a00', fontFamily: fontSansSemiBold, fontSize: fsCaption },
   banner: { backgroundColor: surface, borderColor: border, borderRadius: radiusMd, borderWidth: 1, marginBottom: space4, padding: space4 },
   bannerLabel: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
-  bannerValue: { color: text, fontFamily: fontSans, fontSize: 28, fontWeight: '700' },
+  bannerValue: { color: text, fontFamily: fontSansSemiBold, fontSize: 28 },
   bannerSub: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 4 },
   row: { flexDirection: 'row', gap: space4, marginBottom: space4 },
   card: { backgroundColor: surface, borderColor: border, borderRadius: radiusMd, borderWidth: 1, marginBottom: space4, padding: space4 },
   cardHalf: { flex: 1 },
   cardLabel: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
-  cardValue: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '700', marginTop: 4 },
-  sectionTitle: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '700', marginTop: space6, marginBottom: space4 },
+  cardValue: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody, marginTop: 4 },
+  sectionTitle: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody, marginTop: space6, marginBottom: space4 },
   muted: { color: textMuted, fontFamily: fontSans, fontSize: fsBody },
   exportError: { color: '#b3261e', fontFamily: fontSans, fontSize: fsCaption, marginTop: 4 },
-  merchant: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
-  balance: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600', marginTop: 2 },
+  merchant: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
+  balance: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody, marginTop: 2 },
   expiry: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 2 },
   form: { gap: space4, marginTop: space4 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space3 },

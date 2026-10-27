@@ -1,13 +1,13 @@
 /**
  * WORN — Design Tokens (v1.0)
  * Premium editorial e-commerce · light · warm-paper base · gold accent
- * Closet mode: calm slate-teal utility palette
+ * Closet mode: the same warm-paper palette as the site's /closet page
  * Enhanced with motion, haptics, and accessibility tokens
  */
 
 import { Platform } from 'react-native';
 
-// ── Brand Palette (Worn Play) ────────────────────────────────
+// ── Brand Palette (Worn Play) — mirrors apps/web tailwind `worn` ──
 export const wornInk = '#0f0e0c' as const;
 export const wornInkSoft = '#2a2722' as const;
 export const wornPaper = '#faf8f5' as const;
@@ -15,40 +15,40 @@ export const wornSurface = '#ffffff' as const;
 export const wornWarm = '#f0ece4' as const;
 export const wornWarmDeep = '#e8e1d6' as const;
 export const wornRule = '#e0dbd2' as const;
-export const wornMuted = '#888078' as const;
+export const wornMuted = '#6e6861' as const;
 export const wornGold = '#c8a87a' as const;
-export const wornGoldDeep = '#9c7a4e' as const;
+export const wornGoldDeep = '#806440' as const;
 export const wornGoldTint = '#fdf7ee' as const;
 export const wornSale = '#d64e2a' as const;
 export const wornSuccess = '#3a7d5c' as const;
 export const wornCoin = '#c8a87a' as const;
-export const wornCoinDeep = '#9c7a4e' as const;
+export const wornCoinDeep = '#806440' as const;
 
-// ── Closet Palette (Calm Utility) ────────────────────────────
-export const closetInk = '#1a2332' as const;
-export const closetInkSoft = '#3d4a5c' as const;
-export const closetBg = '#eef2f5' as const;
-export const closetSurface = '#f7f9fb' as const;
-export const closetMist = '#e2e8ee' as const;
-export const closetRule = '#c5d0d6' as const;
-export const closetMuted = '#6b7a8d' as const;
-export const closetAccent = '#2f6f6a' as const;
-export const closetAccentSoft = '#4a9a93' as const;
-export const closetAccentBg = '#e4f0ee' as const;
-export const closetFound = '#1f6b4a' as const;
+// ── Closet Palette — the site's /closet page is warm paper, ink and gold ──
+export const closetInk = wornInk;
+export const closetInkSoft = wornInkSoft;
+export const closetBg = wornPaper;
+export const closetSurface = wornSurface;
+export const closetMist = wornWarm;
+export const closetRule = wornRule;
+export const closetMuted = wornMuted;
+export const closetAccent = wornGoldDeep;
+export const closetAccentSoft = wornGold;
+export const closetAccentBg = wornGoldTint;
+export const closetFound = wornSuccess;
 
-// Dark variants for Closet
-export const closetInkDark = '#e8eef4' as const;
-export const closetInkSoftDark = '#b7c2cf' as const;
-export const closetBgDark = '#0f1419' as const;
-export const closetSurfaceDark = '#1a222c' as const;
-export const closetMistDark = '#243040' as const;
-export const closetRuleDark = '#3a4758' as const;
-export const closetMutedDark = '#8b9aab' as const;
-export const closetAccentDark = '#5eb8b0' as const;
-export const closetAccentSoftDark = '#3d8f88' as const;
-export const closetAccentBgDark = '#1a3331' as const;
-export const closetFoundDark = '#4ecf9a' as const;
+// Dark variants for Closet (warm ink, not slate)
+export const closetInkDark = '#f3efe8' as const;
+export const closetInkSoftDark = '#d8d1c6' as const;
+export const closetBgDark = '#0f0e0c' as const;
+export const closetSurfaceDark = '#1a1815' as const;
+export const closetMistDark = '#24211d' as const;
+export const closetRuleDark = '#3a352f' as const;
+export const closetMutedDark = '#a39b91' as const;
+export const closetAccentDark = '#c8a87a' as const;
+export const closetAccentSoftDark = '#9c7a4e' as const;
+export const closetAccentBgDark = '#2a2219' as const;
+export const closetFoundDark = '#6fbf93' as const;
 
 export const closetDark = {
   ink: closetInkDark,

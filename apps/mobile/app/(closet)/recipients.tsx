@@ -5,7 +5,7 @@ import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { useRecipients, useCreateRecipient, useRecipientIdeas, useCreateGiftOrder } from '@/src/hooks/closet/useCloset';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
-import { bg, border, radiusMd, fontSans, fsBody, fsCaption, text, textMuted, surface, space4 } from '@/src/theme/tokens';
+import { bg, border, radiusMd, fontSans, fontSansSemiBold, fsBody, fsCaption, text, textMuted, surface, space4 } from '@/src/theme/tokens';
 
 const RELATIONSHIPS = [
   { value: 'FAMILY', label: 'Family' },
@@ -55,7 +55,7 @@ export default function RecipientsScreen() {
             />
           ))}
         </View>
-        <TextInput style={styles.input} placeholder="Taste tags csv e.g. saree, kurta, floral" placeholderTextColor={textMuted} value={taste} onChangeText={setTaste} />
+        <TextInput style={styles.input} placeholder="What they like, e.g. saree, kurta, floral" placeholderTextColor={textMuted} value={taste} onChangeText={setTaste} />
         <Button label={create.isPending ? 'Saving…' : 'Add recipient'} block disabled={create.isPending} onPress={handleCreate} />
       </View>
       <View style={{ marginTop: space4 }}>
@@ -96,9 +96,9 @@ const styles = StyleSheet.create({
   chips:{ flexDirection:'row', flexWrap:'wrap', gap: 8 },
   input:{ backgroundColor: bg, borderColor: border, borderRadius: radiusMd, borderWidth:1, color:text, fontFamily:fontSans, fontSize:fsBody, paddingHorizontal:12, paddingVertical:10 },
   card:{ backgroundColor:surface, borderColor:border, borderRadius:radiusMd, borderWidth:1, padding:space4, marginBottom:space4 },
-  title:{ color:text, fontFamily:fontSans, fontSize:fsBody, fontWeight:'600' },
+  title:{ color:text, fontFamily: fontSansSemiBold, fontSize:fsBody },
   muted:{ color:textMuted, fontFamily:fontSans, fontSize:fsCaption },
-  countdown:{ color:text, fontFamily:fontSans, fontSize:fsCaption, fontWeight:'600', marginTop:4 },
+  countdown:{ color:text, fontFamily: fontSansSemiBold, fontSize:fsCaption, marginTop:4 },
   row:{ flexDirection:'row', gap:space4, marginTop:space4 },
   idea:{ borderTopColor:border, borderTopWidth:1, marginTop:space4, paddingTop:space4, gap:4 },
 });

@@ -36,6 +36,7 @@ import { newIdempotencyKey } from '@/src/lib/idempotency';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -354,7 +355,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   label: { fontFamily: fontSans, fontSize: fsCaption, color: textMuted },
-  title: { fontFamily: fontSans, fontSize: fsBody, color: text, fontWeight: '600' },
+  title: { fontFamily: fontSansSemiBold, fontSize: fsBody, color: text },
   muted: { fontFamily: fontSans, fontSize: fsCaption, color: textMuted },
   input: {
     borderWidth: StyleSheet.hairlineWidth,

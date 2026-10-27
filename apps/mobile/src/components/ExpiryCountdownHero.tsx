@@ -8,6 +8,7 @@ import { vaultExpiryCountdownA11yLabel } from '@/src/lib/vaultA11y';
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -62,9 +63,8 @@ const styles = StyleSheet.create({
   },
   kicker: {
     color: closet.muted,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
@@ -73,9 +73,8 @@ const styles = StyleSheet.create({
   },
   value: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     marginTop: space3,
   },
   wrap: {

@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import type {
   AddCreditBody,
   AddCreditResponse,
@@ -38,8 +39,11 @@ import type {
   SnoozeWarrantyBody,
   SnoozeWarrantyResponse,
   Warranty,
+  EntitlementSnapshotDto,
+  PaywallOfferingsResponse,
 } from '@worn/shared';
 
+import { preparePhotoForUpload } from '@/src/lib/photoPrep';
 import { useSessionStore } from '@/src/stores/session';
 
 /**
@@ -162,6 +166,24 @@ async function renewSession(): Promise<string | null> {
 }
 
 /**
+ * A local JPEG as a multipart file part. The global fetch is Expo's since SDK 56, and it sends a
+ * part only if it can read the bytes: React Native's `{ uri, name, type }` object fails every
+ * upload with "Unsupported FormDataPart implementation".
+ */
+export function jpegPart(uri: string, name: string): Blob {
+  const file = new File(uri);
+  return { name, type: 'image/jpeg', bytes: () => file.bytes() } as unknown as Blob;
+}
+
+/**
+ * A photo straight from the picker or camera, resized and re-encoded first: the original is
+ * full size and keeps its EXIF, including where it was taken.
+ */
+async function photoPart(uri: string, name: string): Promise<Blob> {
+  return jpegPart(await preparePhotoForUpload({ uri }), name);
+}
+
+/**
  * fetch with a deadline. Aborts after REQUEST_TIMEOUT_MS (UPLOAD_TIMEOUT_MS for a multipart
  * upload), or as soon as the caller's signal
  * (React Query's, when the screen that asked has gone) aborts. A timeout surfaces as a
@@ -262,14 +284,7 @@ export async function getAvatar(accessToken: string) {
 
 export async function uploadAvatar(accessToken: string, imageUri: string, fileName = 'avatar.jpg') {
   const form = new FormData();
-  form.append(
-    'photo',
-    {
-      uri: imageUri,
-      name: fileName,
-      type: 'image/jpeg',
-    } as unknown as Blob,
-  );
+  form.append('photo', await photoPart(imageUri, fileName));
 
   const res = await apiFetch(`${API_URL}/avatar`, {
     method: 'POST',
@@ -1094,11 +1109,7 @@ export async function captureCreditPhoto(
   opts?: { barcode?: string; fileName?: string },
 ) {
   const form = new FormData();
-  form.append('file', {
-    uri: imageUri,
-    name: opts?.fileName ?? 'gift-card.jpg',
-    type: 'image/jpeg',
-  } as unknown as Blob);
+  form.append('file', await photoPart(imageUri, opts?.fileName ?? 'gift-card.jpg'));
   if (opts?.barcode) form.append('barcode', opts.barcode);
 
   const res = await apiFetch(`${API_URL}/credits/capture/photo`, {
@@ -1194,11 +1205,7 @@ export async function uploadReceipt(
   fileName = 'receipt.jpg',
 ) {
   const form = new FormData();
-  form.append('file', {
-    uri: imageUri,
-    name: fileName,
-    type: 'image/jpeg',
-  } as unknown as Blob);
+  form.append('file', await photoPart(imageUri, fileName));
 
   const res = await apiFetch(`${API_URL}/receipts`, {
     method: 'POST',
@@ -1474,11 +1481,7 @@ export async function careOcrWardrobePhoto(
   fileName = 'care-tag.jpg',
 ) {
   const form = new FormData();
-  form.append('file', {
-    uri: imageUri,
-    name: fileName,
-    type: 'image/jpeg',
-  } as unknown as Blob);
+  form.append('file', await photoPart(imageUri, fileName));
   const res = await apiFetch(`${API_URL}/wardrobe/${id}/care-ocr/photo`, {
     method: 'POST',
     headers: {
@@ -1553,7 +1556,7 @@ export async function deleteWardrobeItem(accessToken: string, id: string) {
 
 export async function uploadWardrobeItem(accessToken: string, imageUri: string, meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number }) {
   const form = new FormData();
-  form.append('file', { uri: imageUri, name: 'wardrobe.jpg', type: 'image/jpeg' } as unknown as Blob);
+  form.append('file', jpegPart(imageUri, 'wardrobe.jpg'));
   form.append('category', meta.category);
   if (meta.colors) form.append('colors', JSON.stringify(meta.colors));
   if (meta.brand) form.append('brand', meta.brand);
@@ -2092,7 +2095,7 @@ export async function fetchCompleteLook(accessToken: string, itemIds?: string[])
 
 export async function uploadWearPhoto(accessToken: string, imageUri: string) {
   const form = new FormData();
-  form.append('file', { uri: imageUri, name: 'wear.jpg', type: 'image/jpeg' } as unknown as Blob);
+  form.append('file', await photoPart(imageUri, 'wear.jpg'));
   const res = await apiFetch(`${API_URL}/wear/photo`, {
     method: 'POST',
     headers: { ...authHeaders(accessToken), 'Content-Type': 'multipart/form-data' },
@@ -3515,19 +3518,8 @@ export async function ingestSms(accessToken: string, body: { from: string; body:
   return parseJson<{ id: string; status: string }>(res);
 }
 
-// --- MON-REVENUECAT / MON-UPI-REGIONAL (scaffold — no store secrets) ---
-export type PaywallOfferings = {
-  offerings: Array<{
-    productId: string;
-    label: string;
-    entitlementIds: Array<'accountant' | 'outfits'>;
-    trialDays: number;
-    priceLabel: string | null;
-    currency: string | null;
-  }>;
-  gatesEnabled: boolean;
-  provider: 'revenuecat' | 'upi' | 'none';
-};
+// --- Closet Premium (App Store / Google Play subscriptions, verified by the server) ---
+export type PaywallOfferings = PaywallOfferingsResponse;
 
 export async function fetchEntitlementOfferings(
   accessToken: string,
@@ -3544,17 +3536,7 @@ export async function fetchEntitlementSnapshot(accessToken: string) {
   const res = await apiFetch(`${API_URL}/entitlements`, {
     headers: authHeaders(accessToken),
   });
-  return parseJson<{
-    userId: string;
-    grants: Array<{
-      entitlementId: 'accountant' | 'outfits';
-      productId: string;
-      expiresAt: string | null;
-      isTrial: boolean;
-      source: 'revenuecat' | 'upi' | 'dev';
-    }>;
-    asOf: string;
-  }>(res);
+  return parseJson<EntitlementSnapshotDto>(res);
 }
 
 /** Simulated trial start — never sends a real App Store / Play receipt. */

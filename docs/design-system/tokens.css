@@ -13,18 +13,18 @@
   --worn-warm:       #f0ece4;   /* muted fills                        */
   --worn-warm-deep:  #e8e1d6;   /* hover / pressed warm               */
   --worn-rule:       #e0dbd2;   /* borders · dividers                 */
-  --worn-muted:      #888078;   /* secondary text · meta              */
+  --worn-muted:      #6e6861;   /* secondary text · meta              */
 
   /* gold accent */
   --worn-gold:       #c8a87a;
-  --worn-gold-deep:  #9c7a4e;   /* accent text on light · links       */
+  --worn-gold-deep:  #806440;   /* accent text on light · links       */
   --worn-gold-tint:  #fdf7ee;   /* selected / highlight background     */
 
   /* ── Semantic ──────────────────────────────────────────── */
   --worn-sale:       #d64e2a;   /* sale price · alerts                */
   --worn-success:    #3a7d5c;   /* in stock · confirmations           */
   --worn-coin:       #c8a87a;   /* coin currency (== gold)            */
-  --worn-coin-deep:  #9c7a4e;
+  --worn-coin-deep:  #806440;
 
   /* ── Role aliases — use THESE in components ────────────── */
   --bg:          var(--worn-paper);

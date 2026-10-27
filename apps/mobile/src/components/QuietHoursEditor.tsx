@@ -10,6 +10,7 @@ import {
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusCard,
@@ -137,9 +138,8 @@ const styles = StyleSheet.create({
   label: {
     color: text,
     flex: 1,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   preview: {
     color: textMuted,
@@ -156,9 +156,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   value: {
     borderColor: border,

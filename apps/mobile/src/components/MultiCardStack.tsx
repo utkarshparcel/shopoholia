@@ -10,7 +10,7 @@ import {
 } from '@/src/lib/vaultWow';
 import {
   closet,
-  fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -81,9 +81,8 @@ const styles = StyleSheet.create({
   },
   stackBalance: {
     color: closet.found,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     marginTop: 2,
   },
   stackCard: {
@@ -100,8 +99,7 @@ const styles = StyleSheet.create({
   },
   stackMerchant: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
   },
 });

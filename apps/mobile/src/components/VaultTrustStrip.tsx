@@ -8,6 +8,7 @@ import {
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsCaption,
   radiusMd,
   space3,
@@ -66,9 +67,8 @@ const styles = StyleSheet.create({
   },
   link: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     textDecorationLine: 'underline',
   },
   linkHit: {

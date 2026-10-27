@@ -513,7 +513,7 @@ const styles = StyleSheet.create({
   },
   nudgeCard: {
     backgroundColor: '#fdf7ee',
-    borderColor: '#9c7a4e',
+    borderColor: '#806440',
     borderRadius: radiusCard,
     borderWidth: 1,
     gap: 6,
@@ -573,7 +573,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   tierCardActive: {
-    borderColor: '#9c7a4e',
+    borderColor: '#806440',
     backgroundColor: '#fdf7ee',
   },
   tierDetail: {
@@ -603,7 +603,7 @@ const styles = StyleSheet.create({
     fontSize: fsBody,
   },
   tierLabelActive: {
-    color: '#9c7a4e',
+    color: '#806440',
   },
   total: {
     color: text,

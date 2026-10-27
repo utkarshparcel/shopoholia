@@ -66,6 +66,28 @@ vi.mock('expo-crypto', async () => {
   return { randomUUID: vi.fn(() => randomUUID()) };
 });
 
+/** The real module needs the native runtime too; api/client loads it to prepare photo uploads. */
+vi.mock('expo-image-manipulator', () => {
+  const image = (uri: string) => ({
+    width: 1,
+    height: 1,
+    saveAsync: async () => ({ uri, width: 1, height: 1 }),
+    release: () => {},
+  });
+  const context = (uri: string) => {
+    const ctx = {
+      resize: () => ctx,
+      renderAsync: async () => image(uri),
+      release: () => {},
+    };
+    return ctx;
+  };
+  return {
+    SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
+    ImageManipulator: { manipulate: (uri: string) => context(uri) },
+  };
+});
+
 /** Prevents EventEmitter crash when a test accidentally loads real api/client. */
 vi.mock('expo-constants', () => ({
   default: { expoConfig: { extra: { apiUrl: 'http://api.test' } } },
@@ -159,6 +181,7 @@ vi.mock('react-native', () => ({
     );
   },
   ScrollView: createComponent('div'),
+  KeyboardAvoidingView: createComponent('div'),
   RefreshControl: createComponent('div'),
   TextInput: ({
     onChangeText,

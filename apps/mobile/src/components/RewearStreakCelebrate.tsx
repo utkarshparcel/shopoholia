@@ -13,6 +13,7 @@ import {
   border,
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -108,9 +109,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   muted: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   banner: {
@@ -125,8 +125,7 @@ const styles = StyleSheet.create({
   },
   bannerText: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
   },
 });

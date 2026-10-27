@@ -21,10 +21,12 @@ import {
   fsBodyL,
   fsCaption,
   radiusMd,
+  radiusPill,
   surface,
   tapTarget,
   text,
   wornInk,
+  wornInkSoft,
   wornMuted,
   wornPaper,
   wornWarm,
@@ -48,8 +50,9 @@ export interface ButtonProps extends PressableProps {
 }
 
 const sizeStyles: Record<ButtonSize, { container: ViewStyle; text: TextStyle; gap: number }> = {
+  // Small actions are pills on the site ("Spend it", "Export"); md/lg keep the 10px radius.
   sm: {
-    container: { minHeight: 34, paddingHorizontal: 14 },
+    container: { minHeight: 34, paddingHorizontal: 14, borderRadius: radiusPill },
     text: { fontSize: fsCaption },
     gap: 6,
   },
@@ -98,6 +101,14 @@ const variantStyles: Record<ButtonVariant, { default: ViewStyle; pressed: ViewSt
   },
 };
 
+/** A small ghost reads as the site's hairline pill ("Revoke", "Export"); larger ghosts stay gold text links. */
+const ghostPill: (typeof variantStyles)[ButtonVariant] = {
+  default: { backgroundColor: 'transparent', borderColor: border },
+  pressed: { backgroundColor: wornWarm, borderColor: wornMuted },
+  loading: { backgroundColor: 'transparent', borderColor: border },
+  text: { color: wornInkSoft },
+};
+
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export function ButtonComponent({
@@ -116,7 +127,7 @@ export function ButtonComponent({
 }: ButtonProps) {
   const reducedMotion = useReducedMotion();
   const { trigger } = useHaptics();
-  const v = variantStyles[variant];
+  const v = variant === 'ghost' && size === 'sm' ? ghostPill : variantStyles[variant];
   const s = sizeStyles[size];
 
   // Animated scale for press feedback

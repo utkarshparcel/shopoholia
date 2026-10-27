@@ -13,6 +13,7 @@ import {
 import {
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -123,9 +124,8 @@ const styles = StyleSheet.create({
   },
   kicker: {
     color: closet.accent,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '700',
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
@@ -143,9 +143,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     textTransform: 'capitalize',
   },
 });

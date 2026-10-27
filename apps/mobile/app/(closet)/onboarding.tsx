@@ -12,7 +12,7 @@ import type { AddCreditBody } from '@worn/shared';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
-import { addCredit, fetchConsents, fetchCredits } from '@/src/api/client';
+import { addCredit, fetchConsents, fetchCredits, fetchWardrobe } from '@/src/api/client';
 import { trackEvent } from '@/src/lib/analytics';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
@@ -124,17 +124,23 @@ export default function ClosetOnboardingScreen() {
         return;
       }
       try {
-        const consents = await fetchConsents(accessToken).catch(() => ({
-          grants: [] as Array<{ scope: string }>,
-        }));
+        // Sign-out clears the local onboarding flags, so a returning user is recognised by
+        // what they already have on the server: consents, credits or wardrobe pieces.
+        const [consents, wardrobe] = await Promise.all([
+          fetchConsents(accessToken).catch(() => ({
+            grants: [] as Array<{ scope: string }>,
+          })),
+          fetchWardrobe(accessToken, null, { limit: 1 }).catch(() => ({ items: [] as unknown[] })),
+        ]);
         if (cancelled) return;
         const hasConsent = consents.grants.length > 0;
+        const hasWardrobe = wardrobe.items.length > 0;
         const credits = consents.grants.some((g) => g.scope === 'FINANCIAL')
           ? await fetchCredits(accessToken).catch(() => ({ accounts: [] as unknown[] }))
           : { accounts: [] as unknown[] };
         if (cancelled) return;
         const hasAccounts = credits.accounts.length > 0;
-        if (hasAccounts || hasConsent) {
+        if (hasAccounts || hasConsent || hasWardrobe) {
           markOnboardingCompleted();
           router.replace(
             (hasAccounts
@@ -294,7 +300,9 @@ export default function ClosetOnboardingScreen() {
 
       <View style={styles.currencyBlock} accessibilityRole="radiogroup">
         <Text style={styles.currencyLabel}>Fit region</Text>
-        <Text style={styles.muted}>Seeds tailor templates for your market — not India-only.</Text>
+        <Text style={[styles.muted, styles.blockHint]}>
+          Seeds tailor templates for your market — not India-only.
+        </Text>
         <View style={styles.currencyRow}>
           {REGION_PACK_PICKER_OPTIONS.map((opt) => {
             const selected = preferredFitRegion === opt.region;
@@ -383,6 +391,11 @@ const styles = StyleSheet.create({
   actions: {
     gap: space4,
   },
+  // Under a block label the label's own margin is the gap; the hint keeps one above the chips.
+  blockHint: {
+    marginBottom: space3,
+    marginTop: 0,
+  },
   currencyBlock: {
     marginBottom: space6,
   },
@@ -436,9 +449,8 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     lineHeight: 24,
   },
   input: {

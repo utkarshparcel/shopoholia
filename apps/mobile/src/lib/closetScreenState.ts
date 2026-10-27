@@ -3,6 +3,8 @@
  * Kept free of React Native so vitest can cover them without UI mocks.
  */
 
+import { getConsentPlainCard } from './consentCenter';
+
 export type ClosetContentMode = 'skeleton' | 'error' | 'empty' | 'content';
 
 /** Subtitle for a Closet screen opened while the Closet feature is off in this build. */
@@ -61,6 +63,15 @@ export function closetErrorText(
 /** Fastify's schema check: "body/relationship Invalid enum value…", never meant for people. */
 const SCHEMA_ERROR_RE = /^(body|querystring|params|headers)[/.\s]/;
 const NETWORK_ERROR_RE = /network request failed|failed to fetch|load failed|networkerror|timed? ?out|aborted/i;
+/** The API's consent gate (`requireConsent`): 403 "Missing active consent for scope: FINANCIAL". */
+const MISSING_CONSENT_RE = /^Missing active consent for scope: (\w+)$/;
+
+/** The consent scope a 403 says is missing, so the screen can send the user to allow it. */
+export function missingConsentScope(error: unknown): string | null {
+  if ((error as { status?: unknown } | null)?.status !== 403) return null;
+  const message = error instanceof Error ? error.message.trim() : '';
+  return MISSING_CONSENT_RE.exec(message)?.[1] ?? null;
+}
 
 /**
  * Alert text for a caught error (MOB 18), through the same fallback as {@link closetErrorText}.
@@ -76,6 +87,11 @@ export function closetAlertText(error: unknown, fallback?: string): string {
     if (status >= 500) return 'The server had a problem. Try again in a moment.';
     if (status === 429) return 'Too many tries. Wait a moment and try again.';
     if (status === 401) return 'Your session ended. Sign in again.';
+    const scope = missingConsentScope(error);
+    if (scope) {
+      const title = getConsentPlainCard(scope)?.title ?? scope.toLowerCase();
+      return `Allow "${title}" in Privacy & consent first, then try again.`;
+    }
     if (status === 400 && SCHEMA_ERROR_RE.test(message)) {
       return 'Some details were not accepted. Check them and try again.';
     }

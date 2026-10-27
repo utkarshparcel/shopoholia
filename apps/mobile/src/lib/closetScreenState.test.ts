@@ -4,6 +4,7 @@ import {
   closetAlertText,
   closetErrorText,
   isNetInfoOffline,
+  missingConsentScope,
   resolveClosetContentMode,
   shouldShowSkeleton,
 } from './closetScreenState';
@@ -165,5 +166,15 @@ describe('closetAlertText (MOB 18)', () => {
   it('falls back when there is nothing to show', () => {
     expect(closetAlertText(undefined)).toBe('Something went wrong. Try again.');
     expect(closetAlertText(new Error(''), 'Could not save')).toBe('Could not save');
+  });
+
+  it('turns a missing-consent 403 into the permission to allow', () => {
+    const e = new FakeApiError(403, 'Missing active consent for scope: FINANCIAL');
+    expect(missingConsentScope(e)).toBe('FINANCIAL');
+    expect(closetAlertText(e)).toBe(
+      'Allow "Money in your Vault" in Privacy & consent first, then try again.',
+    );
+    expect(missingConsentScope(new FakeApiError(403, 'Not your card'))).toBeNull();
+    expect(missingConsentScope(new Error('Missing active consent for scope: FINANCIAL'))).toBeNull();
   });
 });

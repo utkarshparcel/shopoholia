@@ -17,5 +17,5 @@ android {
 dependencies {
   // Play requires Billing Library 8 or later for new apps and updates from 31 Aug 2026.
   // The library's manifest adds com.android.vending.BILLING.
-  implementation "com.android.billingclient:billing-ktx:9.1.0"
+  implementation "com.android.billingclient:billing:9.1.0"
 }

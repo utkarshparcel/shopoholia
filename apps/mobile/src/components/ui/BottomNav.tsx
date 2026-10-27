@@ -57,7 +57,7 @@ export function BottomNav({ items, activeKey, onPress, style, ...props }: Bottom
                 style={[styles.label, isActive && styles.labelActive]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
-                minimumFontScale={0.85}
+                minimumFontScale={0.8}
                 maxFontSizeMultiplier={1.3}
               >
                 {item.label}

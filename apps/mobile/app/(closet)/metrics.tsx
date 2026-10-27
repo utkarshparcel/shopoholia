@@ -45,6 +45,7 @@ import { useSessionStore } from '@/src/stores/session';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -694,7 +695,7 @@ export default function ClosetMetricsScreen() {
 
 const styles = StyleSheet.create({
   activityMain: { flex: 1, gap: 2 },
-  activityMerchant: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  activityMerchant: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
   activityRow: {
     borderTopColor: border,
     borderTopWidth: 1,
@@ -711,20 +712,19 @@ const styles = StyleSheet.create({
   },
   activitySubject: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   card: { backgroundColor: surface, borderColor: border, borderRadius: radiusMd, borderWidth: 1, padding: space4 },
-  cardTitle: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '700', marginBottom: space4 },
+  cardTitle: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody, marginBottom: space4 },
   error: { color: '#b3261e', fontFamily: fontSans, fontSize: fsCaption, marginTop: space3 },
   feedBanner: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginBottom: space3,
   },
   feedHighlight: { borderColor: text, borderWidth: 2 },
   feedLoading: { alignItems: 'center', flexDirection: 'row', gap: space3 },
   fieldLabel: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, marginTop: space3 },
   fixActions: { flexDirection: 'row', gap: space3, marginTop: space4, justifyContent: 'flex-end' },
-  fixLink: { color: text, fontFamily: fontSans, fontSize: fsCaption, fontWeight: '700' },
+  fixLink: { color: text, fontFamily: fontSansSemiBold, fontSize: fsCaption },
   fixLinkDisabled: { color: textMuted, fontWeight: '500' },
   healthRow: {
     borderTopColor: border,
@@ -760,5 +760,5 @@ const styles = StyleSheet.create({
   splitBox: { paddingBottom: space3, paddingLeft: space3 },
   statLabel: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, flex: 1 },
   statRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4, gap: space4 },
-  statValue: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  statValue: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
 });

@@ -21,5 +21,10 @@
     "eslint": "^9.29.0",
     "turbo": "^2.5.4",
     "typescript-eslint": "^8.34.1"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "expo-modules-jsi@56.0.10": "patches/expo-modules-jsi@56.0.10.patch"
+    }
   }
 }

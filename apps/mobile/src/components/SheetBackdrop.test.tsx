@@ -6,6 +6,8 @@ import { AutotagConfirmSheet } from '@/src/components/AutotagConfirmSheet';
 import { SurfaceEduSheet } from '@/src/components/SurfaceEduSheet';
 import { TrackBuySuccessSheet } from '@/src/components/TrackBuySuccessSheet';
 
+vi.mock('expo-image', () => ({ Image: () => null }));
+
 /** Pressable renders a <button> (as role="button" does on web): a button inside a button is invalid. */
 function nestedButtons(container: HTMLElement) {
   return container.querySelectorAll('button button').length;

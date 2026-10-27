@@ -9,12 +9,8 @@
 
 export const FEATURE_CLOSET = process.env.EXPO_PUBLIC_FEATURE_CLOSET === '1';
 
-/** MON-REVENUECAT — show Closet paywall / trial CTA (no App Store secrets). */
+/** Show the Closet paywall / trial CTA (App Store / Google Play subscriptions). */
 export const FEATURE_PAYWALL = process.env.EXPO_PUBLIC_FEATURE_PAYWALL === '1';
-
-/** MON-REVENUECAT — prefer RevenueCat/IAP path when offerings load. */
-export const FEATURE_REVENUECAT =
-  process.env.EXPO_PUBLIC_FEATURE_REVENUECAT === '1';
 
 /** When on, Accountant + Outfits require an active entitlement. */
 export const FEATURE_PREMIUM_GATES =

@@ -13,6 +13,7 @@ import {
   border,
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   space3,
@@ -120,9 +121,8 @@ const styles = StyleSheet.create({
   },
   fraction: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
   },
   caption: {
     color: textMuted,

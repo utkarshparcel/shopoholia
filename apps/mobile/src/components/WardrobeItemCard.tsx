@@ -279,12 +279,11 @@ const styles = StyleSheet.create({
   cardDirty: { borderColor: '#c4a574', backgroundColor: '#faf6f0' },
   challenge: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginTop: 6,
   },
-  merchant: { color: closet.ink, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  merchant: { color: closet.ink, fontFamily: fontSansSemiBold, fontSize: fsBody },
   muted: { color: closet.muted, fontFamily: fontSans, fontSize: fsCaption, marginTop: 2 },
   row: { flexDirection: 'row', gap: space4, marginTop: space4, flexWrap: 'wrap' },
   sheet: {

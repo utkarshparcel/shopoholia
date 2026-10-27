@@ -271,8 +271,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: space4,
     paddingRight: space6,
   },
+  // A ScrollView shrinks by default: next to the grid it was squeezed and cut off the chip labels.
   chipsScroll: {
     flexGrow: 0,
+    flexShrink: 0,
     marginBottom: space6,
   },
   gridItem: {

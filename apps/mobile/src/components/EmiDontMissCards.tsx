@@ -14,12 +14,13 @@ import {
 } from '@/src/hooks/closet/useCloset';
 import { emiDontMissCardsFromPlans } from '@/src/lib/emiDontMiss';
 import { trackEvent } from '@/src/lib/analytics';
-import { closetAlertText } from '@/src/lib/closetScreenState';
+import { alertClosetError } from '@/src/lib/closetAlert';
 import { formatMinor, nextDueSchedule } from '@worn/shared';
 import {
   border,
   closet,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusMd,
@@ -82,7 +83,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
           );
         },
         onError: (e) =>
-          Alert.alert('Could not parse SMS', closetAlertText(e)),
+          alertClosetError('Could not add EMI', e),
       },
     );
   }
@@ -164,7 +165,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                         );
                       },
                       onError: (e) =>
-                        Alert.alert('Could not mark paid', closetAlertText(e)),
+                        alertClosetError('Could not mark paid', e),
                     },
                   )
                 }
@@ -202,7 +203,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                       Alert.alert('Marked paid', 'EMI installment recorded.');
                     },
                     onError: (e) =>
-                      Alert.alert('Could not mark paid', closetAlertText(e)),
+                      alertClosetError('Could not mark paid', e),
                   },
                 )
               }
@@ -227,9 +228,8 @@ const styles = StyleSheet.create({
   board: { gap: space3 },
   boardTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '600',
   },
   boardRow: {
     borderColor: border,
@@ -251,7 +251,7 @@ const styles = StyleSheet.create({
     borderColor: closet.found,
     borderWidth: 2,
   },
-  headline: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '600' },
+  headline: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
   body: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },
   amount: { color: closet.found, fontFamily: fontSans, fontSize: fsCaption },
   sched: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption },

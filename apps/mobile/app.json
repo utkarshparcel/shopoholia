@@ -46,12 +46,21 @@
       ],
       "expo-notifications",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "WORN uses the photos you pick to add clothes, read care labels, receipts and gift cards, log what you wore, and make your try-on avatar.",
+          "cameraPermission": "WORN uses the camera to photograph your clothes, care labels, receipts and gift cards, log what you wore, and make your try-on avatar.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-calendar",
         {
           "calendarPermission": "WORN reads event titles (interview, wedding, office) to plan outfits. You can skip this anytime.",
           "remindersPermission": false
         }
-      ]
+      ],
+      "./plugins/withPodDeploymentTarget"
     ],
     "experiments": {
       "typedRoutes": true

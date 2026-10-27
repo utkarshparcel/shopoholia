@@ -144,9 +144,10 @@ export default function ConnectEmailScreen() {
       <View style={styles.note}>
         <Text style={styles.noteTitle}>How this works</Text>
         <Text style={styles.noteBody}>
-          We open a secure, read-only OAuth session with your email provider. You
-          grant access to purchase and shipping receipts only — never your full
-          inbox, contacts, or sent mail.
+          We open a secure, read-only OAuth session with your email provider.
+          Google&apos;s read-only permission covers your mailbox; WORN looks only for
+          order and shipping emails and ignores the rest. It never sees your
+          contacts.
         </Text>
       </View>
 

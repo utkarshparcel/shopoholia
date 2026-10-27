@@ -14,6 +14,7 @@ import {
   border,
   fontMono,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   fsMicro,
@@ -157,9 +158,8 @@ const styles = StyleSheet.create({
   },
   stepTitle: {
     color: text,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
-    fontWeight: '700',
     marginTop: space3,
   },
 });

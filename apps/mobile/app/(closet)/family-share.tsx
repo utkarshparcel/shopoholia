@@ -19,7 +19,7 @@ import {
 import { trackEvent } from '@/src/lib/analytics';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetAlertText } from '@/src/lib/closetScreenState';
-import { fontSans, fsBody, fsCaption, space4, text, textMuted } from '@/src/theme/tokens';
+import { fontSans, fontSansSemiBold, fsBody, fsCaption, space4, text, textMuted } from '@/src/theme/tokens';
 
 export default function FamilyShareConfirmScreen() {
   const router = useRouter();
@@ -103,7 +103,7 @@ export default function FamilyShareConfirmScreen() {
 
 const styles = StyleSheet.create({
   card: { gap: space4 },
-  headline: { color: text, fontFamily: fontSans, fontSize: fsBody, fontWeight: '700' },
+  headline: { color: text, fontFamily: fontSansSemiBold, fontSize: fsBody },
   body: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, lineHeight: 20 },
   hint: { color: textMuted, fontFamily: fontSans, fontSize: fsCaption, lineHeight: 18 },
   via: { color: text, fontFamily: fontSans, fontSize: fsCaption },

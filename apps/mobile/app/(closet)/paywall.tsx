@@ -10,6 +10,7 @@ import { trackEvent } from '@/src/lib/analytics';
 import {
   border,
   fontSans,
+  fontSansSemiBold,
   fsBody,
   fsCaption,
   radiusCard,
@@ -121,10 +122,9 @@ const styles = StyleSheet.create({
     gap: space3,
   },
   heading: {
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsBody,
     color: text,
-    fontWeight: '600',
   },
   body: {
     fontFamily: fontSans,

@@ -3,13 +3,23 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import {
   applyAutotagEdits,
   buildAutotagConfirmView,
   type AutotagConfirmDraft,
 } from '@worn/shared';
 
+import { CachedClosetImage } from '@/src/components/CachedClosetImage';
 import { Button } from '@/src/components/ui';
 import {
   closet,
@@ -28,6 +38,12 @@ import {
   wornInk,
 } from '@/src/theme/tokens';
 
+type FieldText = { category: string; colors: string; brand: string };
+
+function fieldText(d: AutotagConfirmDraft): FieldText {
+  return { category: d.category, colors: d.colors.join(', '), brand: d.brand ?? '' };
+}
+
 type Props = {
   visible: boolean;
   drafts: AutotagConfirmDraft[];
@@ -38,26 +54,40 @@ type Props = {
 export function AutotagConfirmSheet({ visible, drafts, onCancel, onConfirm }: Props) {
   const [index, setIndex] = useState(0);
   const [local, setLocal] = useState<AutotagConfirmDraft[]>(drafts);
+  // What was typed, shown as is: the drafts are trimmed on every change, which ate the space in
+  // "Louis Vuitton", the comma between colors, and snapped a cleared category back to "other".
+  const [typed, setTyped] = useState<FieldText[]>(() => drafts.map(fieldText));
 
   useEffect(() => {
     if (visible) {
       setLocal(drafts);
+      setTyped(drafts.map(fieldText));
       setIndex(0);
     }
   }, [visible, drafts]);
 
   const current = local[index];
+  const currentText = typed[index];
   const view = current ? buildAutotagConfirmView(current) : null;
 
-  function patchCurrent(edits: { category?: string; colors?: string[]; brand?: string | null }) {
+  function patchCurrent(
+    field: keyof FieldText,
+    value: string,
+    edits: { category?: string; colors?: string[]; brand?: string | null },
+  ) {
     if (!current) return;
     const next = applyAutotagEdits(current, edits);
     setLocal((prev) => prev.map((d, i) => (i === index ? next : d)));
+    setTyped((prev) => prev.map((t, i) => (i === index ? { ...t, [field]: value } : t)));
   }
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
+      {/* The sheet sits at the bottom, so without this the keyboard covers the fields being edited. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.backdrop}
+      >
         <Pressable
           accessibilityLabel="Close"
           accessibilityRole="button"
@@ -71,34 +101,51 @@ export function AutotagConfirmSheet({ visible, drafts, onCancel, onConfirm }: Pr
             {local.length > 1 ? ` · ${index + 1}/${local.length}` : ''}.
           </Text>
 
-          {current && view ? (
+          {current && currentText && view ? (
             <View style={styles.form}>
+              {/* The photo being tagged: without it "1/5" gave no way to tell which piece this is. */}
+              <CachedClosetImage
+                uri={current.imageUri}
+                contentFit="contain"
+                style={styles.thumb}
+                testID="autotag-photo"
+              />
               <Text style={styles.label}>Category</Text>
               <TextInput
                 style={styles.input}
-                value={current.category}
-                onChangeText={(category) => patchCurrent({ category })}
+                value={currentText.category}
+                onChangeText={(category) => patchCurrent('category', category, { category })}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="other"
                 placeholderTextColor={textMuted}
+                testID="autotag-category"
               />
               <Text style={styles.label}>Colors (comma-separated)</Text>
               <TextInput
                 style={styles.input}
-                value={current.colors.join(', ')}
+                value={currentText.colors}
                 onChangeText={(v) =>
-                  patchCurrent({
+                  patchCurrent('colors', v, {
                     colors: v
                       .split(',')
                       .map((c) => c.trim())
                       .filter(Boolean),
                   })
                 }
+                autoCapitalize="none"
+                autoCorrect={false}
                 placeholderTextColor={textMuted}
+                testID="autotag-colors"
               />
               <Text style={styles.label}>Brand</Text>
               <TextInput
                 style={styles.input}
-                value={current.brand ?? ''}
-                onChangeText={(brand) => patchCurrent({ brand })}
+                value={currentText.brand}
+                onChangeText={(brand) => patchCurrent('brand', brand, { brand })}
+                // Brand names aren't dictionary words: autocorrect turned "Hidesign" into "Hi design".
+                autoCorrect={false}
+                testID="autotag-brand"
                 placeholderTextColor={textMuted}
               />
               {view.softDupWarn ? (
@@ -130,7 +177,7 @@ export function AutotagConfirmSheet({ visible, drafts, onCancel, onConfirm }: Pr
             <Button label="Cancel" block variant="ghost" onPress={onCancel} />
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -173,12 +220,18 @@ const styles = StyleSheet.create({
     paddingTop: space6,
     width: '100%',
   },
+  thumb: {
+    alignSelf: 'center',
+    backgroundColor: closet.surface,
+    borderRadius: radiusMd,
+    height: 120,
+    width: 120,
+  },
   title: { color: wornInk, fontFamily: fontSansSemiBold, fontSize: fsTitle },
   warn: {
     color: closet.ink,
-    fontFamily: fontSans,
+    fontFamily: fontSansSemiBold,
     fontSize: fsCaption,
-    fontWeight: '600',
     marginTop: space2,
   },
 });

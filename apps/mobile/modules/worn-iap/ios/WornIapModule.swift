@@ -97,7 +97,7 @@ public final class WornIapModule: Module {
     }
   }
 
-  private func deliver(_ result: VerificationResult<Transaction>) {
+  private func deliver(_ result: VerificationResult<StoreKit.Transaction>) {
     guard let transaction = Self.payload(result) else {
       // Revoked (refunded) before the server confirmed it: nothing to credit, so close it out.
       Task {
@@ -112,7 +112,7 @@ public final class WornIapModule: Module {
    The server verifies the JWS against Apple's root certificates, so even a transaction StoreKit
    could not verify on device is sent for the server to judge. A revoked one grants nothing.
    */
-  private static func payload(_ result: VerificationResult<Transaction>) -> [String: Any]? {
+  private static func payload(_ result: VerificationResult<StoreKit.Transaction>) -> [String: Any]? {
     let transaction = result.unsafePayloadValue
     if transaction.revocationDate != nil {
       return nil
