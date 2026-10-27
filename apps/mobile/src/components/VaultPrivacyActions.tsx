@@ -99,8 +99,8 @@ export function VaultPrivacyActions() {
     });
     if (!ok) return;
     setError(null);
+    // Deleting clears the session; the root layout's auth gate then goes to the login screen.
     deleteVaultMut.mutate(undefined, {
-      onSuccess: () => router.replace('/(auth)/login' as never),
       onError: (e) => setError(closetAlertText(e)),
     });
   }

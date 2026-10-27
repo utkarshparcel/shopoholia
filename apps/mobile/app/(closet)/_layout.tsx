@@ -2,6 +2,7 @@ import { Tabs, usePathname, useRouter } from 'expo-router';
 import { View } from 'react-native';
 
 import { BottomNav, type BottomNavItem } from '@/src/components/ui';
+import { ClosetScreenFocusProvider } from '@/src/hooks/closet/screenFocus';
 import { bg } from '@/src/theme/tokens';
 
 /** A render error in one Closet screen shows a retry here instead of taking down the whole app (MOB 24). */
@@ -33,6 +34,8 @@ export default function ClosetLayout() {
           // A tab the user left stops re-rendering until they come back to it (MOB 30).
           freezeOnBlur: true,
         }}
+        // Each tab knows whether it is the one on screen, so a hidden tab's queries pause.
+        screenLayout={({ children }) => <ClosetScreenFocusProvider>{children}</ClosetScreenFocusProvider>}
       >
         <Tabs.Screen name="today" />
         <Tabs.Screen name="wardrobe" />

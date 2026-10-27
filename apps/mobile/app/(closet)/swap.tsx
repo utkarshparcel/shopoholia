@@ -21,6 +21,7 @@ import {
   useSwapListings,
   useWardrobe,
 } from '@/src/hooks/closet/useCloset';
+import { useSessionUserId } from '@/src/hooks/closet/keys';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { useSessionStore } from '@/src/stores/session';
@@ -50,7 +51,9 @@ export default function SwapCircleScreen() {
   const create = useCreateSwapCircle();
   const join = useJoinSwapCircle();
   const borrow = useBorrowSwapListing();
-  const wardrobe = useWardrobe();
+  // A page of pieces at a time (MOB 14); "Show more pieces" loads the next one.
+  const wardrobe = useWardrobe(undefined, { limit: 20 });
+  const userId = useSessionUserId();
   const [name, setName] = useState('Friends swap');
   const [code, setCode] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -189,7 +192,7 @@ export default function SwapCircleScreen() {
         {activeId ? (
           <View style={styles.card}>
             <Text style={styles.label}>List an item</Text>
-            {items.slice(0, 8).map((it) => (
+            {items.map((it) => (
               <View key={it.id} style={styles.row}>
                 <Text style={styles.body}>
                   {it.brand ? `${it.brand} · ` : ''}
@@ -211,11 +214,22 @@ export default function SwapCircleScreen() {
                 />
               </View>
             ))}
+            {wardrobe.hasNextPage ? (
+              <Button
+                label={wardrobe.isFetchingNextPage ? 'Loading…' : 'Show more pieces'}
+                size="sm"
+                variant="ghost"
+                disabled={wardrobe.isFetchingNextPage}
+                onPress={() => void wardrobe.fetchNextPage()}
+              />
+            ) : null}
             <Text style={[styles.label, { marginTop: space4 }]}>Circle listings</Text>
             {(listings.data?.listings ?? []).map((l) => (
               <View key={l.id} style={styles.row}>
                 <Text style={styles.body}>
-                  {itemNames.get(l.wardrobeItemId) ?? 'A friend’s piece'} · {LISTING_STATUS_LABEL[l.status] ?? l.status.toLowerCase()}
+                  {itemNames.get(l.wardrobeItemId) ??
+                    (l.ownerUserId === userId ? 'One of your pieces' : 'A friend’s piece')}{' '}
+                  · {LISTING_STATUS_LABEL[l.status] ?? l.status.toLowerCase()}
                 </Text>
                 {l.status === 'LISTED' ? (
                   <Button

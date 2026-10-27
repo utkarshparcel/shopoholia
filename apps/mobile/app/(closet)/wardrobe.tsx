@@ -101,7 +101,8 @@ export default function ClosetWardrobeScreen() {
   const createProfile = useCreateClosetProfile();
   const deleteProfile = useDeleteClosetProfile();
   const lentOverdue = useLentWardrobe('overdue');
-  const { data, isLoading, isError, error, refetch, isRefetching } = useWardrobe(activeProfileId);
+  const { data, isLoading, isError, error, refetch, isRefetching, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useWardrobe(activeProfileId);
   const waste = useWasteSummary();
   const upload = useUploadWardrobeItem();
   const bulkUpload = useBulkUploadWardrobe();
@@ -778,7 +779,15 @@ export default function ClosetWardrobeScreen() {
       onRefresh={onRefresh}
       refreshing={isRefetching || waste.isRefetching || ingestion.isRefetching}
       skeletonRows={6}
-      list={{ sections, keyExtractor: (item) => item.id, renderItem: renderCard }}
+      list={{
+        sections,
+        keyExtractor: (item) => item.id,
+        renderItem: renderCard,
+        // The wardrobe loads a page at a time (MOB 14): the next page loads as the list nears its end.
+        onEndReached: () => {
+          if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+        },
+      }}
     >
       {addForm}
 

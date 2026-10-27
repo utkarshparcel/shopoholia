@@ -230,10 +230,8 @@ export default function ProfileScreen() {
           ) : null}
           <Pressable
             accessibilityRole="button"
-            onPress={() => {
-              useSessionStore.getState().clear();
-              router.replace('/(auth)/login' as never);
-            }}
+            // Clearing the session is enough: the root layout's auth gate goes to the login screen.
+            onPress={() => useSessionStore.getState().clear()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>

@@ -33,7 +33,7 @@ import {
   useSelectTodayOutfit,
   useTodayOutfit,
   useTravelPack,
-  useUpdateWardrobeItem,
+  useBulkUpdateWardrobe,
   useWardrobe,
   useWeddingFestivalPlan,
   useWeekOutfits,
@@ -46,7 +46,7 @@ import { GoesWithSheet } from '@/src/components/GoesWithSheet';
 import { PriceDropAlertCards } from '@/src/components/PriceDropAlertCards';
 import { AccessorySlotToday } from '@/src/components/AccessorySlotToday';
 import { RewearStreakCelebrate } from '@/src/components/RewearStreakCelebrate';
-import { buildDryCleanHomeTile, getCopyPack, mapLimit } from '@worn/shared';
+import { buildDryCleanHomeTile, getCopyPack } from '@worn/shared';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
@@ -115,6 +115,9 @@ function weatherLine(ctx: unknown): string {
   return parts.length ? ` · ${parts.join(' · ')}` : '';
 }
 
+/** Up to 40 pages of 50 (2,000 pieces) are loaded to find every dirty piece. */
+const MAX_LAUNDRY_PAGES = 40;
+
 export default function ClosetTodayScreen() {
   const params = useLocalSearchParams<{ focus?: string; reveal?: string; url?: string }>();
   const secondaryReady = useClosetSecondaryReady();
@@ -140,7 +143,7 @@ export default function ClosetTodayScreen() {
   const interviewKit = useSaveInterviewKit();
   const patchInterview = usePatchInterviewKit();
   const patchWeek = usePatchWeekOutfit();
-  const updateWardrobe = useUpdateWardrobeItem();
+  const bulkUpdate = useBulkUpdateWardrobe();
   const capsule = useCapsule({ enabled: secondaryReady });
   const altFetch = useOutfitAlternative();
   const selectOutfit = useSelectTodayOutfit();
@@ -423,10 +426,20 @@ export default function ClosetTodayScreen() {
 
   /** W050 — bulk mark dirty/in-laundry pieces clean, then regenerate. */
   async function markLaundryClean() {
-    const ids = dirtyWardrobeItemIds(wardrobe.data?.items ?? []);
     try {
-      // A few requests at a time, not one per piece all at once.
-      await mapLimit(ids, 4, (id) => updateWardrobe.mutateAsync({ id, patch: { laundryStatus: 'CLEAN' } }));
+      // The wardrobe loads a page at a time: every dirty piece counts, not just the first page's.
+      let loaded = wardrobe;
+      for (let page = 0; loaded.hasNextPage && page < MAX_LAUNDRY_PAGES; page += 1) {
+        loaded = await wardrobe.fetchNextPage();
+      }
+      const ids = dirtyWardrobeItemIds(loaded.data?.items ?? []);
+      const { failedIds } = await bulkUpdate.mutateAsync({ ids, patch: { laundryStatus: 'CLEAN' } });
+      if (failedIds.length > 0) {
+        Alert.alert(
+          'Some pieces were not marked clean',
+          `${failedIds.length} of ${ids.length} could not be updated. Try again in a moment.`,
+        );
+      }
       setLaundryDismissed(true);
       regenerateDay();
     } catch (e) {
@@ -1012,10 +1025,10 @@ export default function ClosetTodayScreen() {
           <Text style={styles.muted}>{laundryPrompt.message}</Text>
           <View style={styles.weekActions}>
             <Button
-              label={updateWardrobe.isPending ? 'Marking…' : laundryPrompt.markCleanCta}
+              label={bulkUpdate.isPending ? 'Marking…' : laundryPrompt.markCleanCta}
               size="sm"
               variant="secondary"
-              disabled={updateWardrobe.isPending}
+              disabled={bulkUpdate.isPending}
               onPress={() => void markLaundryClean()}
             />
             <Button
