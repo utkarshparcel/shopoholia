@@ -101,9 +101,9 @@ export function ClosetHero() {
           className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
         >
           <Link href="/#download" className="btn-primary btn-lg w-full sm:w-auto">
-            Get the app <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            Request early access <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
-          <Link href="#today" className="btn-ghost btn-lg w-full sm:w-auto">
+          <Link href="#week" className="btn-ghost btn-lg w-full sm:w-auto">
             See how it helps <ArrowDown className="h-4 w-4" aria-hidden="true" />
           </Link>
         </motion.div>
@@ -127,7 +127,7 @@ export function ClosetHero() {
           className="animate-float pointer-events-none absolute left-0 top-[54%] hidden xl:block"
         >
           <div className="glass rounded-xl px-4 py-3">
-            <p className="font-mono text-micro uppercase tracking-widest text-worn-muted">Wool coat</p>
+            <p className="font-mono text-micro uppercase tracking-widest text-worn-muted">Sample · Wool coat</p>
             <p className="mt-1 font-display text-xl text-worn-ink">48 wears</p>
             <p className="font-mono text-micro uppercase tracking-widest text-worn-gold-deep mt-0.5">Cost per wear falling ↓</p>
           </div>
@@ -141,9 +141,9 @@ export function ClosetHero() {
           style={{ animationDelay: '2.8s' }}
         >
           <div className="glass rounded-xl px-4 py-3">
-            <p className="font-mono text-micro uppercase tracking-widest text-worn-muted">Gift card · café</p>
+            <p className="font-mono text-micro uppercase tracking-widest text-worn-muted">Sample · café gift card</p>
             <p className="mt-1 font-display text-xl text-worn-ink">Expiring this month</p>
-            <p className="font-mono text-micro uppercase tracking-widest text-worn-gold-deep mt-0.5">Rescue scheduled</p>
+            <p className="font-mono text-micro uppercase tracking-widest text-worn-gold-deep mt-0.5">Reminders set</p>
           </div>
         </motion.div>
       </div>

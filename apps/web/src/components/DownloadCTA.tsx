@@ -84,7 +84,7 @@ export function DownloadCTA() {
           {...redAnim}
           className="ml-auto mr-auto w-fit ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold"
         >
-          Early access · coins, never cash
+          Early access · free to download
         </motion.p>
 
         <motion.h2
@@ -136,12 +136,12 @@ export function DownloadCTA() {
             Play internal testing
           </span>
         </motion.div>
-        <p className="mt-4 font-mono text-micro uppercase tracking-[0.2em] text-worn-paper/40">
+        <p className="mt-4 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
           App Store and Google Play listings to follow
         </p>
 
-        <p className="mt-8 font-mono text-micro uppercase tracking-[0.2em] text-worn-paper/40">
-          Free in early access · Coins, never cash · Delete your photos any time
+        <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
+          Free to download · Optional coin packs in-app · Delete your photos any time
         </p>
       </div>
     </section>

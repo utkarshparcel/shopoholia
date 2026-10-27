@@ -59,7 +59,7 @@ export function DopamineLoop() {
           </h2>
           <p className="mx-auto mt-5 max-w-[52ch] text-body-l text-worn-ink-soft">
             Same scroll, same little thrill, same wait by the door. Nothing
-            arrives but the photos, so nothing piles up.
+            arrives but the renders, so nothing piles up.
           </p>
         </motion.div>
 

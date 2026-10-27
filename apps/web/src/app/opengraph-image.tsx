@@ -39,7 +39,7 @@ export default async function OpengraphImage() {
             <span style={{ fontStyle: 'italic', color: '#c8a87a' }}>Start wearing.</span>
           </div>
           <div style={{ display: 'flex', marginTop: 30, fontSize: 32, lineHeight: 1.3, color: 'rgba(250,248,245,0.78)' }}>
-            The shopping app where nothing ships. Try it on, haul it with coins, unbox photos of you in it.
+            The shopping app where nothing ships. Try it on, haul it with coins, unbox AI renders of you in it.
           </div>
         </div>
         <div

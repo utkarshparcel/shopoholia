@@ -2,15 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 import { useReducedMotion } from 'framer-motion';
-import { Mail, Twitter, Instagram, Github, Linkedin } from 'lucide-react';
+import { Mail } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
-
-const SOCIALS = [
-  { icon: Twitter, href: 'https://twitter.com/wornapp', label: 'Worn on X' },
-  { icon: Instagram, href: 'https://instagram.com/worn.app', label: 'Worn on Instagram' },
-  { icon: Linkedin, href: 'https://linkedin.com/company/worn', label: 'Worn on LinkedIn' },
-  { icon: Github, href: 'https://github.com/worn', label: 'Worn on GitHub' },
-];
 
 const COLS = [
   {
@@ -19,7 +12,7 @@ const COLS = [
       { label: 'The Drop', href: '/#grwm' },
       { label: 'The Loop', href: '/#loop' },
       { label: 'Coins', href: '/#how-it-works' },
-      { label: 'Get the app', href: '/#download' },
+      { label: 'Request early access', href: '/#download' },
     ],
   },
   {
@@ -29,15 +22,6 @@ const COLS = [
       { label: 'Plan the week', href: '/closet#today' },
       { label: 'Catalog what you own', href: '/closet#wardrobe' },
       { label: 'Found money', href: '/closet#vault' },
-    ],
-  },
-  {
-    h: 'Company',
-    links: [
-      { label: 'Privacy', href: '#' },
-      { label: 'Terms', href: '#' },
-      { label: 'Security', href: '#' },
-      { label: 'Press', href: '#' },
     ],
   },
 ];
@@ -62,20 +46,8 @@ export function Footer() {
             <p className="font-display text-3xl">Worn</p>
             <p className="mt-3 text-body-l text-worn-paper/60">
               The shopping app where nothing ships. Browse, try on, haul with
-              coins, wait, unbox the photos. The itch, handled.
+              coins, wait, unbox the renders. The itch, handled.
             </p>
-            <div className="mt-6 flex gap-2">
-              {SOCIALS.map((s) => (
-                <a
-                  key={s.label}
-                  href={s.href}
-                  aria-label={s.label}
-                  className="grid h-10 w-10 place-items-center rounded-full border border-worn-paper/20 text-worn-paper/70 transition-colors hover:border-worn-gold hover:text-worn-gold"
-                >
-                  <s.icon size={16} />
-                </a>
-              ))}
-            </div>
             <a
               href="mailto:hello@worn.app"
               className="mt-6 inline-flex items-center gap-2 font-mono text-micro uppercase tracking-[0.2em] text-worn-gold"
@@ -85,7 +57,7 @@ export function Footer() {
           </div>
 
           {/* link columns */}
-          <nav aria-label="Footer" className="grid grid-cols-2 gap-10 sm:grid-cols-3">
+          <nav aria-label="Footer" className="grid grid-cols-2 gap-10">
             {COLS.map((c) => (
               <div key={c.h}>
                 <p className="font-mono text-micro uppercase tracking-[0.25em] text-worn-gold">
@@ -109,10 +81,10 @@ export function Footer() {
         </div>
 
         <div className="mt-16 flex flex-col items-center justify-between gap-3 border-t border-worn-paper/10 py-6 sm:flex-row">
-          <p className="font-mono text-micro tracking-wider text-worn-paper/40">
+          <p className="font-mono text-micro tracking-wider text-worn-paper/60">
             © 2026 Worn, Inc.
           </p>
-          <p className="font-mono text-micro tracking-wider text-worn-paper/40">
+          <p className="font-mono text-micro tracking-wider text-worn-paper/60">
             Made for the 1 AM cart
           </p>
         </div>

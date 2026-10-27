@@ -12,6 +12,15 @@ import {
   ArrowDownRight,
 } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
+import {
+  RitualPhone,
+  FeedMock,
+  TryOnMock,
+  HaulMock,
+  WaitMock,
+  RevealMock,
+  LookbookMock,
+} from './ritual/RitualScreens';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -30,6 +39,7 @@ type Feature = {
   copy: string;
   icon: React.ComponentType<{ size?: number | string; className?: string }>;
   chip: { k: string; v: string }[];
+  screen: React.ComponentType;
 };
 
 const FEATURES: Feature[] = [
@@ -42,6 +52,7 @@ const FEATURES: Feature[] = [
       { k: 'Tonight', v: '40 pieces' },
       { k: 'Ranked by', v: 'your style quiz' },
     ],
+    screen: FeedMock,
   },
   {
     n: '02',
@@ -52,16 +63,18 @@ const FEATURES: Feature[] = [
       { k: 'Photos needed', v: '1' },
       { k: 'Rendered', v: 'on your avatar' },
     ],
+    screen: TryOnMock,
   },
   {
     n: '03',
     title: 'Haul it',
-    copy: 'Add to haul, check the haul total, pay with coins. Pick Express, Standard or Slow burn. No card, ever.',
+    copy: 'Add to haul, check the haul total, pay with coins. Pick Express, Standard or Slow burn. Worn never asks for your card.',
     icon: Coins,
     chip: [
       { k: 'Currency', v: 'coins' },
       { k: 'Delivery speeds', v: '3' },
     ],
+    screen: HaulMock,
   },
   {
     n: '04',
@@ -72,6 +85,7 @@ const FEATURES: Feature[] = [
       { k: 'Express', v: 'about 2 hrs' },
       { k: 'Slow burn', v: '48 hrs' },
     ],
+    screen: WaitMock,
   },
   {
     n: '05',
@@ -82,16 +96,18 @@ const FEATURES: Feature[] = [
       { k: 'Free scenes', v: '2' },
       { k: 'Unlock a scene', v: '50 coins' },
     ],
+    screen: RevealMock,
   },
   {
     n: '06',
     title: 'The lookbook',
-    copy: 'Every piece you keep lives in your lookbook. Share the photos anywhere. If you still want the real thing, Buy for real opens the partner link.',
+    copy: 'Every look you unlock lives in your lookbook. Share the renders anywhere. If you still want the real thing, Buy for real opens the partner link.',
     icon: BookImage,
     chip: [
       { k: 'Share', v: 'anywhere' },
       { k: 'The real thing', v: 'only if you still want it' },
     ],
+    screen: LookbookMock,
   },
 ];
 
@@ -108,7 +124,7 @@ export function Features() {
     const ctx = gsap.context(() => {
       cards.forEach((card, i) => {
         if (i === cards.length - 1) return;
-        // scale only: fading a glass card lets the unblurred text of the cards beneath show through
+        // scale only: fading a card lets the cards beneath show through
         gsap.to(card, {
           scale: 0.9,
           ease: 'none',
@@ -156,11 +172,12 @@ export function Features() {
           <article
             key={f.n}
             data-stacked
-            className="glass sticky mx-auto w-full max-w-[860px] rounded-lg p-8 shadow-pop will-change-transform sm:p-12"
+            className="sticky mx-auto w-full max-w-[860px] rounded-lg border border-worn-rule bg-worn-surface p-8 shadow-pop will-change-transform sm:p-12"
             style={{ top: `calc(92px + ${i * 14}px)` }}
           >
-            <div className="flex flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
-              <div className="max-w-[52ch]">
+            {/* phones: copy, then chips beside the sample screen · md+: copy and chips beside it */}
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-8 md:gap-x-12">
+              <div className="col-span-2 max-w-[52ch] md:col-span-1">
                 <div className="flex items-center gap-4">
                   <span
                     aria-hidden="true"
@@ -177,11 +194,11 @@ export function Features() {
                 </h3>
                 <p className="mt-4 text-body-l text-worn-ink-soft">{f.copy}</p>
               </div>
-              <div className="flex shrink-0 flex-row gap-3 sm:w-[200px] sm:flex-col">
+              <div className="flex flex-col gap-3 md:flex-row">
                 {f.chip.map((c) => (
                   <div
                     key={c.k}
-                    className="rounded-card border border-worn-rule bg-worn-surface/80 px-4 py-3"
+                    className="rounded-card border border-worn-rule bg-worn-surface/80 px-4 py-3 md:flex-1"
                   >
                     <p className="font-mono text-micro uppercase tracking-wider text-worn-muted">
                       {c.k}
@@ -192,6 +209,11 @@ export function Features() {
                     </p>
                   </div>
                 ))}
+              </div>
+              <div className="md:col-start-2 md:row-span-2 md:row-start-1 md:self-center">
+                <RitualPhone>
+                  <f.screen />
+                </RitualPhone>
               </div>
             </div>
           </article>

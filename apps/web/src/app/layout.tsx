@@ -28,7 +28,7 @@ const dmMono = DM_Mono({
 });
 
 const DESCRIPTION =
-  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox photos of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
+  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox AI renders of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://worn.app'),
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
   description: DESCRIPTION,
   keywords: [
     'shop with coins',
-    'no cash shopping app',
+    'coin shopping app',
     'AI try on',
     'virtual try-on app',
     'virtual shopping',
@@ -113,7 +113,6 @@ export default function RootLayout({
                 '@type': 'Offer',
                 price: '0',
                 priceCurrency: 'USD',
-                availability: 'https://schema.org/InStock',
               },
               publisher: {
                 '@type': 'Organization',

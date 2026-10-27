@@ -52,13 +52,13 @@ export function TwoSides() {
             <p className="mt-4 max-w-[46ch] text-body-l text-worn-ink-soft">
               Browse tonight’s edit, try it on your avatar, add it to your haul and
               pay with coins. Pick a delivery speed, wait for the push, then unbox
-              the photos of you wearing it. No card, no parcel, no pile.
+              the AI renders of you in it. No clothes bill, no parcel, no pile.
             </p>
             <a
               href="#download"
-              className="mt-8 inline-flex items-center gap-2 font-sans text-[15px] font-semibold text-worn-gold-deep"
+              className="mt-6 inline-flex min-h-[44px] items-center gap-2 font-sans text-[15px] font-semibold text-worn-gold-deep"
             >
-              Get the app
+              Request early access
               <ArrowRight size={16} className="transition-transform duration-300 group-hover:translate-x-1" />
             </a>
           </motion.div>
@@ -81,7 +81,7 @@ export function TwoSides() {
             </p>
             <a
               href="/closet"
-              className="mt-8 inline-flex items-center gap-2 font-sans text-[15px] font-semibold text-worn-gold"
+              className="mt-6 inline-flex min-h-[44px] items-center gap-2 font-sans text-[15px] font-semibold text-worn-gold"
             >
               Explore Worn Closet
               <ArrowRight size={16} className="transition-transform duration-300 group-hover:translate-x-1" />

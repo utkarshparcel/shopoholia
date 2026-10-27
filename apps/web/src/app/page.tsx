@@ -11,7 +11,7 @@ import { Footer } from '@/components/Footer';
 import { Navigation } from '@/components/Navigation';
 
 const DESCRIPTION =
-  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox photos of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
+  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox AI renders of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
 
 export const metadata: Metadata = {
   title: { absolute: 'Worn — Stop Shopping. Start Wearing.' },

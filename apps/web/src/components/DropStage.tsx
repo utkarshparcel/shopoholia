@@ -107,17 +107,16 @@ const beatOf = (p: number) => Math.max(0, Math.min(BEATS - 1, Math.floor(p * BEA
 
 type Scene = { id: string; label: string; caption: string; floor: string };
 
-/* the places the picture actually gets taken */
+/* the app's six reveal scenes, in the app's order */
 const SCENES: Scene[] = [
-  { id: 'mirror', label: 'Fit check', caption: 'The fit check — your mirror, 8:04 AM.', floor: 'rgba(250,248,245,0.16)' },
-  { id: 'cafe', label: 'Brunch', caption: 'The brunch post — the café downstairs.', floor: 'rgba(255,190,110,0.22)' },
-  { id: 'amalfi', label: 'Euro summer', caption: 'The Euro-summer post — those steps.', floor: 'rgba(120,180,255,0.2)' },
-  { id: 'beach', label: 'Golden hour', caption: 'The golden-hour post — no filter.', floor: 'rgba(255,150,70,0.24)' },
-  { id: 'rooftop', label: 'Rooftop', caption: 'The Friday post — rooftop, drink in hand.', floor: 'rgba(255,140,100,0.16)' },
-  { id: 'night', label: 'Night out', caption: 'The 1 AM post — neon, rain, the real one.', floor: 'rgba(120,140,255,0.18)' },
+  { id: 'studio', label: 'Studio', caption: 'Studio — clean light, free with every piece.', floor: 'rgba(250,248,245,0.16)' },
+  { id: 'beach', label: 'Golden hour', caption: 'Golden hour — warm light, also free.', floor: 'rgba(255,150,70,0.24)' },
+  { id: 'cafe', label: 'Street', caption: 'Street — out in the city, 50 coins.', floor: 'rgba(255,190,110,0.22)' },
+  { id: 'rooftop', label: 'Editorial dark', caption: 'Editorial dark — the moody one, 50 coins.', floor: 'rgba(255,140,100,0.16)' },
+  { id: 'night', label: 'Night', caption: 'Night — neon and rain, 50 coins.', floor: 'rgba(120,140,255,0.18)' },
+  { id: 'mirror', label: 'Candid', caption: 'Candid — the off-guard one, 50 coins.', floor: 'rgba(250,248,245,0.16)' },
 ];
-const LOOKS = ['studio', ...SCENES.map((s) => s.id)];
-const LIKES = 2418;
+const LOOKS = SCENES.map((s) => s.id);
 
 const CLOSET_BG =
   'radial-gradient(60% 55% at 50% 32%, rgba(200,168,122,0.20), transparent 70%), linear-gradient(180deg, #11100d 0%, #0c0b09 100%)';
@@ -129,7 +128,7 @@ const COPY = {
     { eyebrow: 'The feed', line: 'Everything you’d buy at 1 AM.', sub: 'Drag to browse · tap a piece to try it on' },
     { eyebrow: 'Try on', line: 'No fitting room. No return label.', sub: '' },
     { eyebrow: 'On you', line: 'It’s on you. Haul it in coins, not cash.', sub: 'Nothing ships · nothing to return · nothing to regret' },
-    { eyebrow: 'The reveal', line: '', sub: 'Your haul arrived · scroll through the scenes · swap the piece' },
+    { eyebrow: 'The reveal', line: '', sub: 'Your haul arrived · scroll the scenes · restyle from your haul' },
     { eyebrow: 'Lookbook', line: 'Nothing shipped. Nothing wasted. Still the high.', sub: 'Saved to your lookbook · share it · 0 parcels' },
     { eyebrow: 'There’s more', line: 'That was the itch. This is the closet.', sub: '' },
   ],
@@ -237,7 +236,6 @@ export function DropStage() {
   const shimmerRef = useRef<HTMLDivElement>(null);
   const flashRef = useRef<HTMLDivElement>(null);
   const burstRef = useRef<HTMLDivElement>(null);
-  const likesRef = useRef<HTMLSpanElement>(null);
   const capRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
   const cloneRef = useRef<HTMLElement | null>(null);
@@ -702,29 +700,6 @@ export function DropStage() {
     gsap.to(el, { ...to, duration: 0.75, ease: 'power3.inOut' });
   }, [step, geom, reduced]);
 
-  /* the likes roll in */
-  useLayoutEffect(() => {
-    const el = likesRef.current;
-    if (!el || step !== 4) return;
-    if (reduced) {
-      el.textContent = LIKES.toLocaleString();
-      return;
-    }
-    const o = { v: 0 };
-    const tw = gsap.to(o, {
-      v: LIKES,
-      duration: 1.4,
-      delay: 0.45,
-      ease: 'power3.out',
-      onUpdate: () => {
-        el.textContent = Math.round(o.v).toLocaleString();
-      },
-    });
-    return () => {
-      tw.kill();
-    };
-  }, [step, reduced]);
-
   const dwellSec = STEPS[step].dwell / 1000;
   const ringW = geom.R * 2 + geom.w;
   const ringH = geom.h + 40;
@@ -757,7 +732,7 @@ export function DropStage() {
         key={s.id}
         type="button"
         aria-pressed={on}
-        aria-label={`Shoot it at ${s.label.toLowerCase()}`}
+        aria-label={`See the ${s.label.toLowerCase()} scene`}
         onClick={() => jumpTo(2 + i)}
         className="group flex items-center gap-2.5 text-left"
       >
@@ -848,12 +823,12 @@ export function DropStage() {
         >
           <p className="font-mono text-micro uppercase tracking-[0.3em] text-worn-gold">{step === 5 ? COPY.kickerMore : COPY.kicker}</p>
           <div ref={capRef} className="mt-3">
-            <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-paper/45">
+            <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-paper/60">
               {STEPS[step].n} — {cap.eyebrow}
             </p>
             <p className="mt-2 font-display text-[clamp(22px,2.8vw,34px)] leading-tight text-worn-paper">{cap.line}</p>
             {cap.sub ? (
-              <p className="mt-2 font-mono text-micro uppercase tracking-[0.2em] text-worn-gold/80">{cap.sub}</p>
+              <p className="mt-2 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-gold/80">{cap.sub}</p>
             ) : null}
           </div>
         </div>
@@ -972,7 +947,7 @@ export function DropStage() {
                       <Bookmark size={18} className="ml-auto" />
                     </div>
                     <p className="mt-1.5 font-sans text-[12px] font-semibold">
-                      <span ref={likesRef}>0</span> likes
+                      Sample post · yours to share
                     </p>
                     <p className="truncate font-sans text-[12px]">
                       <span className="font-semibold">you</span> hauled it. wore it.{' '}
@@ -991,7 +966,7 @@ export function DropStage() {
               className="absolute inset-0 overflow-hidden rounded-card shadow-[0_60px_120px_-20px_rgba(0,0,0,0.75)] ring-1 ring-worn-gold/35"
               style={{ opacity: 0 }}
             >
-              {/* one avatar, one piece, seven looks. A new piece wipes down over the old; a new look fades in on top. */}
+              {/* one avatar, one piece, six looks. A new piece wipes down over the old; a new look fades in on top. */}
               <AnimatePresence initial={false}>
                 <motion.div
                   key={dress.key}
@@ -1109,7 +1084,7 @@ export function DropStage() {
                   <Check size={14} className="shrink-0 text-worn-gold" /> Saved to your lookbook
                 </li>
                 <li className="flex items-center gap-2">
-                  <Sparkles size={14} className="shrink-0 text-worn-gold" /> +50 coins · day-7 streak
+                  <Sparkles size={14} className="shrink-0 text-worn-gold" /> 2 free scenes · 4 at 50 coins
                 </li>
                 <li className="flex items-center gap-2">
                   <Camera size={14} className="shrink-0 text-worn-gold" /> 6 scenes · 1 piece · 0 parcels
@@ -1119,7 +1094,7 @@ export function DropStage() {
                 href="#download"
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
               >
-                Get Worn free <ArrowRight size={14} />
+                Request early access <ArrowRight size={14} />
               </a>
               <button
                 type="button"
@@ -1176,7 +1151,7 @@ export function DropStage() {
                   href="#download"
                   className="inline-flex items-center gap-2 rounded-pill border border-worn-paper/25 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-paper/80 transition-colors hover:border-worn-gold hover:text-worn-paper"
                 >
-                  Get Worn free
+                  Request early access
                 </a>
               </div>
             </motion.div>
@@ -1225,20 +1200,23 @@ export function DropStage() {
                   className="flex flex-wrap items-center justify-center gap-2"
                 >
                   <span className="inline-flex items-center gap-1.5 rounded-pill border border-worn-gold/50 bg-worn-gold/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-worn-gold">
-                    <Sparkles size={12} /> +50 coins · 0 parcels
+                    <Sparkles size={12} /> 2 free scenes · 0 parcels
                   </span>
                   <a
                     href="#download"
                     className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
                   >
-                    Get Worn free <ArrowRight size={14} />
+                    Request early access <ArrowRight size={14} />
                   </a>
+                  {/* icon only here, so it shares the CTA's line instead of pushing the row up into the post */}
                   <button
                     type="button"
                     onClick={() => jumpTo(0)}
-                    className="inline-flex items-center gap-2 rounded-pill border border-worn-paper/25 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-paper/70 transition-colors hover:border-worn-gold hover:text-worn-paper"
+                    aria-label="Back to the feed"
+                    title="Back to the feed"
+                    className="grid h-11 w-11 place-items-center rounded-full border border-worn-paper/25 text-worn-paper/70 transition-colors hover:border-worn-gold hover:text-worn-paper"
                   >
-                    <RefreshCcw size={11} /> Back to the feed
+                    <RefreshCcw size={14} />
                   </button>
                 </motion.div>
               ) : null}
@@ -1246,13 +1224,13 @@ export function DropStage() {
           </div>
         ) : null}
 
-        {/* controls */}
-        <div className="glass-dark absolute bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-pill p-1.5">
+        {/* controls — phones get 44px targets: the six steps and play; prev/next join from sm up */}
+        <div className="glass-dark absolute inset-x-0 bottom-4 z-40 mx-auto flex w-fit items-center gap-1 rounded-pill p-1.5">
           <button
             type="button"
             onClick={() => jumpTo(beatRef.current - 1)}
             aria-label="Previous step"
-            className="grid h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold"
+            className="hidden h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold sm:grid"
           >
             <ChevronLeft size={16} />
           </button>
@@ -1263,12 +1241,12 @@ export function DropStage() {
                 type="button"
                 onClick={() => jumpTo(STEP_BEAT[i])}
                 aria-pressed={i === step}
-                className={`relative overflow-hidden rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:px-3 ${
-                  i === step ? 'text-worn-paper' : 'text-worn-paper/45 hover:text-worn-paper/80'
+                className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
+                  i === step ? 'bg-worn-paper/10 text-worn-paper' : 'text-worn-paper/70 hover:text-worn-paper'
                 }`}
               >
-                <span className="mr-1.5 text-worn-gold">{s.n}</span>
-                <span className="hidden sm:inline">{s.label}</span>
+                <span className="text-worn-gold lg:mr-1.5">{s.n}</span>
+                <span className="hidden lg:inline">{s.label}</span>
                 {i === step ? (
                   <motion.span
                     key={`${step}-${scene}-${beat}-${playing}-${active}`}
@@ -1286,7 +1264,7 @@ export function DropStage() {
             type="button"
             onClick={() => jumpTo(beatRef.current + 1)}
             aria-label="Next step"
-            className="grid h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold"
+            className="hidden h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold sm:grid"
           >
             <ChevronRight size={16} />
           </button>
@@ -1294,12 +1272,12 @@ export function DropStage() {
             type="button"
             onClick={() => setPlaying((p) => !p)}
             aria-label={playing ? 'Pause' : 'Play'}
-            className="ml-1 grid h-9 w-9 place-items-center rounded-full bg-worn-gold text-worn-ink transition-transform active:scale-95"
+            className="ml-1 grid h-11 w-11 place-items-center rounded-full bg-worn-gold text-worn-ink transition-transform active:scale-95 sm:h-9 sm:w-9"
           >
             {playing ? <Pause size={14} /> : <Play size={14} />}
           </button>
-          <span className="hidden items-center gap-1.5 pl-2 pr-3 font-mono text-[9px] uppercase tracking-[0.18em] text-worn-paper/45 sm:inline-flex">
-            <Mouse size={11} /> Scroll to step through
+          <span className="hidden items-center gap-1.5 whitespace-nowrap pl-2 pr-3 font-mono text-[12px] uppercase tracking-[0.18em] text-worn-paper/70 xl:inline-flex">
+            <Mouse size={13} /> Scroll to step through
           </span>
         </div>
       </div>

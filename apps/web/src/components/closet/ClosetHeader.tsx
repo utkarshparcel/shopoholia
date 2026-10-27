@@ -3,6 +3,8 @@
 import Link from 'next/link';
 
 const NAV = [
+  { label: 'Week', href: '#week' },
+  { label: 'Stylist', href: '#stylist' },
   { label: 'Today', href: '#today' },
   { label: 'Wardrobe', href: '#wardrobe' },
   { label: 'Vault', href: '#vault' },
@@ -47,13 +49,13 @@ export function ClosetHeader() {
           </Link>
 
           {/* Section anchors */}
-          <nav aria-label="Closet sections" className="hidden lg:flex items-center gap-6">
+          <nav aria-label="Closet sections" className="hidden lg:flex items-center">
             {NAV.map(
               (item: { label: string; href: string }, i: number) => (
                 <Link
                   key={`nav-${i}-${item.href}`}
                   href={item.href}
-                  className="text-caption font-medium tracking-wide text-worn-muted transition-colors duration-200 hover:text-worn-ink"
+                  className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-caption font-medium tracking-wide text-worn-muted transition-colors duration-200 hover:text-worn-ink xl:px-3"
                 >
                   {item.label}
                 </Link>
@@ -69,8 +71,8 @@ export function ClosetHeader() {
             >
               ← Worn Play
             </Link>
-            <Link href="/#download" className="btn-primary btn-md !min-h-[40px] !px-4 !py-2 text-caption">
-              Get the app
+            <Link href="/#download" className="btn-primary btn-md !min-h-[44px] !px-4 !py-2 text-caption sm:!min-h-[40px]">
+              Request early access
             </Link>
           </div>
         </div>

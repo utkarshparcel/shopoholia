@@ -1,5 +1,6 @@
 'use client';
 
+import type { ComponentType } from 'react';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -31,7 +32,16 @@ import {
   Eye,
   Signature,
   HardDriveDownload,
+  ConciergeBell,
 } from 'lucide-react';
+import { TodayVisual } from './visuals/TodayVisual';
+import { WardrobeVisual } from './visuals/WardrobeVisual';
+import { WorthVisual } from './visuals/WorthVisual';
+import { VaultVisual } from './visuals/VaultVisual';
+import { AccountantVisual } from './visuals/AccountantVisual';
+import { MarketVisual } from './visuals/MarketVisual';
+import { FitVisual } from './visuals/FitVisual';
+import { PrivacyVisual } from './visuals/PrivacyVisual';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -62,6 +72,8 @@ type ClosetSection = {
   cards: FeatureCard[];
   catches?: string[];
   chips?: string[];
+  visual?: ComponentType;
+  comingSoon?: { title: string; copy: string };
 };
 
 const SECTIONS: ClosetSection[] = [
@@ -72,8 +84,9 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Your morning, minus the',
     titleGrad: 'mirror standoff.',
     tone: 'paper',
+    visual: TodayVisual,
     blurb:
-      'Every morning, Today hands you an outfit before you ask. Try it on your own avatar, plan the week, and let friends break the tie.',
+      'Every morning, Today hands you an outfit before you ask. Try it on your own photo, plan the week, and let friends break the tie.',
     cards: [
       {
         icon: Sunrise,
@@ -82,18 +95,18 @@ const SECTIONS: ClosetSection[] = [
       },
       {
         icon: ScanFace,
-        title: 'Avatar try-on',
-        copy: 'Try-on renders show the pick on you, from your own measurements, before you get dressed.',
+        title: 'Photo try-on',
+        copy: 'Try-on renders show the pick on your own photo, with the fit checked against your measurements, before you get dressed.',
       },
       {
         icon: CalendarDays,
         title: 'Week planner',
-        copy: 'Lay out Tuesday’s offsite, Thursday’s dinner and the weekend trip on one screen. Less thinking, more wearing.',
+        copy: 'Worn suggests the whole week, Monday to Sunday, plus up to four backups for the mornings that go sideways. Automatically, every week.',
       },
       {
         icon: Users,
         title: 'Friend polls',
-        copy: 'Can’t choose between the green and the blue? Send both to your poll circle and get a verdict in minutes.',
+        copy: 'Can’t choose between the green and the blue? Send both to your poll circle and see the votes as they come in.',
       },
     ],
   },
@@ -104,13 +117,14 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'A closet that',
     titleGrad: 'files itself.',
     tone: 'warm',
+    visual: WardrobeVisual,
     blurb:
-      'Worn does the cataloguing you never got around to, from every order email and receipt to every photo dump and care label.',
+      'Worn does the cataloguing you never got around to: order emails from supported shops, plus anything you forward or photograph.',
     cards: [
       {
         icon: Inbox,
         title: 'One-tap imports',
-        copy: 'Purchases arrive from your order emails and receipts, matched to the right product. One tap and they’re in your wardrobe with brand, price, size and materials.',
+        copy: 'Purchases arrive from your order emails and receipts. One tap and they’re in your wardrobe, with brand, price, size and colour read from the order.',
       },
       {
         icon: Tags,
@@ -128,6 +142,10 @@ const SECTIONS: ClosetSection[] = [
         copy: 'Care-label OCR files the instructions, raises dry-clean tickets, and nudges your shoe and bag rotation so nothing sits moulded in a dust bag.',
       },
     ],
+    comingSoon: {
+      title: 'Concierge cataloguing',
+      copy: 'Don’t want to photograph 200 pieces? A Worn concierge will catalogue your closet for you.',
+    },
   },
   {
     id: 'worth',
@@ -136,13 +154,14 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Every piece, priced',
     titleGrad: 'by proof.',
     tone: 'paper',
+    visual: WorthVisual,
     blurb:
       'Retail price tells you what something cost. Worn tells you what it earns: wears logged, streaks kept, and waste called out.',
     cards: [
       {
         icon: Coins,
         title: 'Cost-per-wear, live',
-        copy: 'A coat worn 48 times costs a fraction of its tag per wear, and the number drops every time you dress. Watch it fall on everything you own.',
+        copy: 'A coat worn 48 times costs a fraction of its tag per wear, and the number drops every time you dress. Watch it fall on everything with a price.',
       },
       {
         icon: Flame,
@@ -152,7 +171,7 @@ const SECTIONS: ClosetSection[] = [
       {
         icon: ChartPie,
         title: 'Waste tracker',
-        copy: 'The never-worn section totals every dollar of dead stock hanging unworn. Worn keeps the score so you stop repeating it.',
+        copy: 'The never-worn section totals every priced piece hanging unworn and counts the unpriced ones. Worn keeps the score so you stop repeating it.',
       },
       {
         icon: Trophy,
@@ -168,23 +187,24 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Money you forgot is',
     titleGrad: 'found money.',
     tone: 'warm',
+    visual: VaultVisual,
     blurb:
-      'Gift cards expiring, warranties lapsing, refunds drifting. The Vault tracks every claim your closet is owed and chases it before the deadline.',
+      'Gift cards expiring, warranties lapsing, refunds drifting. The Vault tracks every claim your closet is owed and reminds you before every deadline.',
     cards: [
       {
         icon: Gift,
         title: 'Gift-card vault',
-        copy: 'Every card with its balance in one place, and expiry rescue that gets a card spent before it zeroes out.',
+        copy: 'Every card with its last known balance in one place, and reminders at 30, 7 and 1 days, with a way to spend it.',
       },
       {
         icon: ShieldCheck,
-        title: 'Warranty claims, filed',
-        copy: 'Purchases with warranty rights surface with their deadlines and claim nudges, before the window closes.',
+        title: 'Warranty claims, ready',
+        copy: 'Purchases with warranty rights surface with their deadlines, nudges and a claim kit, before the window closes.',
       },
       {
         icon: Banknote,
         title: 'Refund ledger',
-        copy: 'Each return with its ETA, and refund chasing that flags the merchant when the number goes quiet.',
+        copy: 'Each return with its ETA, and a nudge when a refund runs late, with the message to send the merchant.',
       },
       {
         icon: Receipt,
@@ -206,28 +226,29 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Your closet runs a',
     titleGrad: 'P&L.',
     tone: 'paper',
+    visual: AccountantVisual,
     blurb:
-      'Worn books your wardrobe like an asset: spend, wear, returns and residual value, with a soft hand at checkout and a clean export at tax time.',
+      'Worn books your wardrobe like an asset: spend, wear, returns and residual value, with a check before you buy and a clean export at tax time.',
     cards: [
       {
         icon: Calculator,
         title: 'Closet P&L',
-        copy: 'One ledger of what you bought, what you actually wore, what you returned and what your closet is worth today.',
+        copy: 'One ledger of what you bought, what you actually wore, what you returned and an estimate of what your closet would resell for.',
       },
       {
         icon: Wallet,
-        title: 'Budgets with a soft gate',
-        copy: 'Set a monthly line. As you near it, checkout triggers a gentle pause and your own wardrobe becomes the first recommendation.',
+        title: 'Budgets with a check',
+        copy: 'Set a monthly line. Share a product to Worn before you buy to see your budget, what you already own and the fit.',
       },
       {
         icon: Landmark,
         title: '"EMI don’t miss"',
-        copy: 'Instalments tracked with due dates and small nudges, so a splurge never turns into a late fee.',
+        copy: 'Instalments tracked with due dates and a reminder before each one, so a splurge doesn’t sneak up on you.',
       },
       {
         icon: FileDown,
         title: 'Tax-ready export',
-        copy: 'Seasonal ROI, resale gains and care spend rolled into one clean, exportable pack for whoever does your taxes.',
+        copy: 'Seasonal ROI, resale proceeds and care spend rolled into one clean, exportable pack for whoever does your taxes.',
       },
     ],
   },
@@ -238,13 +259,14 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Sold, swapped or',
     titleGrad: 'wrapped as a gift.',
     tone: 'warm',
+    visual: MarketVisual,
     blurb:
-      'When a piece stops earning wears, Worn routes it to its next owner, with pricing, pickup and wrapping handled.',
+      'When a piece stops earning wears, Worn routes it to its next owner, with pricing, pickup and a packing checklist.',
     cards: [
       {
         icon: Store,
         title: 'Sell, donate, barter',
-        copy: 'Price suggestions from live comps, one listing to every channel, and pickup booking straight from the app.',
+        copy: 'A price estimate from brand, condition and wear, a ready listing to post anywhere, and pickup booking straight from the app.',
       },
       {
         icon: ArrowLeftRight,
@@ -265,23 +287,24 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'Buy the size that',
     titleGrad: 'actually fits.',
     tone: 'paper',
+    visual: FitVisual,
     blurb:
       'Fit failures are the quietest form of waste. Worn sizes first, commits second.',
     cards: [
       {
         icon: Ruler,
         title: 'Measurement profiles',
-        copy: 'Your measurements, per person in the household, kept current. Every product checked against them at checkout.',
+        copy: 'Your measurements, per person in the household, kept current. Check any product you share against them.',
       },
       {
         icon: Scissors,
         title: 'Tailoring, tracked',
-        copy: 'Alteration orders with status and pickup dates tracked like a package, from hem to final press.',
+        copy: 'Alteration orders with status and pickup dates, each step updated by you or your tailor, from hem to final press.',
       },
       {
         icon: Eye,
-        title: 'Fit preview',
-        copy: 'See the drape, length and looseness on your avatar before you commit. Returns avoided, not processed.',
+        title: 'Fit check',
+        copy: 'Check length and fit against your measurements, with a 2D try-on look, before you commit. Returns avoided, not processed.',
       },
     ],
   },
@@ -292,6 +315,7 @@ const SECTIONS: ClosetSection[] = [
     titlePre: 'One closet per home,',
     titleGrad: 'one ledger per soul.',
     tone: 'warm',
+    visual: PrivacyVisual,
     blurb:
       'A wardrobe app reads a lot of email. Worn earns that access in the open: explicit consent, shared but auditable space, and an exit with no baggage.',
     cards: [
@@ -303,7 +327,7 @@ const SECTIONS: ClosetSection[] = [
       {
         icon: Signature,
         title: 'Consent, explicitly given',
-        copy: 'Every email or SMS source is connected with a dated, explicit consent entry. Revocable at any time, logged forever.',
+        copy: 'Every email source is connected with a dated, explicit consent entry. Revocable at any time, kept as long as the law requires.',
       },
       {
         icon: HardDriveDownload,
@@ -336,35 +360,57 @@ export function ClosetFeatures() {
             }
           >
             <div className="section section-py">
-              {/* Heading: pain first, then the fix */}
-              <motion.div
-                key={`head-${s.id}`}
-                {...a}
-                variants={rise}
-                custom={0}
+              {/* Heading beside its sample screen from lg; screen below the heading on smaller screens */}
+              <div
+                className={
+                  s.visual
+                    ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:items-center lg:gap-14 xl:grid-cols-[minmax(0,1fr)_440px] xl:gap-20'
+                    : undefined
+                }
               >
-                <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">
-                  {s.kicker}
-                </p>
+                {/* Heading: pain first, then the fix */}
+                <motion.div
+                  key={`head-${s.id}`}
+                  {...a}
+                  variants={rise}
+                  custom={0}
+                >
+                  <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">
+                    {s.kicker}
+                  </p>
 
-                <p className="mt-7 font-mono text-micro uppercase tracking-[0.28em] text-worn-muted">
-                  The pain
-                </p>
-                <p className="mt-2 max-w-[34ch] font-display italic text-[clamp(22px,2.8vw,34px)] leading-[1.2] tracking-[-0.01em] text-worn-ink-soft text-balance">
-                  {s.pain}
-                </p>
+                  <p className="mt-7 font-mono text-micro uppercase tracking-[0.28em] text-worn-muted">
+                    The pain
+                  </p>
+                  <p className="mt-2 max-w-[34ch] font-display italic text-[clamp(22px,2.8vw,34px)] leading-[1.2] tracking-[-0.01em] text-worn-ink-soft text-balance">
+                    {s.pain}
+                  </p>
 
-                <p className="mt-7 font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">
-                  The fix
-                </p>
-                <h2 className="mt-3 max-w-[22ch] font-display text-[clamp(32px,4.5vw,56px)] leading-[1.04] tracking-[-0.015em] text-worn-ink text-balance">
-                  {s.titlePre} <em className="grad-text font-display">{s.titleGrad}</em>
-                  {s.titlePost ? ` ${s.titlePost}` : ''}
-                </h2>
-                {s.blurb ? (
-                  <p className="mt-4 max-w-[58ch] text-body-l text-worn-muted">{s.blurb}</p>
+                  <p className="mt-7 font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">
+                    The fix
+                  </p>
+                  <h2 className="mt-3 max-w-[22ch] font-display text-[clamp(32px,4.5vw,56px)] leading-[1.04] tracking-[-0.015em] text-worn-ink text-balance">
+                    {s.titlePre} <em className="grad-text font-display">{s.titleGrad}</em>
+                    {s.titlePost ? ` ${s.titlePost}` : ''}
+                  </h2>
+                  {s.blurb ? (
+                    <p className="mt-4 max-w-[58ch] text-body-l text-worn-muted">{s.blurb}</p>
+                  ) : null}
+                </motion.div>
+
+                {/* Sample screen; its parts inherit this entrance and stagger in */}
+                {s.visual ? (
+                  <motion.div
+                    key={`visual-${s.id}`}
+                    {...a}
+                    variants={rise}
+                    custom={0.12}
+                    className="mt-10 max-w-[440px] lg:mt-0 lg:max-w-none"
+                  >
+                    <s.visual />
+                  </motion.div>
                 ) : null}
-              </motion.div>
+              </div>
 
               {/* Cards */}
               <div
@@ -395,6 +441,30 @@ export function ClosetFeatures() {
                   },
                 )}
               </div>
+
+              {/* Wardrobe: concierge, clearly not shipped yet */}
+              {s.comingSoon ? (
+                <motion.div
+                  key={`soon-${s.id}`}
+                  {...a}
+                  variants={rise}
+                  custom={0.2}
+                  className="mt-6 flex items-start gap-4 rounded-2xl border border-dashed border-worn-gold/70 bg-worn-gold-tint p-5 sm:mt-8 sm:items-center sm:gap-5 sm:p-6"
+                >
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-worn-surface">
+                    <ConciergeBell className="h-5 w-5 text-worn-gold-deep" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                      <span className="text-title font-medium text-worn-ink">{s.comingSoon.title}</span>
+                      <span className="rounded-pill border border-worn-gold-deep/25 bg-worn-surface px-2.5 py-0.5 font-mono text-micro uppercase tracking-[0.16em] text-worn-gold-deep">
+                        Coming soon
+                      </span>
+                    </p>
+                    <p className="mt-1.5 text-body text-worn-muted">{s.comingSoon.copy}</p>
+                  </div>
+                </motion.div>
+              ) : null}
 
               {/* Vault: what it catches */}
               {s.catches ? (

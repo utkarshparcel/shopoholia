@@ -28,7 +28,7 @@ const STEPS: Step[] = [
   {
     n: '01',
     title: 'Start with 500',
-    copy: 'Sign in with Google and 500 welcome coins land in your wallet. Enough for a first haul tonight.',
+    copy: 'Sign in with Google and 500 welcome coins land in your wallet, enough for a piece under 500 tonight. Want more? Coin packs are optional in-app purchases.',
     icon: Gift,
     stat: '500 welcome coins',
   },
@@ -131,7 +131,7 @@ export function HowItWorks() {
                 Coins, not cash. <em className="grad-text">Spent like the real thing.</em>
               </h2>
             </div>
-            <p className="hidden font-mono text-micro uppercase tracking-[0.25em] text-worn-muted lg:block">
+            <p className="hidden font-mono text-[12px] uppercase tracking-[0.25em] text-worn-muted lg:block">
               Keep scrolling →
             </p>
           </motion.div>

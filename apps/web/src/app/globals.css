@@ -137,6 +137,17 @@
     @apply py-16 sm:py-24 lg:py-32;
   }
 
+  /* A step track's sticky block (useScrollSteps): centred in the window under the header, by the height it sets as --sh */
+  .step-stick {
+    top: max(84px, calc(42px + 50svh - var(--sh, 100svh) / 2));
+  }
+
+  @media (min-width: 640px) {
+    .step-stick {
+      top: max(88px, calc(44px + 50svh - var(--sh, 100svh) / 2));
+    }
+  }
+
   /* Typography utilities — plain declarations (no @apply cycles) */
   .text-display-xl {
     font-family: var(--font-display), Georgia, serif;

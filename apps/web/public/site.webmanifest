@@ -1,7 +1,7 @@
 {
   "name": "Worn",
   "short_name": "Worn",
-  "description": "The shopping app where nothing ships. Browse, try on, haul with coins, wait, unbox photos of you wearing it.",
+  "description": "The shopping app where nothing ships. Browse, try on, haul with coins, wait, unbox AI renders of you wearing it.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#faf8f5",

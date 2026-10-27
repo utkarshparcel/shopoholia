@@ -31,12 +31,6 @@ const PRODUCT_LINKS = [
   { label: 'Privacy & Household', href: '#privacy' },
 ];
 
-const LEGAL_LINKS = [
-  { label: 'Privacy', href: '/closet#privacy' },
-  { label: 'Terms', href: 'mailto:legal@worn.app' },
-  { label: 'Security', href: 'mailto:security@worn.app' },
-];
-
 export function ClosetFooter() {
   return (
     <footer className="bg-worn-ink text-worn-paper">
@@ -62,47 +56,26 @@ export function ClosetFooter() {
             </Link>
           </div>
 
-          {/* Link columns */}
-          <div className="grid grid-cols-2 gap-8 sm:gap-14">
-            <nav aria-label="Product">
-              <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-gold">
-                Product
-              </p>
-              <ul className="mt-4 space-y-2.5">
-                {PRODUCT_LINKS.map(
-                  (link: { label: string; href: string }, i: number) => (
-                    <li key={`footer-product-${i}`}>
-                      <Link
-                        href={link.href}
-                        className="text-caption text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper"
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ),
-                )}
-              </ul>
-            </nav>
-            <nav aria-label="Legal">
-              <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-gold">
-                Legal
-              </p>
-              <ul className="mt-4 space-y-2.5">
-                {LEGAL_LINKS.map(
-                  (link: { label: string; href: string }, i: number) => (
-                    <li key={`footer-legal-${i}`}>
-                      <Link
-                        href={link.href}
-                        className="text-caption text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper"
-                      >
-                        {link.label}
-                      </Link>
-                    </li>
-                  ),
-                )}
-              </ul>
-            </nav>
-          </div>
+          {/* Link column */}
+          <nav aria-label="Product">
+            <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-gold">
+              Product
+            </p>
+            <ul className="mt-4 space-y-2.5">
+              {PRODUCT_LINKS.map(
+                (link: { label: string; href: string }, i: number) => (
+                  <li key={`footer-product-${i}`}>
+                    <Link
+                      href={link.href}
+                      className="text-caption text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper"
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ),
+              )}
+            </ul>
+          </nav>
         </div>
 
         <div className="mt-14 border-t border-worn-paper/10 pt-6">

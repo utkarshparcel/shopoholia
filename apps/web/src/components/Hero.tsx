@@ -45,7 +45,7 @@ const NAV = [
   ['○', 'Profile'],
 ];
 
-const TRUST = ['Coins, never cash', 'AI try-on', 'Timed delivery', 'The reveal'];
+const TRUST = ['Pay in coins', 'AI try-on', 'Timed delivery', 'The reveal'];
 
 function Coin() {
   return (
@@ -282,7 +282,7 @@ export function Hero() {
             <p className="hero-rise mt-7 max-w-[52ch] text-body-l text-worn-ink-soft" style={delay(0.55)}>
               Browse real pieces and try them on your AI avatar. Haul them with
               coins, pick a delivery speed and wait for it like it is real. Then
-              unbox photos of you wearing them. All of the buying high. None of
+              unbox AI renders of you wearing them. All of the buying high. None of
               the parcel, the bill, or the pile of clothes you never wear.
             </p>
 
@@ -290,7 +290,7 @@ export function Hero() {
             <div className="hero-rise mt-9 flex flex-wrap items-center gap-4" style={delay(0.7)}>
               <Magnetic strength={0.3}>
                 <a href="#download" className="btn btn-primary px-8 py-4 text-[15px] shadow-pop">
-                  Get Worn free
+                  Request early access
                   <ArrowRight size={17} strokeWidth={2.2} />
                 </a>
               </Magnetic>
@@ -305,6 +305,23 @@ export function Hero() {
                   </span>
                 </a>
               </Magnetic>
+            </div>
+
+            {/* phones: the top of the same phone, scaled and faded out — fixed box, so nothing shifts */}
+            <div
+              className="hero-rise relative mx-auto mt-10 h-[320px] w-[272px] overflow-hidden sm:hidden"
+              style={{
+                ...delay(0.8),
+                WebkitMaskImage: 'linear-gradient(180deg, #000 58%, transparent)',
+                maskImage: 'linear-gradient(180deg, #000 58%, transparent)',
+              }}
+              aria-hidden="true"
+            >
+              <div className="absolute left-0 top-0 w-[340px] origin-top-left scale-[0.8] rounded-[44px] border border-worn-gold/25 bg-worn-ink p-2.5">
+                <div className="overflow-hidden rounded-[36px] border border-black/40">
+                  <FeedScreen reduced={!!reduced} />
+                </div>
+              </div>
             </div>
 
             {/* trust chips */}
@@ -368,7 +385,7 @@ export function Hero() {
         aria-hidden="true"
       >
         <div className="hero-rise flex flex-col items-center gap-2" style={delay(1.3)}>
-          <span className="font-mono text-micro uppercase tracking-[0.3em] text-worn-muted">Scroll</span>
+          <span className="font-mono text-[12px] uppercase tracking-[0.3em] text-worn-muted">Scroll</span>
           <span className="relative block h-10 w-px overflow-hidden bg-worn-rule">
             <motion.span
               className="absolute inset-x-0 top-0 h-4 bg-worn-gold-deep"
