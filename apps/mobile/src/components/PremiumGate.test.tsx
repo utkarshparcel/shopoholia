@@ -5,8 +5,9 @@ const featureMocks = vi.hoisted(() => ({
   FEATURE_PREMIUM_GATES: true,
 }));
 
-const revenueCatMocks = vi.hoisted(() => ({
-  canAccessClosetPremium: vi.fn(() => false),
+const gateMocks = vi.hoisted(() => ({
+  usePremiumAccess: vi.fn(() => ({ allowed: false, checking: false })),
+  push: vi.fn(),
   paywallCopyFor: vi.fn(() => ({
     title: 'Accountant Premium',
     subtitle: 'Budgets and ROI.',
@@ -22,15 +23,26 @@ vi.mock('@/src/lib/features', () => ({
   },
 }));
 
-vi.mock('@/src/lib/revenueCat', () => ({
-  canAccessClosetPremium: revenueCatMocks.canAccessClosetPremium,
-  paywallCopyFor: revenueCatMocks.paywallCopyFor,
-  startLocalTrial: revenueCatMocks.startLocalTrial,
+vi.mock('@/src/lib/purchases/premiumAccess', () => ({
+  paywallCopyFor: gateMocks.paywallCopyFor,
+  startLocalTrial: gateMocks.startLocalTrial,
 }));
 
+vi.mock('@/src/lib/purchases/useEntitlements', () => ({
+  usePremiumAccess: gateMocks.usePremiumAccess,
+}));
+
+vi.mock('expo-router', () => ({ router: { push: gateMocks.push } }));
+
+const USER_ID = '00000000-0000-4000-8000-000000000020';
+const dev = globalThis as { __DEV__?: boolean };
+
 vi.mock('@/src/stores/session', () => ({
-  useSessionStore: (sel: (s: { phone: string | null }) => unknown) =>
-    sel({ phone: '919876543210' }),
+  useSessionStore: (sel: (s: { accessToken: string | null }) => unknown) => sel({ accessToken: 'token' }),
+}));
+
+vi.mock('@/src/lib/access-token', () => ({
+  userIdFromAccessToken: (token: string | null) => (token ? USER_ID : null),
 }));
 
 import { PremiumGate } from './PremiumGate';
@@ -38,10 +50,12 @@ import { PremiumGate } from './PremiumGate';
 describe('PremiumGate', () => {
   beforeEach(() => {
     featureMocks.FEATURE_PREMIUM_GATES = true;
-    revenueCatMocks.canAccessClosetPremium.mockReset();
-    revenueCatMocks.paywallCopyFor.mockClear();
-    revenueCatMocks.startLocalTrial.mockClear();
-    revenueCatMocks.canAccessClosetPremium.mockReturnValue(false);
+    gateMocks.usePremiumAccess.mockReset();
+    gateMocks.paywallCopyFor.mockClear();
+    gateMocks.startLocalTrial.mockClear();
+    gateMocks.push.mockClear();
+    gateMocks.usePremiumAccess.mockReturnValue({ allowed: false, checking: false });
+    dev.__DEV__ = true;
   });
 
   it('renders children when gates are off', () => {
@@ -56,7 +70,7 @@ describe('PremiumGate', () => {
   });
 
   it('renders children when entitled', () => {
-    revenueCatMocks.canAccessClosetPremium.mockReturnValue(true);
+    gateMocks.usePremiumAccess.mockReturnValue({ allowed: true, checking: false });
     render(
       <PremiumGate surface="accountant">
         <span>budget chart</span>
@@ -78,16 +92,38 @@ describe('PremiumGate', () => {
     expect(screen.getByRole('button', { name: 'Start free trial' })).toBeTruthy();
   });
 
-  it('starts local trial on CTA press', () => {
+  it('shows neither the surface nor the paywall while entitlements load', () => {
+    gateMocks.usePremiumAccess.mockReturnValue({ allowed: false, checking: true });
+    render(
+      <PremiumGate surface="accountant">
+        <span>secret</span>
+      </PremiumGate>,
+    );
+    expect(screen.queryByText('secret')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start free trial' })).toBeNull();
+  });
+
+  it('starts local trial on CTA press in a development build', () => {
     render(
       <PremiumGate surface="accountant">
         <span>secret</span>
       </PremiumGate>,
     );
     screen.getByRole('button', { name: 'Start free trial' }).click();
-    expect(revenueCatMocks.startLocalTrial).toHaveBeenCalledWith(
-      '919876543210',
-      'closet_accountant_monthly',
+    expect(gateMocks.startLocalTrial).toHaveBeenCalledWith(USER_ID, 'closet_accountant_monthly');
+    expect(gateMocks.push).not.toHaveBeenCalled();
+  });
+
+  it('opens the store paywall on CTA press in a release build', () => {
+    dev.__DEV__ = false;
+    render(
+      <PremiumGate surface="accountant">
+        <span>secret</span>
+      </PremiumGate>,
     );
+    screen.getByRole('button', { name: 'Start free trial' }).click();
+    expect(gateMocks.push).toHaveBeenCalledWith('/paywall');
+    expect(gateMocks.startLocalTrial).not.toHaveBeenCalled();
+    dev.__DEV__ = true;
   });
 });

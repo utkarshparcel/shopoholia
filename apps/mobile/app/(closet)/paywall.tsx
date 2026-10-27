@@ -1,24 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import { useEffect } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
-import {
-  confirmUpiPayment,
-  createUpiPaymentIntent,
-  fetchEntitlementOfferings,
-  syncEntitlementTrial,
-  type PaywallOfferings,
-} from '@/src/api/client';
-import {
-  EXPERIMENT_UPI_CHECKOUT,
-  FEATURE_CLOSET,
-  FEATURE_PAYWALL,
-  WORN_REGION,
-} from '@/src/lib/features';
-import { preferredCheckoutMethod, trialCtaLabel } from '@/src/lib/paywall';
+import { FEATURE_CLOSET, FEATURE_PAYWALL } from '@/src/lib/features';
+import { trialCtaLabel } from '@/src/lib/paywall';
+import { usePremiumPurchase, type PremiumNotice } from '@/src/lib/purchases/useEntitlements';
 import { trackEvent } from '@/src/lib/analytics';
-import { useSessionStore } from '@/src/stores/session';
 import {
   border,
   fontSans,
@@ -32,74 +20,28 @@ import {
   textMuted,
 } from '@/src/theme/tokens';
 
+const NOTICE_COPY: Record<PremiumNotice['kind'], string> = {
+  active: 'Closet Premium is active.',
+  pending: 'Waiting for approval. Premium unlocks as soon as the purchase is approved.',
+  confirming: "We couldn't confirm your purchase yet. Premium unlocks as soon as we can.",
+  conflict: 'This purchase was already added to another Worn account.',
+  refunded: 'This purchase was refunded, so Premium is not active.',
+  inactive: "This subscription isn't active any more.",
+  rejected: "We couldn't confirm this purchase. If you were charged, contact Worn support.",
+  failed: "The purchase didn't go through. Please try again.",
+  nothing_to_restore: 'No Closet Premium purchase to restore on this store account.',
+};
+
 /**
- * MON-REVENUECAT paywall scaffold.
- * Trial via /entitlements/sync; optional UPI stub deep-link when experiment on.
- * No RevenueCat / Razorpay SDK keys required.
+ * Closet Premium: subscribe through App Store / Google Play billing, or restore a purchase.
+ * Unlocks only from the server's verified entitlements.
  */
 export default function ClosetPaywallScreen() {
-  const accessToken = useSessionStore((s) => s.accessToken);
-  const [offerings, setOfferings] = useState<PaywallOfferings | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    if (!accessToken) return;
-    try {
-      setError(null);
-      const region = WORN_REGION === 'US' || WORN_REGION === 'GLOBAL' ? WORN_REGION : 'IN';
-      setOfferings(await fetchEntitlementOfferings(accessToken, region));
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [accessToken]);
+  const premium = usePremiumPurchase();
 
   useEffect(() => {
     trackEvent('paywall_viewed');
-    void load();
-  }, [load]);
-
-  const startTrial = useCallback(async () => {
-    if (!accessToken) return;
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      const method = preferredCheckoutMethod();
-      if (method === 'upi' && EXPERIMENT_UPI_CHECKOUT) {
-        const intent = await createUpiPaymentIntent(accessToken, {
-          productId: 'closet_premium_monthly',
-          region: 'IN',
-          method: 'upi',
-        });
-        if (intent.upiIntentUrl) {
-          await Linking.openURL(intent.upiIntentUrl).catch(() => undefined);
-        }
-        const confirmed = await confirmUpiPayment(accessToken, intent.id);
-        setNote(
-          `UPI staging paid · unlocked ${confirmed.entitlementsGranted.join(', ')}`,
-        );
-        trackEvent('paywall_upi_confirmed', {
-          entitlements: confirmed.entitlementsGranted.length,
-        });
-      } else {
-        const { snapshot } = await syncEntitlementTrial(
-          accessToken,
-          'closet_premium_monthly',
-        );
-        setNote(
-          `Trial started · ${snapshot.grants.length} entitlement(s)`,
-        );
-        trackEvent('paywall_trial_started', { grants: snapshot.grants.length });
-      }
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }, [accessToken, load]);
+  }, []);
 
   if (!FEATURE_CLOSET || !FEATURE_PAYWALL) {
     return (
@@ -110,35 +52,59 @@ export default function ClosetPaywallScreen() {
     );
   }
 
-  const premium = offerings?.offerings.find(
+  const offering = premium.offerings?.offerings.find(
     (o) => o.productId === 'closet_premium_monthly',
   );
+  const notice = premium.notice ? NOTICE_COPY[premium.notice.kind] : null;
+  const bad =
+    premium.notice?.kind === 'conflict' ||
+    premium.notice?.kind === 'refunded' ||
+    premium.notice?.kind === 'inactive' ||
+    premium.notice?.kind === 'rejected' ||
+    premium.notice?.kind === 'failed';
 
   return (
     <ClosetScreen
       title="Closet Premium"
-      subtitle="Accountant + Outfits — 7-day trial. No App Store secrets in this build."
-      onRefresh={load}
+      subtitle="Accountant + Outfits — 7-day trial."
+      onRefresh={premium.reload}
       hasContent
     >
       <View style={styles.card}>
-        <Text style={styles.heading}>{premium?.label ?? 'Closet Premium'}</Text>
-        <Text style={styles.body}>
-          {premium?.priceLabel
-            ? `${premium.priceLabel}/mo after trial`
-            : 'Regional price loads from the API'}
-        </Text>
-        <Text style={styles.caption}>
-          Provider: {offerings?.provider ?? '…'} · checkout:{' '}
-          {preferredCheckoutMethod()}
-        </Text>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {note ? <Text style={styles.note}>{note}</Text> : null}
-        <Button
-          label={busy ? 'Working…' : trialCtaLabel(offerings)}
-          onPress={() => void startTrial()}
-          disabled={busy || !accessToken}
-        />
+        <Text style={styles.heading}>{offering?.label ?? 'Closet Premium'}</Text>
+        {premium.active ? (
+          <Text style={styles.body}>Closet Premium is active.</Text>
+        ) : premium.available && !premium.purchasable && !premium.loading ? (
+          <Text style={styles.body}>Subscriptions aren&apos;t available right now. Please try again later.</Text>
+        ) : premium.available ? (
+          <Text style={styles.body}>
+            {premium.product?.sample
+              ? `Sample ${premium.product.priceString}/mo after trial`
+              : `${premium.product?.priceString}/mo after trial`}
+          </Text>
+        ) : (
+          <Text style={styles.body}>
+            {premium.loading
+              ? 'Loading…'
+              : "Closet Premium isn't available on this device yet."}
+          </Text>
+        )}
+        {notice ? <Text style={bad ? styles.error : styles.note}>{notice}</Text> : null}
+        {premium.available && premium.purchasable && !premium.active ? (
+          <Button
+            label={premium.busy === 'subscribe' ? 'Working…' : trialCtaLabel(premium.offerings, premium.product)}
+            onPress={() => void premium.subscribe()}
+            disabled={premium.busy !== null}
+          />
+        ) : null}
+        {premium.available && premium.purchasable ? (
+          <Button
+            label={premium.busy === 'restore' ? 'Restoring…' : 'Restore Purchases'}
+            onPress={() => void premium.restore()}
+            disabled={premium.busy !== null}
+            variant="secondary"
+          />
+        ) : null}
       </View>
     </ClosetScreen>
   );

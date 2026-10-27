@@ -1,11 +1,10 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ClosetEntitlement } from '@worn/shared';
-import {
-  canAccessClosetPremium,
-  paywallCopyFor,
-  startLocalTrial,
-} from '@/src/lib/revenueCat';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { paywallCopyFor, startLocalTrial } from '@/src/lib/purchases/premiumAccess';
+import { usePremiumAccess } from '@/src/lib/purchases/useEntitlements';
 import { FEATURE_PREMIUM_GATES } from '@/src/lib/features';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -30,17 +29,19 @@ type Props = {
 };
 
 /**
- * When FEATURE_PREMIUM_GATES=1, blocks children until a trial/entitlement exists.
- * Trial CTA uses local scaffold (no store secrets).
+ * When FEATURE_PREMIUM_GATES=1, blocks children until the server's entitlements grant the
+ * surface. The CTA opens the store paywall; __DEV__ builds start a local trial instead.
  */
 export function PremiumGate({ surface, children }: Props) {
-  const phone = useSessionStore((s) => s.phone);
-  const userId = phone ?? '00000000-0000-4000-8000-000000000000';
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const [, setTick] = useState(0);
-  const allowed = canAccessClosetPremium(surface);
+  const { allowed, checking } = usePremiumAccess(surface);
 
   if (!FEATURE_PREMIUM_GATES || allowed) {
     return <>{children}</>;
+  }
+  if (checking) {
+    return <View style={styles.wrap} testID={`paywall-${surface}-checking`} />;
   }
 
   const copy = paywallCopyFor(surface);
@@ -52,6 +53,10 @@ export function PremiumGate({ surface, children }: Props) {
       <Pressable
         style={styles.cta}
         onPress={() => {
+          if (!__DEV__ || !userId) {
+            router.push('/paywall');
+            return;
+          }
           startLocalTrial(
             userId,
             surface === 'accountant' ? 'closet_accountant_monthly' : 'closet_outfits_monthly',

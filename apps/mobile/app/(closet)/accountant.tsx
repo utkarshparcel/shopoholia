@@ -18,6 +18,7 @@ import { parseAmountInput } from '@/src/lib/amountInput';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { emptyStateCopy } from '@/src/lib/emptyDemo';
 import { PremiumGate } from '@/src/components/PremiumGate';
+import { usePremiumAccess } from '@/src/lib/purchases/useEntitlements';
 import { EmiDontMissCards } from '@/src/components/EmiDontMissCards';
 import { RepairSpendChip } from '@/src/components/RepairSpendChip';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
@@ -58,6 +59,8 @@ export default function ClosetAccountantScreen() {
   const [refundDestFilter, setRefundDestFilter] = useState<
     RefundDestination | 'ALL'
   >('ALL');
+  // The gated surface's data loads only once the server's entitlements open it.
+  const { allowed } = usePremiumAccess('accountant');
   const {
     data: summary,
     isLoading: summaryLoading,
@@ -65,12 +68,12 @@ export default function ClosetAccountantScreen() {
     error: summaryErr,
     refetch: refetchSummary,
     isRefetching: summaryRefetching,
-  } = useAccountantSummary();
+  } = useAccountantSummary({ enabled: allowed });
   const {
     data: seasonRoi,
     refetch: refetchSeasonRoi,
     isRefetching: seasonRoiRefetching,
-  } = useAccountantSeasonRoi();
+  } = useAccountantSeasonRoi(undefined, { enabled: allowed });
   const {
     data: ledger,
     isLoading: ledgerLoading,
@@ -78,12 +81,12 @@ export default function ClosetAccountantScreen() {
     error: ledgerErr,
     refetch: refetchLedger,
     isRefetching: ledgerRefetching,
-  } = useAccountantLedger();
+  } = useAccountantLedger({ enabled: allowed });
   const {
     data: budgetsData,
     refetch: refetchBudgets,
     isRefetching: budgetsRefetching,
-  } = useBudgets();
+  } = useBudgets({ enabled: allowed });
   const createBudget = useCreateBudget();
   const exportCsv = useExportAccountantCsv();
   // The summary carries no currency, so amounts show in the user's chosen one (MOB 27).

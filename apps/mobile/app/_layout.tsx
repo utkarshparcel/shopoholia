@@ -21,6 +21,7 @@ import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { SurfaceToggle } from '@/src/components/SurfaceToggle';
+import { PurchasesRoot } from '@/src/lib/purchases/PurchasesRoot';
 import { useClosetStore } from '@/src/stores/closet';
 import { startSessionTokenPersistence, useSessionStore } from '@/src/stores/session';
 import { bg, closet, fontSans, fsCaption, space3, space4 } from '@/src/theme/tokens';
@@ -217,6 +218,7 @@ export default function RootLayout() {
             <Stack.Screen name="style-quiz" />
           </Stack>
           {FEATURE_CLOSET ? <SurfaceToggle /> : null}
+          <PurchasesRoot />
           {restoreFallbackToast ? (
             <View
               accessibilityRole="alert"

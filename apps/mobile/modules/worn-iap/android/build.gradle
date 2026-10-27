@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.worniap'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.worniap"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // Play requires Billing Library 8 or later for new apps and updates from 31 Aug 2026.
+  // The library's manifest adds com.android.vending.BILLING.
+  implementation "com.android.billingclient:billing-ktx:9.1.0"
+}

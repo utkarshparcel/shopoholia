@@ -1,0 +1,193 @@
+{
+  "identifier" : "5F1C2A10",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "99.0",
+      "familyShareable" : false,
+      "internalID" : "6740000101",
+      "localizations" : [
+        {
+          "description" : "100 Worn coins for try-ons and drops.",
+          "displayName" : "Starter Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "worn.coins.100",
+      "referenceName" : "Starter Pack (100 coins)",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "299.0",
+      "familyShareable" : false,
+      "internalID" : "6740000102",
+      "localizations" : [
+        {
+          "description" : "350 Worn coins for try-ons and drops.",
+          "displayName" : "Style Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "worn.coins.350",
+      "referenceName" : "Style Pack (350 coins)",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "499.0",
+      "familyShareable" : false,
+      "internalID" : "6740000103",
+      "localizations" : [
+        {
+          "description" : "650 Worn coins for try-ons and drops.",
+          "displayName" : "Premium Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "worn.coins.650",
+      "referenceName" : "Premium Pack (650 coins)",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "999.0",
+      "familyShareable" : false,
+      "internalID" : "6740000104",
+      "localizations" : [
+        {
+          "description" : "1,500 Worn coins for try-ons and drops.",
+          "displayName" : "Ultimate Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "worn.coins.1500",
+      "referenceName" : "Ultimate Pack (1500 coins)",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_IN",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "IND",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21500001",
+      "localizations" : [
+
+      ],
+      "name" : "Closet Premium",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "199.0",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6740000201",
+          "introductoryOffer" : {
+            "internalID" : "6740000202",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "Accountant and Outfits, with a 7-day free trial.",
+              "displayName" : "Closet Premium",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "worn.closet.premium.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Closet Premium Monthly",
+          "subscriptionGroupID" : "21500001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "129.0",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6740000211",
+          "introductoryOffer" : {
+            "internalID" : "6740000212",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "Morning outfits and week plans, with a 7-day free trial.",
+              "displayName" : "Outfits",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "worn.closet.outfits.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Closet Outfits Monthly",
+          "subscriptionGroupID" : "21500001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "99.0",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "6740000221",
+          "introductoryOffer" : {
+            "internalID" : "6740000222",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "Budgets, season ROI and CSV export, with a 7-day free trial.",
+              "displayName" : "Accountant",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "worn.closet.accountant.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Closet Accountant Monthly",
+          "subscriptionGroupID" : "21500001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

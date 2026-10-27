@@ -1246,39 +1246,39 @@ export function useStartDeclutterChallenge() {
 }
 
 // --- Universe P3: accountant ---
-export function useAccountantSummary() {
+export function useAccountantSummary(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
   return useQuery({
     queryKey: closetKey('accountant-summary', userId),
     queryFn: ({ signal }) => fetchAccountantSummary(sessionToken(), signal),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && opts?.enabled !== false,
     subscribed: useClosetSubscribed(),
   });
 }
-export function useAccountantSeasonRoi(year?: number) {
+export function useAccountantSeasonRoi(year?: number, opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
   return useQuery({
     queryKey: closetKey('accountant-roi-season', userId, year ?? 'current'),
     queryFn: ({ signal }) => fetchAccountantSeasonRoi(sessionToken(), year, signal),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && opts?.enabled !== false,
     subscribed: useClosetSubscribed(),
   });
 }
-export function useAccountantLedger() {
+export function useAccountantLedger(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
   return useQuery({
     queryKey: closetKey('accountant-ledger', userId),
     queryFn: ({ signal }) => fetchAccountantLedger(sessionToken(), signal),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && opts?.enabled !== false,
     subscribed: useClosetSubscribed(),
   });
 }
-export function useBudgets() {
+export function useBudgets(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
   return useQuery({
     queryKey: closetKey('budgets', userId),
     queryFn: ({ signal }) => fetchBudgets(sessionToken(), signal),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && opts?.enabled !== false,
     subscribed: useClosetSubscribed(),
   });
 }
