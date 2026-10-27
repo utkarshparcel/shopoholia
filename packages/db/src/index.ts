@@ -24,6 +24,15 @@ export {
   computeBalanceAfter,
   deleteOrphanMoneyAccount,
   purgeOrphanMoneyAccounts,
+  createAccountWithLedgerEntry,
+  setAccountBalance,
+  mergeAccountInto,
+  reconcileAccountCache,
+  withTxRetry,
+  isRetryableTxError,
+  ledgerRefId,
+  MONEY_TX_MAX_ATTEMPTS,
+  type AccountReconcileResult,
   type MoneyLedgerType,
 } from "./queries/money.js";
 export {

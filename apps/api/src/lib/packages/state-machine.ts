@@ -22,13 +22,15 @@ export function nextPackageStates(state: PackageDeliveryStatus): PackageDelivery
   return TRANSITIONS[state] ?? [];
 }
 
+export const IN_TRANSIT_STATUSES: readonly PackageDeliveryStatus[] = [
+  "ORDERED",
+  "SHIPPED",
+  "IN_TRANSIT",
+  "OUT_FOR_DELIVERY",
+];
+
 export function isInTransitStatus(status: PackageDeliveryStatus): boolean {
-  return (
-    status === "ORDERED" ||
-    status === "SHIPPED" ||
-    status === "IN_TRANSIT" ||
-    status === "OUT_FOR_DELIVERY"
-  );
+  return IN_TRANSIT_STATUSES.includes(status);
 }
 
 export function isTerminalPackageStatus(status: PackageDeliveryStatus): boolean {

@@ -154,4 +154,64 @@ describe("N37 swap circle", () => {
     expect(res.statusCode).toBe(404);
     await app.close();
   });
+
+  it("two members borrowing at once: one gets it, the other 409; return is once", async () => {
+    const { app, repos } = await buildTestServer();
+    const owner = await login(app, "919800000011");
+    const a = await login(app, "919800000012");
+    const b = await login(app, "919800000013");
+    const auth = (t: string) => ({ authorization: `Bearer ${t}` });
+    const circle = (
+      await app.inject({ method: "POST", url: "/swap-circles", headers: auth(owner.accessToken), payload: { name: "Race" } })
+    ).json() as SwapCircle;
+    for (const m of [a, b]) {
+      const j = await app.inject({
+        method: "POST",
+        url: "/swap-circles/join",
+        headers: auth(m.accessToken),
+        payload: { inviteCode: circle.inviteCode },
+      });
+      expect(j.statusCode).toBe(200);
+    }
+    const itemId = (
+      (
+        await app.inject({
+          method: "POST",
+          url: "/wardrobe",
+          headers: auth(owner.accessToken),
+          payload: { category: "lehenga", costMinor: 50000, imageKeys: ["l.jpg"], garmentImageKey: "l.jpg" },
+        })
+      ).json() as WardrobeItem
+    ).id;
+    const listUrl = `/swap-circles/${circle.id}/listings`;
+    const listOnce = () =>
+      app.inject({ method: "POST", url: listUrl, headers: auth(owner.accessToken), payload: { wardrobeItemId: itemId } });
+    const [l1, l2] = await Promise.all([listOnce(), listOnce()]);
+    expect([l1.statusCode, l2.statusCode].sort()).toEqual([200, 201]);
+    const listing = l1.json() as SwapListing;
+    expect((l2.json() as SwapListing).id).toBe(listing.id);
+
+    const borrowUrl = `${listUrl}/${listing.id}/borrow`;
+    const [ba, bb] = await Promise.all([
+      app.inject({ method: "POST", url: borrowUrl, headers: auth(a.accessToken) }),
+      app.inject({ method: "POST", url: borrowUrl, headers: auth(b.accessToken) }),
+    ]);
+    expect([ba.statusCode, bb.statusCode].sort()).toEqual([200, 409]);
+    const winner = ba.statusCode === 200 ? a : b;
+    expect(((ba.statusCode === 200 ? ba : bb).json() as SwapListing).borrowerUserId).toBe(winner.userId);
+    const disposition = await repos.findDispositionListing(listing.dispositionListingId!, owner.userId);
+    expect(disposition?.status).toBe("BARTERED");
+
+    // The winner's retry is the same borrow, not a conflict.
+    const again = await app.inject({ method: "POST", url: borrowUrl, headers: auth(winner.accessToken) });
+    expect(again.statusCode).toBe(200);
+
+    const returnUrl = `${listUrl}/${listing.id}/return`;
+    const r1 = await app.inject({ method: "POST", url: returnUrl, headers: auth(winner.accessToken) });
+    const r2 = await app.inject({ method: "POST", url: returnUrl, headers: auth(winner.accessToken) });
+    expect(r1.statusCode).toBe(200);
+    expect(r2.statusCode).toBe(200);
+    expect((r2.json() as SwapListing).status).toBe("RETURNED");
+    await app.close();
+  });
 });

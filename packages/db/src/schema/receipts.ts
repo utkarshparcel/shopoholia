@@ -2,12 +2,15 @@ import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { merchantPurchases } from "./purchases.js";
+import { users } from "./users.js";
 
 export const receipts = pgTable(
   "receipts",
   {
     id: id(),
-    userId: uuid("user_id").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     imageKey: text("image_key").notNull(),
     merchant: text("merchant").notNull(),
     purchasedAt: timestamp("purchased_at", { withTimezone: true })

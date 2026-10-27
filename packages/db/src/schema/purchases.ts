@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import {
   packageDeliveryStatusEnum,
@@ -52,8 +52,8 @@ export const merchantPurchases = pgTable(
   },
   (t) => [
     index("merchant_purchases_user_created_idx").on(t.userId, t.createdAt.desc().nullsFirst()),
-    // Not unique yet: ingest inserts one row per email without an order_ref upsert.
-    index("merchant_purchases_user_order_ref_idx")
+    // #38: one purchase per (user, order_ref); createMerchantPurchase returns the existing row.
+    uniqueIndex("merchant_purchases_user_order_ref_idx")
       .on(t.userId, t.orderRef)
       .where(sql`${t.orderRef} IS NOT NULL`),
     index("merchant_purchases_assignee_idx")

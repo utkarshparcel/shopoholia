@@ -1,5 +1,6 @@
-import type { sendExpoPush } from "@worn/shared";
-import type { Repositories } from "./repositories/types.js";
+import { localParts, resolveTimeZone, zonedTimeToInstant, type sendExpoPush } from "@worn/shared";
+import { trackServerEvent } from "./analytics.js";
+import type { BudgetRecord, MerchantPurchaseRecord, Repositories } from "./repositories/types.js";
 
 export const categoryToBudgetCategory: Record<string, string> = {
   // APPAREL bucket
@@ -67,49 +68,75 @@ export function allocatePurchaseToBudgetCategories(
   return m;
 }
 
+/** Start of the budget period holding `now` in the user's time zone (C1), never server time. */
+export function budgetPeriodStart(period: string, now: Date, timeZone: string): Date {
+  const { year, month } = localParts(now, timeZone);
+  const first = period === "MONTHLY" ? month : Math.floor((month - 1) / 3) * 3 + 1;
+  return zonedTimeToInstant(
+    `${String(year).padStart(4, "0")}-${String(first).padStart(2, "0")}-01`,
+    "00:00",
+    timeZone,
+  );
+}
+
+/**
+ * Spend counted against one budget since `periodStart`. GENERAL takes whole purchases; a
+ * specific category takes only its matching line items, so a purchase with no item detail
+ * never counts against it (no false budget_exceeded).
+ */
+export function budgetActualMinor(
+  category: string,
+  purchases: MerchantPurchaseRecord[],
+  itemsByPurchase: Map<string, Array<{ category: string | null; priceMinor: number; qty: number }>>,
+  periodStart: Date,
+): number {
+  let actual = 0;
+  for (const p of purchases) {
+    if (new Date(p.purchasedAt) < periodStart) continue;
+    if (category === "GENERAL") {
+      actual += p.totalMinor;
+      continue;
+    }
+    actual += allocatePurchaseToBudgetCategories(itemsByPurchase.get(p.id) ?? []).get(category) ?? 0;
+  }
+  return actual;
+}
+
+/** Current-period actual for each budget: one purchase read and one item read for all of them. */
+export async function budgetActuals(
+  repos: Repositories,
+  userId: string,
+  budgets: BudgetRecord[],
+  now: Date,
+): Promise<Array<{ budget: BudgetRecord; actualMinor: number }>> {
+  if (budgets.length === 0) return [];
+  const timeZone = resolveTimeZone((await repos.findUserById(userId))?.timeZone);
+  const starts = budgets.map((b) => budgetPeriodStart(b.period, now, timeZone));
+  const earliest = Math.min(...starts.map((d) => d.getTime()));
+  // A DUPLICATE (merged or backfilled #38 duplicate) is not spend; its lines may still exist.
+  const purchases = (await repos.listMerchantPurchasesByUser(userId)).filter(
+    (p) => p.status !== "DUPLICATE" && new Date(p.purchasedAt).getTime() >= earliest,
+  );
+  const itemsMap = purchases.length
+    ? await repos.listMerchantPurchaseItemsByPurchaseIds(purchases.map((p) => p.id))
+    : new Map();
+  return budgets.map((budget, i) => ({
+    budget,
+    actualMinor: budgetActualMinor(budget.category, purchases, itemsMap, starts[i]!),
+  }));
+}
+
 export async function isBudgetExceeded(
   repos: Repositories,
   userId: string,
   category: string,
 ): Promise<{ exceeded: boolean; limitMinor: number | null; actualMinor: number }> {
   const budgets = await repos.listBudgets(userId);
-  const budget = budgets.find((b) => b.category === category || b.category === "GENERAL");
+  const budget =
+    budgets.find((b) => b.category === category) ?? budgets.find((b) => b.category === "GENERAL");
   if (!budget) return { exceeded: false, limitMinor: null, actualMinor: 0 };
-
-  const purchases = await repos.listMerchantPurchasesByUser(userId);
-  const now = new Date();
-  const periodStart = budget.period === "MONTHLY"
-    ? new Date(now.getFullYear(), now.getMonth(), 1)
-    : new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-
-  const filtered = purchases.filter((p) => new Date(p.purchasedAt) >= periodStart);
-  if (filtered.length === 0) return { exceeded: false, limitMinor: budget.limitMinor, actualMinor: 0 };
-
-  // batch fetch items for all purchases in period (single round-trip)
-  const idList = filtered.map((p) => p.id);
-  const itemsMap = await repos.listMerchantPurchaseItemsByPurchaseIds(idList);
-
-  let actual = 0;
-  for (const p of filtered) {
-    if (budget.category === "GENERAL") {
-      actual += p.totalMinor;
-      continue;
-    }
-    const items = itemsMap.get(p.id) ?? [];
-    // use per-item allocation: sum only items that map to this budget category
-    let matchedAmount = 0;
-    for (const it of items) {
-      if (mapCategoryToBudgetCategory(it.category) === budget.category) matchedAmount += it.priceMinor * it.qty;
-    }
-    // if no items mapped, fallback to purchase total only if purchase merchant hints? skip to avoid false positive
-    if (matchedAmount > 0) actual += matchedAmount;
-    else if (items.length === 0) {
-      // no item detail — conservatively count purchase total only for GENERAL; for specific category skip (avoid false budget_exceeded)
-      continue;
-    }
-  }
-
-  return { exceeded: actual > budget.limitMinor, limitMinor: budget.limitMinor, actualMinor: actual };
+  const [{ actualMinor }] = await budgetActuals(repos, userId, [budget], new Date());
+  return { exceeded: actualMinor > budget.limitMinor, limitMinor: budget.limitMinor, actualMinor };
 }
 
 /** Soft spend-awareness copy (W085) — heads-up, never shame or block. */
@@ -161,8 +188,8 @@ export async function computeBudgetNudges(
   for (const v of proposedByCat.values()) proposedGeneral += v;
 
   const nudges: BudgetNudgePayload[] = [];
-  for (const b of budgets) {
-    const status = await isBudgetExceeded(repos, userId, b.category);
+  for (const { budget: b, actualMinor } of await budgetActuals(repos, userId, budgets, new Date())) {
+    const status = { actualMinor, exceeded: actualMinor > b.limitMinor };
     const proposed =
       b.category === "GENERAL" ? proposedGeneral : (proposedByCat.get(b.category) ?? 0);
     if (proposed <= 0 && !status.exceeded) continue;
@@ -204,17 +231,18 @@ export type SpendEnvelopeEvaluation = {
   alertThresholdHit: boolean;
 };
 
-/** Stable period key for dedupe / rollups, e.g. `2026-08` or `2026-Q3`. */
+/** Stable period key for dedupe / rollups, e.g. `2026-08` or `2026-Q3`, in the user's time zone. */
 export function budgetPeriodLabel(
   period: "MONTHLY" | "QUARTERLY",
-  now: Date = new Date(),
+  now: Date,
+  timeZone: string,
 ): string {
-  const y = now.getFullYear();
+  const { year, month } = localParts(now, timeZone);
   if (period === "MONTHLY") {
-    return `${y}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    return `${year}-${String(month).padStart(2, "0")}`;
   }
-  const q = Math.floor(now.getMonth() / 3) + 1;
-  return `${y}-Q${q}`;
+  const q = Math.floor((month - 1) / 3) + 1;
+  return `${year}-Q${q}`;
 }
 
 export function spendEnvelopeDedupeKey(
@@ -280,8 +308,9 @@ type SpendEnvelopePushRepos = {
     status: "QUEUED" | "SENT" | "FAILED";
   }) => Promise<{ id: string }>;
   findUserById: (id: string) => Promise<{
-    consentFlags: Record<string, unknown>;
+    prefs: Record<string, unknown>;
     pushToken: string | null;
+    timeZone: string;
   } | null>;
   updatePushEventStatus?: (
     id: string,
@@ -311,22 +340,21 @@ export async function maybeSendSpendEnvelopeAlert(
   if (envelope.status !== "WARN") return "skipped";
 
   const now = input.now ?? new Date();
-  const periodLabel = budgetPeriodLabel(input.period, now);
+  const user = await repos.findUserById(input.userId);
+  if (!user) return "skipped";
+  const periodLabel = budgetPeriodLabel(input.period, now, resolveTimeZone(user.timeZone));
   const dedupeKey = spendEnvelopeDedupeKey(input.userId, input.category, periodLabel);
 
   const existing = await repos.listPushEvents(input.userId);
   if (existing.some((e) => e.dedupeKey === dedupeKey)) return "skipped";
 
-  const user = (await repos.findUserById(input.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
   const copy = spendEnvelopeAlertCopy(input.category, input.limitMinor, input.actualMinor);
   const { runClosetPushDelivery } = await import("@worn/shared");
 
   const result = await runClosetPushDelivery({
     eventType: SPEND_ENVELOPE_EVENT,
-    consentFlags: user.consentFlags,
+    // Notification prefs live in users.prefs (C2).
+    consentFlags: user.prefs,
     pushToken: user.pushToken,
     title: copy.title,
     body: copy.body,
@@ -367,4 +395,41 @@ export async function maybeSendSpendEnvelopeAlert(
   if (result.status === "queued") return "queued";
   if (result.status === "sent") return "sent";
   return "failed";
+}
+
+/**
+ * N42: after a purchase is recorded, send the 80% envelope push for each budget now in WARN.
+ * Runs from the write path (receipt confirm, Play track), never from a GET. Each push is
+ * deduped per period by the unique push_events.dedupe_key.
+ */
+export async function sendSpendEnvelopeAlerts(
+  repos: Repositories,
+  userId: string,
+  opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
+): Promise<Array<{ category: string; status: Awaited<ReturnType<typeof maybeSendSpendEnvelopeAlert>> }>> {
+  const now = opts.now ?? new Date();
+  const budgets = await repos.listBudgets(userId);
+  const results = [];
+  for (const { budget, actualMinor } of await budgetActuals(repos, userId, budgets, now)) {
+    if (evaluateSpendEnvelope(actualMinor, budget.limitMinor).status !== "WARN") continue;
+    const status = await maybeSendSpendEnvelopeAlert(repos, {
+      userId,
+      category: budget.category,
+      period: budget.period,
+      limitMinor: budget.limitMinor,
+      actualMinor,
+      now,
+      sendExpo: opts.sendExpo,
+    });
+    if (status === "sent" || status === "queued") {
+      trackServerEvent("spend_envelope_alerted", {
+        userId,
+        category: budget.category,
+        limitMinor: budget.limitMinor,
+        actualMinor,
+      });
+    }
+    results.push({ category: budget.category, status });
+  }
+  return results;
 }

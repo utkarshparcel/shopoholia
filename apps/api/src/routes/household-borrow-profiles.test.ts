@@ -399,6 +399,88 @@ describe("U015 household vault spend cap", () => {
     expect(aborts).toBe(0);
     expect((await repos.getHouseholdVaultSettings(household.id, partner.userId)).spentMinor).toBe(3500);
   });
+
+  it("spend: a retry counts once, concurrent spends stay under the cap, a short balance is 409", async () => {
+    const { app } = await buildTestServer();
+    const owner = await login(app, "919810000117");
+    const partner = await login(app, "919810000118");
+    for (const u of [owner, partner]) {
+      await app.inject({
+        method: "POST",
+        url: "/vault/consent",
+        headers: { authorization: `Bearer ${u.accessToken}` },
+        payload: { userId: u.userId, scope: "FINANCIAL", source: "onboarding" },
+      });
+    }
+    const household = (
+      await app.inject({
+        method: "POST",
+        url: "/households",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        payload: { name: "Cap home" },
+      })
+    ).json() as Household;
+    await app.inject({
+      method: "POST",
+      url: "/households/join",
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: { inviteCode: household.inviteCode },
+    });
+    const accountId = (
+      (
+        await app.inject({
+          method: "POST",
+          url: "/credits",
+          headers: { authorization: `Bearer ${owner.accessToken}` },
+          payload: { kind: "GIFT_CARD", merchant: "Myntra", currency: "INR", balanceMinor: 2500 },
+        })
+      ).json() as { id: string }
+    ).id;
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: 2000 },
+    });
+    const spend = (amountMinor: number, idempotencyKey: string) =>
+      app.inject({
+        method: "POST",
+        url: `/households/${household.id}/vault/spend`,
+        headers: { authorization: `Bearer ${partner.accessToken}` },
+        payload: { accountId, amountMinor, idempotencyKey },
+      });
+    type SpendBody = { spentMinor: number; balanceMinor: number };
+
+    const [a, b] = await Promise.all([
+      spend(1000, "11111111-1111-4111-8111-111111111111"),
+      spend(1000, "11111111-1111-4111-8111-111111111111"),
+    ]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect((a.json() as SpendBody).spentMinor).toBe(1000);
+    expect((b.json() as SpendBody).spentMinor).toBe(1000);
+
+    const racers = await Promise.all([
+      spend(800, "22222222-2222-4222-8222-222222222222"),
+      spend(800, "33333333-3333-4333-8333-333333333333"),
+    ]);
+    expect(racers.map((r) => r.statusCode).sort()).toEqual([200, 403]);
+    const won = racers.find((r) => r.statusCode === 200)!.json() as SpendBody;
+    expect(won.spentMinor).toBe(1800);
+    expect(won.balanceMinor).toBe(700);
+
+    // Owner tops the cap up; the account (700 left) cannot cover 1000.
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: 10_000 },
+    });
+    const short = await spend(1000, "44444444-4444-4444-8444-444444444444");
+    expect(short.statusCode).toBe(409);
+    const after = await spend(100, "55555555-5555-4555-8555-555555555555");
+    expect(after.statusCode).toBe(200);
+    expect((after.json() as SpendBody).spentMinor).toBe(1900);
+  });
 });
 
 describe("N27 kids / multi-profile closets", () => {

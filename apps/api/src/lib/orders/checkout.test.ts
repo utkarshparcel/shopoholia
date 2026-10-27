@@ -220,7 +220,7 @@ describe("checkoutOrder", () => {
     expect((blocked as CheckoutError).code).toBe("COOLING_OFF");
     expect((blocked as CheckoutError).coolingOff?.releaseAt).toBeTruthy();
 
-    const held = readCoolingOffFromFlags((await repos.findUserById(user.id))?.consentFlags);
+    const held = readCoolingOffFromFlags((await repos.findUserById(user.id))?.prefs);
     expect(held).toBeTruthy();
     expect(new Date(held!.releaseAt).getTime() - new Date(held!.heldAt).getTime()).toBe(
       COOLING_OFF_MS,
@@ -232,6 +232,6 @@ describe("checkoutOrder", () => {
       coolingOffOverride: true,
     });
     expect(order.order.id).toBeTruthy();
-    expect(readCoolingOffFromFlags((await repos.findUserById(user.id))?.consentFlags)).toBeNull();
+    expect(readCoolingOffFromFlags((await repos.findUserById(user.id))?.prefs)).toBeNull();
   });
 });

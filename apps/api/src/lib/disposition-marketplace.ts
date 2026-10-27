@@ -1,4 +1,8 @@
-import type { Repositories, WardrobeItemRecord } from "./repositories/types.js";
+import type {
+  DispositionListingRecord,
+  Repositories,
+  WardrobeItemRecord,
+} from "./repositories/types.js";
 
 export type DispositionMode = "SELL" | "DONATE" | "BARTER";
 
@@ -9,8 +13,15 @@ export async function ensureIndividualSeller(
   const existing = await repos.findSellerByUserId(userId);
   if (existing) return existing;
   const shopName = `Closet ${userId.slice(0, 8)}`;
-  const seller = await repos.registerSeller(userId, shopName, "INDIVIDUAL");
-  return seller;
+  try {
+    return await repos.registerSeller(userId, shopName, "INDIVIDUAL");
+  } catch (err) {
+    // A concurrent first listing registered the seller (unique sellers.user_id): use that one.
+    if ((err as { code?: string })?.code !== "23505") throw err;
+    const raced = await repos.findSellerByUserId(userId);
+    if (!raced) throw err;
+    return raced;
+  }
 }
 
 export async function createMarketplaceListingForDisposition(
@@ -80,4 +91,36 @@ export async function prepareDispositionRails(
     return { sellerId: seller.id, listingId: listing.id };
   }
   return { sellerId: null, listingId: null };
+}
+
+/**
+ * The item's one ACTIVE disposition (#12), with its rails. The disposition row is claimed first,
+ * so a double tap or a repeat gets the existing listing (`created: false`) and never puts the
+ * garment on the marketplace twice. If the marketplace listing then fails, the new disposition is
+ * cancelled and the error is rethrown.
+ */
+export async function openDispositionWithRails(
+  repos: Repositories,
+  userId: string,
+  wardrobeItem: WardrobeItemRecord,
+  mode: DispositionMode,
+  priceMinor: number | null | undefined,
+): Promise<{ listing: DispositionListingRecord; created: boolean }> {
+  const marketplace = mode === "SELL" || mode === "BARTER";
+  const seller = marketplace ? await ensureIndividualSeller(repos, userId) : null;
+  const opened = await repos.openDispositionListing({
+    userId,
+    wardrobeItemId: wardrobeItem.id,
+    mode,
+    priceMinor: priceMinor ?? null,
+    sellerId: seller?.id ?? null,
+  });
+  if (!opened.created || !seller) return opened;
+  try {
+    await createMarketplaceListingForDisposition(repos, seller.id, wardrobeItem, priceMinor);
+  } catch (err) {
+    await repos.updateDispositionListing(opened.listing.id, { status: "CANCELLED" }, { fromStatuses: ["ACTIVE"] });
+    throw err;
+  }
+  return opened;
 }

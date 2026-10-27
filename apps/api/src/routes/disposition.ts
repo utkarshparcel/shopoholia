@@ -24,7 +24,7 @@ import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
-import { prepareDispositionRails } from "../lib/disposition-marketplace.js";
+import { openDispositionWithRails } from "../lib/disposition-marketplace.js";
 import {
   LOGISTICS_PARTNERS,
   bookDispositionPickup,
@@ -241,7 +241,13 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["disposition"],
         body: CreateDispositionBodySchema,
-        response: { 201: DispositionCreateResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
+        response: {
+          200: DispositionCreateResponseSchema,
+          201: DispositionCreateResponseSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
@@ -251,21 +257,23 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!item) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       const mode = body.mode ?? "SELL";
       const priceMinor = body.priceMinor ?? null;
-      const { sellerId } = await prepareDispositionRails(
+      const { listing, created } = await openDispositionWithRails(
         app.deps.repos,
         userId,
         item,
         mode,
         priceMinor,
-        { createSeller: body.createSeller },
       );
-      const listing = await app.deps.repos.createDispositionListing({
-        userId,
-        wardrobeItemId: body.wardrobeItemId,
-        mode,
-        priceMinor,
-        sellerId,
-      });
+      if (!created) {
+        // One active listing per item (#12): a repeat gets it back; another mode is a conflict.
+        if (listing.mode !== mode) {
+          return reply.code(409).send({
+            error: "Conflict",
+            message: `This item already has an active ${listing.mode} listing`,
+          });
+        }
+        return reply.code(200).send(toDispositionJson(listing));
+      }
       trackServerEvent("disposition_created", { userId, wardrobeItemId: body.wardrobeItemId, mode });
 
       const all = await app.deps.repos.listDispositionListings(userId);
@@ -420,6 +428,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
           }),
           401: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -467,26 +476,26 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const mode = result.mode as "SELL" | "DONATE" | "BARTER";
       const priceMinor = body.priceMinor ?? null;
-      const { sellerId } = await prepareDispositionRails(
+      const { listing, created } = await openDispositionWithRails(
         app.deps.repos,
         userId,
         item,
         mode,
         priceMinor,
-        { createSeller: true },
       );
-      const listing = await app.deps.repos.createDispositionListing({
-        userId,
-        wardrobeItemId: body.wardrobeItemId,
-        mode,
-        priceMinor,
-        sellerId,
-      });
-      trackServerEvent("disposition_created", {
-        userId,
-        wardrobeItemId: body.wardrobeItemId,
-        mode,
-      });
+      if (!created && listing.mode !== mode) {
+        return reply.code(409).send({
+          error: "Conflict",
+          message: `This item already has an active ${listing.mode} listing`,
+        });
+      }
+      if (created) {
+        trackServerEvent("disposition_created", {
+          userId,
+          wardrobeItemId: body.wardrobeItemId,
+          mode,
+        });
+      }
       return {
         ...result,
         listingId: listing.id,

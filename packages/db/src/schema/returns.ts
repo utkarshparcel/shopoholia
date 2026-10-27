@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { returnStateEnum } from "./enums.js";
 import { users } from "./users.js";
@@ -51,6 +51,15 @@ export const returnRequests = pgTable(
     index("return_requests_purchase_item_idx")
       .on(t.purchaseItemId)
       .where(sql`${t.purchaseItemId} IS NOT NULL`),
+    // One open return per purchase line of a user: (user_id, purchase_id, purchase_item_id)
+    // NULLS NOT DISTINCT, spelled with coalesce because Drizzle has no NULLS NOT DISTINCT on indexes.
+    uniqueIndex("return_requests_open_line_uidx")
+      .on(
+        t.userId,
+        sql`coalesce(${t.purchaseId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+        sql`coalesce(${t.purchaseItemId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+      )
+      .where(sql`${t.state} NOT IN ('CANCELLED', 'EXPIRED')`),
   ],
 );
 

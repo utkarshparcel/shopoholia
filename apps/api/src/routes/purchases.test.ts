@@ -296,4 +296,113 @@ describe("POST /purchases/merge + /purchases/split", () => {
     });
     expect(splitAll.statusCode).toBe(400);
   });
+
+  it("another user's purchases are 404 for merge and split, and nothing moves", async () => {
+    const mine = await app.deps.repos.createMerchantPurchase({
+      userId,
+      source: "EMAIL",
+      merchant: "A",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 300,
+      items: [
+        { title: "1", priceMinor: 100 },
+        { title: "2", priceMinor: 200 },
+      ],
+    });
+    const mine2 = await app.deps.repos.createMerchantPurchase({
+      userId,
+      source: "EMAIL",
+      merchant: "A",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 50,
+      items: [{ title: "4", priceMinor: 50 }],
+    });
+    const other = await login(app, "919876500004");
+    const merge = await app.inject({
+      method: "POST",
+      url: "/purchases/merge",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { targetPurchaseId: mine.purchase.id, sourcePurchaseId: mine2.purchase.id },
+    });
+    expect(merge.statusCode).toBe(404);
+    const theirs = await app.deps.repos.createMerchantPurchase({
+      userId: other.userId,
+      source: "EMAIL",
+      merchant: "A",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 100,
+      items: [{ title: "3", priceMinor: 100 }],
+    });
+    const cross = await app.inject({
+      method: "POST",
+      url: "/purchases/merge",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { targetPurchaseId: theirs.purchase.id, sourcePurchaseId: mine.purchase.id },
+    });
+    expect(cross.statusCode).toBe(404);
+    const split = await app.inject({
+      method: "POST",
+      url: "/purchases/split",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { purchaseId: mine.purchase.id, itemIds: [mine.items[0]!.id] },
+    });
+    expect(split.statusCode).toBe(404);
+    expect(await app.deps.repos.listMerchantPurchaseItems(mine.purchase.id)).toHaveLength(2);
+  });
+
+  it("refuses a merge when both purchases have an open whole-order return, writing nothing", async () => {
+    const mk = (title: string) =>
+      app.deps.repos.createMerchantPurchase({
+        userId,
+        source: "EMAIL",
+        merchant: "Myntra",
+        purchasedAt: new Date(),
+        currency: "INR",
+        totalMinor: 1000,
+        items: [{ title, priceMinor: 1000 }],
+      });
+    const a = await mk("Tee");
+    const b = await mk("Socks");
+    for (const p of [a, b]) {
+      await app.deps.repos.openReturnRequest({
+        userId,
+        purchaseId: p.purchase.id,
+        purchaseItemId: null,
+        method: "PICKUP",
+        windowDeadline: new Date(Date.now() + 86_400_000),
+      });
+    }
+    const res = await app.inject({
+      method: "POST",
+      url: "/purchases/merge",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { targetPurchaseId: a.purchase.id, sourcePurchaseId: b.purchase.id },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((await app.deps.repos.findMerchantPurchaseById(b.purchase.id))!.status).toBe("CONFIRMED");
+    expect(await app.deps.repos.listMerchantPurchaseItems(b.purchase.id)).toHaveLength(1);
+  });
+
+  it("one purchase per orderRef (#38): a repeat create returns the first with created=false", async () => {
+    const input = {
+      userId,
+      source: "EMAIL" as const,
+      merchant: "Myntra",
+      orderRef: "ORD-38",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 1000,
+      items: [{ title: "Tee", priceMinor: 1000 }],
+    };
+    const [first, second] = await Promise.all([
+      app.deps.repos.createMerchantPurchase(input),
+      app.deps.repos.createMerchantPurchase(input),
+    ]);
+    expect(second.purchase.id).toBe(first.purchase.id);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    expect((await app.deps.repos.listMerchantPurchases(userId)).filter((p) => p.orderRef === "ORD-38")).toHaveLength(1);
+  });
 });

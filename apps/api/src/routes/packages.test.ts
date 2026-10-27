@@ -144,6 +144,71 @@ describe("N09 packages API", () => {
     expect(bad.statusCode).toBe(409);
     await app.close();
   });
+
+  it("RTO start-refund: a double tap opens one return; the board shows it; others get 404", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    const created = await app.deps.repos.createMerchantPurchase({
+      userId,
+      source: "EMAIL",
+      merchant: "Myntra",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 1000,
+      deliveryStatus: "FAILED",
+      items: [{ title: "Tee", priceMinor: 1000 }],
+    });
+    const url = `/packages/${created.purchase.id}/rto/start-refund`;
+    const [a, b] = await Promise.all([
+      app.inject({ method: "POST", url, headers: auth, payload: {} }),
+      app.inject({ method: "POST", url, headers: auth, payload: {} }),
+    ]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    const returns = await app.deps.repos.listReturnRequests(userId);
+    expect(returns.length).toBe(1);
+    expect(returns[0]!.state).toBe("INITIATED");
+
+    const board = await app.inject({ method: "GET", url: "/packages/rto-recovery?all=1", headers: auth });
+    expect(board.statusCode).toBe(200);
+    const rows = (board.json() as { board: Array<{ purchaseId: string; returnId?: string | null }> }).board;
+    expect(rows.find((r) => r.purchaseId === created.purchase.id)).toBeTruthy();
+
+    const other = await login(app, "919876500002");
+    const res = await app.inject({
+      method: "POST",
+      url,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("GET /packages filters in-transit in the query", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    for (const deliveryStatus of ["SHIPPED", "DELIVERED", "FAILED"] as const) {
+      await app.deps.repos.createMerchantPurchase({
+        userId,
+        source: "EMAIL",
+        merchant: "Myntra",
+        purchasedAt: new Date(),
+        currency: "INR",
+        totalMinor: 1000,
+        deliveryStatus,
+        items: [{ title: deliveryStatus, priceMinor: 1000 }],
+      });
+    }
+    const auth = { authorization: `Bearer ${accessToken}` };
+    const inTransit = await app.inject({ method: "GET", url: "/packages", headers: auth });
+    expect((inTransit.json() as { packages: Array<{ deliveryStatus: string }> }).packages.map((p) => p.deliveryStatus)).toEqual([
+      "SHIPPED",
+    ]);
+    const all = await app.inject({ method: "GET", url: "/packages?all=1", headers: auth });
+    expect((all.json() as { packages: unknown[] }).packages.length).toBe(3);
+    await app.close();
+  });
 });
 
 describe("N10 exchange window ≠ return window", () => {

@@ -136,4 +136,96 @@ describe("mergeCreditAccounts", () => {
     const tgtLedger = await repos.listMoneyLedger(target.id, USER);
     expect(tgtLedger.some((l) => l.type === "TRANSFER_IN")).toBe(true);
   });
+
+  async function funded(
+    repos: ReturnType<typeof createMemoryRepositories>,
+    balance: number,
+    ref: string,
+  ) {
+    const acc = await repos.createMoneyAccount({
+      userId: USER,
+      kind: "GIFT_CARD",
+      merchant: "Myntra",
+      currency: "INR",
+      balanceCacheMinor: 0,
+      expiresAt: null,
+      status: "ACTIVE",
+    });
+    if (balance > 0) {
+      await repos.postMoneyLedger({
+        accountId: acc.id,
+        userId: USER,
+        delta: balance,
+        type: "DEPOSIT",
+        refType: "test",
+        refId: ref,
+      });
+    }
+    return acc;
+  }
+
+  it("a retried merge returns the first result and moves money once", async () => {
+    const repos = createMemoryRepositories();
+    const target = await funded(repos, 3000, "00000000-0000-4000-8000-000000000021");
+    const source = await funded(repos, 1500, "00000000-0000-4000-8000-000000000022");
+    const input = { targetAccountId: target.id, sourceAccountId: source.id };
+
+    const [a, b] = await Promise.all([
+      mergeCreditAccounts(repos, USER, input),
+      mergeCreditAccounts(repos, USER, input),
+    ]);
+    const again = await mergeCreditAccounts(repos, USER, input);
+    for (const r of [a, b, again]) {
+      expect(r.transferredMinor).toBe(1500);
+      expect(r.mergedFromId).toBe(source.id);
+    }
+    expect((await repos.findMoneyAccount(target.id, USER))?.balanceCacheMinor).toBe(4500);
+    const srcLedger = await repos.listMoneyLedger(source.id, USER);
+    expect(srcLedger.filter((l) => l.type === "TRANSFER_OUT")).toHaveLength(1);
+  });
+
+  it("a closed source merged elsewhere, or an empty source, is a conflict", async () => {
+    const repos = createMemoryRepositories();
+    const target = await funded(repos, 3000, "00000000-0000-4000-8000-000000000031");
+    const other = await funded(repos, 100, "00000000-0000-4000-8000-000000000032");
+    const source = await funded(repos, 1500, "00000000-0000-4000-8000-000000000033");
+    await mergeCreditAccounts(repos, USER, {
+      targetAccountId: other.id,
+      sourceAccountId: source.id,
+    });
+    await expect(
+      mergeCreditAccounts(repos, USER, {
+        targetAccountId: target.id,
+        sourceAccountId: source.id,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", message: /closed/ });
+
+    const empty = await funded(repos, 0, "unused");
+    await expect(
+      mergeCreditAccounts(repos, USER, {
+        targetAccountId: target.id,
+        sourceAccountId: empty.id,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT", message: /nothing to merge/ });
+  });
+
+  it("another user's account is not found", async () => {
+    const repos = createMemoryRepositories();
+    const target = await funded(repos, 3000, "00000000-0000-4000-8000-000000000041");
+    const stranger = await repos.createMoneyAccount({
+      userId: "00000000-0000-4000-8000-0000000000bb",
+      kind: "GIFT_CARD",
+      merchant: "Myntra",
+      currency: "INR",
+      balanceCacheMinor: 0,
+      expiresAt: null,
+      status: "ACTIVE",
+    });
+    await expect(
+      mergeCreditAccounts(repos, USER, {
+        targetAccountId: target.id,
+        sourceAccountId: stranger.id,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
 });

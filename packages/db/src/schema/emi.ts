@@ -19,6 +19,8 @@ export const emiPlans = pgTable(
     nextDueOn: date("next_due_on").notNull(),
     currency: text("currency").notNull().default("INR"),
     status: emiPlanStatusEnum("status").notNull().default("ACTIVE"),
+    /** idempotencyKey of the last recorded payment (POST /emi/:id/pay replays). */
+    lastPaymentKey: text("last_payment_key"),
     ...timestamps,
   },
   (t) => [index("emi_plans_user_next_due_idx").on(t.userId, t.nextDueOn)],

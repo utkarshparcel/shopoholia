@@ -84,6 +84,8 @@ export const MoneyAccountsResponseSchema = z.object({
 
 export const MoneyTransactionsResponseSchema = z.object({
   transactions: z.array(MoneyLedgerEntrySchema),
+  /** Pass back as `?cursor=` for the next page; null on the last page. */
+  nextCursor: z.string().nullable().optional(),
 });
 
 /** Fixed sample for empty-state demo (`demo: true` on POST /credits). */
@@ -141,7 +143,7 @@ export const AddCreditBodySchema = z.object({
   idempotencyKey: z.string().uuid().optional(),
   /**
    * When true, server seeds the sample ₹500 Myntra gift card (overrides
-   * kind/merchant/balance) and ensures FINANCIAL consent for the empty-state aha.
+   * kind/merchant/balance). Needs FINANCIAL consent like any other credit.
    */
   demo: z.boolean().optional(),
   /** Physical card scan / photo capture metadata (prefills audited on add). */

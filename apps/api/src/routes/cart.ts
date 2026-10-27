@@ -63,7 +63,7 @@ async function buildCartResponse(deps: AppDeps, userId: string) {
   );
 
   const user = await deps.repos.findUserById(userId);
-  const hold = readCoolingOffFromFlags(user?.consentFlags);
+  const hold = readCoolingOffFromFlags(user?.prefs);
   const now = new Date();
   const coolingOff =
     hold && isHoldActive(hold, now)

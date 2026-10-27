@@ -123,6 +123,8 @@ export type AccountantLedgerEntry = z.infer<typeof AccountantLedgerEntrySchema>;
 
 export const AccountantLedgerResponseSchema = z.object({
   entries: z.array(AccountantLedgerEntrySchema),
+  /** C3 paging: pass back as `?cursor=` for the next (older) page; null on the last page. */
+  nextCursor: z.string().nullable().optional(),
 });
 export type AccountantLedgerResponse = z.infer<typeof AccountantLedgerResponseSchema>;
 

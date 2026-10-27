@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, checkHouseholdVaultSpendCap } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import {
   avatars,
@@ -42,6 +42,10 @@ import {
   postLedgerEntry,
   deleteOrphanMoneyAccount as deleteOrphanMoneyAccountQuery,
   purgeOrphanMoneyAccounts as purgeOrphanMoneyAccountsQuery,
+  createAccountWithLedgerEntry,
+  setAccountBalance,
+  mergeAccountInto,
+  reconcileAccountCache,
   pushEvents,
   oauthStates,
   otpCodes,
@@ -79,6 +83,14 @@ import {
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
+import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
+import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
+import {
+  PurchaseMergeSplitError,
+  assertItemsSplitable,
+  assertMergePlan,
+  sumItemsMinor,
+} from "../purchase-merge-split.js";
 import {
   LISTING_WORD_SEPARATOR,
   decodeListingCursor,
@@ -92,6 +104,7 @@ import type {
   CartItemRecord,
   CartRecord,
   CoinLedgerRecord,
+  CreateMerchantPurchaseInput,
   CreateOrderInput,
   CreateSellerListingInput,
   GrantCoinsInput,
@@ -291,6 +304,133 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
     order: mapOrder(orderRow!),
     items: itemRows.map(mapOrderItem),
   };
+}
+
+/**
+ * Inserts a purchase and its lines. #38: a repeat (user, orderRef) inserts nothing and gets the
+ * existing purchase and its lines back with `created: false` (also when it races another insert).
+ */
+async function insertMerchantPurchaseWithItems(tx: Tx, input: CreateMerchantPurchaseInput) {
+  const [purchaseRow] = await tx
+    .insert(merchantPurchases)
+    .values({
+      id: randomUUID(),
+      userId: input.userId,
+      source: input.source,
+      merchant: input.merchant,
+      orderRef: input.orderRef ?? null,
+      purchasedAt: input.purchasedAt,
+      currency: input.currency,
+      totalMinor: input.totalMinor,
+      status: "CONFIRMED",
+      deliveryStatus: input.deliveryStatus ?? "ORDERED",
+      etaAt: input.etaAt ?? null,
+      trackingCode: input.trackingCode ?? null,
+      returnWindowDeadline: input.returnWindowDeadline ?? null,
+      exchangeWindowDeadline: input.exchangeWindowDeadline ?? null,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (!purchaseRow) {
+    if (input.orderRef == null) throw new Error("merchant purchase insert conflicted without an orderRef");
+    const [existing] = await tx
+      .select()
+      .from(merchantPurchases)
+      .where(and(eq(merchantPurchases.userId, input.userId), eq(merchantPurchases.orderRef, input.orderRef)))
+      .limit(1);
+    if (!existing) throw new Error("merchant purchase orderRef conflict but no row found");
+    const existingItems = await tx
+      .select()
+      .from(merchantPurchaseItems)
+      .where(eq(merchantPurchaseItems.purchaseId, existing.id))
+      .orderBy(desc(merchantPurchaseItems.createdAt));
+    return {
+      purchase: mapMerchantPurchase(existing),
+      items: existingItems.map(mapMerchantPurchaseItem),
+      created: false,
+    };
+  }
+  const itemRows =
+    input.items.length === 0
+      ? []
+      : await tx
+          .insert(merchantPurchaseItems)
+          .values(
+            input.items.map((item) => ({
+              id: randomUUID(),
+              purchaseId: purchaseRow.id,
+              title: item.title,
+              category: item.category ?? null,
+              brand: item.brand ?? null,
+              priceMinor: item.priceMinor,
+              imageKey: item.imageKey ?? null,
+              qty: item.qty ?? 1,
+              duplicateWardrobeItemId: item.duplicateWardrobeItemId ?? null,
+            })),
+          )
+          .returning();
+  return {
+    purchase: mapMerchantPurchase(purchaseRow),
+    items: itemRows.map(mapMerchantPurchaseItem),
+    created: true,
+  };
+}
+
+/**
+ * #12: inserts an ACTIVE disposition listing, or returns the item's existing ACTIVE one
+ * (disposition_listings_active_item_uidx) with `created: false`.
+ */
+async function openDispositionListingTx(
+  tx: Tx,
+  input: {
+    userId: string;
+    wardrobeItemId: string;
+    mode: DispositionListingRecord["mode"];
+    priceMinor?: number | null;
+    sellerId?: string | null;
+  },
+) {
+  const [row] = await tx
+    .insert(dispositionListings)
+    .values({
+      id: randomUUID(),
+      userId: input.userId,
+      wardrobeItemId: input.wardrobeItemId,
+      mode: input.mode,
+      priceMinor: input.priceMinor ?? null,
+      status: "ACTIVE",
+      sellerId: input.sellerId ?? null,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (row) return { listing: mapDispositionListing(row), created: true };
+  const [existing] = await tx
+    .select()
+    .from(dispositionListings)
+    .where(and(
+      eq(dispositionListings.wardrobeItemId, input.wardrobeItemId),
+      eq(dispositionListings.userId, input.userId),
+      eq(dispositionListings.status, "ACTIVE"),
+    ))
+    .limit(1);
+  if (!existing) throw new Error("disposition listing insert conflicted but no ACTIVE listing found");
+  return { listing: mapDispositionListing(existing), created: false };
+}
+
+/** Repoints ingestion docs, receipts and return requests from one purchase to another. */
+async function repointPurchaseRefs(tx: Tx, fromPurchaseId: string, toPurchaseId: string) {
+  await tx
+    .update(ingestionDocuments)
+    .set({ matchedPurchaseId: toPurchaseId, updatedAt: now() })
+    .where(eq(ingestionDocuments.matchedPurchaseId, fromPurchaseId));
+  await tx
+    .update(receipts)
+    .set({ purchaseId: toPurchaseId, updatedAt: now() })
+    .where(eq(receipts.purchaseId, fromPurchaseId));
+  await tx
+    .update(returnRequests)
+    .set({ purchaseId: toPurchaseId, updatedAt: now() })
+    .where(eq(returnRequests.purchaseId, fromPurchaseId));
 }
 
 function generateReferralCode(userId: string): string {
@@ -820,6 +960,23 @@ function mapReturnRequest(row: typeof returnRequests.$inferSelect): ReturnRecord
     invoiceReceiptId: (row as { invoiceReceiptId?: string | null }).invoiceReceiptId ?? null,
     labelImageKey: (row as { labelImageKey?: string | null }).labelImageKey ?? null,
     labelUsedAt: (row as { labelUsedAt?: Date | null }).labelUsedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapEmiPlan(row: typeof emiPlans.$inferSelect): EmiPlanRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    provider: row.provider,
+    merchant: row.merchant ?? null,
+    principalMinor: row.principalMinor,
+    remainingMinor: row.remainingMinor,
+    installmentMinor: row.installmentMinor,
+    nextDueOn: String(row.nextDueOn),
+    currency: row.currency,
+    status: row.status as EmiPlanRecord["status"],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -3233,11 +3390,13 @@ export function createPostgresRepositories(db: Db): Repositories {
         return row ? mapMerchantPurchase(row) : null;
     },
     async replaceMerchantPurchaseItems(purchaseId, items) {
-        await db
+        // One transaction: a failed insert must not leave the purchase with no lines.
+        return db.transaction(async (tx) => {
+        await tx
             .delete(merchantPurchaseItems)
             .where(eq(merchantPurchaseItems.purchaseId, purchaseId));
         if (items.length === 0) return [];
-        const rows = await db
+        const rows = await tx
             .insert(merchantPurchaseItems)
             .values(
                 items.map((item) => ({
@@ -3254,6 +3413,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             )
             .returning();
         return rows.map(mapMerchantPurchaseItem);
+        });
     },
     async moveMerchantPurchaseItems(itemIds, toPurchaseId) {
         if (itemIds.length === 0) return [];
@@ -3265,18 +3425,117 @@ export function createPostgresRepositories(db: Db): Repositories {
         return rows.map(mapMerchantPurchaseItem);
     },
     async repointMerchantPurchaseRefs(fromPurchaseId, toPurchaseId) {
-        await db
-            .update(ingestionDocuments)
-            .set({ matchedPurchaseId: toPurchaseId, updatedAt: now() })
-            .where(eq(ingestionDocuments.matchedPurchaseId, fromPurchaseId));
-        await db
-            .update(receipts)
-            .set({ purchaseId: toPurchaseId, updatedAt: now() })
-            .where(eq(receipts.purchaseId, fromPurchaseId));
-        await db
-            .update(returnRequests)
-            .set({ purchaseId: toPurchaseId, updatedAt: now() })
-            .where(eq(returnRequests.purchaseId, fromPurchaseId));
+        await db.transaction((tx) => repointPurchaseRefs(tx, fromPurchaseId, toPurchaseId));
+    },
+    async mergeMerchantPurchases(userId, targetPurchaseId, sourcePurchaseId) {
+        return db.transaction(async (tx) => {
+            // Lock both in id order so two merges of the same pair cannot deadlock.
+            const locked = await tx
+                .select()
+                .from(merchantPurchases)
+                .where(and(
+                    inArray(merchantPurchases.id, [targetPurchaseId, sourcePurchaseId]),
+                    eq(merchantPurchases.userId, userId),
+                ))
+                .orderBy(asc(merchantPurchases.id))
+                .for("update");
+            const targetRow = locked.find((r) => r.id === targetPurchaseId);
+            const sourceRow = locked.find((r) => r.id === sourcePurchaseId);
+            if (!targetRow || !sourceRow) {
+                throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
+            }
+            const target = mapMerchantPurchase(targetRow);
+            const source = mapMerchantPurchase(sourceRow);
+            const [{ n }] = await tx
+                .select({ n: sql<number>`count(*)::int` })
+                .from(merchantPurchaseItems)
+                .where(eq(merchantPurchaseItems.purchaseId, source.id));
+            assertMergePlan(target, source, n, userId);
+            await tx
+                .update(merchantPurchaseItems)
+                .set({ purchaseId: target.id, updatedAt: now() })
+                .where(eq(merchantPurchaseItems.purchaseId, source.id));
+            // Throws 23505 (return_requests_open_line_uidx) when both have an open return for the
+            // same line; the whole merge rolls back.
+            await repointPurchaseRefs(tx, source.id, target.id);
+            const itemRows = await tx
+                .select()
+                .from(merchantPurchaseItems)
+                .where(eq(merchantPurchaseItems.purchaseId, target.id))
+                .orderBy(desc(merchantPurchaseItems.createdAt));
+            const items = itemRows.map(mapMerchantPurchaseItem);
+            const [purchaseRow] = await tx
+                .update(merchantPurchases)
+                .set({ totalMinor: sumItemsMinor(items), updatedAt: now() })
+                .where(eq(merchantPurchases.id, target.id))
+                .returning();
+            await tx
+                .update(merchantPurchases)
+                .set({ status: "DUPLICATE", totalMinor: 0, updatedAt: now() })
+                .where(eq(merchantPurchases.id, source.id));
+            return { purchase: mapMerchantPurchase(purchaseRow), items };
+        });
+    },
+    async splitMerchantPurchase(userId, input) {
+        return db.transaction(async (tx) => {
+            const [row] = await tx
+                .select()
+                .from(merchantPurchases)
+                .where(and(eq(merchantPurchases.id, input.purchaseId), eq(merchantPurchases.userId, userId)))
+                .for("update");
+            if (!row) throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
+            const purchase = mapMerchantPurchase(row);
+            const itemRows = await tx
+                .select()
+                .from(merchantPurchaseItems)
+                .where(eq(merchantPurchaseItems.purchaseId, purchase.id))
+                .orderBy(desc(merchantPurchaseItems.createdAt));
+            const items = itemRows.map(mapMerchantPurchaseItem);
+            const moving = assertItemsSplitable(purchase, items, input.itemIds, userId);
+            const movingIds = new Set(moving.map((m) => m.id));
+            const remaining = items.filter((it) => !movingIds.has(it.id));
+            const [splitRow] = await tx
+                .insert(merchantPurchases)
+                .values({
+                    id: randomUUID(),
+                    userId,
+                    source: purchase.source,
+                    merchant: input.merchant?.trim() || purchase.merchant,
+                    orderRef: null,
+                    purchasedAt: purchase.purchasedAt,
+                    currency: purchase.currency,
+                    totalMinor: sumItemsMinor(moving),
+                    status: "CONFIRMED",
+                    deliveryStatus: purchase.deliveryStatus,
+                    etaAt: purchase.etaAt,
+                    trackingCode: null,
+                    returnWindowDeadline: purchase.returnWindowDeadline,
+                    exchangeWindowDeadline: purchase.exchangeWindowDeadline,
+                })
+                .returning();
+            const movedRows = await tx
+                .update(merchantPurchaseItems)
+                .set({ purchaseId: splitRow.id, updatedAt: now() })
+                .where(and(
+                    inArray(merchantPurchaseItems.id, [...movingIds]),
+                    eq(merchantPurchaseItems.purchaseId, purchase.id),
+                ))
+                .returning();
+            const [originalRow] = await tx
+                .update(merchantPurchases)
+                .set({ totalMinor: sumItemsMinor(remaining), updatedAt: now() })
+                .where(eq(merchantPurchases.id, purchase.id))
+                .returning();
+            return {
+                original: { purchase: mapMerchantPurchase(originalRow), items: remaining },
+                split: {
+                    purchase: mapMerchantPurchase(splitRow),
+                    items: movedRows
+                        .map(mapMerchantPurchaseItem)
+                        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+                },
+            };
+        });
     },
     async purgeIngestionDocumentRaw(id) {
         // One statement; a legacy owner in parsed_json moves to user_id before the body goes.
@@ -3323,22 +3582,40 @@ export function createPostgresRepositories(db: Db): Repositories {
             .orderBy(desc(moneyAccounts.createdAt));
         return rows.map(mapMoneyAccount);
     },
-    async listAllMoneyAccounts() {
+    async listMoneyAccountsByUsers(userIds) {
+        if (userIds.length === 0) return [];
         const rows = await db
             .select()
             .from(moneyAccounts)
+            .where(inArray(moneyAccounts.userId, [...userIds]))
             .orderBy(desc(moneyAccounts.createdAt));
         return rows.map(mapMoneyAccount);
     },
-    async fixMoneyAccountCache(accountId, userId, correctBalance) {
-        const updated = await db
-            .update(moneyAccounts)
-            .set({ balanceCacheMinor: correctBalance, updatedAt: now() })
-            .where(and(eq(moneyAccounts.id, accountId), eq(moneyAccounts.userId, userId)))
-            .returning({ id: moneyAccounts.id });
-        if (updated.length === 0) {
+    async listAllMoneyAccounts(opts) {
+        if (!opts) {
+            const rows = await db
+                .select()
+                .from(moneyAccounts)
+                .orderBy(desc(moneyAccounts.createdAt));
+            return rows.map(mapMoneyAccount);
+        }
+        const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
+        const rows = await db
+            .select()
+            .from(moneyAccounts)
+            .where(opts.afterId ? sql`${moneyAccounts.id} > ${opts.afterId}` : undefined)
+            .orderBy(asc(moneyAccounts.id))
+            .limit(limit);
+        return rows.map(mapMoneyAccount);
+    },
+    async fixMoneyAccountCache(accountId, userId, _correctBalance) {
+        const result = await reconcileAccountCache(db, accountId, userId, { fix: true });
+        if (!result) {
             throw new Error("Money account not found");
         }
+    },
+    async reconcileMoneyAccount(accountId, userId, opts) {
+        return reconcileAccountCache(db, accountId, userId, opts);
     },
     async listMoneyLedger(accountId, userId) {
         const rows = await db
@@ -3347,6 +3624,26 @@ export function createPostgresRepositories(db: Db): Repositories {
             .where(and(eq(moneyLedger.userId, userId), eq(moneyLedger.accountId, accountId)))
             .orderBy(desc(moneyLedger.createdAt));
         return rows.map(mapMoneyLedger);
+    },
+    async listMoneyLedgerPage(accountId, userId, page) {
+        const rows = await db
+            .select({ row: moneyLedger, createdAtText: keysetCreatedAtText(moneyLedger.createdAt) })
+            .from(moneyLedger)
+            .where(
+                and(
+                    eq(moneyLedger.userId, userId),
+                    eq(moneyLedger.accountId, accountId),
+                    keysetAfter(moneyLedger.createdAt, moneyLedger.id, page.after),
+                ),
+            )
+            .orderBy(...keysetOrderBy(moneyLedger.createdAt, moneyLedger.id))
+            .limit(page.limit + 1);
+        return toPage(
+            rows,
+            page.limit,
+            (r) => ({ createdAt: r.createdAtText, id: r.row.id }),
+            (r) => mapMoneyLedger(r.row),
+        );
     },
     async listMoneyLedgerByUser(userId) {
         const rows = await db
@@ -3371,16 +3668,19 @@ export function createPostgresRepositories(db: Db): Repositories {
         await db.delete(warranties).where(eq(warranties.userId, userId));
     },
     async deleteMerchantPurchasesByUser(userId) {
-      const rows = await db
-        .select({ id: merchantPurchases.id })
-        .from(merchantPurchases)
-        .where(eq(merchantPurchases.userId, userId));
-      const ids = rows.map((r) => r.id);
-      if (ids.length === 0) return;
-      await db
-        .delete(merchantPurchaseItems)
-        .where(inArray(merchantPurchaseItems.purchaseId, ids));
-      await db.delete(merchantPurchases).where(eq(merchantPurchases.userId, userId));
+      // Items and purchases go together, or neither does.
+      await db.transaction(async (tx) => {
+        const rows = await tx
+          .select({ id: merchantPurchases.id })
+          .from(merchantPurchases)
+          .where(eq(merchantPurchases.userId, userId));
+        const ids = rows.map((r) => r.id);
+        if (ids.length === 0) return;
+        await tx
+          .delete(merchantPurchaseItems)
+          .where(inArray(merchantPurchaseItems.purchaseId, ids));
+        await tx.delete(merchantPurchases).where(eq(merchantPurchases.userId, userId));
+      });
     },
     async createMoneyAccount(input) {
         const [row] = await db
@@ -3433,6 +3733,14 @@ export function createPostgresRepositories(db: Db): Repositories {
             .limit(1);
         return row ? mapMoneyLedger(row) : null;
     },
+    async listMoneyLedgerByRefs(userId, refIds, type) {
+        if (refIds.length === 0) return [];
+        const rows = await db
+            .select()
+            .from(moneyLedger)
+            .where(and(eq(moneyLedger.userId, userId), inArray(moneyLedger.refId, refIds), eq(moneyLedger.type, type)));
+        return rows.map(mapMoneyLedger);
+    },
     async postMoneyLedger(input) {
         return postLedgerEntry(db, {
             accountId: input.accountId,
@@ -3442,6 +3750,17 @@ export function createPostgresRepositories(db: Db): Repositories {
             refType: input.refType,
             refId: input.refId,
         });
+    },
+    async createMoneyAccountWithEntry(input) {
+        const { account, created } = await createAccountWithLedgerEntry(db, input);
+        return { account: mapMoneyAccount(account), created };
+    },
+    async setMoneyAccountBalance(input) {
+        return setAccountBalance(db, input);
+    },
+    async mergeMoneyAccounts(input) {
+        const { target, transferredMinor, alreadyApplied } = await mergeAccountInto(db, input);
+        return { account: mapMoneyAccount(target), transferredMinor, alreadyApplied };
     },
     // --- Universe P1.2: receipts & warranties ---
     async createReceipt(input) {
@@ -3497,46 +3816,50 @@ export function createPostgresRepositories(db: Db): Repositories {
             .where(and(eq(receipts.id, id), eq(receipts.userId, userId)));
     },
     async createMerchantPurchase(input) {
-      const [purchaseRow] = await db
-        .insert(merchantPurchases)
-        .values({
-        id: randomUUID(),
-        userId: input.userId,
-        source: input.source,
-            merchant: input.merchant,
-            orderRef: input.orderRef ?? null,
-            purchasedAt: input.purchasedAt,
-            currency: input.currency,
-            totalMinor: input.totalMinor,
-            status: "CONFIRMED",
-            deliveryStatus: input.deliveryStatus ?? "ORDERED",
-            etaAt: input.etaAt ?? null,
-            trackingCode: input.trackingCode ?? null,
-            returnWindowDeadline: input.returnWindowDeadline ?? null,
-            exchangeWindowDeadline: input.exchangeWindowDeadline ?? null,
-        })
-            .returning();
-        if (input.items.length === 0) {
-          return { purchase: mapMerchantPurchase(purchaseRow), items: [] };
-        }
-        const itemRows = await db
-            .insert(merchantPurchaseItems)
-            .values(input.items.map((item) => ({
-            id: randomUUID(),
-            purchaseId: purchaseRow.id,
-            title: item.title,
-            category: item.category ?? null,
-            brand: item.brand ?? null,
-            priceMinor: item.priceMinor,
-            imageKey: item.imageKey ?? null,
-            qty: item.qty ?? 1,
-            duplicateWardrobeItemId: item.duplicateWardrobeItemId ?? null,
-        })))
-            .returning();
-        return {
-            purchase: mapMerchantPurchase(purchaseRow),
-            items: itemRows.map(mapMerchantPurchaseItem),
-        };
+        // One transaction: a purchase never lands without its lines.
+        return db.transaction((tx) => insertMerchantPurchaseWithItems(tx, input));
+    },
+    async confirmReceiptPurchase(input) {
+        return db.transaction(async (tx) => {
+            // The receipt lock serialises double taps: the second waits, then sees the link.
+            const [receipt] = await tx
+                .select()
+                .from(receipts)
+                .where(and(eq(receipts.id, input.receiptId), eq(receipts.userId, input.userId)))
+                .for("update");
+            if (!receipt) return null;
+            if (receipt.purchaseId) {
+                const [linked] = await tx
+                    .select()
+                    .from(merchantPurchases)
+                    .where(eq(merchantPurchases.id, receipt.purchaseId))
+                    .limit(1);
+                if (linked) return { purchase: mapMerchantPurchase(linked), warranties: [], created: false };
+            }
+            const { purchase } = await insertMerchantPurchaseWithItems(tx, input.purchase);
+            const warrantyRows =
+                input.warranties.length === 0
+                    ? []
+                    : await tx
+                        .insert(warranties)
+                        .values(input.warranties.map((w) => ({
+                        id: randomUUID(),
+                        userId: w.userId,
+                        receiptId: w.receiptId ?? null,
+                        itemTitle: w.itemTitle,
+                        provider: w.provider,
+                        coverageUntil: w.coverageUntil,
+                        claimContact: w.claimContact ?? null,
+                        category: w.category ?? null,
+                        state: "ACTIVE" as const,
+                    })))
+                        .returning();
+            await tx
+                .update(receipts)
+                .set({ purchaseId: purchase.id, updatedAt: now() })
+                .where(eq(receipts.id, receipt.id));
+            return { purchase, warranties: warrantyRows.map(mapWarranty), created: true };
+        });
     },
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
       const [row] = await db
@@ -3602,11 +3925,17 @@ export function createPostgresRepositories(db: Db): Repositories {
         if (row) return mapWarranty(row);
         return this.findWarranty(id, userId);
     },
-    async listMerchantPurchases(userId) {
+    async listMerchantPurchases(userId, opts = {}) {
+      const statuses = opts.deliveryStatuses;
       const rows = await db
         .select()
         .from(merchantPurchases)
-        .where(eq(merchantPurchases.userId, userId))
+        .where(
+          and(
+            eq(merchantPurchases.userId, userId),
+            statuses ? inArray(merchantPurchases.deliveryStatus, [...statuses]) : undefined,
+          ),
+        )
         .orderBy(desc(merchantPurchases.createdAt));
         return rows.map(mapMerchantPurchase);
     },
@@ -3953,16 +4282,14 @@ export function createPostgresRepositories(db: Db): Repositories {
         return mapItemMetric(row);
     },
     async createDispositionListing(input) {
-        const [row] = await db.insert(dispositionListings).values({
-            id: randomUUID(),
-            userId: input.userId,
-            wardrobeItemId: input.wardrobeItemId,
+        const { listing } = await db.transaction((tx) => openDispositionListingTx(tx, {
+            ...input,
             mode: input.mode as DispositionListingRecord["mode"],
-            priceMinor: input.priceMinor ?? null,
-            status: "ACTIVE",
-            sellerId: input.sellerId ?? null,
-        }).returning();
-        return mapDispositionListing(row);
+        }));
+        return listing;
+    },
+    async openDispositionListing(input) {
+        return db.transaction((tx) => openDispositionListingTx(tx, input));
     },
     async listDispositionListings(userId) {
         const rows = await db.select().from(dispositionListings).where(eq(dispositionListings.userId, userId)).orderBy(desc(dispositionListings.createdAt));
@@ -3987,12 +4314,8 @@ export function createPostgresRepositories(db: Db): Repositories {
         return rows.map((r) => ({ id: r.id, userId: r.userId, period: r.period, category: r.category, totalMinor: r.totalMinor, createdAt: r.createdAt, updatedAt: r.updatedAt }));
     },
     async upsertSpendRollup(input) {
-        const [existing] = await db.select().from(spendRollups).where(and(eq(spendRollups.userId, input.userId), eq(spendRollups.period, input.period), eq(spendRollups.category, input.category))).limit(1);
-        if (existing) {
-            const [row] = await db.update(spendRollups).set({ totalMinor: input.totalMinor, updatedAt: now() }).where(eq(spendRollups.id, existing.id)).returning();
-            return { id: row.id, userId: row.userId, period: row.period, category: row.category, totalMinor: row.totalMinor, createdAt: row.createdAt, updatedAt: row.updatedAt };
-        }
-        const [row] = await db.insert(spendRollups).values({ id: randomUUID(), userId: input.userId, period: input.period, category: input.category, totalMinor: input.totalMinor }).returning();
+        // #54: one row per (user, period, category) — spend_rollups_user_period_category_uidx.
+        const [row] = await db.insert(spendRollups).values({ id: randomUUID(), userId: input.userId, period: input.period, category: input.category, totalMinor: input.totalMinor }).onConflictDoUpdate({ target: [spendRollups.userId, spendRollups.period, spendRollups.category], set: { totalMinor: input.totalMinor, updatedAt: now() } }).returning();
         return { id: row.id, userId: row.userId, period: row.period, category: row.category, totalMinor: row.totalMinor, createdAt: row.createdAt, updatedAt: row.updatedAt };
     },
     async listReturnRequests(userId) {
@@ -4006,69 +4329,81 @@ export function createPostgresRepositories(db: Db): Repositories {
         return mapReturnRequest(row);
     },
     async createReturnRequest(input) {
-        const [row] = await db.insert(returnRequests).values({
-          id: randomUUID(),
-          userId: input.userId,
-          purchaseId: input.purchaseId ?? null,
-          purchaseItemId: input.purchaseItemId ?? null,
-          windowDeadline: input.windowDeadline,
-          exchangeDeadline: input.exchangeDeadline ?? null,
-          state: "REQUESTED",
-          refundMinor: null,
-          method: input.method ?? null,
-          reason: input.reason ?? null,
-          orderedSize: input.orderedSize ?? null,
-          preferredSize: input.preferredSize ?? null,
-        }).returning();
-        await db.insert(returnEvents).values({ id: randomUUID(), returnRequestId: row.id, fromState: null, toState: "REQUESTED", actor: "user" });
-        return mapReturnRequest(row);
+        return (await this.openReturnRequest(input)).request;
     },
-    async updateReturnRequest(id, patch) {
-        const [existing] = await db.select().from(returnRequests).where(eq(returnRequests.id, id)).limit(1);
-        if (!existing)
-            return null;
-        const prev = existing.state;
-        const [row] = await db.update(returnRequests).set({
-            state: patch.state ?? existing.state,
-            refundMinor: patch.refundMinor !== undefined ? patch.refundMinor : existing.refundMinor,
-            method: patch.method !== undefined ? patch.method : existing.method,
-            tracking: patch.tracking !== undefined ? patch.tracking : existing.tracking,
-            exchangeDeadline: patch.exchangeDeadline !== undefined ? patch.exchangeDeadline : existing.exchangeDeadline,
-            windowDeadline: patch.windowDeadline !== undefined ? patch.windowDeadline : existing.windowDeadline,
-            pickupSlotAt: patch.pickupSlotAt !== undefined ? patch.pickupSlotAt : existing.pickupSlotAt,
-            reason: patch.reason !== undefined ? patch.reason : existing.reason,
-            orderedSize: patch.orderedSize !== undefined ? patch.orderedSize : existing.orderedSize,
-            preferredSize: patch.preferredSize !== undefined ? patch.preferredSize : existing.preferredSize,
-            chaseSnoozeUntil:
-              patch.chaseSnoozeUntil !== undefined ? patch.chaseSnoozeUntil : (existing as { chaseSnoozeUntil?: Date | null }).chaseSnoozeUntil,
-            chaseEscalated:
-              patch.chaseEscalated !== undefined
-                ? patch.chaseEscalated
-                  ? 1
-                  : 0
-                : (existing as { chaseEscalated?: number }).chaseEscalated,
-            invoiceRequestedAt:
-              patch.invoiceRequestedAt !== undefined
-                ? patch.invoiceRequestedAt
-                : (existing as { invoiceRequestedAt?: Date | null }).invoiceRequestedAt,
-            invoiceReceiptId:
-              patch.invoiceReceiptId !== undefined
-                ? patch.invoiceReceiptId
-                : (existing as { invoiceReceiptId?: string | null }).invoiceReceiptId,
-            labelImageKey:
-              patch.labelImageKey !== undefined
-                ? patch.labelImageKey
-                : (existing as { labelImageKey?: string | null }).labelImageKey,
-            labelUsedAt:
-              patch.labelUsedAt !== undefined
-                ? patch.labelUsedAt
-                : (existing as { labelUsedAt?: Date | null }).labelUsedAt,
-            updatedAt: now(),
-        }).where(eq(returnRequests.id, id)).returning();
-        if (patch.state && patch.state !== prev) {
-            await db.insert(returnEvents).values({ id: randomUUID(), returnRequestId: id, fromState: prev, toState: patch.state, actor: "user" });
-        }
-        return mapReturnRequest(row);
+    async openReturnRequest(input) {
+        const purchaseId = input.purchaseId ?? null;
+        const purchaseItemId = input.purchaseItemId ?? null;
+        return db.transaction(async (tx) => {
+            const [row] = await tx.insert(returnRequests).values({
+              id: randomUUID(),
+              userId: input.userId,
+              purchaseId,
+              purchaseItemId,
+              windowDeadline: input.windowDeadline,
+              exchangeDeadline: input.exchangeDeadline ?? null,
+              state: input.state ?? "REQUESTED",
+              refundMinor: null,
+              method: input.method ?? null,
+              reason: input.reason ?? null,
+              orderedSize: input.orderedSize ?? null,
+              preferredSize: input.preferredSize ?? null,
+            }).onConflictDoNothing().returning();
+            if (!row) {
+                // return_requests_open_line_uidx: this line already has an open return.
+                const [open] = await tx.select().from(returnRequests).where(and(
+                    eq(returnRequests.userId, input.userId),
+                    sql`${returnRequests.purchaseId} IS NOT DISTINCT FROM ${purchaseId}::uuid`,
+                    sql`${returnRequests.purchaseItemId} IS NOT DISTINCT FROM ${purchaseItemId}::uuid`,
+                    inArray(returnRequests.state, OPEN_RETURN_STATES),
+                )).limit(1);
+                if (!open) throw new Error("Return request insert lost: the open return was closed meanwhile");
+                return { request: mapReturnRequest(open), created: false };
+            }
+            const events: Array<typeof returnEvents.$inferInsert> = [{ id: randomUUID(), returnRequestId: row.id, fromState: null, toState: "REQUESTED", actor: "user" }];
+            if (row.state === "INITIATED") {
+                events.push({ id: randomUUID(), returnRequestId: row.id, fromState: "REQUESTED", toState: "INITIATED", actor: "user" });
+            }
+            await tx.insert(returnEvents).values(events);
+            return { request: mapReturnRequest(row), created: true };
+        });
+    },
+    async expireOverdueReturnRequests(userId, at) {
+        return db.transaction(async (tx) => {
+            const due = await tx.select({ id: returnRequests.id, state: returnRequests.state }).from(returnRequests).where(and(
+                eq(returnRequests.userId, userId),
+                lt(returnRequests.windowDeadline, at),
+                inArray(returnRequests.state, returnStatesInto("EXPIRED")),
+            )).for("update");
+            if (due.length === 0) return [];
+            const rows = await tx.update(returnRequests).set({ state: "EXPIRED", updatedAt: now() }).where(inArray(returnRequests.id, due.map((d) => d.id))).returning();
+            await tx.insert(returnEvents).values(due.map((d) => ({ id: randomUUID(), returnRequestId: d.id, fromState: d.state, toState: "EXPIRED", actor: "system.expire" })));
+            return rows.map(mapReturnRequest);
+        });
+    },
+    async updateReturnRequest(id, patch, opts = {}) {
+        return db.transaction(async (tx) => {
+            const [existing] = await tx.select().from(returnRequests).where(opts.userId ? and(eq(returnRequests.id, id), eq(returnRequests.userId, opts.userId)) : eq(returnRequests.id, id)).for("update");
+            if (!existing)
+                return null;
+            if (opts.fromStates && !opts.fromStates.includes(existing.state)) {
+                throw new ReturnStateConflictError(existing.state);
+            }
+            const prev = existing.state;
+            const { chaseEscalated, ...rest } = patch;
+            const set: Partial<typeof returnRequests.$inferInsert> = { updatedAt: now() };
+            for (const [k, v] of Object.entries(rest)) {
+                if (v !== undefined) (set as Record<string, unknown>)[k] = v;
+            }
+            if (chaseEscalated !== undefined) set.chaseEscalated = chaseEscalated ? 1 : 0;
+            const [row] = await tx.update(returnRequests).set(set).where(eq(returnRequests.id, id)).returning();
+            if (patch.state && patch.state !== prev) {
+                await tx.insert(returnEvents).values({ id: randomUUID(), returnRequestId: id, fromState: prev, toState: patch.state, actor: opts.actor ?? "user" });
+            } else if (opts.noteActor) {
+                await tx.insert(returnEvents).values({ id: randomUUID(), returnRequestId: id, fromState: prev, toState: prev, actor: opts.noteActor });
+            }
+            return mapReturnRequest(row);
+        });
     },
     async listReturnEvents(returnRequestId) {
         const rows = await db.select().from(returnEvents).where(eq(returnEvents.returnRequestId, returnRequestId)).orderBy(desc(returnEvents.createdAt));
@@ -4085,6 +4420,20 @@ export function createPostgresRepositories(db: Db): Repositories {
     async findMerchantPurchaseItemById(id) {
       const [row] = await db.select().from(merchantPurchaseItems).where(eq(merchantPurchaseItems.id, id)).limit(1);
       return row ? mapMerchantPurchaseItem(row) : null;
+    },
+    async listMerchantPurchasesByIds(userId, ids) {
+      if (ids.length === 0) return [];
+      const rows = await db.select().from(merchantPurchases).where(and(eq(merchantPurchases.userId, userId), inArray(merchantPurchases.id, ids)));
+      return rows.map(mapMerchantPurchase);
+    },
+    async listMerchantPurchaseItemsByIds(userId, ids) {
+      if (ids.length === 0) return [];
+      const rows = await db
+        .select({ item: merchantPurchaseItems })
+        .from(merchantPurchaseItems)
+        .innerJoin(merchantPurchases, eq(merchantPurchases.id, merchantPurchaseItems.purchaseId))
+        .where(and(eq(merchantPurchases.userId, userId), inArray(merchantPurchaseItems.id, ids)));
+      return rows.map((r) => mapMerchantPurchaseItem(r.item));
     },
     async updateMerchantPurchaseDelivery(id, userId, patch) {
       const [existing] = await db
@@ -4140,9 +4489,11 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
     async createRecipient(input) {
         const wishlist = normalizeWishlist(input.profile?.wishlist ?? []);
-        const [row] = await db.insert(recipients).values({ id: randomUUID(), userId: input.userId, name: input.name, relationship: (input.relationship ?? "OTHER"), region: input.region ?? "IN" }).returning();
+        // The recipient and its profile commit together.
+        return db.transaction(async (tx) => {
+        const [row] = await tx.insert(recipients).values({ id: randomUUID(), userId: input.userId, name: input.name, relationship: (input.relationship ?? "OTHER"), region: input.region ?? "IN" }).returning();
         if (input.profile) {
-            await db.insert(recipientProfiles).values({
+            await tx.insert(recipientProfiles).values({
                 id: randomUUID(),
                 recipientId: row.id,
                 sizes: (input.profile.sizes ?? {}),
@@ -4153,9 +4504,10 @@ export function createPostgresRepositories(db: Db): Repositories {
             });
         }
         else {
-            await db.insert(recipientProfiles).values({ id: randomUUID(), recipientId: row.id, sizes: {}, tasteTags: [], wishlist: [], importantDates: [], notes: null });
+            await tx.insert(recipientProfiles).values({ id: randomUUID(), recipientId: row.id, sizes: {}, tasteTags: [], wishlist: [], importantDates: [], notes: null });
         }
         return { id: row.id, userId: row.userId, name: row.name, relationship: row.relationship, region: row.region, createdAt: row.createdAt, updatedAt: row.updatedAt };
+        });
     },
     async findRecipientProfile(recipientId) {
         const [row] = await db.select().from(recipientProfiles).where(eq(recipientProfiles.recipientId, recipientId)).limit(1);
@@ -4163,14 +4515,21 @@ export function createPostgresRepositories(db: Db): Repositories {
             return null;
         return { id: row.id, recipientId: row.recipientId, sizes: (row.sizes ?? {}), tasteTags: (row.tasteTags ?? []), wishlist: normalizeWishlist(row.wishlist ?? []), importantDates: (row.importantDates ?? []), notes: row.notes ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt };
     },
+    async listRecipientProfiles(recipientIds) {
+        if (recipientIds.length === 0)
+            return [];
+        const rows = await db.select().from(recipientProfiles).where(inArray(recipientProfiles.recipientId, [...recipientIds]));
+        return rows.map((row) => ({ id: row.id, recipientId: row.recipientId, sizes: (row.sizes ?? {}), tasteTags: (row.tasteTags ?? []), wishlist: normalizeWishlist(row.wishlist ?? []), importantDates: (row.importantDates ?? []), notes: row.notes ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt }));
+    },
     async upsertRecipientProfile(input) {
-        const [existing] = await db.select().from(recipientProfiles).where(eq(recipientProfiles.recipientId, input.recipientId)).limit(1);
-        if (existing) {
-            const wishlist = input.wishlist !== undefined ? normalizeWishlist(input.wishlist) : normalizeWishlist(existing.wishlist ?? []);
-            const [row] = await db.update(recipientProfiles).set({ sizes: (input.sizes ?? existing.sizes), tasteTags: input.tasteTags ?? existing.tasteTags, wishlist, importantDates: (input.importantDates ?? existing.importantDates), notes: input.notes !== undefined ? input.notes : existing.notes, updatedAt: now() }).where(eq(recipientProfiles.id, existing.id)).returning();
-            return { id: row.id, recipientId: row.recipientId, sizes: (row.sizes ?? {}), tasteTags: (row.tasteTags ?? []), wishlist: normalizeWishlist(row.wishlist ?? []), importantDates: (row.importantDates ?? []), notes: row.notes ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt };
-        }
-        const [row] = await db.insert(recipientProfiles).values({ id: randomUUID(), recipientId: input.recipientId, sizes: (input.sizes ?? {}), tasteTags: input.tasteTags ?? [], wishlist: normalizeWishlist(input.wishlist ?? []), importantDates: (input.importantDates ?? []), notes: input.notes ?? null }).returning();
+        // One profile per recipient (unique recipient_id): insert, or patch only the given fields.
+        const set: Partial<typeof recipientProfiles.$inferInsert> = { updatedAt: now() };
+        if (input.sizes != null) set.sizes = input.sizes;
+        if (input.tasteTags != null) set.tasteTags = input.tasteTags;
+        if (input.wishlist !== undefined) set.wishlist = normalizeWishlist(input.wishlist);
+        if (input.importantDates != null) set.importantDates = input.importantDates;
+        if (input.notes !== undefined) set.notes = input.notes;
+        const [row] = await db.insert(recipientProfiles).values({ id: randomUUID(), recipientId: input.recipientId, sizes: (input.sizes ?? {}), tasteTags: input.tasteTags ?? [], wishlist: normalizeWishlist(input.wishlist ?? []), importantDates: (input.importantDates ?? []), notes: input.notes ?? null }).onConflictDoUpdate({ target: recipientProfiles.recipientId, set }).returning();
         return { id: row.id, recipientId: row.recipientId, sizes: (row.sizes ?? {}), tasteTags: (row.tasteTags ?? []), wishlist: normalizeWishlist(row.wishlist ?? []), importantDates: (row.importantDates ?? []), notes: row.notes ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt };
     },
     async listGiftOrders(userId) {
@@ -4259,15 +4618,27 @@ export function createPostgresRepositories(db: Db): Repositories {
         };
     },
     async createGroupGiftContribution(input) {
-        const [row] = await db.insert(groupGiftContributions).values({
+        const key = input.idempotencyKey ?? null;
+        // A retried tap with the same key hits the (gift_order_id, idempotency_key) unique index and returns the first row.
+        let [row] = await db.insert(groupGiftContributions).values({
           id: randomUUID(),
           giftOrderId: input.giftOrderId,
           contributorUserId: input.contributorUserId ?? null,
           contributorName: input.contributorName ?? null,
           amountMinor: input.amountMinor,
           note: input.note ?? null,
+          idempotencyKey: key,
+        }).onConflictDoNothing({
+          target: [groupGiftContributions.giftOrderId, groupGiftContributions.idempotencyKey],
+          where: sql`${groupGiftContributions.idempotencyKey} IS NOT NULL`,
         }).returning();
-        return {
+        const created = row !== undefined;
+        if (!row && key) {
+            [row] = await db.select().from(groupGiftContributions).where(and(eq(groupGiftContributions.giftOrderId, input.giftOrderId), eq(groupGiftContributions.idempotencyKey, key))).limit(1);
+        }
+        if (!row)
+            throw new Error("group gift contribution insert lost");
+        return { created, contribution: {
           id: row.id,
           giftOrderId: row.giftOrderId,
           contributorUserId: row.contributorUserId ?? null,
@@ -4276,7 +4647,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           note: row.note ?? null,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
-        };
+        } };
     },
     async listGroupGiftContributions(giftOrderId) {
         const rows = await db
@@ -4301,6 +4672,19 @@ export function createPostgresRepositories(db: Db): Repositories {
           .from(groupGiftContributions)
           .where(eq(groupGiftContributions.giftOrderId, giftOrderId));
         return rows.reduce((sum, row) => sum + row.amountMinor, 0);
+    },
+    async sumGroupGiftContributionsByOrders(giftOrderIds) {
+        const sums = new Map<string, number>(giftOrderIds.map((id) => [id, 0]));
+        if (giftOrderIds.length === 0)
+            return sums;
+        const rows = await db
+          .select({ giftOrderId: groupGiftContributions.giftOrderId, total: sql<string>`coalesce(sum(${groupGiftContributions.amountMinor}), 0)` })
+          .from(groupGiftContributions)
+          .where(inArray(groupGiftContributions.giftOrderId, [...giftOrderIds]))
+          .groupBy(groupGiftContributions.giftOrderId);
+        for (const row of rows)
+            sums.set(row.giftOrderId, Number(row.total));
+        return sums;
     },
     // --- P4 fit ---
     async listMeasurementProfiles(userId) {
@@ -4396,7 +4780,8 @@ export function createPostgresRepositories(db: Db): Repositories {
         return rows.map(mapTailoringOrder);
     },
     async updateTailoringOrderState(id, state) {
-        const [row] = await db.update(tailoringOrders).set({ state: state, updatedAt: now() }).where(eq(tailoringOrders.id, id)).returning();
+        // A DELIVERED or CANCELLED order never moves again (the job ladder and mark-received race).
+        const [row] = await db.update(tailoringOrders).set({ state: state, updatedAt: now() }).where(and(eq(tailoringOrders.id, id), or(eq(tailoringOrders.state, state), sql`${tailoringOrders.state} NOT IN ('DELIVERED', 'CANCELLED')`))).returning();
         if (!row) return null;
         return mapTailoringOrder(row);
     },
@@ -4448,12 +4833,13 @@ export function createPostgresRepositories(db: Db): Repositories {
         const [row] = await db.select().from(dispositionListings).where(and(eq(dispositionListings.id, id), eq(dispositionListings.userId, userId))).limit(1);
         return row ? mapDispositionListing(row) : null;
     },
-    async updateDispositionListing(id, patch) {
-        const [existing] = await db.select().from(dispositionListings).where(eq(dispositionListings.id, id)).limit(1);
-        if (!existing)
-            return null;
-        const [row] = await db.update(dispositionListings).set({ status: patch.status ?? existing.status, priceMinor: patch.priceMinor !== undefined ? patch.priceMinor : existing.priceMinor, updatedAt: now() }).where(eq(dispositionListings.id, id)).returning();
-        return mapDispositionListing(row);
+    async updateDispositionListing(id, patch, opts = {}) {
+        // One conditional UPDATE: with fromStatuses, a listing that moved on is not overwritten.
+        const set: Partial<typeof dispositionListings.$inferInsert> = { updatedAt: now() };
+        if (patch.status !== undefined) set.status = patch.status;
+        if (patch.priceMinor !== undefined) set.priceMinor = patch.priceMinor;
+        const [row] = await db.update(dispositionListings).set(set).where(and(eq(dispositionListings.id, id), opts.fromStatuses ? inArray(dispositionListings.status, [...opts.fromStatuses]) : undefined)).returning();
+        return row ? mapDispositionListing(row) : null;
     },
     async createSwapCircle(input) {
       const [row] = await db
@@ -4527,7 +4913,17 @@ export function createPostgresRepositories(db: Db): Repositories {
       );
     },
     async addSwapCircleMember(input) {
-      const [existing] = await db
+      // A concurrent join of the same user is a no-op on the unique (circle_id, user_id).
+      await db
+        .insert(swapCircleMembers)
+        .values({
+          id: randomUUID(),
+          circleId: input.circleId,
+          userId: input.userId,
+          role: input.role,
+        })
+        .onConflictDoNothing({ target: [swapCircleMembers.circleId, swapCircleMembers.userId] });
+      const [row] = await db
         .select()
         .from(swapCircleMembers)
         .where(
@@ -4537,25 +4933,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           ),
         )
         .limit(1);
-      if (existing) {
-        return {
-          id: existing.id,
-          circleId: existing.circleId,
-          userId: existing.userId,
-          role: existing.role as SwapCircleMemberRecord["role"],
-          createdAt: existing.createdAt,
-          updatedAt: existing.updatedAt,
-        } satisfies SwapCircleMemberRecord;
-      }
-      const [row] = await db
-        .insert(swapCircleMembers)
-        .values({
-          id: randomUUID(),
-          circleId: input.circleId,
-          userId: input.userId,
-          role: input.role,
-        })
-        .returning();
+      if (!row) throw new Error("swap circle member insert lost");
       return {
         id: row.id,
         circleId: row.circleId,
@@ -4666,23 +5044,31 @@ export function createPostgresRepositories(db: Db): Repositories {
           }) satisfies SwapListingRecord,
       );
     },
-    async updateSwapListing(id, patch) {
-      const [existing] = await db.select().from(swapListings).where(eq(swapListings.id, id)).limit(1);
-      if (!existing) return null;
-      const [row] = await db
+    async updateSwapListing(id, patch, opts = {}) {
+      return db.transaction(async (tx) => {
+      // One conditional UPDATE: two borrowers racing for a LISTED item cannot both win.
+      const set: Partial<typeof swapListings.$inferInsert> = { updatedAt: now() };
+      if (patch.status !== undefined) set.status = patch.status;
+      if (patch.borrowerUserId !== undefined) set.borrowerUserId = patch.borrowerUserId;
+      if (patch.dispositionListingId !== undefined) set.dispositionListingId = patch.dispositionListingId;
+      const [row] = await tx
         .update(swapListings)
-        .set({
-          status: patch.status ?? existing.status,
-          borrowerUserId:
-            patch.borrowerUserId !== undefined ? patch.borrowerUserId : existing.borrowerUserId,
-          dispositionListingId:
-            patch.dispositionListingId !== undefined
-              ? patch.dispositionListingId
-              : existing.dispositionListingId,
-          updatedAt: now(),
-        })
-        .where(eq(swapListings.id, id))
+        .set(set)
+        .where(and(
+          eq(swapListings.id, id),
+          opts.fromStatuses ? inArray(swapListings.status, [...opts.fromStatuses]) : undefined,
+        ))
         .returning();
+      if (!row) return null;
+      if (opts.dispositionStatus && row.dispositionListingId) {
+        await tx
+          .update(dispositionListings)
+          .set({ status: opts.dispositionStatus, updatedAt: now() })
+          .where(and(
+            eq(dispositionListings.id, row.dispositionListingId),
+            eq(dispositionListings.status, "ACTIVE"),
+          ));
+      }
       return {
         id: row.id,
         circleId: row.circleId,
@@ -4694,6 +5080,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       } satisfies SwapListingRecord;
+      });
     },
 
     async createHousehold(input) {
@@ -4768,7 +5155,17 @@ export function createPostgresRepositories(db: Db): Repositories {
       );
     },
     async addHouseholdMember(input) {
-      const existing = await db
+      // A concurrent join of the same user is a no-op on the unique (household_id, user_id).
+      await db
+        .insert(householdMembers)
+        .values({
+          id: randomUUID(),
+          householdId: input.householdId,
+          userId: input.userId,
+          role: input.role,
+        })
+        .onConflictDoNothing({ target: [householdMembers.householdId, householdMembers.userId] });
+      const [row] = await db
         .select()
         .from(householdMembers)
         .where(
@@ -4778,26 +5175,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           ),
         )
         .limit(1);
-      if (existing[0]) {
-        const row = existing[0];
-        return {
-          id: row.id,
-          householdId: row.householdId,
-          userId: row.userId,
-          role: row.role as HouseholdMemberRecord["role"],
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        } satisfies HouseholdMemberRecord;
-      }
-      const [row] = await db
-        .insert(householdMembers)
-        .values({
-          id: randomUUID(),
-          householdId: input.householdId,
-          userId: input.userId,
-          role: input.role,
-        })
-        .returning();
+      if (!row) throw new Error("household member insert lost");
       return {
         id: row.id,
         householdId: row.householdId,
@@ -4880,6 +5258,32 @@ export function createPostgresRepositories(db: Db): Repositories {
         })
         .returning();
       return mapHouseholdVaultSettings(row!);
+    },
+    async addHouseholdVaultSpent(householdId, userId, deltaMinor) {
+      // Check and write with no await between them, so concurrent spends can't both pass the cap.
+      const key = `${householdId}:${userId}`;
+      const prev = householdVaultSettingsStore.get(key);
+      const spent = prev?.spentMinor ?? 0;
+      if (deltaMinor > 0) {
+        const cap = checkHouseholdVaultSpendCap({
+          isMember: true,
+          vaultAccess: prev?.vaultAccess,
+          spendCapMinor: prev?.spendCapMinor,
+          spentMinor: spent,
+          amountMinor: deltaMinor,
+        });
+        if (!cap.allowed) return null;
+      }
+      const next: HouseholdVaultSettingsRecord = {
+        householdId,
+        userId,
+        vaultAccess: prev?.vaultAccess ?? "VIEW",
+        spendCapMinor: prev?.spendCapMinor ?? null,
+        spentMinor: Math.max(0, spent + deltaMinor),
+        updatedAt: now(),
+      };
+      householdVaultSettingsStore.set(key, next);
+      return next;
     },
     async listHouseholdVaultSettings(householdId) {
       const rows = await db
@@ -5268,10 +5672,9 @@ export function createPostgresRepositories(db: Db): Repositories {
       const rows = await db
         .select()
         .from(emiPlans)
-        .where(eq(emiPlans.userId, userId))
+        .where(and(eq(emiPlans.userId, userId), opts?.status ? eq(emiPlans.status, opts.status) : undefined))
         .orderBy(asc(emiPlans.nextDueOn));
       return rows
-        .filter((r) => !opts?.status || r.status === opts.status)
         .map((row) => ({
           id: row.id,
           userId: row.userId,
@@ -5331,6 +5734,34 @@ export function createPostgresRepositories(db: Db): Repositories {
         updatedAt: row.updatedAt,
       };
     },
+    async payEmiPlan(id, userId, input) {
+      const { from, to, paymentKey } = input;
+      const [row] = await db
+        .update(emiPlans)
+        .set({ ...to, lastPaymentKey: paymentKey ?? null, updatedAt: now() })
+        .where(
+          and(
+            eq(emiPlans.id, id),
+            eq(emiPlans.userId, userId),
+            eq(emiPlans.remainingMinor, from.remainingMinor),
+            eq(emiPlans.nextDueOn, from.nextDueOn),
+            eq(emiPlans.status, from.status),
+            paymentKey
+              ? or(isNull(emiPlans.lastPaymentKey), ne(emiPlans.lastPaymentKey, paymentKey))
+              : undefined,
+          ),
+        )
+        .returning();
+      if (row) return { plan: mapEmiPlan(row), outcome: "APPLIED" as const };
+      const [current] = await db
+        .select()
+        .from(emiPlans)
+        .where(and(eq(emiPlans.id, id), eq(emiPlans.userId, userId)))
+        .limit(1);
+      if (!current) return null;
+      const replay = paymentKey != null && current.lastPaymentKey === paymentKey;
+      return { plan: mapEmiPlan(current), outcome: replay ? ("REPLAY" as const) : ("CONFLICT" as const) };
+    },
 
     async createCashbackClaim(input) {
       const [row] = await db
@@ -5364,13 +5795,16 @@ export function createPostgresRepositories(db: Db): Repositories {
       };
     },
     async listCashbackClaims(userId, opts) {
-      const { compareCashbackClaimsByDeadline } = await import("@worn/shared");
       const rows = await db
         .select()
         .from(cashbackClaims)
-        .where(eq(cashbackClaims.userId, userId));
+        .where(
+          and(
+            eq(cashbackClaims.userId, userId),
+            opts?.status ? eq(cashbackClaims.status, opts.status) : undefined,
+          ),
+        );
       return rows
-        .filter((r) => !opts?.status || r.status === opts.status)
         .map((row) => ({
           id: row.id,
           userId: row.userId,
@@ -5410,15 +5844,15 @@ export function createPostgresRepositories(db: Db): Repositories {
       };
     },
     async claimCashbackClaim(id, userId) {
-      const existing = await this.findCashbackClaim(id, userId);
-      if (!existing) return null;
-      if (existing.status !== "UNCLAIMED") return existing;
+      // Guarded on UNCLAIMED: an EXPIRED or already CLAIMED claim is returned as it is.
       const [row] = await db
         .update(cashbackClaims)
         .set({ status: "CLAIMED", claimedAt: now(), updatedAt: now() })
-        .where(and(eq(cashbackClaims.id, id), eq(cashbackClaims.userId, userId)))
+        .where(
+          and(eq(cashbackClaims.id, id), eq(cashbackClaims.userId, userId), eq(cashbackClaims.status, "UNCLAIMED")),
+        )
         .returning();
-      if (!row) return null;
+      if (!row) return this.findCashbackClaim(id, userId);
       return {
         id: row.id,
         userId: row.userId,

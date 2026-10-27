@@ -21,6 +21,7 @@ import {
   friendlyHouseholdVaultAclCopy,
   generateHouseholdInviteCode,
   householdMemberUserIds,
+  mapLimit,
   normalizeHouseholdInviteCode,
   redactHouseholdVaultAccount,
   type CreateHouseholdBody,
@@ -312,23 +313,20 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(403).send({ error: "Forbidden", message: authzMessage(denial) });
       }
       const memberIds = householdMemberUserIds(members);
-      const all: WardrobeItemRecord[] = [];
-      for (const mid of memberIds) {
-        const items = await app.deps.repos.listWardrobeItems(mid);
-        all.push(...items);
-      }
+      // Bounded (C11): a few members' closets at a time, and a capped number of presigns.
+      const all: WardrobeItemRecord[] = (
+        await mapLimit(memberIds, 3, (mid) => app.deps.repos.listWardrobeItems(mid))
+      ).flat();
       all.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      const withUrls = await Promise.all(
-        all.map(async (r) => {
-          const imageUrls = await Promise.all(
-            (r.imageKeys ?? []).map((k) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = r.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-            : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
+      const withUrls = await mapLimit(all, 8, async (r) => {
+        const imageUrls = await Promise.all(
+          (r.imageKeys ?? []).map((k) => app.deps.storage.getSignedUrl(k)),
+        );
+        const garmentImageUrl = r.garmentImageKey
+          ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
+          : null;
+        return toWardrobeJson(r, imageUrls, garmentImageUrl);
+      });
       return { householdId: id, items: withUrls };
     },
   );
@@ -419,8 +417,9 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       const mySettings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
       const memberIds = householdMemberUserIds(members);
       const accounts = [];
+      const allAccounts = await app.deps.repos.listMoneyAccountsByUsers(memberIds);
       for (const mid of memberIds) {
-        const list = await app.deps.repos.listMoneyAccounts(mid);
+        const list = allAccounts.filter((a) => a.userId === mid);
         for (const a of list) {
           if (a.status && a.status !== "ACTIVE") continue;
           accounts.push(
@@ -549,23 +548,14 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       if (denyUnlessHouseholdMember(members, userId)) {
         return reply.code(404).send({ error: "Not Found", message: "Household not found" });
       }
-      // Find account owned by any household member (no card secrets returned).
-      let account = null as Awaited<
-        ReturnType<typeof app.deps.repos.findMoneyAccount>
-      >;
-      let ownerId: string | null = null;
-      for (const mid of householdMemberUserIds(members)) {
-        const found = await app.deps.repos.findMoneyAccount(body.accountId, mid);
-        if (found) {
-          account = found;
-          ownerId = mid;
-          break;
-        }
-      }
-      if (!account || !ownerId) {
+      // Find account owned by any household member (no card secrets returned), in one query.
+      const memberIds = householdMemberUserIds(members);
+      const account =
+        (await app.deps.repos.listMoneyAccountsByUsers(memberIds)).find((a) => a.id === body.accountId) ?? null;
+      if (!account) {
         return reply.code(404).send({ error: "Not Found", message: "Credit not found in shared vault" });
       }
-      const owner = ownerId;
+      const owner = account.userId;
       const remaining = (s: { spendCapMinor: number | null; spentMinor: number }) =>
         s.spendCapMinor == null ? null : Math.max(0, s.spendCapMinor - s.spentMinor);
 

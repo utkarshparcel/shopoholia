@@ -30,6 +30,8 @@ export const CreateEmiPlanBodySchema = z.object({
 
 export const PayEmiBodySchema = z.object({
   amountMinor: z.number().int().positive().optional(),
+  /** One key per tap: a retry with the same key records the installment once. */
+  idempotencyKey: z.string().uuid().optional(),
 });
 
 export const EmiPlanListResponseSchema = z.object({

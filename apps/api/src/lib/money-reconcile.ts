@@ -15,9 +15,10 @@
  *    or manual DB edit) and heals the cache.
  *
  * This module exposes:
- *  - `reconcileMoneyAccounts(repos, log)` — scans all money_accounts, compares
- *    `balanceCacheMinor` vs `SUM(delta)` and `last(balanceAfter)`, logs mismatches,
- *    and patches the cache when drift is found.
+ *  - `reconcileMoneyAccounts(repos, log, { fix, userId })` — pages through
+ *    money_accounts (or one user's), compares `balanceCacheMinor` vs
+ *    `SUM(delta)` and `last(balanceAfter)`, logs mismatches, and with `fix`
+ *    writes the locked SUM into the cache.
  *  - It is invoked by `GET /admin/money/reconcile` (auth-gated, audit-logged) and
  *    by the `services/worker-expiry` reconciliation job (see reconcile.ts there).
  */
@@ -44,68 +45,84 @@ export type ReconcileResult = {
   mismatches: ReconcileMismatch[];
 };
 
+/** Accounts read per page in the cross-user sweep (bounded memory). */
+export const RECONCILE_PAGE_SIZE = 500;
+
+/**
+ * Compares each account's cache with SUM(delta) of its ledger. With `userId`
+ * only that user's accounts are checked; otherwise every account, a page at a
+ * time. The comparison and the fix run per account under its row lock, so a
+ * concurrent spend can't be overwritten by a stale value. A ledger whose last
+ * `balanceAfter` disagrees with its sum is reported but never "fixed": the
+ * cache already equals the sum and the chain needs a human.
+ */
 export async function reconcileMoneyAccounts(
   repos: Repositories,
   log: FastifyBaseLogger,
-  opts: { fix?: boolean } = {},
+  opts: { fix?: boolean; userId?: string } = {},
 ): Promise<ReconcileResult> {
   const fix = opts.fix ?? true;
-
-  const allAccounts = await repos.listAllMoneyAccounts();
   const mismatches: ReconcileMismatch[] = [];
   let fixed = 0;
+  let checked = 0;
 
-  for (const account of allAccounts) {
-    const ledger = await repos.listMoneyLedger(account.id, account.userId);
-    if (ledger.length === 0) continue;
-
-    const ledgerSum = ledger.reduce((sum, e) => sum + e.delta, 0);
-    // The ledger is append-only; the latest entry's balanceAfter is the true balance
-    const last = [...ledger].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]!;
-    const lastBalanceAfter = last.balanceAfter;
-
-    // Canonical check: cache should equal sum of deltas (since we start at 0)
-    // and also equal lastBalanceAfter. We compare against both; either mismatch is drift.
-    const driftVsSum = account.balanceCacheMinor - ledgerSum;
-    const driftVsLast = account.balanceCacheMinor - lastBalanceAfter;
-    const hasDrift = driftVsSum !== 0 || driftVsLast !== 0;
-
-    if (!hasDrift) continue;
-
+  const check = async (account: MoneyAccountRecord) => {
+    checked++;
+    const r = await repos.reconcileMoneyAccount(account.id, account.userId, { fix });
+    if (!r || r.entries === 0) return;
+    const driftVsSum = r.cachedMinor - r.ledgerSumMinor;
+    const driftVsLast = r.lastBalanceAfter == null ? 0 : r.cachedMinor - r.lastBalanceAfter;
+    if (driftVsSum === 0 && driftVsLast === 0) return;
     const drift = driftVsSum !== 0 ? driftVsSum : driftVsLast;
-    let didFix = false;
-    if (fix) {
-      try {
-        await repos.fixMoneyAccountCache(account.id, account.userId, lastBalanceAfter);
-        didFix = true;
-        fixed++;
-      } catch {
-        // leave as not fixed, will be reported
-      }
-    }
-
+    if (r.fixed) fixed++;
     mismatches.push({
       accountId: account.id,
       userId: account.userId,
       merchant: account.merchant,
-      cachedMinor: account.balanceCacheMinor,
-      ledgerSumMinor: ledgerSum,
-      lastBalanceAfter,
+      cachedMinor: r.cachedMinor,
+      ledgerSumMinor: r.ledgerSumMinor,
+      lastBalanceAfter: r.lastBalanceAfter,
       driftMinor: drift,
-      fixed: didFix,
+      fixed: r.fixed,
     });
-
     log.warn(
-      { accountId: account.id, userId: account.userId, cached: account.balanceCacheMinor, ledgerSum, lastBalanceAfter, drift },
+      {
+        accountId: account.id,
+        userId: account.userId,
+        cached: r.cachedMinor,
+        ledgerSum: r.ledgerSumMinor,
+        lastBalanceAfter: r.lastBalanceAfter,
+        drift,
+        fixed: r.fixed,
+      },
       "money.reconcile.mismatch",
     );
+  };
+
+  if (opts.userId) {
+    for (const account of await repos.listMoneyAccounts(opts.userId)) {
+      await check(account);
+    }
+  } else {
+    let afterId: string | undefined;
+    for (;;) {
+      const page = await repos.listAllMoneyAccounts({ afterId, limit: RECONCILE_PAGE_SIZE });
+      for (const account of page) await check(account);
+      if (page.length < RECONCILE_PAGE_SIZE) break;
+      afterId = page[page.length - 1]!.id;
+    }
   }
 
   if (mismatches.length > 0) {
-    audit(log, "money.reconciled", { checked: allAccounts.length, mismatched: mismatches.length, fixed });
+    audit(log, "money.reconciled", {
+      checked,
+      mismatched: mismatches.length,
+      fixed,
+      ...(opts.userId ? { userId: opts.userId } : {}),
+    });
   }
 
-  return { checked: allAccounts.length, mismatched: mismatches.length, fixed, mismatches };
+  return { checked, mismatched: mismatches.length, fixed, mismatches };
 }
 
 /** Adapter so worker-expiry can reuse the same heal path without importing the API package shape. */

@@ -294,10 +294,12 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
         params: z.object({ id: z.string().uuid() }),
         body: CreateSwapListingBodySchema,
         response: {
+          200: SwapListingSchema,
           201: SwapListingSchema,
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -318,14 +320,24 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!item) {
         return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       }
-      // Private BARTER disposition — no public marketplace rails
-      const disposition = await app.deps.repos.createDispositionListing({
+      // Private BARTER disposition — no public marketplace rails. One active per item (#12).
+      const { listing: disposition, created } = await app.deps.repos.openDispositionListing({
         userId,
         wardrobeItemId: body.wardrobeItemId,
         mode: "BARTER",
         priceMinor: null,
         sellerId: null,
       });
+      if (!created) {
+        const listed = (await app.deps.repos.listSwapListings(id)).find(
+          (l) => l.dispositionListingId === disposition.id,
+        );
+        if (listed) return reply.code(200).send(toListingJson(listed));
+        return reply.code(409).send({
+          error: "Conflict",
+          message: `This item already has an active ${disposition.mode} listing`,
+        });
+      }
       const listing = await app.deps.repos.createSwapListing({
         circleId: id,
         ownerUserId: userId,
@@ -354,6 +366,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -370,24 +383,34 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Swap listing not found" });
       }
       const denial = denyUnlessCanBorrow(members, listing, userId);
+      if (denial === "NOT_LISTED") {
+        // A retry of my own borrow is the same borrow; anyone else lost the item.
+        if (listing.status === "BORROWED" && listing.borrowerUserId === userId) return toListingJson(listing);
+        return reply.code(409).send({ error: "Conflict", message: authzMessage(denial) });
+      }
       if (denial) {
         return reply.code(403).send({ error: "Forbidden", message: authzMessage(denial) });
       }
-      const updated = await app.deps.repos.updateSwapListing(listingId, {
-        status: "BORROWED",
-        borrowerUserId: userId,
-      });
-      if (listing.dispositionListingId) {
-        await app.deps.repos.updateDispositionListing(listing.dispositionListingId, {
-          status: "BARTERED",
-        });
+      // Guarded on LISTED, with the disposition marked BARTERED in the same transaction:
+      // of two members borrowing at once, one wins and the other gets 409.
+      const updated = await app.deps.repos.updateSwapListing(
+        listingId,
+        { status: "BORROWED", borrowerUserId: userId },
+        { fromStatuses: ["LISTED"], dispositionStatus: "BARTERED" },
+      );
+      if (!updated) {
+        const current = await app.deps.repos.findSwapListing(listingId, id);
+        if (current?.status === "BORROWED" && current.borrowerUserId === userId) {
+          return toListingJson(current);
+        }
+        return reply.code(409).send({ error: "Conflict", message: "Item is no longer available" });
       }
       trackServerEvent("swap_listing_borrowed", {
         userId,
         circleId: id,
         listingId,
       });
-      return toListingJson(updated!);
+      return toListingJson(updated);
     },
   );
 
@@ -404,6 +427,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -420,18 +444,30 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Swap listing not found" });
       }
       const denial = denyUnlessCanReturn(members, listing, userId);
+      if (denial === "WRONG_STATUS") {
+        const mine = listing.borrowerUserId === userId || listing.ownerUserId === userId;
+        if (listing.status === "RETURNED" && mine) return toListingJson(listing);
+        return reply.code(409).send({ error: "Conflict", message: authzMessage(denial) });
+      }
       if (denial) {
         return reply.code(403).send({ error: "Forbidden", message: authzMessage(denial) });
       }
-      const updated = await app.deps.repos.updateSwapListing(listingId, {
-        status: "RETURNED",
-      });
+      const updated = await app.deps.repos.updateSwapListing(
+        listingId,
+        { status: "RETURNED" },
+        { fromStatuses: ["BORROWED"] },
+      );
+      if (!updated) {
+        const current = await app.deps.repos.findSwapListing(listingId, id);
+        if (current?.status === "RETURNED") return toListingJson(current);
+        return reply.code(409).send({ error: "Conflict", message: "Item is not borrowed" });
+      }
       trackServerEvent("swap_listing_returned", {
         userId,
         circleId: id,
         listingId,
       });
-      return toListingJson(updated!);
+      return toListingJson(updated);
     },
   );
 };

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   allocatePurchaseToBudgetCategories,
   mapCategoryToBudgetCategory,
+  budgetActualMinor,
   budgetPeriodLabel,
+  budgetPeriodStart,
   budgetHaulAwarenessMessage,
   budgetNudgeMessage,
   computeBudgetNudges,
@@ -73,6 +75,7 @@ describe("allocatePurchaseToBudgetCategories", () => {
 describe("isBudgetExceeded", () => {
   it("returns not exceeded when no budget exists", async () => {
     const repos = {
+      findUserById: async () => null,
       listBudgets: async () => [],
       listMerchantPurchasesByUser: async () => [],
       listMerchantPurchaseItemsByPurchaseIds: async () => new Map(),
@@ -87,6 +90,7 @@ describe("isBudgetExceeded", () => {
   it("skips specific-category purchases with no line items (no false positive)", async () => {
     const now = new Date();
     const repos = {
+      findUserById: async () => null,
       listBudgets: async () => [
         {
           id: "b1",
@@ -125,6 +129,7 @@ describe("computeBudgetNudges / pickPrimaryBudgetNudge", () => {
     budgets: Array<{ category: string; period: "MONTHLY" | "QUARTERLY"; limitMinor: number }>;
   }): Repositories {
     return {
+      findUserById: async () => null,
       listBudgets: async () =>
         opts.budgets.map((b, i) => ({
           id: `b${i}`,
@@ -240,12 +245,30 @@ describe("spend envelopes (N42) — mid-period 80% threshold", () => {
 
   it("builds period labels and dedupe keys", () => {
     const now = new Date(2026, 7, 20); // Aug 2026
-    expect(budgetPeriodLabel("MONTHLY", now)).toBe("2026-08");
-    expect(budgetPeriodLabel("QUARTERLY", now)).toBe("2026-Q3");
+    expect(budgetPeriodLabel("MONTHLY", now, "Asia/Kolkata")).toBe("2026-08");
+    expect(budgetPeriodLabel("QUARTERLY", now, "Asia/Kolkata")).toBe("2026-Q3");
     expect(spendEnvelopeDedupeKey("u1", "APPAREL", "2026-08")).toBe(
       "spend-envelope:u1:APPAREL:2026-08",
     );
     expect(spendEnvelopeAlertCopy("APPAREL", 10_000, 8_000).title).toMatch(/80%/);
+  });
+
+  it("periods follow the user's time zone, not the server's (C1)", () => {
+    // 00:30 IST on 1 November is still 31 October in UTC and in New York.
+    const now = new Date("2026-10-31T19:00:00.000Z");
+    expect(budgetPeriodLabel("MONTHLY", now, "Asia/Kolkata")).toBe("2026-11");
+    expect(budgetPeriodLabel("MONTHLY", now, "America/New_York")).toBe("2026-10");
+    expect(budgetPeriodStart("MONTHLY", now, "Asia/Kolkata").toISOString()).toBe("2026-10-31T18:30:00.000Z");
+    expect(budgetPeriodStart("QUARTERLY", now, "Asia/Kolkata").toISOString()).toBe("2026-09-30T18:30:00.000Z");
+    expect(budgetPeriodLabel("QUARTERLY", new Date("2026-12-31T18:45:00.000Z"), "Asia/Kolkata")).toBe("2027-Q1");
+    // A purchase at 02:00 IST on 1 November counts in November, not October.
+    const purchases = [
+      { id: "p1", purchasedAt: new Date("2026-10-31T20:30:00.000Z"), totalMinor: 700 },
+      { id: "p2", purchasedAt: new Date("2026-10-31T18:00:00.000Z"), totalMinor: 300 },
+    ] as unknown as Parameters<typeof budgetActualMinor>[1];
+    expect(
+      budgetActualMinor("GENERAL", purchases, new Map(), budgetPeriodStart("MONTHLY", now, "Asia/Kolkata")),
+    ).toBe(700);
   });
 
   it("sends mid-period WARN push once per period (deduped)", async () => {
@@ -270,7 +293,7 @@ describe("spend envelopes (N42) — mid-period 80% threshold", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe(SPEND_ENVELOPE_EVENT);
     expect(events[0]?.dedupeKey).toBe(
-      spendEnvelopeDedupeKey(user.id, "APPAREL", budgetPeriodLabel("MONTHLY", now)),
+      spendEnvelopeDedupeKey(user.id, "APPAREL", budgetPeriodLabel("MONTHLY", now, "Asia/Kolkata")),
     );
 
     const second = await maybeSendSpendEnvelopeAlert(repos, {

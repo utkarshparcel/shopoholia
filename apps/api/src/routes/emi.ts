@@ -192,7 +192,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["accountant"],
         params: z.object({ id: z.string().uuid() }),
         body: PayEmiBodySchema,
-        response: { 200: EmiPlanSchema, 401: ErrorSchema, 404: ErrorSchema },
+        response: { 200: EmiPlanSchema, 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -207,14 +207,23 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       const remaining = remainingAfterPayment(plan.remainingMinor, payment);
       const status = remaining === 0 ? ("PAID" as const) : plan.status;
       const nextDueOn = remaining === 0 ? plan.nextDueOn : advanceDueOn(plan.nextDueOn);
-      const updated = await app.deps.repos.updateEmiPlan(id, userId, {
-        remainingMinor: remaining,
-        nextDueOn,
-        status,
+      // Compare-and-set on the plan as read: a concurrent second tap gets 409, and a retry with
+      // the same idempotencyKey gets the plan back without recording the installment again.
+      const paid = await app.deps.repos.payEmiPlan(id, userId, {
+        from: { remainingMinor: plan.remainingMinor, nextDueOn: plan.nextDueOn, status: plan.status },
+        to: { remainingMinor: remaining, nextDueOn, status },
+        paymentKey: body.idempotencyKey,
       });
-      if (!updated) {
+      if (!paid) {
         return reply.code(404).send({ error: "Not Found", message: "EMI plan not found" });
       }
+      if (paid.outcome === "REPLAY") return toEmiJson(paid.plan);
+      if (paid.outcome === "CONFLICT") {
+        return reply
+          .code(409)
+          .send({ error: "Conflict", message: "This plan changed while you were paying; refresh and try again" });
+      }
+      const updated = paid.plan;
       if (updated.status === "ACTIVE") {
         await scheduleEmiDueNudge(updated);
       }

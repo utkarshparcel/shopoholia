@@ -140,13 +140,9 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const recipients = await app.deps.repos.listRecipients(userId);
-      const withProfiles = await Promise.all(
-        recipients.map(async (r) => {
-          const p = await app.deps.repos.findRecipientProfile(r.id);
-          return toRecipientJson(r, p);
-        }),
-      );
-      return { recipients: withProfiles };
+      const profiles = await app.deps.repos.listRecipientProfiles(recipients.map((r) => r.id));
+      const byRecipient = new Map(profiles.map((p) => [p.recipientId, p]));
+      return { recipients: recipients.map((r) => toRecipientJson(r, byRecipient.get(r.id) ?? null)) };
     },
   );
 
@@ -337,15 +333,10 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const gifts = await app.deps.repos.listGiftOrders(userId);
-      const withSums = await Promise.all(
-        gifts.map(async (g) => {
-          const contributedMinor = g.groupTargetMinor != null
-            ? await app.deps.repos.sumGroupGiftContributions(g.id)
-            : undefined;
-          return toGiftJson(g, contributedMinor);
-        }),
+      const sums = await app.deps.repos.sumGroupGiftContributionsByOrders(
+        gifts.filter((g) => g.groupTargetMinor != null).map((g) => g.id),
       );
-      return { gifts: withSums };
+      return { gifts: gifts.map((g) => toGiftJson(g, sums.get(g.id))) };
     },
   );
 
@@ -391,6 +382,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         params: z.object({ id: z.string().uuid() }),
         body: CreateGroupContributeBodySchema,
         response: {
+          200: GroupContributeResponseSchema,
           201: GroupContributeResponseSchema,
           400: ErrorSchema,
           401: ErrorSchema,
@@ -402,19 +394,27 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { id } = request.params;
       const body = request.body as CreateGroupContributeBody;
-      const order = await app.deps.repos.findGiftOrderById(id);
+      // Owner-only: there is no invite or share-link rule for group gifts, so nobody else may add to the pool.
+      const order = await app.deps.repos.findGiftOrder(id, userId);
       if (!order) return reply.code(404).send({ error: "Not Found", message: "Gift order not found" });
       if (order.groupTargetMinor == null) {
         return reply.code(400).send({ error: "Bad Request", message: "Gift order is not a group gift" });
       }
-      const contribution = await app.deps.repos.createGroupGiftContribution({
+      const { contribution, created } = await app.deps.repos.createGroupGiftContribution({
         giftOrderId: id,
         contributorUserId: userId,
         contributorName: body.contributorName ?? null,
         amountMinor: body.amountMinor,
         note: body.note ?? null,
+        idempotencyKey: body.idempotencyKey ?? null,
       });
       const contributedMinor = await app.deps.repos.sumGroupGiftContributions(id);
+      if (!created) {
+        return reply.code(200).send({
+          contribution: toContributionJson(contribution),
+          gift: toGiftJson(order, contributedMinor),
+        });
+      }
       trackServerEvent("group_gift_contributed", {
         userId,
         giftOrderId: id,
@@ -467,8 +467,10 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         label?: string | null;
         date: string;
       }> = [];
+      const profiles = await app.deps.repos.listRecipientProfiles(recipients.map((r) => r.id));
+      const byRecipient = new Map(profiles.map((p) => [p.recipientId, p]));
       for (const r of recipients) {
-        const profile = await app.deps.repos.findRecipientProfile(r.id);
+        const profile = byRecipient.get(r.id);
         for (const d of profile?.importantDates ?? []) {
           rows.push({
             recipientId: r.id,

@@ -3,12 +3,15 @@ import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { warrantyStateEnum } from "./enums.js";
 import { receipts } from "./receipts.js";
+import { users } from "./users.js";
 
 export const warranties = pgTable(
   "warranties",
   {
     id: id(),
-    userId: uuid("user_id").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     receiptId: uuid("receipt_id").references(() => receipts.id, {
       onDelete: "set null",
     }),

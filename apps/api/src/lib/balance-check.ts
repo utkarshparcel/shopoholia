@@ -11,9 +11,12 @@ import {
   needsBalanceRecheckReminder,
   type BalanceCheckResponse,
 } from "@worn/shared";
-import { randomUUID } from "node:crypto";
+import { ledgerRefId } from "@worn/db";
 import type { MoneyAccountRecord, Repositories } from "./repositories/types.js";
 import { scheduleBalanceRecheckReminder } from "./balance-check-jobs.js";
+
+/** Upper bound on one merchant balance API call (audit API 11). */
+export const MERCHANT_BALANCE_TIMEOUT_MS = 10_000;
 
 export type MerchantBalanceFetchResult = {
   balanceMinor: number;
@@ -34,6 +37,7 @@ export async function fetchMerchantBalance(input: {
   stubBalanceMinor?: number;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
+  timeoutMs?: number;
 }): Promise<MerchantBalanceFetchResult> {
   const env = input.env ?? process.env;
   const url = env.MERCHANT_BALANCE_API_URL;
@@ -47,12 +51,17 @@ export async function fetchMerchantBalance(input: {
         currency: input.currency,
         hintBalanceMinor: input.hintBalanceMinor,
       }),
+      signal: AbortSignal.timeout(input.timeoutMs ?? MERCHANT_BALANCE_TIMEOUT_MS),
     });
     if (!res.ok) {
       throw new Error(`merchant balance API HTTP ${res.status}`);
     }
     const body = (await res.json()) as { balanceMinor?: number };
-    if (typeof body.balanceMinor !== "number" || body.balanceMinor < 0) {
+    if (
+      typeof body.balanceMinor !== "number" ||
+      !Number.isFinite(body.balanceMinor) ||
+      body.balanceMinor < 0
+    ) {
       throw new Error("merchant balance API returned invalid balanceMinor");
     }
     return { balanceMinor: Math.floor(body.balanceMinor), source: "api" };
@@ -69,30 +78,34 @@ export async function fetchMerchantBalance(input: {
   return { balanceMinor: Math.floor(stub), source: "stub" };
 }
 
+/**
+ * Sets the account to `newBalanceMinor` under the account lock, so the delta
+ * is computed from the locked balance rather than the caller's stale copy.
+ * Without a client key the ref is derived from the account's last ledger row
+ * and the target, so a retried or concurrent identical check posts once.
+ * An unchanged balance only resets the re-check clock (no ledger row).
+ */
 async function applyBalanceDelta(
   repos: Repositories,
   account: MoneyAccountRecord,
   newBalanceMinor: number,
-  idempotencyKey: string,
+  idempotencyKey?: string,
 ): Promise<{ balanceMinor: number; adjusted: boolean }> {
-  const previous = account.balanceCacheMinor;
-  const delta = newBalanceMinor - previous;
-  if (delta === 0) {
-    // Touch updatedAt so the re-check clock resets without a ledger row.
-    await repos.fixMoneyAccountCache(account.id, account.userId, previous);
-    return { balanceMinor: previous, adjusted: false };
-  }
-
-  const type = delta > 0 ? "DEPOSIT" : "SPEND";
-  const { balanceAfter } = await repos.postMoneyLedger({
+  const result = await repos.setMoneyAccountBalance({
     accountId: account.id,
     userId: account.userId,
-    delta,
-    type,
+    targetMinor: newBalanceMinor,
     refType: "BALANCE_CHECK",
-    refId: idempotencyKey,
+    refId: ({ lastLedgerId }) =>
+      idempotencyKey ??
+      ledgerRefId(
+        "credit.balance_check",
+        account.id,
+        lastLedgerId ?? "none",
+        String(newBalanceMinor),
+      ),
   });
-  return { balanceMinor: balanceAfter, adjusted: true };
+  return { balanceMinor: result.balanceAfter, adjusted: result.delta !== 0 };
 }
 
 export async function runBalanceCheck(
@@ -117,12 +130,7 @@ export async function runBalanceCheck(
       fetchImpl: opts.fetchImpl,
       env: opts.env,
     });
-    const applied = await applyBalanceDelta(
-      repos,
-      account,
-      fetched.balanceMinor,
-      randomUUID(),
-    );
+    const applied = await applyBalanceDelta(repos, account, fetched.balanceMinor);
     const refreshed = await repos.findMoneyAccount(account.id, account.userId);
     if (refreshed) {
       await scheduleBalanceRecheckReminder(refreshed, { now: opts.now });
@@ -164,7 +172,7 @@ export async function confirmManualBalance(
     repos,
     account,
     balanceMinor,
-    opts.idempotencyKey ?? randomUUID(),
+    opts.idempotencyKey,
   );
   const refreshed = await repos.findMoneyAccount(account.id, account.userId);
   if (refreshed) {

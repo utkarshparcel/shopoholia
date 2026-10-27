@@ -102,7 +102,7 @@ export const cashbackClaimsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["vault"],
         params: z.object({ id: z.string().uuid() }),
-        response: { 200: CashbackClaimSchema, 401: ErrorSchema, 404: ErrorSchema },
+        response: { 200: CashbackClaimSchema, 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -111,6 +111,10 @@ export const cashbackClaimsRoutes: FastifyPluginAsyncZod = async (app) => {
       const claimed = await app.deps.repos.claimCashbackClaim(id, userId);
       if (!claimed) {
         return reply.code(404).send({ error: "Not Found", message: "Claim not found" });
+      }
+      // A repeat on a CLAIMED claim is the same claim; an EXPIRED one can't be claimed.
+      if (claimed.status === "EXPIRED") {
+        return reply.code(409).send({ error: "Conflict", message: "This claim has expired" });
       }
       trackServerEvent("cashback_claim_marked", {
         userId,

@@ -1,5 +1,5 @@
 import { normalizeMerchantKey } from "@worn/shared";
-import { randomUUID } from "node:crypto";
+import { ledgerRefId } from "@worn/db";
 import type { MoneyAccountRecord, Repositories } from "./repositories/types.js";
 
 export class CreditMergeError extends Error {
@@ -25,6 +25,7 @@ export function assertCreditsMergeable(
   target: MoneyAccountRecord,
   source: MoneyAccountRecord,
   userId: string,
+  opts: { allowClosedSource?: boolean } = {},
 ): void {
   if (target.userId !== userId || source.userId !== userId) {
     throw new CreditMergeError("NOT_FOUND", "Credit account not found");
@@ -35,7 +36,10 @@ export function assertCreditsMergeable(
       "Cannot merge a credit account into itself",
     );
   }
-  if (target.status === "CLOSED" || source.status === "CLOSED") {
+  if (
+    target.status === "CLOSED" ||
+    (source.status === "CLOSED" && !opts.allowClosedSource)
+  ) {
     throw new CreditMergeError(
       "CONFLICT",
       "Cannot merge a closed credit account",
@@ -122,6 +126,10 @@ function soonerExpiresAt(
 /**
  * Merge `source` into `target`: transfer full balance, keep soonest expiry,
  * close source. Ledger: TRANSFER_OUT + TRANSFER_IN with shared merge ref.
+ *
+ * The repository does it in one transaction with both accounts locked, and
+ * the ref is derived from the pair, so a retried request (source already
+ * closed by the first one) returns the first result instead of failing.
  */
 export async function mergeCreditAccounts(
   repos: Repositories,
@@ -137,56 +145,35 @@ export async function mergeCreditAccounts(
   if (!target || !source) {
     throw new CreditMergeError("NOT_FOUND", "Credit account not found");
   }
-  assertCreditsMergeable(target, source, userId);
+  // A closed source is checked under the lock: it is either this merge's own
+  // retry (answered from the ledger) or a conflict.
+  assertCreditsMergeable(target, source, userId, { allowClosedSource: true });
 
-  const transferredMinor = source.balanceCacheMinor;
-  if (transferredMinor <= 0) {
-    throw new CreditMergeError(
-      "CONFLICT",
-      "Source credit has nothing to merge",
-    );
+  try {
+    const merged = await repos.mergeMoneyAccounts({
+      userId,
+      sourceAccountId: source.id,
+      targetAccountId: target.id,
+      refId: ledgerRefId("credit.merge", source.id, target.id),
+      refType: "credit.merge",
+      nextExpiresAt: (t, s) => soonerExpiresAt(t.expiresAt, s.expiresAt),
+    });
+    return {
+      account: merged.account,
+      mergedFromId: source.id,
+      transferredMinor: merged.transferredMinor,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "Money account not found") {
+      throw new CreditMergeError("NOT_FOUND", "Credit account not found");
+    }
+    if (message === "Money account closed") {
+      throw new CreditMergeError("CONFLICT", "Cannot merge a closed credit account");
+    }
+    if (message === "Money account has nothing to merge") {
+      throw new CreditMergeError("CONFLICT", "Source credit has nothing to merge");
+    }
+    throw error;
   }
-
-  const mergeRef = randomUUID();
-
-  await repos.postMoneyLedger({
-    accountId: source.id,
-    userId,
-    delta: -transferredMinor,
-    type: "TRANSFER_OUT",
-    refType: "credit.merge",
-    refId: mergeRef,
-  });
-
-  await repos.postMoneyLedger({
-    accountId: target.id,
-    userId,
-    delta: transferredMinor,
-    type: "TRANSFER_IN",
-    refType: "credit.merge",
-    refId: mergeRef,
-  });
-
-  const nextExpires = soonerExpiresAt(target.expiresAt, source.expiresAt);
-  await repos.updateMoneyAccount(source.id, userId, { status: "CLOSED" });
-  const patched =
-    (await repos.updateMoneyAccount(target.id, userId, {
-      expiresAt: nextExpires,
-    })) ?? (await repos.findMoneyAccount(target.id, userId));
-
-  if (!patched) {
-    throw new CreditMergeError("NOT_FOUND", "Credit account not found");
-  }
-
-  // Re-read for accurate balance cache after transfers.
-  const fresh = await repos.findMoneyAccount(target.id, userId);
-  if (!fresh) {
-    throw new CreditMergeError("NOT_FOUND", "Credit account not found");
-  }
-
-  return {
-    account: fresh,
-    mergedFromId: source.id,
-    transferredMinor,
-  };
 }

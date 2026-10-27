@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline, checkHouseholdVaultSpendCap } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
+import { pageInMemory } from "../paging.js";
+import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
+import {
+  PurchaseMergeSplitError,
+  assertItemsSplitable,
+  assertMergePlan,
+  sumItemsMinor,
+} from "../purchase-merge-split.js";
+>>>>>>> fix-money
 import {
   compareText,
   decodeListingCursor,
@@ -197,7 +206,59 @@ export function createMemoryRepositories(): Repositories {
   const ingestionDocumentUser = new Map<string, string>();
   const moneyAccounts = new Map<string, MoneyAccountRecord>();
   const moneyLedger = new Map<string, MoneyLedgerRecord>();
+  // (userId, refId, type) -> row: the unique ref index, so lookups don't scan.
+  const moneyLedgerByRef = new Map<string, MoneyLedgerRecord>();
+  const ledgerRefKey = (userId: string, refId: string, type: string) =>
+    `${userId}|${refId}|${type}`;
+  /** Appends one ledger row; the caller holds withMoneyLock for the user. */
+  function appendMoneyLedger(
+    account: MoneyAccountRecord,
+    input: {
+      delta: number;
+      type: MoneyLedgerRecord["type"];
+      refType?: string;
+      refId?: string;
+    },
+  ): { balanceAfter: number } {
+    if (input.refId && moneyLedgerByRef.has(ledgerRefKey(account.userId, input.refId, input.type))) {
+      const err = new Error("Duplicate ledger entry (idempotency violation)");
+      (err as unknown as { code: string }).code = "23505";
+      throw err;
+    }
+    const balanceAfter = account.balanceCacheMinor + input.delta;
+    if (balanceAfter < 0) throw new Error("Insufficient money balance");
+    const entry: MoneyLedgerRecord = {
+      id: randomUUID(),
+      accountId: account.id,
+      userId: account.userId,
+      delta: input.delta,
+      type: input.type,
+      refType: input.refType ?? null,
+      refId: input.refId ?? null,
+      balanceAfter,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    moneyLedger.set(entry.id, entry);
+    if (entry.refId) moneyLedgerByRef.set(ledgerRefKey(entry.userId, entry.refId, entry.type), entry);
+    moneyAccounts.set(account.id, { ...account, balanceCacheMinor: balanceAfter, updatedAt: now() });
+    return { balanceAfter };
+  }
+  function ledgerSumFor(accountId: string) {
+    let sum = 0;
+    let entries = 0;
+    let last: MoneyLedgerRecord | null = null;
+    for (const e of moneyLedger.values()) {
+      if (e.accountId !== accountId) continue;
+      sum += e.delta;
+      entries += 1;
+      last = e;
+    }
+    return { sum, entries, lastBalanceAfter: last?.balanceAfter ?? null };
+  }
   const receiptsStore = new Map<string, ReceiptRecord>();
+  /** In-flight receipt confirms: the memory twin of the receipt row lock. */
+  const receiptConfirms = new Map<string, Promise<{ purchase: MerchantPurchaseRecord } | null>>();
   const warrantiesStore = new Map<string, WarrantyRecord>();
   const merchantPurchasesStore = new Map<string, MerchantPurchaseRecord>();
   const merchantPurchaseItemsStore = new Map<string, MerchantPurchaseItemRecord>();
@@ -216,6 +277,7 @@ export function createMemoryRepositories(): Repositories {
   const closetProfilesStore = new Map<string, ClosetProfileRecord>();
   const brandPriceWatchesStore = new Map<string, BrandPriceWatchRecord>();
   const emiPlansStore = new Map<string, EmiPlanRecord>();
+  const emiPaymentKeys = new Map<string, string>();
   const cashbackClaimsStore = new Map<string, CashbackClaimRecord>();
   const budgetsStore = new Map<string, BudgetRecord>();
   const spendRollupsStore = new Map<string, SpendRollupRecord>();
@@ -229,6 +291,8 @@ export function createMemoryRepositories(): Repositories {
   const recipientProfileByRecipient = new Map<string, string>();
   const giftOrdersStore = new Map<string, GiftOrderRecord>();
   const groupGiftContributionsStore = new Map<string, GroupGiftContributionRecord>();
+  /** `${giftOrderId}:${idempotencyKey}` -> contribution id (mirrors the PG partial unique index). */
+  const groupGiftContributionKeys = new Map<string, string>();
   const measurementStore = new Map<string, MeasurementProfileRecord>();
   const templateStore = new Map<string, CustomizationTemplateRecord>();
   const tailoringOrdersStore = new Map<string, TailoringOrderRecord>();
@@ -2155,6 +2219,9 @@ export function createMemoryRepositories(): Repositories {
       for (const [id, l] of moneyLedger) {
         if (l.userId === userId) moneyLedger.delete(id);
       }
+      for (const [key, l] of moneyLedgerByRef) {
+        if (l.userId === userId) moneyLedgerByRef.delete(key);
+      }
       for (const [id, a] of moneyAccounts) {
         if (a.userId === userId) moneyAccounts.delete(id);
       }
@@ -2512,6 +2579,71 @@ export function createMemoryRepositories(): Repositories {
       }
     },
 
+    async mergeMerchantPurchases(userId, targetPurchaseId, sourcePurchaseId) {
+      const target = merchantPurchasesStore.get(targetPurchaseId);
+      const source = merchantPurchasesStore.get(sourcePurchaseId);
+      if (!target || !source || target.userId !== userId || source.userId !== userId) {
+        throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
+      }
+      const sourceItemIds = merchantPurchaseItemsByPurchase.get(source.id) ?? [];
+      assertMergePlan(target, source, sourceItemIds.length, userId);
+      // Mirror return_requests_open_line_uidx: refuse before writing anything (no partial merge).
+      const openLines = (purchaseId: string) =>
+        new Set(
+          [...returnRequestsStore.values()]
+            .filter((r) => r.purchaseId === purchaseId && OPEN_RETURN_STATES.includes(r.state as never))
+            .map((r) => r.purchaseItemId ?? ""),
+        );
+      const targetLines = openLines(target.id);
+      if ([...openLines(source.id)].some((line) => targetLines.has(line))) {
+        throw Object.assign(new Error('duplicate key value violates unique constraint "return_requests_open_line_uidx"'), {
+          code: "23505",
+        });
+      }
+      // Mark the source before the first await, as the row locks do in Postgres: a concurrent merge
+      // of the same pair (either direction) then sees DUPLICATE and gets CONFLICT.
+      merchantPurchasesStore.set(source.id, { ...source, status: "DUPLICATE", totalMinor: 0, updatedAt: new Date() });
+      await this.moveMerchantPurchaseItems([...sourceItemIds], target.id);
+      await this.repointMerchantPurchaseRefs(source.id, target.id);
+      const items = await this.listMerchantPurchaseItems(target.id);
+      const purchase = await this.updateMerchantPurchase(target.id, { totalMinor: sumItemsMinor(items) });
+      return { purchase: purchase!, items };
+    },
+
+    async splitMerchantPurchase(userId, input) {
+      const purchase = merchantPurchasesStore.get(input.purchaseId);
+      if (!purchase || purchase.userId !== userId) {
+        throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
+      }
+      const items = await this.listMerchantPurchaseItems(purchase.id);
+      const moving = assertItemsSplitable(purchase, items, input.itemIds, userId);
+      const remaining = items.filter((it) => !moving.some((m) => m.id === it.id));
+      const { purchase: neu } = await this.createMerchantPurchase({
+        userId,
+        source: purchase.source,
+        merchant: input.merchant?.trim() || purchase.merchant,
+        orderRef: null,
+        purchasedAt: purchase.purchasedAt,
+        currency: purchase.currency,
+        totalMinor: sumItemsMinor(moving),
+        deliveryStatus: purchase.deliveryStatus,
+        etaAt: purchase.etaAt,
+        trackingCode: null,
+        returnWindowDeadline: purchase.returnWindowDeadline,
+        exchangeWindowDeadline: purchase.exchangeWindowDeadline,
+        items: [],
+      });
+      await this.moveMerchantPurchaseItems(
+        moving.map((m) => m.id),
+        neu.id,
+      );
+      const original = await this.updateMerchantPurchase(purchase.id, { totalMinor: sumItemsMinor(remaining) });
+      return {
+        original: { purchase: original!, items: await this.listMerchantPurchaseItems(purchase.id) },
+        split: { purchase: neu, items: await this.listMerchantPurchaseItems(neu.id) },
+      };
+    },
+
     async purgeIngestionDocumentRaw(id) {
       const doc = ingestionDocuments.get(id);
       if (!doc) return;
@@ -2547,22 +2679,49 @@ export function createMemoryRepositories(): Repositories {
         )
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
-
-    async listAllMoneyAccounts() {
-      return [...moneyAccounts.values()].sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-      );
+    async listMoneyAccountsByUsers(userIds) {
+      const ids = new Set(userIds);
+      return [...moneyAccounts.values()]
+        .filter((a) => ids.has(a.userId))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
 
-    async fixMoneyAccountCache(accountId, userId, correctBalance) {
-      const acc = moneyAccounts.get(accountId);
-      if (!acc || acc.userId !== userId) {
+    async listAllMoneyAccounts(opts) {
+      if (!opts) {
+        return [...moneyAccounts.values()].sort(
+          (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+        );
+      }
+      const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
+      return [...moneyAccounts.values()]
+        .filter((a) => !opts.afterId || a.id > opts.afterId)
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, limit);
+    },
+
+    async fixMoneyAccountCache(accountId, userId, _correctBalance) {
+      const result = await this.reconcileMoneyAccount(accountId, userId, { fix: true });
+      if (!result) {
         throw new Error("Money account not found");
       }
-      moneyAccounts.set(accountId, {
-        ...acc,
-        balanceCacheMinor: correctBalance,
-        updatedAt: now(),
+    },
+
+    async reconcileMoneyAccount(accountId, userId, opts) {
+      return withMoneyLock(userId, async () => {
+        const acc = moneyAccounts.get(accountId);
+        if (!acc || acc.userId !== userId) return null;
+        const { sum, entries, lastBalanceAfter } = ledgerSumFor(accountId);
+        const fixed = opts.fix && entries > 0 && acc.balanceCacheMinor !== sum;
+        if (fixed) {
+          moneyAccounts.set(accountId, { ...acc, balanceCacheMinor: sum, updatedAt: now() });
+        }
+        return {
+          cachedMinor: acc.balanceCacheMinor,
+          ledgerSumMinor: sum,
+          lastBalanceAfter,
+          entries,
+          fixed,
+        };
       });
     },
 
@@ -2570,6 +2729,13 @@ export function createMemoryRepositories(): Repositories {
       return [...moneyLedger.values()]
         .filter((l) => l.userId === userId && l.accountId === accountId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+
+    async listMoneyLedgerPage(accountId, userId, page) {
+      const rows = [...moneyLedger.values()].filter(
+        (l) => l.userId === userId && l.accountId === accountId,
+      );
+      return pageInMemory(rows, page.limit, page.after, (l) => l.createdAt, (l) => l.id);
     },
 
     async listMoneyLedgerByUser(userId) {
@@ -2662,17 +2828,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async findMoneyLedgerByRef(userId, refId, type) {
-      for (let i = [...moneyLedger.values()].length - 1; i >= 0; i--) {
-        const entry = [...moneyLedger.values()][i]!;
-        if (
-          entry.userId === userId &&
-          entry.refId === refId &&
-          entry.type === type
-        ) {
-          return entry;
-        }
-      }
-      return null;
+      return moneyLedgerByRef.get(ledgerRefKey(userId, refId, type)) ?? null;
+    },
+    async listMoneyLedgerByRefs(userId, refIds, type) {
+      return refIds
+        .map((refId) => moneyLedgerByRef.get(ledgerRefKey(userId, refId, type)))
+        .filter((l): l is MoneyLedgerRecord => Boolean(l));
     },
 
     async postMoneyLedger(input) {
@@ -2682,38 +2843,101 @@ export function createMemoryRepositories(): Repositories {
         if (account.userId !== input.userId) {
           throw new Error("Money account does not belong to user");
         }
-        // DB-enforced idempotency: unique on (userId, refId, type) where refId not null
-        if (input.refId) {
-          for (const e of moneyLedger.values()) {
-            if (e.userId === input.userId && e.refId === input.refId && e.type === input.type) {
-              const err = new Error("Duplicate ledger entry (idempotency violation)");
-              (err as unknown as { code: string }).code = "23505";
-              throw err;
-            }
-          }
-        }
-        const balanceAfter = account.balanceCacheMinor + input.delta;
-        if (balanceAfter < 0) throw new Error("Insufficient money balance");
-        const entry: MoneyLedgerRecord = {
+        return appendMoneyLedger(account, input);
+      });
+    },
+
+    async createMoneyAccountWithEntry(input) {
+      return withMoneyLock(input.account.userId, async () => {
+        const { refId, type } = input.entry;
+        const prior = refId
+          ? moneyLedgerByRef.get(ledgerRefKey(input.account.userId, refId, type))
+          : undefined;
+        const priorAccount = prior ? moneyAccounts.get(prior.accountId) : undefined;
+        if (priorAccount) return { account: priorAccount, created: false };
+        if (input.entry.delta < 0) throw new Error("Insufficient money balance");
+        const account: MoneyAccountRecord = {
           id: randomUUID(),
-          accountId: input.accountId,
-          userId: input.userId,
-          delta: input.delta,
-          type: input.type,
-          refType: input.refType ?? null,
-          refId: input.refId ?? null,
-          balanceAfter,
+          ...input.account,
+          balanceCacheMinor: 0,
           createdAt: now(),
           updatedAt: now(),
         };
-        moneyLedger.set(entry.id, entry);
-        const updated: MoneyAccountRecord = {
-          ...account,
-          balanceCacheMinor: balanceAfter,
-          updatedAt: now(),
-        };
-        moneyAccounts.set(account.id, updated);
-        return { balanceAfter };
+        moneyAccounts.set(account.id, account);
+        appendMoneyLedger(account, input.entry);
+        return { account: moneyAccounts.get(account.id)!, created: true };
+      });
+    },
+
+    async setMoneyAccountBalance(input) {
+      if (!Number.isInteger(input.targetMinor) || input.targetMinor < 0) {
+        throw new RangeError("targetMinor must be a non-negative integer");
+      }
+      return withMoneyLock(input.userId, async () => {
+        const account = moneyAccounts.get(input.accountId);
+        if (!account) throw new Error("Money account not found");
+        if (account.userId !== input.userId) {
+          throw new Error("Money account does not belong to user");
+        }
+        const previousMinor = account.balanceCacheMinor;
+        const delta = input.targetMinor - previousMinor;
+        if (delta === 0) {
+          moneyAccounts.set(account.id, { ...account, updatedAt: now() });
+          return { previousMinor, balanceAfter: previousMinor, delta: 0, posted: false };
+        }
+        let lastLedgerId: string | null = null;
+        for (const e of moneyLedger.values()) if (e.accountId === account.id) lastLedgerId = e.id;
+        const refId = input.refId({ balanceMinor: previousMinor, lastLedgerId });
+        const type = delta > 0 ? "DEPOSIT" : "SPEND";
+        const prior = moneyLedgerByRef.get(ledgerRefKey(input.userId, refId, type));
+        if (prior) {
+          if (prior.accountId !== account.id) {
+            throw new Error("Money ledger ref belongs to another account");
+          }
+          return {
+            previousMinor: prior.balanceAfter - prior.delta,
+            balanceAfter: prior.balanceAfter,
+            delta: prior.delta,
+            posted: false,
+          };
+        }
+        const { balanceAfter } = appendMoneyLedger(account, {
+          delta,
+          type,
+          refType: input.refType,
+          refId,
+        });
+        return { previousMinor, balanceAfter, delta, posted: true };
+      });
+    },
+
+    async mergeMoneyAccounts(input) {
+      if (input.sourceAccountId === input.targetAccountId) {
+        throw new RangeError("Cannot merge an account into itself");
+      }
+      return withMoneyLock(input.userId, async () => {
+        const source = moneyAccounts.get(input.sourceAccountId);
+        const target = moneyAccounts.get(input.targetAccountId);
+        if (!source || !target || source.userId !== input.userId || target.userId !== input.userId) {
+          throw new Error("Money account not found");
+        }
+        const prior = moneyLedgerByRef.get(ledgerRefKey(input.userId, input.refId, "TRANSFER_OUT"));
+        if (prior) {
+          return { account: target, transferredMinor: -prior.delta, alreadyApplied: true };
+        }
+        if (source.status === "CLOSED" || target.status === "CLOSED") {
+          throw new Error("Money account closed");
+        }
+        const amount = source.balanceCacheMinor;
+        if (amount <= 0) throw new Error("Money account has nothing to merge");
+        appendMoneyLedger(source, { delta: -amount, type: "TRANSFER_OUT", refType: input.refType, refId: input.refId });
+        appendMoneyLedger(target, { delta: amount, type: "TRANSFER_IN", refType: input.refType, refId: input.refId });
+        const closed = { ...moneyAccounts.get(source.id)!, status: "CLOSED" as const, updatedAt: now() };
+        moneyAccounts.set(source.id, closed);
+        const funded = moneyAccounts.get(target.id)!;
+        const patched = { ...funded, expiresAt: input.nextExpiresAt(funded, closed), updatedAt: now() };
+        moneyAccounts.set(target.id, patched);
+        return { account: patched, transferredMinor: amount, alreadyApplied: false };
       });
     },
 
@@ -2770,6 +2994,17 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async createMerchantPurchase(input) {
+      // #38: one purchase per (user, orderRef); a repeat gets the existing one and its lines.
+      // Looked up synchronously so the check and the insert below cannot interleave.
+      const existing =
+        input.orderRef == null
+          ? undefined
+          : [...merchantPurchasesStore.values()].find(
+              (p) => p.userId === input.userId && p.orderRef === input.orderRef,
+            );
+      if (existing) {
+        return { purchase: existing, items: await this.listMerchantPurchaseItems(existing.id), created: false };
+      }
       const purchase: MerchantPurchaseRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -2818,7 +3053,32 @@ export function createMemoryRepositories(): Repositories {
         return row;
       });
 
-      return { purchase, items };
+      return { purchase, items, created: true };
+    },
+
+    async confirmReceiptPurchase(input) {
+      const receipt = receiptsStore.get(input.receiptId);
+      if (!receipt || receipt.userId !== input.userId) return null;
+      const inflight = receiptConfirms.get(input.receiptId);
+      if (inflight) {
+        const done = await inflight;
+        return done && { purchase: done.purchase, warranties: [], created: false };
+      }
+      const linked = receipt.purchaseId ? merchantPurchasesStore.get(receipt.purchaseId) : undefined;
+      if (linked) return { purchase: linked, warranties: [], created: false };
+      const run = (async () => {
+        const { purchase } = await this.createMerchantPurchase(input.purchase);
+        const warranties: WarrantyRecord[] = [];
+        for (const w of input.warranties) warranties.push(await this.createWarranty(w));
+        await this.updateReceiptPurchaseId(input.receiptId, input.userId, purchase.id);
+        return { purchase, warranties, created: true };
+      })();
+      receiptConfirms.set(input.receiptId, run);
+      try {
+        return await run;
+      } finally {
+        receiptConfirms.delete(input.receiptId);
+      }
     },
 
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
@@ -2886,9 +3146,10 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
 
-    async listMerchantPurchases(userId) {
+    async listMerchantPurchases(userId, opts = {}) {
+      const statuses = opts.deliveryStatuses;
       return [...merchantPurchasesStore.values()]
-        .filter((p) => p.userId === userId)
+        .filter((p) => p.userId === userId && (!statuses || statuses.includes(p.deliveryStatus)))
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
 
@@ -3232,6 +3493,14 @@ export function createMemoryRepositories(): Repositories {
       return rec;
     },
     async createDispositionListing(input) {
+      return (await this.openDispositionListing({ ...input, mode: input.mode as DispositionListingRecord["mode"] })).listing;
+    },
+    async openDispositionListing(input) {
+      // #12 mirror of disposition_listings_active_item_uidx; checked and inserted synchronously.
+      const active = [...dispositionStore.values()].find(
+        (r) => r.wardrobeItemId === input.wardrobeItemId && r.status === "ACTIVE",
+      );
+      if (active) return { listing: active, created: false };
       const rec: DispositionListingRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -3239,12 +3508,12 @@ export function createMemoryRepositories(): Repositories {
         mode: input.mode as DispositionListingRecord["mode"],
         priceMinor: input.priceMinor ?? null,
         status: "ACTIVE",
-        sellerId: (input as { sellerId?: string | null }).sellerId ?? null,
+        sellerId: input.sellerId ?? null,
         createdAt: now(),
         updatedAt: now(),
       };
       dispositionStore.set(rec.id, rec);
-      return rec;
+      return { listing: rec, created: true };
     },
     async listDispositionListings(userId) {
       return [...dispositionStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime());
@@ -3254,9 +3523,10 @@ export function createMemoryRepositories(): Repositories {
       if (!r || r.userId !== userId) return null;
       return r;
     },
-    async updateDispositionListing(id, patch) {
+    async updateDispositionListing(id, patch, opts = {}) {
       const r = dispositionStore.get(id);
       if (!r) return null;
+      if (opts.fromStatuses && !opts.fromStatuses.includes(r.status)) return null;
       const updated: DispositionListingRecord = { ...r, ...patch, updatedAt: now() } as DispositionListingRecord;
       dispositionStore.set(id, updated);
       return updated;
@@ -3343,9 +3613,14 @@ export function createMemoryRepositories(): Repositories {
         .filter((l) => l.circleId === circleId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
-    async updateSwapListing(id, patch) {
+    async updateSwapListing(id, patch, opts = {}) {
       const r = swapListingsStore.get(id);
       if (!r) return null;
+      if (opts.fromStatuses && !opts.fromStatuses.includes(r.status)) return null;
+      const disposition = r.dispositionListingId ? dispositionStore.get(r.dispositionListingId) : undefined;
+      if (opts.dispositionStatus && disposition?.status === "ACTIVE") {
+        dispositionStore.set(disposition.id, { ...disposition, status: opts.dispositionStatus, updatedAt: now() });
+      }
       const updated: SwapListingRecord = {
         ...r,
         status: patch.status ?? r.status,
@@ -3447,6 +3722,32 @@ export function createMemoryRepositories(): Repositories {
           input.spentMinor !== undefined
             ? input.spentMinor
             : (prev?.spentMinor ?? 0),
+        updatedAt: now(),
+      };
+      householdVaultSettingsStore.set(key, next);
+      return next;
+    },
+    async addHouseholdVaultSpent(householdId, userId, deltaMinor) {
+      // Check and write with no await between them, so concurrent spends can't both pass the cap.
+      const key = `${householdId}:${userId}`;
+      const prev = householdVaultSettingsStore.get(key);
+      const spent = prev?.spentMinor ?? 0;
+      if (deltaMinor > 0) {
+        const cap = checkHouseholdVaultSpendCap({
+          isMember: true,
+          vaultAccess: prev?.vaultAccess,
+          spendCapMinor: prev?.spendCapMinor,
+          spentMinor: spent,
+          amountMinor: deltaMinor,
+        });
+        if (!cap.allowed) return null;
+      }
+      const next: HouseholdVaultSettingsRecord = {
+        householdId,
+        userId,
+        vaultAccess: prev?.vaultAccess ?? "VIEW",
+        spendCapMinor: prev?.spendCapMinor ?? null,
+        spentMinor: Math.max(0, spent + deltaMinor),
         updatedAt: now(),
       };
       householdVaultSettingsStore.set(key, next);
@@ -3704,6 +4005,26 @@ export function createMemoryRepositories(): Repositories {
       emiPlansStore.set(id, updated);
       return updated;
     },
+    async payEmiPlan(id, userId, input) {
+      const existing = emiPlansStore.get(id);
+      if (!existing || existing.userId !== userId) return null;
+      if (input.paymentKey && emiPaymentKeys.get(id) === input.paymentKey) {
+        return { plan: existing, outcome: "REPLAY" as const };
+      }
+      const { from } = input;
+      if (
+        existing.remainingMinor !== from.remainingMinor ||
+        existing.nextDueOn !== from.nextDueOn ||
+        existing.status !== from.status
+      ) {
+        return { plan: existing, outcome: "CONFLICT" as const };
+      }
+      const updated: EmiPlanRecord = { ...existing, ...input.to, updatedAt: now() };
+      emiPlansStore.set(id, updated);
+      if (input.paymentKey) emiPaymentKeys.set(id, input.paymentKey);
+      else emiPaymentKeys.delete(id);
+      return { plan: updated, outcome: "APPLIED" as const };
+    },
 
     async createCashbackClaim(input) {
       const rec: CashbackClaimRecord = {
@@ -3724,7 +4045,6 @@ export function createMemoryRepositories(): Repositories {
       return rec;
     },
     async listCashbackClaims(userId, opts) {
-      const { compareCashbackClaimsByDeadline } = await import("@worn/shared");
       return [...cashbackClaimsStore.values()]
         .filter((c) => c.userId === userId && (!opts?.status || c.status === opts.status))
         .sort(compareCashbackClaimsByDeadline);
@@ -3809,14 +4129,27 @@ export function createMemoryRepositories(): Repositories {
       return r;
     },
     async createReturnRequest(input) {
+      return (await this.openReturnRequest(input)).request;
+    },
+    async openReturnRequest(input) {
+      const purchaseId = input.purchaseId ?? null;
+      const purchaseItemId = input.purchaseItemId ?? null;
+      const open = [...returnRequestsStore.values()].find(
+        (r) =>
+          r.userId === input.userId &&
+          r.purchaseId === purchaseId &&
+          r.purchaseItemId === purchaseItemId &&
+          (OPEN_RETURN_STATES as string[]).includes(r.state),
+      );
+      if (open) return { request: open, created: false };
       const rec: ReturnRecord = {
         id: randomUUID(),
         userId: input.userId,
-        purchaseId: input.purchaseId ?? null,
-        purchaseItemId: input.purchaseItemId ?? null,
+        purchaseId,
+        purchaseItemId,
         windowDeadline: input.windowDeadline,
         exchangeDeadline: input.exchangeDeadline ?? null,
-        state: "REQUESTED",
+        state: input.state ?? "REQUESTED",
         refundMinor: null,
         method: input.method ?? null,
         tracking: null,
@@ -3834,21 +4167,45 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
       returnRequestsStore.set(rec.id, rec);
-      const ev: ReturnEventRecord = { id: randomUUID(), returnRequestId: rec.id, fromState: null, toState: "REQUESTED", actor: "user", createdAt: now(), updatedAt: now() };
-      const list = returnEventsStore.get(rec.id) ?? [];
-      list.push(ev);
-      returnEventsStore.set(rec.id, list);
-      returnEventsById.set(ev.id, ev);
-      return rec;
+      const addEvent = (fromState: string | null, toState: string) => {
+        const ev: ReturnEventRecord = { id: randomUUID(), returnRequestId: rec.id, fromState, toState, actor: "user", createdAt: now(), updatedAt: now() };
+        const list = returnEventsStore.get(rec.id) ?? [];
+        list.push(ev);
+        returnEventsStore.set(rec.id, list);
+        returnEventsById.set(ev.id, ev);
+      };
+      addEvent(null, "REQUESTED");
+      if (rec.state === "INITIATED") addEvent("REQUESTED", "INITIATED");
+      return { request: rec, created: true };
     },
-    async updateReturnRequest(id, patch) {
+    async expireOverdueReturnRequests(userId, at) {
+      const expirable = returnStatesInto("EXPIRED") as string[];
+      const expired: ReturnRecord[] = [];
+      for (const r of returnRequestsStore.values()) {
+        if (r.userId !== userId || !(r.windowDeadline < at) || !expirable.includes(r.state)) continue;
+        expired.push((await this.updateReturnRequest(r.id, { state: "EXPIRED" }, { actor: "system.expire" }))!);
+      }
+      return expired;
+    },
+    async updateReturnRequest(id, patch, opts = {}) {
       const r = returnRequestsStore.get(id);
-      if (!r) return null;
+      if (!r || (opts.userId && r.userId !== opts.userId)) return null;
+      if (opts.fromStates && !opts.fromStates.includes(r.state)) throw new ReturnStateConflictError(r.state);
       const prev = r.state;
-      const updated: ReturnRecord = { ...r, ...patch, updatedAt: now() };
+      const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      const updated: ReturnRecord = { ...r, ...defined, updatedAt: now() };
       returnRequestsStore.set(id, updated);
-      if (patch.state && patch.state !== prev) {
-        const ev: ReturnEventRecord = { id: randomUUID(), returnRequestId: id, fromState: prev, toState: patch.state, actor: "user", createdAt: now(), updatedAt: now() };
+      const changed = Boolean(patch.state && patch.state !== prev);
+      if (changed || opts.noteActor) {
+        const ev: ReturnEventRecord = {
+          id: randomUUID(),
+          returnRequestId: id,
+          fromState: prev,
+          toState: changed ? patch.state! : prev,
+          actor: changed ? (opts.actor ?? "user") : opts.noteActor!,
+          createdAt: now(),
+          updatedAt: now(),
+        };
         const list = returnEventsStore.get(id) ?? [];
         list.push(ev);
         returnEventsStore.set(id, list);
@@ -3869,6 +4226,18 @@ export function createMemoryRepositories(): Repositories {
     },
     async findMerchantPurchaseById(id) {
       return merchantPurchasesStore.get(id) ?? null;
+    },
+    async listMerchantPurchasesByIds(userId, ids) {
+      return ids
+        .map((id) => merchantPurchasesStore.get(id))
+        .filter((p): p is MerchantPurchaseRecord => Boolean(p && p.userId === userId));
+    },
+    async listMerchantPurchaseItemsByIds(userId, ids) {
+      return ids
+        .map((id) => merchantPurchaseItemsStore.get(id))
+        .filter((i): i is MerchantPurchaseItemRecord =>
+          Boolean(i && merchantPurchasesStore.get(i.purchaseId)?.userId === userId),
+        );
     },
     async findMerchantPurchaseItemById(id) {
       return merchantPurchaseItemsStore.get(id) ?? null;
@@ -3921,6 +4290,13 @@ export function createMemoryRepositories(): Repositories {
       const pid = recipientProfileByRecipient.get(recipientId);
       if (!pid) return null;
       return recipientProfilesStore.get(pid) ?? null;
+    },
+    async listRecipientProfiles(recipientIds) {
+      return recipientIds.flatMap((rid) => {
+        const pid = recipientProfileByRecipient.get(rid);
+        const prof = pid ? recipientProfilesStore.get(pid) : undefined;
+        return prof ? [prof] : [];
+      });
     },
     async upsertRecipientProfile(input) {
       const pid = recipientProfileByRecipient.get(input.recipientId);
@@ -3983,6 +4359,10 @@ export function createMemoryRepositories(): Repositories {
       return giftOrdersStore.get(id) ?? null;
     },
     async createGroupGiftContribution(input) {
+      const keyRef = input.idempotencyKey ? `${input.giftOrderId}:${input.idempotencyKey}` : null;
+      const existingId = keyRef ? groupGiftContributionKeys.get(keyRef) : undefined;
+      const existing = existingId ? groupGiftContributionsStore.get(existingId) : undefined;
+      if (existing) return { contribution: existing, created: false };
       const rec: GroupGiftContributionRecord = {
         id: randomUUID(),
         giftOrderId: input.giftOrderId,
@@ -3994,7 +4374,8 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
       groupGiftContributionsStore.set(rec.id, rec);
-      return rec;
+      if (keyRef) groupGiftContributionKeys.set(keyRef, rec.id);
+      return { contribution: rec, created: true };
     },
     async listGroupGiftContributions(giftOrderId) {
       return [...groupGiftContributionsStore.values()]
@@ -4005,6 +4386,14 @@ export function createMemoryRepositories(): Repositories {
       return [...groupGiftContributionsStore.values()]
         .filter((c) => c.giftOrderId === giftOrderId)
         .reduce((sum, c) => sum + c.amountMinor, 0);
+    },
+    async sumGroupGiftContributionsByOrders(giftOrderIds) {
+      const sums = new Map<string, number>(giftOrderIds.map((id) => [id, 0]));
+      for (const c of groupGiftContributionsStore.values()) {
+        const prev = sums.get(c.giftOrderId);
+        if (prev !== undefined) sums.set(c.giftOrderId, prev + c.amountMinor);
+      }
+      return sums;
     },
 
     // P4 fit
@@ -4079,6 +4468,7 @@ export function createMemoryRepositories(): Repositories {
     async updateTailoringOrderState(id, state) {
       const r = tailoringOrdersStore.get(id);
       if (!r) return null;
+      if (r.state !== state && (r.state === "DELIVERED" || r.state === "CANCELLED")) return null;
       const updated: TailoringOrderRecord = { ...r, state, updatedAt: now() };
       tailoringOrdersStore.set(id, updated);
       return updated;

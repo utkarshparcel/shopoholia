@@ -1,5 +1,7 @@
 // Mirrors apps/api/src/lib/ingest-queue.ts. Kept local to avoid a hard
 // build-time dependency on the worker package from the API.
+import type { Queue } from "bullmq";
+
 export const CREDIT_EXPIRY_QUEUE = "credit-expiry";
 export const CREDIT_EXPIRY_JOB = "credit-expiry-reminder";
 
@@ -164,6 +166,48 @@ export async function scheduleWarrantyReminder(
       error: String(err),
     });
     return "skipped";
+  }
+}
+
+/**
+ * Same as scheduleWarrantyReminder for several warranties, on one queue connection
+ * (receipt confirm). Returns how many were published.
+ */
+export async function scheduleWarrantyReminders(
+  warranties: WarrantyReminderLike[],
+): Promise<number> {
+  const redisUrl = process.env.EXPIRY_REDIS_URL ?? process.env.REDIS_URL;
+  if (!redisUrl) return 0;
+  const jobs = warranties.flatMap((warranty) => {
+    if (!warranty.coverageUntil) return [];
+    const delay = computeExpiryDelayMs(warranty.coverageUntil, WARRANTY_LEAD_MS);
+    if (delay === null) return [];
+    const payload: WarrantyExpiryPayload = {
+      warrantyId: warranty.id,
+      userId: warranty.userId,
+      itemTitle: warranty.itemTitle,
+      provider: warranty.provider,
+      coverageUntil: new Date(warranty.coverageUntil).toISOString(),
+    };
+    return [{ name: WARRANTY_EXPIRY_JOB, data: payload, opts: { delay, jobId: warrantyExpiryJobId(warranty.id) } }];
+  });
+  if (jobs.length === 0) return 0;
+  let queue: Queue | undefined;
+  try {
+    const bullmq = await import("bullmq");
+    queue = new bullmq.Queue(WARRANTY_EXPIRY_QUEUE, { connection: redisUrl });
+    for (const job of jobs) await queue.add(job.name, job.data, job.opts);
+    return jobs.length;
+  } catch (err) {
+    console.warn("[audit] warranty-expiry.enqueue.failed", {
+      warrantyIds: warranties.map((w) => w.id),
+      error: String(err),
+    });
+    return 0;
+  } finally {
+    await queue?.close().catch((err: unknown) => {
+      console.warn("[audit] warranty-expiry.queue-close.failed", { error: String(err) });
+    });
   }
 }
 

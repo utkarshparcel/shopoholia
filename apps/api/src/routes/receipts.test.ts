@@ -430,6 +430,63 @@ describe("receipts", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("confirm is once per receipt: a double tap and a repeat make one purchase and one warranty set", async () => {
+    await grantFinancialConsent();
+    const receipt = await repos.createReceipt({
+      userId,
+      imageKey: "receipts/twice.jpg",
+      merchant: "Mock Mart",
+      purchasedAt: new Date("2024-01-01T00:00:00.000Z"),
+      totalMinor: 5000,
+      ocrJson: { items: [{ title: "Wireless Headphones", priceMinor: 5000 }] },
+      purchaseId: null,
+    });
+    const confirm = () =>
+      app.inject({
+        method: "POST",
+        url: `/receipts/${receipt.id}/confirm`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          merchant: "Mock Mart",
+          purchasedAt: "2024-01-01T00:00:00.000Z",
+          totalMinor: 5000,
+          currency: "INR",
+          items: [{ title: "Wireless Headphones", priceMinor: 5000 }],
+        },
+      });
+    const [a, b] = await Promise.all([confirm(), confirm()]);
+    const c = await confirm();
+    expect([a.statusCode, b.statusCode, c.statusCode]).toEqual([200, 200, 200]);
+    const purchaseId = a.json().purchaseId;
+    expect(purchaseId).toBeTruthy();
+    expect(b.json().purchaseId).toBe(purchaseId);
+    expect(c.json().purchaseId).toBe(purchaseId);
+    const purchases = (await repos.listMerchantPurchases(userId)).filter((p) => p.source === "RECEIPT");
+    expect(purchases).toHaveLength(1);
+    expect(await repos.listWarranties(userId)).toHaveLength(1);
+
+    const other = await login(app, "919876500003");
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { userId: other.userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/receipts/${receipt.id}/confirm`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: {
+        merchant: "Mock Mart",
+        purchasedAt: "2024-01-01T00:00:00.000Z",
+        totalMinor: 5000,
+        currency: "INR",
+        items: [{ title: "Wireless Headphones", priceMinor: 5000 }],
+      },
+    });
+    expect(foreign.statusCode).toBe(404);
+  });
+
   it("auto-detects warranty from category rules when confirm omits warranties (U010)", async () => {
     await grantFinancialConsent();
     const receipt = await repos.createReceipt({

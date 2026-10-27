@@ -148,6 +148,10 @@ export const dispositionListings = pgTable(
   (t) => [
     index("disposition_listings_user_created_idx").on(t.userId, t.createdAt.desc().nullsFirst()),
     index("disposition_listings_wardrobe_item_idx").on(t.wardrobeItemId),
+    // #12: one ACTIVE listing per item (openDispositionListing returns the existing one).
+    uniqueIndex("disposition_listings_active_item_uidx")
+      .on(t.wardrobeItemId)
+      .where(sql`${t.status} = 'ACTIVE'`),
     index("disposition_listings_seller_idx")
       .on(t.sellerId)
       .where(sql`${t.sellerId} IS NOT NULL`),

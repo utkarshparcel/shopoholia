@@ -1,22 +1,30 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "../client.js";
 import { moneyAccounts, moneyLedger } from "../schema/money.js";
 import { users } from "../schema/users.js";
 import {
+  MONEY_TX_MAX_ATTEMPTS,
   computeBalanceAfter,
+  createAccountWithLedgerEntry,
   deleteOrphanMoneyAccount,
   getAccountBalance,
+  isRetryableTxError,
+  ledgerRefId,
+  mergeAccountInto,
   postLedgerEntry,
   purgeOrphanMoneyAccounts,
+  reconcileAccountCache,
+  setAccountBalance,
+  withTxRetry,
 } from "./money.js";
 
 const ACCOUNT_ID = "00000000-0000-0000-0000-0000000000a1";
 const USER_ID = "00000000-0000-0000-0000-0000000000b1";
 
 /** In-memory Db double that exercises postLedgerEntry's full code path
- * (serializable execute, FOR UPDATE selects, balanceAfter, account cache
- * update) without needing a live Postgres. */
+ * (FOR UPDATE select, balanceAfter, account cache update) without needing a
+ * live Postgres. */
 function makeMockDb(initialBalance: number, opts?: { accountUserId?: string }) {
   let balance = initialBalance;
   const ledger: Array<{ delta: number; balanceAfter: number }> = [];
@@ -259,9 +267,7 @@ describe("deleteOrphanMoneyAccount / purgeOrphanMoneyAccounts", () => {
         (chain as { __table?: unknown }).__table = t;
         return chain;
       };
-      chain.where = self;
-      chain.limit = self;
-      chain.for = async () => {
+      const rowsFor = async () => {
         const t = (chain as { __table?: unknown }).__table ?? table;
         if (t === moneyAccounts) {
           const row = accounts.get(ACCOUNT_ID);
@@ -272,6 +278,10 @@ describe("deleteOrphanMoneyAccount / purgeOrphanMoneyAccounts", () => {
         }
         return [];
       };
+      chain.where = self;
+      // `.limit()` is awaited directly for the ledger probe (no row lock).
+      chain.limit = () => rowsFor();
+      chain.for = rowsFor;
       // Non-tx select used by purgeOrphanMoneyAccounts
       chain.then = undefined;
       return {
@@ -359,10 +369,103 @@ describe("deleteOrphanMoneyAccount / purgeOrphanMoneyAccounts", () => {
     expect(wasDeleted()).toBe(false);
   });
 
-  it("purge sweeps zero-balance orphans for a user", async () => {
-    const { db, wasDeleted } = makeOrphanDb({ balance: 0, hasLedger: false });
+  it("purge sweeps zero-balance orphans for a user in one delete", async () => {
+    let calls = 0;
+    const db = {
+      delete: () => ({
+        where: () => ({
+          returning: async () => {
+            calls += 1;
+            return [{ id: ACCOUNT_ID }];
+          },
+        }),
+      }),
+    } as unknown as Db;
     await expect(purgeOrphanMoneyAccounts(db, USER_ID)).resolves.toBe(1);
-    expect(wasDeleted()).toBe(true);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("withTxRetry / isRetryableTxError", () => {
+  const serialization = () => Object.assign(new Error("could not serialize access"), { code: "40001" });
+
+  it("recognises 40001 and 40P01, also when wrapped in a cause", () => {
+    expect(isRetryableTxError(serialization())).toBe(true);
+    expect(isRetryableTxError({ code: "40P01" })).toBe(true);
+    expect(isRetryableTxError(new Error("wrapped", { cause: serialization() }))).toBe(true);
+    expect(isRetryableTxError(Object.assign(new Error("dup"), { code: "23505" }))).toBe(false);
+    expect(isRetryableTxError(null)).toBe(false);
+  });
+
+  it("retries a serialization failure and returns the later result", async () => {
+    let calls = 0;
+    const sleeps: number[] = [];
+    const result = await withTxRetry(
+      async () => {
+        calls += 1;
+        if (calls < 3) throw serialization();
+        return "ok";
+      },
+      { sleep: async (ms) => void sleeps.push(ms), baseDelayMs: 10 },
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(3);
+    expect(sleeps).toHaveLength(2);
+    // Exponential with jitter: [10, 20) then [20, 40).
+    expect(sleeps[0]).toBeGreaterThanOrEqual(10);
+    expect(sleeps[0]).toBeLessThan(20);
+    expect(sleeps[1]).toBeGreaterThanOrEqual(20);
+    expect(sleeps[1]).toBeLessThan(40);
+  });
+
+  it("gives up after the bounded number of attempts", async () => {
+    let calls = 0;
+    await expect(
+      withTxRetry(
+        async () => {
+          calls += 1;
+          throw serialization();
+        },
+        { sleep: async () => {} },
+      ),
+    ).rejects.toMatchObject({ code: "40001" });
+    expect(calls).toBe(MONEY_TX_MAX_ATTEMPTS);
+  });
+
+  it("does not retry other errors", async () => {
+    let calls = 0;
+    await expect(
+      withTxRetry(async () => {
+        calls += 1;
+        throw new Error("Insufficient money balance");
+      }),
+    ).rejects.toThrow(/Insufficient/);
+    expect(calls).toBe(1);
+  });
+
+  it("postLedgerEntry retries a transaction that aborts with 40001", async () => {
+    const { db, getBalance } = makeMockDb(0);
+    const realTx = (db as unknown as { transaction: (fn: unknown) => Promise<unknown> }).transaction;
+    let attempts = 0;
+    (db as unknown as { transaction: unknown }).transaction = async (fn: unknown) => {
+      attempts += 1;
+      if (attempts === 1) throw serialization();
+      return realTx(fn);
+    };
+    const res = await postLedgerEntry(db, { accountId: ACCOUNT_ID, userId: USER_ID, delta: 300, type: "DEPOSIT" });
+    expect(res.balanceAfter).toBe(300);
+    expect(getBalance()).toBe(300);
+    expect(attempts).toBe(2);
+  });
+});
+
+describe("ledgerRefId", () => {
+  it("is a stable RFC 4122 v5 uuid per input", () => {
+    const a = ledgerRefId("credit.merge", "s", "t");
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(ledgerRefId("credit.merge", "s", "t")).toBe(a);
+    expect(ledgerRefId("credit.merge", "t", "s")).not.toBe(a);
+    expect(() => ledgerRefId()).toThrow(RangeError);
   });
 });
 
@@ -421,5 +524,151 @@ describe.skipIf(!runIntegration)("postLedgerEntry (live DB, row-lock path)", () 
       type: "SPEND",
     });
     expect(spend.balanceAfter).toBe(600);
+  });
+
+  async function newAccount(): Promise<string> {
+    const [row] = await db
+      .insert(moneyAccounts)
+      .values({ userId, kind: "GIFT_CARD", merchant: "Myntra", currency: "INR" })
+      .returning({ id: moneyAccounts.id });
+    return row!.id;
+  }
+
+  it("concurrent posts on different accounts all commit (no 40001 storm)", async () => {
+    const ids = await Promise.all(Array.from({ length: 6 }, () => newAccount()));
+    const results = await Promise.allSettled(
+      ids.map((accountId) => postLedgerEntry(db, { accountId, userId, delta: 100, type: "DEPOSIT" })),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(6);
+  });
+
+  it("concurrent spends on one account: the row lock admits exactly the affordable ones", async () => {
+    const accountId = await newAccount();
+    await postLedgerEntry(db, { accountId, userId, delta: 1000, type: "DEPOSIT" });
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => postLedgerEntry(db, { accountId, userId, delta: -300, type: "SPEND" })),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(3);
+    expect(await getAccountBalance(db, accountId)).toBe(100);
+  });
+
+  it("createAccountWithLedgerEntry is atomic and idempotent per ref, also under a race", async () => {
+    const refId = ledgerRefId("test.add", userId);
+    const input = {
+      account: { userId, kind: "GIFT_CARD" as const, merchant: "Ajio", currency: "INR", expiresAt: null, status: "ACTIVE" as const },
+      entry: { delta: 2500, type: "DEPOSIT" as const, refType: "credit.add", refId },
+    };
+    const raced = await Promise.all([1, 2, 3].map(() => createAccountWithLedgerEntry(db, input)));
+    const ids = new Set(raced.map((r) => r.account.id));
+    expect(ids.size).toBe(1);
+    expect(raced.filter((r) => r.created)).toHaveLength(1);
+    const again = await createAccountWithLedgerEntry(db, input);
+    expect(again).toMatchObject({ created: false, account: { id: [...ids][0], balanceCacheMinor: 2500 } });
+    const shells = await db
+      .select({ id: moneyAccounts.id })
+      .from(moneyAccounts)
+      .where(and(eq(moneyAccounts.userId, userId), eq(moneyAccounts.merchant, "Ajio")));
+    expect(shells).toHaveLength(1);
+  });
+
+  it("createAccountWithLedgerEntry rejects a negative first entry without leaving a shell", async () => {
+    await expect(
+      createAccountWithLedgerEntry(db, {
+        account: { userId, kind: "CASH", merchant: "Neg", currency: "INR", expiresAt: null, status: "ACTIVE" },
+        entry: { delta: -1, type: "SPEND" },
+      }),
+    ).rejects.toThrow(/Insufficient/);
+    const rows = await db.select().from(moneyAccounts).where(and(eq(moneyAccounts.userId, userId), eq(moneyAccounts.merchant, "Neg")));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("setAccountBalance posts the delta under the lock and is a no-op on repeat", async () => {
+    const accountId = await newAccount();
+    await postLedgerEntry(db, { accountId, userId, delta: 1000, type: "DEPOSIT" });
+    const ref = ({ lastLedgerId }: { lastLedgerId: string | null }) =>
+      ledgerRefId("test.set", accountId, lastLedgerId ?? "none", "700");
+    const down = await setAccountBalance(db, { accountId, userId, targetMinor: 700, refType: "credit.balance_check", refId: ref });
+    expect(down).toEqual({ previousMinor: 1000, balanceAfter: 700, delta: -300, posted: true });
+    const repeat = await setAccountBalance(db, { accountId, userId, targetMinor: 700, refType: "credit.balance_check", refId: ref });
+    expect(repeat).toEqual({ previousMinor: 700, balanceAfter: 700, delta: 0, posted: false });
+    const up = await setAccountBalance(db, {
+      accountId,
+      userId,
+      targetMinor: 900,
+      refType: "credit.balance_check",
+      refId: () => ledgerRefId("test.set.up", accountId),
+    });
+    expect(up).toMatchObject({ delta: 200, balanceAfter: 900, posted: true });
+    // Two concurrent "set to 500" calls: one posts -400, the other sees 0.
+    const both = await Promise.all(
+      [1, 2].map(() =>
+        setAccountBalance(db, {
+          accountId,
+          userId,
+          targetMinor: 500,
+          refType: "credit.balance_check",
+          refId: ({ lastLedgerId }) => ledgerRefId("test.set.race", accountId, lastLedgerId ?? "none"),
+        }),
+      ),
+    );
+    expect(both.map((r) => r.delta).sort()).toEqual([-400, 0]);
+    expect(await getAccountBalance(db, accountId)).toBe(500);
+    await expect(
+      setAccountBalance(db, { accountId, userId, targetMinor: -1, refType: "x", refId: () => ledgerRefId("x") }),
+    ).rejects.toThrow(RangeError);
+  });
+
+  it("mergeAccountInto moves the whole balance in one tx and a retry is a no-op", async () => {
+    const source = await newAccount();
+    const target = await newAccount();
+    await postLedgerEntry(db, { accountId: source, userId, delta: 400, type: "DEPOSIT" });
+    await postLedgerEntry(db, { accountId: target, userId, delta: 100, type: "DEPOSIT" });
+    const refId = ledgerRefId("credit.merge", source, target);
+    const input = {
+      userId,
+      sourceAccountId: source,
+      targetAccountId: target,
+      refId,
+      refType: "credit.merge",
+      nextExpiresAt: () => null,
+    };
+    const [a, b] = await Promise.all([mergeAccountInto(db, input), mergeAccountInto(db, input)]);
+    expect([a.alreadyApplied, b.alreadyApplied].sort()).toEqual([false, true]);
+    expect(a.transferredMinor).toBe(400);
+    expect(b.transferredMinor).toBe(400);
+    expect(await getAccountBalance(db, target)).toBe(500);
+    expect(await getAccountBalance(db, source)).toBe(0);
+    const [closed] = await db.select().from(moneyAccounts).where(eq(moneyAccounts.id, source));
+    expect(closed!.status).toBe("CLOSED");
+    await expect(
+      mergeAccountInto(db, { ...input, refId: ledgerRefId("other") }),
+    ).rejects.toThrow(/closed/);
+    await expect(mergeAccountInto(db, { ...input, targetAccountId: source })).rejects.toThrow(RangeError);
+  });
+
+  it("reconcileAccountCache reports drift read-only and heals it under the lock", async () => {
+    const accountId = await newAccount();
+    await postLedgerEntry(db, { accountId, userId, delta: 800, type: "DEPOSIT" });
+    await db.update(moneyAccounts).set({ balanceCacheMinor: 9999 }).where(eq(moneyAccounts.id, accountId));
+    const report = await reconcileAccountCache(db, accountId, userId, { fix: false });
+    expect(report).toEqual({ cachedMinor: 9999, ledgerSumMinor: 800, lastBalanceAfter: 800, entries: 1, fixed: false });
+    expect(await getAccountBalance(db, accountId)).toBe(9999);
+    const healed = await reconcileAccountCache(db, accountId, userId, { fix: true });
+    expect(healed).toMatchObject({ fixed: true, ledgerSumMinor: 800 });
+    expect(await getAccountBalance(db, accountId)).toBe(800);
+    expect(await reconcileAccountCache(db, accountId, "00000000-0000-0000-0000-00000000ffff", { fix: true })).toBeNull();
+  });
+
+  it("purgeOrphanMoneyAccounts deletes only empty, ledger-free shells", async () => {
+    const empty = await newAccount();
+    const funded = await newAccount();
+    await postLedgerEntry(db, { accountId: funded, userId, delta: 10, type: "DEPOSIT" });
+    expect(await deleteOrphanMoneyAccount(db, funded, userId)).toBe(false);
+    const removed = await purgeOrphanMoneyAccounts(db, userId);
+    expect(removed).toBeGreaterThanOrEqual(1);
+    const left = await db.select({ id: moneyAccounts.id }).from(moneyAccounts).where(eq(moneyAccounts.id, empty));
+    expect(left).toHaveLength(0);
+    const kept = await db.select({ id: moneyAccounts.id }).from(moneyAccounts).where(eq(moneyAccounts.id, funded));
+    expect(kept).toHaveLength(1);
   });
 });

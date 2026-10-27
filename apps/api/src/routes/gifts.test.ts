@@ -670,6 +670,47 @@ describe("gifts", () => {
     expect(row?.contributedMinor).toBe(2500);
   });
 
+  it("contribute: a retried tap with the same key adds once; another user's gift is 404", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken } = await login(app);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    const rec = await app.inject({ method: "POST", url: "/recipients", headers: auth, payload: { name: "Pool" } });
+    const recId = (rec.json() as Recipient).id;
+    const gift = await app.inject({
+      method: "POST",
+      url: "/gifts",
+      headers: auth,
+      payload: { recipientId: recId, groupTargetMinor: 10_000, groupCurrency: "INR" },
+    });
+    const giftId = (gift.json() as GiftOrder).id;
+    const idempotencyKey = "6f1c2a52-8e8a-4c55-9a51-2b7f4f0c9d11";
+    const tap = () =>
+      app.inject({
+        method: "POST",
+        url: `/gifts/${giftId}/contribute`,
+        headers: auth,
+        payload: { amountMinor: 1500, idempotencyKey },
+      });
+    const [a, b] = await Promise.all([tap(), tap()]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 201]);
+    const again = await tap();
+    expect(again.statusCode).toBe(200);
+    type Body = { contribution: { id: string }; gift: GiftOrder };
+    expect((again.json() as Body).contribution.id).toBe((a.json() as Body).contribution.id);
+    expect((again.json() as Body).gift.contributedMinor).toBe(1500);
+
+    const other = await login(app, "919876500031");
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/gifts/${giftId}/contribute`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { amountMinor: 100 },
+    });
+    expect(foreign.statusCode).toBe(404);
+    const detail = await app.inject({ method: "GET", url: `/gifts/${giftId}`, headers: auth });
+    expect((detail.json() as Body).gift.contributedMinor).toBe(1500);
+  });
+
   it("serializes recipient with profile null when profile row is missing", async () => {
     const { app, repos } = await buildTestServer();
     const { accessToken } = await login(app);
@@ -683,7 +724,9 @@ describe("gifts", () => {
     const recId = (created.json() as Recipient).id;
 
     const origFind = repos.findRecipientProfile.bind(repos);
+    const origList = repos.listRecipientProfiles.bind(repos);
     repos.findRecipientProfile = async () => null;
+    repos.listRecipientProfiles = async () => [];
     try {
       const list = await app.inject({
         method: "GET",
@@ -714,6 +757,7 @@ describe("gifts", () => {
       expect(wish404.statusCode).toBe(404);
     } finally {
       repos.findRecipientProfile = origFind;
+      repos.listRecipientProfiles = origList;
     }
   });
 });

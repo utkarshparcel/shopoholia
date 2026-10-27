@@ -57,6 +57,22 @@ export function assertPurchasesMergeable(
   }
 }
 
+/** Everything a merge checks, on the rows the repository has locked. */
+export function assertMergePlan(
+  target: MerchantPurchaseRecord,
+  source: MerchantPurchaseRecord,
+  sourceItemCount: number,
+  userId: string,
+): void {
+  assertPurchasesMergeable(target, source, userId);
+  if (sourceItemCount === 0 && source.totalMinor === 0) {
+    throw new PurchaseMergeSplitError(
+      "CONFLICT",
+      "Source purchase has nothing to merge",
+    );
+  }
+}
+
 export function assertItemsSplitable(
   purchase: MerchantPurchaseRecord,
   items: MerchantPurchaseItemRecord[],
@@ -102,7 +118,8 @@ export function assertItemsSplitable(
 
 /**
  * Merge `source` into `target`: move items (preserving ids), recompute totals,
- * mark source DUPLICATE, repoint docs/receipts/returns.
+ * mark source DUPLICATE, repoint docs/receipts/returns — in one transaction, so a
+ * crash can never leave lines counted under both purchases.
  */
 export async function mergePurchases(
   repos: Repositories,
@@ -113,71 +130,28 @@ export async function mergePurchases(
   items: MerchantPurchaseItemRecord[];
   mergedFromId: string;
 }> {
-  const target = await repos.findMerchantPurchaseById(input.targetPurchaseId);
-  const source = await repos.findMerchantPurchaseById(input.sourcePurchaseId);
-  if (!target || !source) {
-    throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
-  }
-  assertPurchasesMergeable(target, source, userId);
-
-  const [targetItems, sourceItems] = await Promise.all([
-    repos.listMerchantPurchaseItems(target.id),
-    repos.listMerchantPurchaseItems(source.id),
-  ]);
-
-  if (sourceItems.length === 0 && source.totalMinor === 0) {
-    throw new PurchaseMergeSplitError(
-      "CONFLICT",
-      "Source purchase has nothing to merge",
+  try {
+    const { purchase, items } = await repos.mergeMerchantPurchases(
+      userId,
+      input.targetPurchaseId,
+      input.sourcePurchaseId,
     );
+    return { purchase, items, mergedFromId: input.sourcePurchaseId };
+  } catch (err) {
+    // Both purchases have an open whole-order return (one open return per line, #61).
+    if ((err as { code?: string })?.code === "23505") {
+      throw new PurchaseMergeSplitError(
+        "CONFLICT",
+        "Both purchases have an open return; finish or cancel one first",
+      );
+    }
+    throw err;
   }
-
-  const moved =
-    sourceItems.length > 0
-      ? await repos.moveMerchantPurchaseItems(
-          sourceItems.map((i) => i.id),
-          target.id,
-        )
-      : [];
-
-  await repos.repointMerchantPurchaseRefs(source.id, target.id);
-
-  const allItems = [...targetItems, ...moved];
-  const totalMinor = sumItemsMinor(allItems);
-
-  const patched = await repos.updateMerchantPurchase(target.id, { totalMinor });
-  if (!patched) {
-    throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
-  }
-
-  await repos.updateMerchantPurchase(source.id, {
-    status: "DUPLICATE",
-    totalMinor: 0,
-  });
-
-  const items = await repos.listMerchantPurchaseItems(target.id);
-  // Integrity: totals must equal sum of lines
-  if (sumItemsMinor(items) !== patched.totalMinor) {
-    const healed = await repos.updateMerchantPurchase(target.id, {
-      totalMinor: sumItemsMinor(items),
-    });
-    return {
-      purchase: healed ?? patched,
-      items,
-      mergedFromId: source.id,
-    };
-  }
-
-  return {
-    purchase: patched,
-    items,
-    mergedFromId: source.id,
-  };
 }
 
 /**
  * Split selected items onto a new purchase (same merchant/currency/source).
- * Item ids are preserved via move.
+ * Item ids are preserved via move. One transaction.
  */
 export async function splitPurchase(
   repos: Repositories,
@@ -187,59 +161,5 @@ export async function splitPurchase(
   original: { purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] };
   split: { purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] };
 }> {
-  const purchase = await repos.findMerchantPurchaseById(input.purchaseId);
-  if (!purchase) {
-    throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
-  }
-  const items = await repos.listMerchantPurchaseItems(purchase.id);
-  const moving = assertItemsSplitable(purchase, items, input.itemIds, userId);
-  const remaining = items.filter((it) => !moving.some((m) => m.id === it.id));
-
-  const splitTotal = sumItemsMinor(moving);
-  const originalTotal = sumItemsMinor(remaining);
-
-  const { purchase: neu } = await repos.createMerchantPurchase({
-    userId,
-    source: purchase.source,
-    merchant: input.merchant?.trim() || purchase.merchant,
-    orderRef: null,
-    purchasedAt: purchase.purchasedAt,
-    currency: purchase.currency,
-    totalMinor: splitTotal,
-    deliveryStatus: purchase.deliveryStatus,
-    etaAt: purchase.etaAt,
-    trackingCode: null,
-    returnWindowDeadline: purchase.returnWindowDeadline,
-    exchangeWindowDeadline: purchase.exchangeWindowDeadline,
-    items: [],
-  });
-
-  const moved = await repos.moveMerchantPurchaseItems(
-    moving.map((m) => m.id),
-    neu.id,
-  );
-
-  const patchedOriginal = await repos.updateMerchantPurchase(purchase.id, {
-    totalMinor: originalTotal,
-  });
-  if (!patchedOriginal) {
-    throw new PurchaseMergeSplitError("NOT_FOUND", "Purchase not found");
-  }
-
-  // Heal new purchase total from moved lines (empty create + move).
-  const patchedSplit =
-    (await repos.updateMerchantPurchase(neu.id, {
-      totalMinor: sumItemsMinor(moved),
-    })) ?? neu;
-
-  return {
-    original: {
-      purchase: patchedOriginal,
-      items: await repos.listMerchantPurchaseItems(purchase.id),
-    },
-    split: {
-      purchase: patchedSplit,
-      items: await repos.listMerchantPurchaseItems(neu.id),
-    },
-  };
+  return repos.splitMerchantPurchase(userId, input);
 }

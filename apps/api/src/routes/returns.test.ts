@@ -621,3 +621,142 @@ describe("U026 GST invoice request + U029 return label", () => {
     await app.close();
   });
 });
+
+describe("returns: guards, dedupe and idempotent refunds", () => {
+  async function seed() {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const bought = await app.deps.repos.createMerchantPurchase({
+      userId,
+      source: "EMAIL",
+      merchant: "Myntra",
+      purchasedAt: new Date(),
+      currency: "INR",
+      totalMinor: 20000,
+      items: [{ title: "Sneakers", priceMinor: 20000, category: "FOOTWEAR" }],
+    });
+    const auth = { authorization: `Bearer ${accessToken}` };
+    return { app, userId, auth, purchaseId: bought.purchase.id, itemId: bought.items[0]!.id };
+  }
+
+  it("POST /returns twice for the same line returns the open return (200), not a second one", async () => {
+    const { app, userId, auth, itemId } = await seed();
+    const first = await app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseItemId: itemId } });
+    expect(first.statusCode).toBe(201);
+    const [again, twin] = await Promise.all([
+      app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseItemId: itemId } }),
+      app.inject({ method: "POST", url: `/returns/${itemId}/initiate`, headers: auth, payload: {} }),
+    ]);
+    expect(again.statusCode).toBe(200);
+    expect((again.json() as ReturnRequest).id).toBe(first.json().id);
+    expect(twin.statusCode).toBe(200);
+    expect((twin.json() as ReturnRequest).id).toBe(first.json().id);
+    expect((await app.deps.repos.listReturnRequests(userId)).length).toBe(1);
+    await app.close();
+  });
+
+  it("a write from a stale read cannot resurrect an EXPIRED return (409, row unchanged)", async () => {
+    const { app, userId, auth, purchaseId } = await seed();
+    const created = await app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseId } });
+    const id = created.json().id as string;
+    await app.inject({ method: "POST", url: `/returns/${id}/initiate`, headers: auth, payload: {} });
+    const stale = await app.deps.repos.findReturnRequest(id, userId);
+    // The deadline job (or GET expiry) wins the race after the route's read.
+    await app.deps.repos.updateReturnRequest(id, { state: "EXPIRED" }, { actor: "system.expire" });
+    const realFind = app.deps.repos.findReturnRequest.bind(app.deps.repos);
+    app.deps.repos.findReturnRequest = async (rid, uid) => (rid === id ? stale : realFind(rid, uid));
+    const pickup = await app.inject({
+      method: "POST",
+      url: `/returns/${id}/pickup`,
+      headers: auth,
+      payload: { pickupSlotAt: new Date(Date.now() + 86_400_000).toISOString() },
+    });
+    expect(pickup.statusCode).toBe(409);
+    expect(pickup.json().message).toBe("Cannot transition EXPIRED -> PICKUP_SCHEDULED");
+    app.deps.repos.findReturnRequest = realFind;
+    expect((await app.deps.repos.findReturnRequest(id, userId))?.state).toBe("EXPIRED");
+    await app.close();
+  });
+
+  it("another user's return is 404 on every write", async () => {
+    const { app, auth, purchaseId } = await seed();
+    const created = await app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseId } });
+    const id = created.json().id as string;
+    const other = await login(app, "919876500001");
+    const otherAuth = { authorization: `Bearer ${other.accessToken}` };
+    for (const [url, payload] of [
+      [`/returns/${id}/chase/escalate`, {}],
+      [`/returns/${id}/label`, { imageKey: "returns/x/label.jpg" }],
+      [`/returns/${id}/window`, { windowDeadline: new Date().toISOString(), reason: "x" }],
+      [`/returns/${id}/refund`, { destination: "UPI" }],
+    ] as const) {
+      const res = await app.inject({ method: "POST", url, headers: otherAuth, payload });
+      expect(res.statusCode, url).toBe(404);
+    }
+    await app.close();
+  });
+
+  it("refund posts one ledger credit and one account, and a retry after a failed state write completes it", async () => {
+    const { app, userId, auth, purchaseId } = await seed();
+    const created = await app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseId } });
+    const id = created.json().id as string;
+    await app.inject({ method: "POST", url: `/returns/${id}/initiate`, headers: auth, payload: {} });
+    await app.inject({ method: "POST", url: `/returns/${id}/confirm`, headers: auth, payload: {} });
+
+    // The ledger commits, then the state write fails (crash / pool error).
+    const realUpdate = app.deps.repos.updateReturnRequest.bind(app.deps.repos);
+    app.deps.repos.updateReturnRequest = async (rid, patch, opts) => {
+      if (patch.state === "REFUNDED") throw new Error("connection lost");
+      return realUpdate(rid, patch, opts);
+    };
+    const failed = await app.inject({ method: "POST", url: `/returns/${id}/refund`, headers: auth, payload: { destination: "UPI" } });
+    expect(failed.statusCode).toBe(500);
+    app.deps.repos.updateReturnRequest = realUpdate;
+
+    const retry = await app.inject({ method: "POST", url: `/returns/${id}/refund`, headers: auth, payload: { destination: "UPI" } });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({ id, state: "REFUNDED", refundMinor: 20000 });
+    const replay = await app.inject({ method: "POST", url: `/returns/${id}/refund`, headers: auth, payload: { destination: "UPI" } });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ id, state: "REFUNDED", refundMinor: 20000 });
+
+    const accounts = await app.deps.repos.listMoneyAccounts(userId);
+    expect(accounts.filter((a) => a.merchant === "Refund").length).toBe(1);
+    const refunds = await app.deps.repos.listMoneyLedgerByRefs(userId, [id], "REFUND");
+    expect(refunds.length).toBe(1);
+    expect(refunds[0]!.delta).toBe(20000);
+    await app.close();
+  });
+
+  it("concurrent refunds credit once", async () => {
+    const { app, userId, auth, purchaseId } = await seed();
+    const created = await app.inject({ method: "POST", url: "/returns", headers: auth, payload: { purchaseId } });
+    const id = created.json().id as string;
+    await app.inject({ method: "POST", url: `/returns/${id}/initiate`, headers: auth, payload: {} });
+    await app.inject({ method: "POST", url: `/returns/${id}/confirm`, headers: auth, payload: {} });
+    const results = await Promise.all(
+      [0, 1, 2].map(() =>
+        app.inject({ method: "POST", url: `/returns/${id}/refund`, headers: auth, payload: { destination: "UPI" } }),
+      ),
+    );
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    expect((await app.deps.repos.listMoneyLedgerByRefs(userId, [id], "REFUND")).length).toBe(1);
+    expect((await app.deps.repos.listMoneyAccounts(userId)).length).toBe(1);
+    await app.close();
+  });
+
+  it("GET /returns expires overdue rows in one pass and records a system event", async () => {
+    const { app, userId, auth } = await seed();
+    const past = new Date(Date.now() - 86_400_000);
+    const a = await app.deps.repos.createReturnRequest({ userId, purchaseId: null, purchaseItemId: null, windowDeadline: past });
+    const list = await app.inject({ method: "GET", url: "/returns", headers: auth });
+    expect(list.statusCode).toBe(200);
+    expect((list.json() as ReturnsListResponse).returns.find((r) => r.id === a.id)?.state).toBe("EXPIRED");
+    const events = await app.deps.repos.listReturnEvents(a.id);
+    expect(events.filter((e) => e.toState === "EXPIRED").map((e) => e.actor)).toEqual(["system.expire"]);
+    // A second GET writes nothing more.
+    await app.inject({ method: "GET", url: "/returns", headers: auth });
+    expect((await app.deps.repos.listReturnEvents(a.id)).length).toBe(events.length);
+    await app.close();
+  });
+});

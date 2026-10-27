@@ -164,6 +164,8 @@ export const CreateGroupContributeBodySchema = z.object({
   amountMinor: z.number().int().positive(),
   note: z.string().max(500).optional().nullable(),
   contributorName: z.string().max(120).optional().nullable(),
+  /** One key per contribution tap; a retry with the same key returns the first contribution. */
+  idempotencyKey: z.string().uuid().optional(),
 });
 export type CreateGroupContributeBody = z.infer<typeof CreateGroupContributeBodySchema>;
 

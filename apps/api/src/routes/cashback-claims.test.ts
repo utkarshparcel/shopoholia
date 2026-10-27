@@ -112,6 +112,23 @@ describe("cashback-claims CRUD (U006)", () => {
     expect(mark.statusCode).toBe(200);
     expect((mark.json() as CashbackClaim).status).toBe("CLAIMED");
 
+    const repeat = await app.inject({
+      method: "POST",
+      url: `/cashback-claims/${claim.id}/claim`,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(repeat.statusCode).toBe(200);
+    expect((repeat.json() as CashbackClaim).claimedAt).toBe((mark.json() as CashbackClaim).claimedAt);
+
+    const other = await login(app, "919876500022");
+    await withConsent(app, other.accessToken, other.userId);
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/cashback-claims/${claim.id}/claim`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    expect(foreign.statusCode).toBe(404);
+
     await app.close();
   });
 });

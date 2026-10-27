@@ -1,12 +1,14 @@
 import type {
   DeliveryTier,
   OrderState,
+  PageResponse,
   RenderScenario,
   RenderStatus,
   StateEta,
   UserPrefs,
   UserPrefsPatch,
 } from "@worn/shared";
+import type { KeysetPosition } from "../paging.js";
 
 export type AvatarStatus = "NONE" | "PROCESSING" | "READY" | "FAILED";
 
@@ -1124,6 +1126,27 @@ export interface Repositories {
     toPurchaseId: string,
   ): Promise<void>;
   /**
+   * N48 merge in one transaction, with both purchases locked: moves the source's lines and refs
+   * to the target, sets the target total to the sum of its lines and marks the source DUPLICATE.
+   * Checks mergeability on the locked rows (throws PurchaseMergeSplitError).
+   */
+  mergeMerchantPurchases(
+    userId: string,
+    targetPurchaseId: string,
+    sourcePurchaseId: string,
+  ): Promise<{ purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] }>;
+  /**
+   * N48 split in one transaction, with the purchase locked: creates the new purchase, moves the
+   * lines (ids kept) and sets both totals from their lines. Throws PurchaseMergeSplitError.
+   */
+  splitMerchantPurchase(
+    userId: string,
+    input: { purchaseId: string; itemIds: string[]; merchant?: string },
+  ): Promise<{
+    original: { purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] };
+    split: { purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] };
+  }>;
+  /**
    * Retention purge: delete raw blob metadata while keeping the row + status
    * so metrics still count the document. Clears `rawKey` and strips PII from
    * `parsedJson` (the owner lives in `user_id`). Does not flip status to ERROR.
@@ -1144,18 +1167,52 @@ export interface Repositories {
     userId: string,
     opts?: { kind?: MoneyAccountRecord["kind"] },
   ): Promise<MoneyAccountRecord[]>;
-  /** Cross-user scan used by money reconciliation (admin + worker-expiry). */
-  listAllMoneyAccounts(): Promise<MoneyAccountRecord[]>;
+  /** listMoneyAccounts for several users (a household) in one query, newest first. */
+  listMoneyAccountsByUsers(userIds: readonly string[]): Promise<MoneyAccountRecord[]>;
+  /**
+   * Cross-user scan used by money reconciliation (admin + worker-expiry).
+   * With `opts`, returns one page in id order after `afterId` (default limit
+   * 500, max 1000); without it, every account (kept for the worker).
+   */
+  listAllMoneyAccounts(opts?: {
+    afterId?: string;
+    limit?: number;
+  }): Promise<MoneyAccountRecord[]>;
   listMoneyLedger(
     accountId: string,
     userId: string,
   ): Promise<MoneyLedgerRecord[]>;
-  /** Heal denormalized balance_cache_minor from ledger truth. */
+  /** One keyset page (created_at desc, id desc) of an account's ledger. */
+  listMoneyLedgerPage(
+    accountId: string,
+    userId: string,
+    page: { limit: number; after: KeysetPosition | null },
+  ): Promise<PageResponse<MoneyLedgerRecord>>;
+  /**
+   * Heal denormalized balance_cache_minor from ledger truth. Locks the account
+   * and writes SUM(delta) as read under that lock; `correctBalance` is the
+   * caller's earlier view and is not trusted. Throws when not found.
+   */
   fixMoneyAccountCache(
     accountId: string,
     userId: string,
     correctBalance: number,
   ): Promise<void>;
+  /**
+   * Compare one account's cache with SUM(delta) of its ledger, healing it
+   * under the account lock when `fix` is set. Null when not the user's.
+   */
+  reconcileMoneyAccount(
+    accountId: string,
+    userId: string,
+    opts: { fix: boolean },
+  ): Promise<{
+    cachedMinor: number;
+    ledgerSumMinor: number;
+    lastBalanceAfter: number | null;
+    entries: number;
+    fixed: boolean;
+  } | null>;
 
   // --- Universe P1.1: gift-card / store-credit vault (write) ---
   createMoneyAccount(input: {
@@ -1200,6 +1257,12 @@ export interface Repositories {
     refId: string,
     type: MoneyLedgerRecord["type"],
   ): Promise<MoneyLedgerRecord | null>;
+  /** findMoneyLedgerByRef for many refs in one query. */
+  listMoneyLedgerByRefs(
+    userId: string,
+    refIds: string[],
+    type: MoneyLedgerRecord["type"],
+  ): Promise<MoneyLedgerRecord[]>;
   /** Serialized, double-spend-safe money ledger write (via @worn/db). */
   postMoneyLedger(input: {
     accountId: string;
@@ -1209,6 +1272,64 @@ export interface Repositories {
     refType?: string;
     refId?: string;
   }): Promise<{ balanceAfter: number }>;
+  /**
+   * Create an account and its first ledger row in one transaction. With a
+   * `refId`, a repeat or a concurrent twin gets the account that already
+   * holds that ref (`created: false`).
+   */
+  createMoneyAccountWithEntry(input: {
+    account: {
+      userId: string;
+      kind: MoneyAccountRecord["kind"];
+      merchant: string;
+      currency: string;
+      expiresAt: Date | null;
+      status: MoneyAccountRecord["status"];
+    };
+    entry: {
+      delta: number;
+      type: MoneyLedgerRecord["type"];
+      refType?: string;
+      refId?: string;
+    };
+  }): Promise<{ account: MoneyAccountRecord; created: boolean }>;
+  /**
+   * "Set balance to X" under the account lock: posts the difference as a
+   * DEPOSIT or SPEND with the ref that `refId` builds from the locked state.
+   */
+  setMoneyAccountBalance(input: {
+    accountId: string;
+    userId: string;
+    targetMinor: number;
+    refType: string;
+    refId: (state: { balanceMinor: number; lastLedgerId: string | null }) => string;
+  }): Promise<{
+    previousMinor: number;
+    balanceAfter: number;
+    delta: number;
+    posted: boolean;
+  }>;
+  /**
+   * Move the source's whole balance into the target and close the source, in
+   * one transaction. A repeat with the same `refId` returns the first result.
+   * Throws "Money account not found" / "Money account closed" /
+   * "Money account has nothing to merge".
+   */
+  mergeMoneyAccounts(input: {
+    userId: string;
+    sourceAccountId: string;
+    targetAccountId: string;
+    refId: string;
+    refType: string;
+    nextExpiresAt: (
+      target: { expiresAt: Date | null },
+      source: { expiresAt: Date | null },
+    ) => Date | null;
+  }): Promise<{
+    account: MoneyAccountRecord;
+    transferredMinor: number;
+    alreadyApplied: boolean;
+  }>;
 
   // --- Universe P1.2: receipts & warranties ---
   createReceipt(input: CreateReceiptInput): Promise<ReceiptRecord>;
@@ -1233,7 +1354,27 @@ export interface Repositories {
    * land in the purchase ledger (powers Waste Tracker + Accountant). */
   createMerchantPurchase(
     input: CreateMerchantPurchaseInput,
-  ): Promise<{ purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] }>;
+  ): Promise<{
+    purchase: MerchantPurchaseRecord;
+    items: MerchantPurchaseItemRecord[];
+    /** false: the user already had a purchase with this orderRef (#38); it and its lines come back unchanged. */
+    created?: boolean;
+  }>;
+  /**
+   * Receipt confirm in one transaction, with the receipt locked: creates the purchase, its lines
+   * and the warranties and links the receipt. A receipt that already has a purchase gets that
+   * purchase back (`created: false`) and nothing is written. null: no such receipt for the user.
+   */
+  confirmReceiptPurchase(input: {
+    receiptId: string;
+    userId: string;
+    purchase: CreateMerchantPurchaseInput;
+    warranties: CreateWarrantyInput[];
+  }): Promise<{
+    purchase: MerchantPurchaseRecord;
+    warranties: WarrantyRecord[];
+    created: boolean;
+  } | null>;
   /** Idempotency for Play→Closet bridge (orderRef = Play order id). */
   findMerchantPurchaseByOrderRef(
     userId: string,
@@ -1251,7 +1392,11 @@ export interface Repositories {
     id: string,
     userId: string,
   ): Promise<WarrantyRecord | null>;
-  listMerchantPurchases(userId: string): Promise<MerchantPurchaseRecord[]>;
+  listMerchantPurchases(
+    userId: string,
+    /** Only these delivery statuses (filtered in the query). */
+    opts?: { deliveryStatuses?: readonly MerchantPurchaseRecord["deliveryStatus"][] },
+  ): Promise<MerchantPurchaseRecord[]>;
   listMerchantPurchaseItems(
     purchaseId: string,
   ): Promise<MerchantPurchaseItemRecord[]>;
@@ -1313,6 +1458,18 @@ export interface Repositories {
      priceMinor?: number | null;
      sellerId?: string | null;
    }): Promise<DispositionListingRecord>;
+  /**
+   * #12 one ACTIVE listing per wardrobe item: when the item already has one (also when two
+   * inserts race), that listing comes back with `created: false` and nothing is written.
+   * createDispositionListing is this without the flag.
+   */
+  openDispositionListing(input: {
+    userId: string;
+    wardrobeItemId: string;
+    mode: DispositionListingRecord["mode"];
+    priceMinor?: number | null;
+    sellerId?: string | null;
+  }): Promise<{ listing: DispositionListingRecord; created: boolean }>;
     listDispositionListings(userId: string): Promise<DispositionListingRecord[]>;
 
   // --- Universe P3: accountant ---
@@ -1336,6 +1493,25 @@ export interface Repositories {
     orderedSize?: string | null;
     preferredSize?: string | null;
   }): Promise<ReturnRecord>;
+  /**
+   * Opens a return and its first event(s) in one transaction. A purchase line holds at most one
+   * open return (not CANCELLED/EXPIRED): opening it again returns that return with created:false.
+   * `state: "INITIATED"` records REQUESTED then INITIATED.
+   */
+  openReturnRequest(input: {
+    userId: string;
+    purchaseId?: string | null;
+    purchaseItemId?: string | null;
+    windowDeadline: Date;
+    exchangeDeadline?: Date | null;
+    method?: string | null;
+    reason?: ReturnRecord["reason"];
+    orderedSize?: string | null;
+    preferredSize?: string | null;
+    state?: "REQUESTED" | "INITIATED";
+  }): Promise<{ request: ReturnRecord; created: boolean }>;
+  /** Moves the user's overdue open returns to EXPIRED, with their events, in one transaction. */
+  expireOverdueReturnRequests(userId: string, now: Date): Promise<ReturnRecord[]>;
   updateReturnRequest(
     id: string,
     patch: Partial<
@@ -1359,6 +1535,17 @@ export interface Repositories {
         | "labelUsedAt"
       >
     >,
+    /**
+     * Row lock, patch and event in one transaction. `userId` scopes the row (null when it is not
+     * theirs); `fromStates` throws ReturnStateConflictError unless the locked row is in one of them;
+     * `actor` labels the state-change event; `noteActor` also records a same-state event.
+     */
+    opts?: {
+      userId?: string;
+      fromStates?: readonly string[];
+      actor?: string;
+      noteActor?: string;
+    },
   ): Promise<ReturnRecord | null>;
   listReturnEvents(returnRequestId: string): Promise<ReturnEventRecord[]>;
   createReturnEvent(input: {
@@ -1371,6 +1558,10 @@ export interface Repositories {
   // --- Merchant purchases lookup for returns ---
   findMerchantPurchaseById(id: string): Promise<MerchantPurchaseRecord | null>;
   findMerchantPurchaseItemById(id: string): Promise<MerchantPurchaseItemRecord | null>;
+  /** The user's purchases among `ids`, in one query. */
+  listMerchantPurchasesByIds(userId: string, ids: string[]): Promise<MerchantPurchaseRecord[]>;
+  /** Purchase lines among `ids` whose purchase is the user's, in one query. */
+  listMerchantPurchaseItemsByIds(userId: string, ids: string[]): Promise<MerchantPurchaseItemRecord[]>;
   updateMerchantPurchaseDelivery(
     id: string,
     userId: string,
@@ -1400,14 +1591,20 @@ export interface Repositories {
   findRecipient(id: string, userId: string): Promise<RecipientRecord | null>;
   createRecipient(input: CreateRecipientInput): Promise<RecipientRecord>;
   findRecipientProfile(recipientId: string): Promise<RecipientProfileRecord | null>;
+  /** findRecipientProfile for many recipients in one query. */
+  listRecipientProfiles(recipientIds: readonly string[]): Promise<RecipientProfileRecord[]>;
   upsertRecipientProfile(input: UpsertRecipientProfileInput): Promise<RecipientProfileRecord>;
   listGiftOrders(userId: string): Promise<GiftOrderRecord[]>;
   createGiftOrder(input: CreateGiftOrderInput): Promise<GiftOrderRecord>;
   findGiftOrder(id: string, userId: string): Promise<GiftOrderRecord | null>;
   findGiftOrderById(id: string): Promise<GiftOrderRecord | null>;
-  createGroupGiftContribution(input: CreateGroupGiftContributionInput): Promise<GroupGiftContributionRecord>;
+  createGroupGiftContribution(
+    input: CreateGroupGiftContributionInput,
+  ): Promise<{ contribution: GroupGiftContributionRecord; created: boolean }>;
   listGroupGiftContributions(giftOrderId: string): Promise<GroupGiftContributionRecord[]>;
   sumGroupGiftContributions(giftOrderId: string): Promise<number>;
+  /** sumGroupGiftContributions for many gifts in one query (0 for gifts with none). */
+  sumGroupGiftContributionsByOrders(giftOrderIds: readonly string[]): Promise<Map<string, number>>;
 
   // --- Universe P4: fit ---
   listMeasurementProfiles(userId: string): Promise<MeasurementProfileRecord[]>;
@@ -1419,6 +1616,7 @@ export interface Repositories {
   createTailoringOrder(input: CreateTailoringOrderInput): Promise<TailoringOrderRecord>;
   findTailoringOrder(id: string, userId: string): Promise<TailoringOrderRecord | null>;
   listTailoringOrders(userId: string): Promise<TailoringOrderRecord[]>;
+  /** null when missing, or when the order is already DELIVERED/CANCELLED and `state` is a different one. */
   updateTailoringOrderState(id: string, state: TailoringOrderRecord["state"]): Promise<TailoringOrderRecord | null>;
   updateTailoringOrderFabric(
     id: string,
@@ -1430,7 +1628,12 @@ export interface Repositories {
 
   // --- Universe P4: disposition (extended) ---
   findDispositionListing(id: string, userId: string): Promise<DispositionListingRecord | null>;
-  updateDispositionListing(id: string, patch: Partial<Pick<DispositionListingRecord, "status" | "priceMinor">>): Promise<DispositionListingRecord | null>;
+  /** null when the listing is missing, or (with `fromStatuses`) no longer in one of them. */
+  updateDispositionListing(
+    id: string,
+    patch: Partial<Pick<DispositionListingRecord, "status" | "priceMinor">>,
+    opts?: { fromStatuses?: readonly DispositionListingRecord["status"][] },
+  ): Promise<DispositionListingRecord | null>;
 
   // --- N37: invite-only swap circle ---
   createSwapCircle(input: { name: string; ownerId: string; inviteCode: string }): Promise<SwapCircleRecord>;
@@ -1452,9 +1655,17 @@ export interface Repositories {
   }): Promise<SwapListingRecord>;
   findSwapListing(id: string, circleId: string): Promise<SwapListingRecord | null>;
   listSwapListings(circleId: string): Promise<SwapListingRecord[]>;
+  /**
+   * null when the listing is missing, or (with `fromStatuses`) no longer in one of them.
+   * `dispositionStatus` also moves the linked ACTIVE disposition listing, in the same transaction.
+   */
   updateSwapListing(
     id: string,
     patch: Partial<Pick<SwapListingRecord, "status" | "borrowerUserId" | "dispositionListingId">>,
+    opts?: {
+      fromStatuses?: readonly SwapListingRecord["status"][];
+      dispositionStatus?: DispositionListingRecord["status"];
+    },
   ): Promise<SwapListingRecord | null>;
 
   // --- N26: household / shared closet ---
@@ -1488,6 +1699,18 @@ export interface Repositories {
     spendCapMinor?: number | null;
     spentMinor?: number;
   }): Promise<HouseholdVaultSettingsRecord>;
+  /**
+   * Atomic `spentMinor += deltaMinor`. A positive delta applies only while the member has SPEND
+   * access and stays within the cap (null otherwise); a negative one releases a reservation
+   * (floored at 0). Backed by the vault-settings store: in Postgres this is
+   * `UPDATE ... SET spent_minor = spent_minor + $d WHERE vault_access = 'SPEND' AND
+   * (spend_cap_minor IS NULL OR spent_minor + $d <= spend_cap_minor) RETURNING *`.
+   */
+  addHouseholdVaultSpent(
+    householdId: string,
+    userId: string,
+    deltaMinor: number,
+  ): Promise<HouseholdVaultSettingsRecord | null>;
   listHouseholdVaultSettings(
     householdId: string,
   ): Promise<HouseholdVaultSettingsRecord[]>;
@@ -1597,6 +1820,20 @@ export interface Repositories {
     userId: string,
     patch: Partial<Pick<EmiPlanRecord, "remainingMinor" | "nextDueOn" | "status">>,
   ): Promise<EmiPlanRecord | null>;
+  /**
+   * Records one installment as a compare-and-set on the plan as it was read (`from`).
+   * REPLAY: `paymentKey` is the last recorded payment's key. CONFLICT: the plan changed since
+   * it was read. null: no such plan for this user.
+   */
+  payEmiPlan(
+    id: string,
+    userId: string,
+    input: {
+      from: Pick<EmiPlanRecord, "remainingMinor" | "nextDueOn" | "status">;
+      to: Pick<EmiPlanRecord, "remainingMinor" | "nextDueOn" | "status">;
+      paymentKey?: string;
+    },
+  ): Promise<{ plan: EmiPlanRecord; outcome: "APPLIED" | "REPLAY" | "CONFLICT" } | null>;
 
   createCashbackClaim(input: {
     userId: string;
@@ -1979,6 +2216,8 @@ export type CreateGroupGiftContributionInput = {
   contributorName?: string | null;
   amountMinor: number;
   note?: string | null;
+  /** Same key on the same gift → the existing contribution, `created: false`. */
+  idempotencyKey?: string | null;
 };
 
 export type MeasurementProfileRecord = {

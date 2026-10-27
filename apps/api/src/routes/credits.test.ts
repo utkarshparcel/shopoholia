@@ -51,8 +51,69 @@ describe("credits", () => {
       url: "/credits/00000000-0000-4000-8000-000000000001/transactions",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(tx.statusCode).toBe(200);
-    expect(tx.json().transactions).toEqual([]);
+    expect(tx.statusCode).toBe(404);
+  });
+
+  it("GET /credits/:id/transactions is 404 for another user's credit and pages its own", async () => {
+    await grantFinancialConsent();
+    const add = await app.inject({
+      method: "POST",
+      url: "/credits",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { kind: "GIFT_CARD", merchant: "Ajio", currency: "INR", balanceMinor: 1000 },
+    });
+    const accountId = add.json().id as string;
+    for (let i = 0; i < 3; i++) {
+      await app.inject({
+        method: "POST",
+        url: `/credits/${accountId}/spend`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          amountMinor: 100,
+          idempotencyKey: `12121212-1212-4121-8121-12121212120${i}`,
+        },
+      });
+    }
+
+    const first = await app.inject({
+      method: "GET",
+      url: `/credits/${accountId}/transactions?limit=3`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().transactions).toHaveLength(3);
+    const cursor = first.json().nextCursor as string;
+    expect(cursor).toEqual(expect.any(String));
+    const second = await app.inject({
+      method: "GET",
+      url: `/credits/${accountId}/transactions?limit=3&cursor=${cursor}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(second.json().transactions).toHaveLength(1);
+    expect(second.json().transactions[0].type).toBe("DEPOSIT");
+    expect(second.json().nextCursor).toBeNull();
+
+    const bad = await app.inject({
+      method: "GET",
+      url: `/credits/${accountId}/transactions?cursor=not-ours`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe("invalid_cursor");
+
+    const other = await login(app, "919800000999");
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { userId: other.userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    const foreign = await app.inject({
+      method: "GET",
+      url: `/credits/${accountId}/transactions`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    expect(foreign.statusCode).toBe(404);
   });
 
   it("rejects unauthenticated credit reads with 401", async () => {
@@ -526,7 +587,26 @@ describe("credits", () => {
     expect(kept?.balanceCacheMinor).toBe(500);
   });
 
-  it("demo flag seeds ₹500 Myntra without prior FINANCIAL consent", async () => {
+  it("demo flag needs FINANCIAL consent and never grants it", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/credits",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        kind: "GIFT_CARD",
+        merchant: "ignored",
+        currency: "INR",
+        balanceMinor: 1,
+        demo: true,
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await repos.findActiveConsent(userId, "FINANCIAL")).toBeNull();
+    expect(await repos.listMoneyAccounts(userId)).toHaveLength(0);
+  });
+
+  it("demo flag seeds ₹500 Myntra once FINANCIAL consent is granted", async () => {
+    await grantFinancialConsent();
     const res = await app.inject({
       method: "POST",
       url: "/credits",
@@ -555,6 +635,7 @@ describe("credits", () => {
   });
 
   it("demo flag is idempotent per user", async () => {
+    await grantFinancialConsent();
     const payload = {
       kind: "GIFT_CARD" as const,
       merchant: "Myntra",
@@ -609,9 +690,47 @@ describe("credits", () => {
         idempotencyKey: "66666666-6666-4666-8666-666666666666",
       },
     });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("insufficient_balance");
     const kept = await repos.findMoneyAccount(accountId, userId);
     expect(kept?.balanceCacheMinor).toBe(500);
+  });
+
+  it("an idempotencyKey reused on another credit is a 409, not a replay", async () => {
+    await grantFinancialConsent();
+    const add = (merchant: string) =>
+      app.inject({
+        method: "POST",
+        url: "/credits",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { kind: "GIFT_CARD", merchant, currency: "INR", balanceMinor: 900 },
+      });
+    const a = (await add("Ajio")).json().id as string;
+    const b = (await add("Nykaa")).json().id as string;
+    const key = "67676767-6767-4676-8676-676767676767";
+    const first = await app.inject({
+      method: "POST",
+      url: `/credits/${a}/spend`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { amountMinor: 100, idempotencyKey: key },
+    });
+    expect(first.statusCode).toBe(200);
+    const reused = await app.inject({
+      method: "POST",
+      url: `/credits/${b}/spend`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { amountMinor: 100, idempotencyKey: key },
+    });
+    expect(reused.statusCode).toBe(409);
+    expect(reused.json().error).toBe("idempotency_key_reused");
+    const confirm = await app.inject({
+      method: "POST",
+      url: `/credits/${b}/confirm-balance`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { balanceMinor: 100, idempotencyKey: key },
+    });
+    expect(confirm.statusCode).toBe(409);
+    expect((await repos.findMoneyAccount(b, userId))?.balanceCacheMinor).toBe(900);
   });
 
   it("POST /credits/capture/photo returns 400 when neither photo nor barcode is sent", async () => {
@@ -792,7 +911,7 @@ describe("credits", () => {
     }
   });
 
-  it("add recovers when deposit races on unique idempotency (23505)", async () => {
+  it("add with a key another account already holds returns that account, no shell", async () => {
     await grantFinancialConsent();
     const key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01";
     const winner = await repos.createMoneyAccount({
@@ -812,175 +931,28 @@ describe("credits", () => {
       refType: "credit.add",
       refId: key,
     });
-
-    let findCalls = 0;
-    const origFind = repos.findMoneyLedgerByRef.bind(repos);
-    const origPost = repos.postMoneyLedger.bind(repos);
-    const origCreate = repos.createMoneyAccount.bind(repos);
-    let shellId: string | null = null;
-
-    repos.findMoneyLedgerByRef = async (uid, refId, type) => {
-      findCalls += 1;
-      // First call: early idempotent check → miss so we create a shell.
-      if (findCalls === 1) return null;
-      return origFind(uid, refId, type);
-    };
-    repos.createMoneyAccount = async (input) => {
-      const shell = await origCreate(input);
-      shellId = shell.id;
-      return shell;
-    };
-    repos.postMoneyLedger = async () => {
-      const err = new Error("duplicate key value violates unique constraint");
-      (err as { code?: string }).code = "23505";
-      throw err;
-    };
-
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: "/credits",
-        headers: { authorization: `Bearer ${token}` },
-        payload: {
-          kind: "GIFT_CARD",
-          merchant: "Amazon",
-          currency: "INR",
-          balanceMinor: 7500,
-          idempotencyKey: key,
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json().id).toBe(winner.id);
-      expect(res.json().balanceCacheMinor).toBe(7500);
-      expect(shellId).toBeTruthy();
-      expect(shellId).not.toBe(winner.id);
-      expect(await repos.findMoneyAccount(shellId!, userId)).toBeNull();
-      expect(findCalls).toBeGreaterThanOrEqual(2);
-    } finally {
-      repos.findMoneyLedgerByRef = origFind;
-      repos.postMoneyLedger = origPost;
-      repos.createMoneyAccount = origCreate;
-    }
+    const res = await app.inject({
+      method: "POST",
+      url: "/credits",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        kind: "GIFT_CARD",
+        merchant: "Amazon",
+        currency: "INR",
+        balanceMinor: 7500,
+        idempotencyKey: key,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().id).toBe(winner.id);
+    expect(res.json().balanceCacheMinor).toBe(7500);
+    expect(await repos.listMoneyAccounts(userId)).toHaveLength(1);
   });
 
-  it("add recovers when deposit fails because peer GC'd the shell (missing account)", async () => {
+  it("add surfaces a storage failure and leaves no account behind", async () => {
     await grantFinancialConsent();
-    const key = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbb01";
-    const winner = await repos.createMoneyAccount({
-      userId,
-      kind: "STORE_CREDIT",
-      merchant: "Myntra",
-      currency: "INR",
-      balanceCacheMinor: 0,
-      expiresAt: null,
-      status: "ACTIVE",
-    });
-    await repos.postMoneyLedger({
-      accountId: winner.id,
-      userId,
-      delta: 2200,
-      type: "DEPOSIT",
-      refType: "credit.add",
-      refId: key,
-    });
-
-    let findCalls = 0;
-    const origFind = repos.findMoneyLedgerByRef.bind(repos);
-    const origPost = repos.postMoneyLedger.bind(repos);
-    repos.findMoneyLedgerByRef = async (uid, refId, type) => {
-      findCalls += 1;
-      if (findCalls === 1) return null;
-      return origFind(uid, refId, type);
-    };
-    repos.postMoneyLedger = async () => {
-      throw new Error("Money account not found");
-    };
-
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: "/credits",
-        headers: { authorization: `Bearer ${token}` },
-        payload: {
-          kind: "STORE_CREDIT",
-          merchant: "Myntra",
-          currency: "INR",
-          balanceMinor: 2200,
-          idempotencyKey: key,
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json().id).toBe(winner.id);
-      expect(res.json().balanceCacheMinor).toBe(2200);
-    } finally {
-      repos.findMoneyLedgerByRef = origFind;
-      repos.postMoneyLedger = origPost;
-    }
-  });
-
-  it("add recovers winner on post-purge ledger re-lookup when race find misses", async () => {
-    await grantFinancialConsent();
-    const key = "dddddddd-dddd-4ddd-8ddd-dddddddddd01";
-    const winner = await repos.createMoneyAccount({
-      userId,
-      kind: "GIFT_CARD",
-      merchant: "Nykaa",
-      currency: "INR",
-      balanceCacheMinor: 0,
-      expiresAt: null,
-      status: "ACTIVE",
-    });
-    await repos.postMoneyLedger({
-      accountId: winner.id,
-      userId,
-      delta: 1800,
-      type: "DEPOSIT",
-      refType: "credit.add",
-      refId: key,
-    });
-
-    let findCalls = 0;
-    const origFind = repos.findMoneyLedgerByRef.bind(repos);
-    const origPost = repos.postMoneyLedger.bind(repos);
-    repos.findMoneyLedgerByRef = async (uid, refId, type) => {
-      findCalls += 1;
-      // 1: early check miss; 2: in-catch race miss; 3+: post-purge recovery hit.
-      if (findCalls <= 2) return null;
-      return origFind(uid, refId, type);
-    };
-    repos.postMoneyLedger = async () => {
-      const err = new Error("duplicate key value violates unique constraint");
-      (err as { code?: string }).code = "23505";
-      throw err;
-    };
-
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: "/credits",
-        headers: { authorization: `Bearer ${token}` },
-        payload: {
-          kind: "GIFT_CARD",
-          merchant: "Nykaa",
-          currency: "INR",
-          balanceMinor: 1800,
-          idempotencyKey: key,
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json().id).toBe(winner.id);
-      expect(res.json().balanceCacheMinor).toBe(1800);
-      expect(findCalls).toBeGreaterThanOrEqual(3);
-    } finally {
-      repos.findMoneyLedgerByRef = origFind;
-      repos.postMoneyLedger = origPost;
-    }
-  });
-
-  it("add rethrows non-unique deposit errors", async () => {
-    await grantFinancialConsent();
-    const origPost = repos.postMoneyLedger.bind(repos);
-    repos.postMoneyLedger = async () => {
+    const orig = repos.createMoneyAccountWithEntry.bind(repos);
+    repos.createMoneyAccountWithEntry = async () => {
       throw new Error("disk full");
     };
     try {
@@ -998,8 +970,9 @@ describe("credits", () => {
       });
       expect(res.statusCode).toBeGreaterThanOrEqual(500);
     } finally {
-      repos.postMoneyLedger = origPost;
+      repos.createMoneyAccountWithEntry = orig;
     }
+    expect(await repos.listMoneyAccounts(userId)).toHaveLength(0);
   });
 
   it("POST /credits/capture/photo handles OCR with neither code nor giftCardCode", async () => {
@@ -1134,58 +1107,7 @@ describe("credits", () => {
     }
   });
 
-  it("add rethrows unique race when no winner account is recoverable", async () => {
-    await grantFinancialConsent();
-    const key = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee01";
-    const origFind = repos.findMoneyLedgerByRef.bind(repos);
-    const origPost = repos.postMoneyLedger.bind(repos);
-    const orphanAccountId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
-    let findCalls = 0;
-    repos.findMoneyLedgerByRef = async (uid, refId, type) => {
-      findCalls += 1;
-      // Early miss + in-catch miss; post-purge returns a ledger whose account is gone.
-      if (findCalls <= 2) return null;
-      return {
-        id: "ghost-ledger",
-        accountId: orphanAccountId,
-        userId: uid,
-        delta: 900,
-        type: type ?? "DEPOSIT",
-        refType: "credit.add",
-        refId,
-        balanceAfter: 900,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-    };
-    repos.postMoneyLedger = async () => {
-      const err = new Error("duplicate key value violates unique constraint");
-      (err as { code?: string }).code = "23505";
-      throw err;
-    };
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: "/credits",
-        headers: { authorization: `Bearer ${token}` },
-        payload: {
-          kind: "GIFT_CARD",
-          merchant: "Uniqlo",
-          currency: "INR",
-          balanceMinor: 900,
-          idempotencyKey: key,
-        },
-      });
-      // An unhandled 23505 reaches the global fallback: 409, never a 500.
-      expect(res.statusCode).toBe(409);
-      expect(findCalls).toBeGreaterThanOrEqual(3);
-    } finally {
-      repos.findMoneyLedgerByRef = origFind;
-      repos.postMoneyLedger = origPost;
-    }
-  });
-
-  it("spend rethrows unique race when ledger lookup still misses", async () => {
+  it("spend answers 409 when a unique race leaves no readable winner", async () => {
     await grantFinancialConsent();
     const add = await app.inject({
       method: "POST",
@@ -1216,6 +1138,7 @@ describe("credits", () => {
         payload: { amountMinor: 500, idempotencyKey },
       });
       expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("Conflict");
     } finally {
       repos.findMoneyLedgerByRef = origFind;
       repos.postMoneyLedger = origPost;
@@ -1384,37 +1307,6 @@ describe("credits", () => {
     expect(viaSpend.statusCode).toBe(200);
     expect(viaSpend.json().balanceMinor).toBe(8200);
     expect(viaSpend.json().adjusted).toBe(true);
-  });
-
-  it("add rethrows unique race when ledger never materializes after purge", async () => {
-    await grantFinancialConsent();
-    const key = "f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1";
-    const origFind = repos.findMoneyLedgerByRef.bind(repos);
-    const origPost = repos.postMoneyLedger.bind(repos);
-    repos.findMoneyLedgerByRef = async () => null;
-    repos.postMoneyLedger = async () => {
-      const err = new Error("duplicate key value violates unique constraint");
-      (err as { code?: string }).code = "23505";
-      throw err;
-    };
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: "/credits",
-        headers: { authorization: `Bearer ${token}` },
-        payload: {
-          kind: "GIFT_CARD",
-          merchant: "Ghost",
-          currency: "INR",
-          balanceMinor: 400,
-          idempotencyKey: key,
-        },
-      });
-      expect(res.statusCode).toBe(409);
-    } finally {
-      repos.findMoneyLedgerByRef = origFind;
-      repos.postMoneyLedger = origPost;
-    }
   });
 
   describe("U001 undo-spend", () => {

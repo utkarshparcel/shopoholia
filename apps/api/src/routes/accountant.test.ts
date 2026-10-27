@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { buildTestServer, login } from "../test-utils.js";
+import { sendSpendEnvelopeAlerts } from "../lib/budget.js";
 
 describe("accountant", () => {
   afterEach(() => {
@@ -160,6 +161,75 @@ describe("accountant", () => {
     expect(l.entries.some((e) => e.kind === "LEDGER")).toBe(true);
     expect(l.entries.some((e) => e.kind === "PURCHASE")).toBe(true);
 
+    await app.close();
+  });
+
+  it("ledger is paged newest first with a cursor; a bad cursor is 400", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: auth,
+      payload: { userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    for (let i = 0; i < 5; i += 1) {
+      await app.deps.repos.createMerchantPurchase({
+        userId,
+        source: "RECEIPT",
+        merchant: `Shop${i}`,
+        purchasedAt: new Date(),
+        currency: "INR",
+        totalMinor: 1000 + i,
+        items: [{ title: "Tee", priceMinor: 1000 + i, category: "APPAREL" }],
+      });
+    }
+    type Page = { entries: Array<{ id: string; createdAt: string }>; nextCursor: string | null };
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const res = await app.inject({
+        method: "GET",
+        url: `/accountant/ledger?limit=2${cursor ? `&cursor=${cursor}` : ""}`,
+        headers: auth,
+      });
+      expect(res.statusCode).toBe(200);
+      const page = res.json() as Page;
+      expect(page.entries.length).toBeLessThanOrEqual(2);
+      seen.push(...page.entries.map((e) => e.id));
+      cursor = page.nextCursor;
+      pages += 1;
+    } while (cursor && pages < 10);
+    expect(pages).toBe(3);
+    expect(new Set(seen).size).toBe(5);
+
+    const bad = await app.inject({ method: "GET", url: "/accountant/ledger?cursor=nope!", headers: auth });
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("CPW threshold is kept in user prefs (C2)", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: auth,
+      payload: { userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    const put = await app.inject({
+      method: "PUT",
+      url: "/accountant/cpw-threshold",
+      headers: auth,
+      payload: { maxCpwMinor: 25_000 },
+    });
+    expect(put.json()).toEqual({ maxCpwMinor: 25_000 });
+    expect((await app.deps.repos.getUserPrefs(userId))?.cpwThreshold).toEqual({ maxCpwMinor: 25_000 });
+    const get = await app.inject({ method: "GET", url: "/accountant/cpw-threshold", headers: auth });
+    expect((get.json() as { maxCpwMinor: number | null }).maxCpwMinor).toBe(25_000);
     await app.close();
   });
 
@@ -372,7 +442,7 @@ describe("accountant", () => {
     await app.close();
   });
 
-  it("marks envelope WARN at 80% and queues mid-period push (N42)", async () => {
+  it("marks envelope WARN at 80%; the push comes from the write path, never the GET (N42)", async () => {
     const { app } = await buildTestServer();
     const { accessToken, userId } = await login(app);
     await app.inject({
@@ -381,10 +451,9 @@ describe("accountant", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { userId, scope: "FINANCIAL", source: "onboarding" },
     });
-    // Narrow quiet window so mid-period alert delivery is not delayed in CI.
-    await app.deps.repos.updateUser(userId, {
-      consentFlags: {
-        notifications: {
+    // Narrow quiet window so mid-period alert delivery is not delayed in CI (prefs, C2).
+    await app.deps.repos.patchUserPrefs(userId, {
+      notifications: {
           quietHoursStart: "03:00",
           quietHoursEnd: "03:01",
           categories: {
@@ -402,7 +471,6 @@ describe("accountant", () => {
             digest: 1,
           },
         },
-      },
     });
 
     await app.inject({
@@ -454,8 +522,17 @@ describe("accountant", () => {
       alertThresholdHit: true,
     });
 
+    // A GET has no side effects: no push yet.
+    expect((await app.deps.push.listEvents(userId)).some((p) => p.eventType === "SPEND_ENVELOPE")).toBe(false);
+
+    const sent = await sendSpendEnvelopeAlerts(app.deps.repos, userId);
+    expect(sent).toEqual([{ category: "APPAREL", status: expect.stringMatching(/sent|queued/) }]);
+    // Once per period, however often a write re-checks.
+    expect(await sendSpendEnvelopeAlerts(app.deps.repos, userId)).toEqual([
+      { category: "APPAREL", status: "skipped" },
+    ]);
     const pushes = await app.deps.push.listEvents(userId);
-    expect(pushes.some((p) => p.eventType === "SPEND_ENVELOPE")).toBe(true);
+    expect(pushes.filter((p) => p.eventType === "SPEND_ENVELOPE")).toHaveLength(1);
 
     await app.close();
   });

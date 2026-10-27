@@ -16,6 +16,7 @@ import {
   MoneyAccountKindSchema,
   MoneyAccountsResponseSchema,
   MoneyTransactionsResponseSchema,
+  PageQuerySchema,
   SpendCreditBodySchema,
   SpendCreditResponseSchema,
   UndoSpendCreditBodySchema,
@@ -26,8 +27,9 @@ import {
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
-import { requireConsent, requireConsentHandler } from "../lib/auth/consent.js";
+import { requireConsent } from "../lib/auth/consent.js";
 import { audit } from "../lib/audit.js";
+import { decodeCursor, InvalidCursorError } from "../lib/paging.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import {
   balanceCheckMetaForAccount,
@@ -92,6 +94,10 @@ function isUniqueViolation(err: unknown): boolean {
   return /duplicate|unique/i.test(msg);
 }
 
+function isInsufficientBalance(err: unknown): boolean {
+  return (err as Error)?.message === "Insufficient money balance";
+}
+
 export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get(
     "/credits",
@@ -130,56 +136,50 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["credits"],
         params: z.object({ id: z.string().uuid() }),
+        querystring: PageQuerySchema,
         response: {
           200: MoneyTransactionsResponseSchema,
+          400: ErrorSchema,
           401: ErrorSchema,
           403: ErrorSchema,
+          404: ErrorSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
       const { id } = request.params;
-      const transactions = await app.deps.repos.listMoneyLedger(id, userId);
+      let after;
+      try {
+        after = decodeCursor(request.query.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
+      }
+      const account = await app.deps.repos.findMoneyAccount(id, userId);
+      if (!account) {
+        return reply
+          .code(404)
+          .send({ error: "Not Found", message: "Credit account not found" });
+      }
+      const page = await app.deps.repos.listMoneyLedgerPage(id, userId, {
+        limit: request.query.limit,
+        after,
+      });
       audit(app.log, "money.read", { userId, accountId: id });
-      return { transactions: transactions.map(toLedgerJson) };
+      return {
+        transactions: page.items.map(toLedgerJson),
+        nextCursor: page.nextCursor,
+      };
     },
   );
 
   app.post(
     "/credits",
     {
-      preHandler: [
-        requireAuth,
-        async (request, reply) => {
-          // Demo seed auto-grants FINANCIAL so empty-state aha works under 60s.
-          if (request.body?.demo === true) {
-            const userId = request.user!.sub;
-            const existing = await request.server.deps.repos.findActiveConsent(
-              userId,
-              "FINANCIAL",
-            );
-            if (!existing) {
-              await request.server.deps.repos.grantConsent({
-                userId,
-                scope: "FINANCIAL",
-                source: "demo",
-              });
-              audit(request.server.log, "consent.granted", {
-                userId,
-                scope: "FINANCIAL",
-              });
-              trackServerEvent("consent_granted", {
-                userId,
-                scope: "FINANCIAL",
-                source: "demo",
-              });
-            }
-            return;
-          }
-          return requireConsentHandler("FINANCIAL", request, reply);
-        },
-      ],
+      // Consent is only ever granted by the user's own action (POST /consent);
+      // the demo card needs it like any other credit.
+      preHandler: [requireAuth, requireConsent("FINANCIAL")],
       config: {
         rateLimit: {
           max: process.env.NODE_ENV === "test" ? 1000 : 20,
@@ -217,106 +217,30 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           `00000000-0000-4000-8000-${userId.replace(/-/g, "").slice(0, 12)}`)
         : body.idempotencyKey;
 
-      // Idempotent retry: same key → return the existing account (no second card).
-      if (idempotencyKey) {
-        const prior = await app.deps.repos.findMoneyLedgerByRef(
-          userId,
-          idempotencyKey,
-          "DEPOSIT",
-        );
-        if (prior) {
-          const existing = await app.deps.repos.findMoneyAccount(
-            prior.accountId,
+      // Account + first DEPOSIT in one transaction: a retry or a concurrent
+      // twin with the same key gets the account that already holds it, and a
+      // failure leaves no empty shell behind.
+      const { account: stored, created } =
+        await app.deps.repos.createMoneyAccountWithEntry({
+          account: {
             userId,
-          );
-          if (existing) {
-            return reply.code(201).send(toAccountJson(existing));
-          }
-        }
-      }
-
-      const depositRefId = idempotencyKey ?? undefined;
-
-      const account = await app.deps.repos.createMoneyAccount({
-        userId,
-        kind,
-        merchant,
-        currency,
-        balanceCacheMinor: 0,
-        expiresAt: expiresAt ? new Date(expiresAt) : null,
-        status: "ACTIVE",
-      });
-
-      // Prefer client idempotencyKey as DEPOSIT refId; fall back to account.id.
-      const refId = depositRefId ?? account.id;
-
-      try {
-        await app.deps.repos.postMoneyLedger({
-          accountId: account.id,
-          userId,
-          delta: balanceMinor,
-          type: "DEPOSIT",
-          refType: isDemo ? "credit.demo" : "credit.add",
-          refId,
+            kind,
+            merchant,
+            currency,
+            expiresAt: expiresAt ? new Date(expiresAt) : null,
+            status: "ACTIVE",
+          },
+          entry: {
+            delta: balanceMinor,
+            type: "DEPOSIT",
+            refType: isDemo ? "credit.demo" : "credit.add",
+            refId: idempotencyKey ?? randomUUID(),
+          },
         });
-      } catch (err) {
-        const unique = isUniqueViolation(err);
-        const missingAccount =
-          Boolean(idempotencyKey) &&
-          /money account not found/i.test((err as Error)?.message ?? "");
-
-        if (!unique && !missingAccount) throw err;
-
-        // Race: peer already deposited with this ref, or winner GC'd our shell.
-        const existing = await app.deps.repos.findMoneyLedgerByRef(
-          userId,
-          refId,
-          "DEPOSIT",
-        );
-        const raced = existing
-          ? await app.deps.repos.findMoneyAccount(existing.accountId, userId)
-          : null;
-        // Always drop our empty shell when we did not win the deposit.
-        if (!raced || raced.id !== account.id) {
-          await app.deps.repos.deleteOrphanMoneyAccount(account.id, userId);
-        }
-        // Sweep sibling zero-balance shells from the same race window.
-        await app.deps.repos.purgeOrphanMoneyAccounts(userId);
-        if (raced) {
-          app.log.warn(
-            { userId, accountId: raced.id, idempotencyKey },
-            "duplicate credit.add suppressed by unique index",
-          );
-          return reply.code(201).send(toAccountJson(raced));
-        }
-        // Unique / missing without a readable winner — one more lookup after purge.
-        const prior = await app.deps.repos.findMoneyLedgerByRef(
-          userId,
-          refId,
-          "DEPOSIT",
-        );
-        if (prior) {
-          const recovered = await app.deps.repos.findMoneyAccount(
-            prior.accountId,
-            userId,
-          );
-          if (recovered) {
-            return reply.code(201).send(toAccountJson(recovered));
-          }
-        }
-        throw err;
+      if (!created) {
+        return reply.code(201).send(toAccountJson(stored));
       }
-
-      // Re-read so the returned payload reflects the deposited balance.
-      const stored =
-        (await app.deps.repos.findMoneyAccount(account.id, userId)) ?? account;
-
-      // After a successful deposit, sweep empty race shells (losers that created
-      // accounts but have not yet hit the unique-index path). Safe: funded
-      // accounts have ledger rows / non-zero balance and are skipped.
-      if (idempotencyKey) {
-        await app.deps.repos.purgeOrphanMoneyAccounts(userId);
-      }
+      const account = stored;
 
       await scheduleExpiryReminder(stored);
       await scheduleBalanceRecheckReminder(stored);
@@ -537,6 +461,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -552,14 +477,23 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           .send({ error: "Not Found", message: "Credit account not found" });
       }
 
-      const prior = await app.deps.repos.findMoneyLedgerByRef(
-        userId,
-        idempotencyKey,
-        "SPEND",
-      );
-      if (prior) {
+      const replay = async () => {
+        const prior = await app.deps.repos.findMoneyLedgerByRef(
+          userId,
+          idempotencyKey,
+          "SPEND",
+        );
+        if (!prior) return null;
+        if (prior.accountId !== id) {
+          return reply.code(409).send({
+            error: "idempotency_key_reused",
+            message: "This idempotencyKey was already used on another credit",
+          });
+        }
         return { balanceMinor: prior.balanceAfter };
-      }
+      };
+      const prior = await replay();
+      if (prior) return prior;
 
       let balanceAfter: number;
       try {
@@ -573,8 +507,18 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
         }));
       } catch (err) {
         if (isUniqueViolation(err)) {
-          const raced = await app.deps.repos.findMoneyLedgerByRef(userId, idempotencyKey, "SPEND");
-          if (raced) return { balanceMinor: raced.balanceAfter };
+          const raced = await replay();
+          if (raced) return raced;
+          return reply.code(409).send({
+            error: "Conflict",
+            message: "A concurrent spend with this idempotencyKey is in flight",
+          });
+        }
+        if (isInsufficientBalance(err)) {
+          return reply.code(409).send({
+            error: "insufficient_balance",
+            message: "Credit balance is lower than the spend amount",
+          });
         }
         throw err;
       }
@@ -611,6 +555,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -631,7 +576,11 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
         idempotencyKey,
         "DEPOSIT",
       );
-      if (priorUndo && priorUndo.refType === "credit.spend.undo") {
+      if (
+        priorUndo &&
+        priorUndo.refType === "credit.spend.undo" &&
+        priorUndo.accountId === id
+      ) {
         return { balanceMinor: priorUndo.balanceAfter, undone: true };
       }
 
@@ -680,7 +629,15 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
             idempotencyKey,
             "DEPOSIT",
           );
-          if (raced) return { balanceMinor: raced.balanceAfter, undone: true };
+          if (raced?.accountId === id && raced.refType === "credit.spend.undo") {
+            return { balanceMinor: raced.balanceAfter, undone: true };
+          }
+          // The key already holds a different DEPOSIT (e.g. the add that
+          // created a credit), so this undo can never post.
+          return reply.code(409).send({
+            error: "idempotency_key_reused",
+            message: "This idempotencyKey was already used for another deposit",
+          });
         }
         throw err;
       }
@@ -868,6 +825,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -881,33 +839,34 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
           .code(404)
           .send({ error: "Not Found", message: "Credit account not found" });
       }
+      const keyReused = () =>
+        reply.code(409).send({
+          error: "idempotency_key_reused",
+          message: "This idempotencyKey was already used on another credit",
+        });
       if (idempotencyKey) {
-        const priorDeposit = await app.deps.repos.findMoneyLedgerByRef(
-          userId,
-          idempotencyKey,
-          "DEPOSIT",
-        );
-        if (priorDeposit) {
-          return {
-            balanceMinor: priorDeposit.balanceAfter,
-            adjusted: true,
-          };
-        }
-        const priorSpend = await app.deps.repos.findMoneyLedgerByRef(
-          userId,
-          idempotencyKey,
-          "SPEND",
-        );
-        if (priorSpend) {
-          return {
-            balanceMinor: priorSpend.balanceAfter,
-            adjusted: true,
-          };
+        for (const type of ["DEPOSIT", "SPEND"] as const) {
+          const prior = await app.deps.repos.findMoneyLedgerByRef(
+            userId,
+            idempotencyKey,
+            type,
+          );
+          if (!prior) continue;
+          if (prior.accountId !== id) return keyReused();
+          return { balanceMinor: prior.balanceAfter, adjusted: true };
         }
       }
-      const result = await confirmManualBalance(app.deps.repos, account, balanceMinor, {
-        idempotencyKey,
-      });
+      let result: Awaited<ReturnType<typeof confirmManualBalance>>;
+      try {
+        result = await confirmManualBalance(app.deps.repos, account, balanceMinor, {
+          idempotencyKey,
+        });
+      } catch (err) {
+        if ((err as Error)?.message === "Money ledger ref belongs to another account") {
+          return keyReused();
+        }
+        throw err;
+      }
       audit(app.log, "money.credit.balance_confirmed", {
         userId,
         accountId: id,

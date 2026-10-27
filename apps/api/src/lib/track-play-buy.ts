@@ -1,5 +1,7 @@
 import type { Repositories } from "./repositories/types.js";
 import { resolveCandidatePriceMinor } from "./prebuy-fit.js";
+import { sendSpendEnvelopeAlerts } from "./budget.js";
+import { captureException } from "./sentry.js";
 
 export const PLAY_MERCHANT = "WORN Play";
 
@@ -78,7 +80,7 @@ export async function trackPlayBuyInCloset(
     });
   }
 
-  const { purchase, items } = await repos.createMerchantPurchase({
+  const { purchase, items, created } = await repos.createMerchantPurchase({
     userId: input.userId,
     source: "MANUAL",
     merchant: PLAY_MERCHANT,
@@ -93,11 +95,19 @@ export async function trackPlayBuyInCloset(
     ? await ensureWardrobeFromPurchaseItems(repos, input.userId, items)
     : [];
 
+  if (created !== false) {
+    // N42: the new purchase may put a budget past 80%; the push runs off the response path.
+    void sendSpendEnvelopeAlerts(repos, input.userId).catch((err) =>
+      captureException(err, { tags: { surface: "spend_envelope_alert" } }),
+    );
+  }
+
   return {
     purchaseId: purchase.id,
     itemCount: items.length,
     wardrobeItemIds,
-    created: true,
+    // false when a concurrent track won the (user, orderRef) insert (#38).
+    created: created !== false,
   };
 }
 

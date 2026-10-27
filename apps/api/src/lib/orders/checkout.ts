@@ -18,7 +18,6 @@ import {
   cartFingerprint,
   evaluateCoolingOffCheckout,
   readCoolingOffFromFlags,
-  withCoolingOffFlag,
   type CoolingOffHold,
 } from "../cooling-off.js";
 import {
@@ -135,8 +134,8 @@ export async function checkoutOrder(
 
   // N34: 24h soft lock when apparel haul would exceed APPAREL budget
   try {
-    const user = await deps.repos.findUserById(input.userId);
-    const existingHold = readCoolingOffFromFlags(user?.consentFlags);
+    // C2: the hold is a user pref, written key-by-key with patchUserPrefs (never into consent_flags).
+    const existingHold = readCoolingOffFromFlags(await deps.repos.getUserPrefs(input.userId));
     const fingerprint = cartFingerprint(
       rows.map((r) => ({ listingVariantId: r.listingVariantId, quantity: r.quantity })),
     );
@@ -148,9 +147,7 @@ export async function checkoutOrder(
     });
     if (decision.action === "soft_lock") {
       if (decision.started) {
-        await deps.repos.updateUser(input.userId, {
-          consentFlags: withCoolingOffFlag(user?.consentFlags, decision.hold),
-        });
+        await deps.repos.patchUserPrefs(input.userId, { coolingOff: decision.hold });
         void scheduleCoolingOffRelease(holdToReleasePayload(input.userId, decision.hold));
         trackServerEvent("cooling_off_started", {
           userId: input.userId,
@@ -167,9 +164,7 @@ export async function checkoutOrder(
     }
     if (decision.reason === "override" || decision.reason === "hold_expired") {
       if (existingHold) {
-        await deps.repos.updateUser(input.userId, {
-          consentFlags: withCoolingOffFlag(user?.consentFlags, null),
-        });
+        await deps.repos.patchUserPrefs(input.userId, { coolingOff: null });
       }
       if (decision.reason === "override") {
         trackServerEvent("cooling_off_overridden", {
@@ -177,9 +172,7 @@ export async function checkoutOrder(
         });
       }
     } else if (existingHold && decision.reason === "no_apparel_overage") {
-      await deps.repos.updateUser(input.userId, {
-        consentFlags: withCoolingOffFlag(user?.consentFlags, null),
-      });
+      await deps.repos.patchUserPrefs(input.userId, { coolingOff: null });
     }
   } catch (error) {
     if (error instanceof CheckoutError) throw error;

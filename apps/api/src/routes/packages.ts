@@ -25,9 +25,10 @@ import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
 import {
-  isInTransitStatus,
+  IN_TRANSIT_STATUSES,
   isValidPackageTransition,
 } from "../lib/packages/state-machine.js";
+import { ReturnStateConflictError } from "../lib/returns/state-machine.js";
 import {
   computeWindowDeadline,
   computeExchangeDeadline,
@@ -105,42 +106,45 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
           createdAt: Date;
         }
       >();
+      // Latest return per purchase first, then its line titles and refunds in one query each.
+      const latestByPurchaseId = new Map<string, ReturnRecord>();
       for (const r of returns) {
         if (!r.purchaseId) continue;
-        const existing = returnsByPurchaseId.get(r.purchaseId);
-        if (!existing || r.updatedAt > existing.updatedAt) {
-          let itemTitle: string | null = null;
-          if (r.purchaseItemId) {
-            const item = await app.deps.repos.findMerchantPurchaseItemById(r.purchaseItemId);
-            itemTitle = item?.title ?? null;
-          }
-          returnsByPurchaseId.set(r.purchaseId, {
-            id: r.id,
-            state: r.state,
-            refundMinor: r.refundMinor,
-            tracking: r.tracking,
-            merchant: null,
-            itemTitle,
-            updatedAt: r.updatedAt,
-            createdAt: r.createdAt,
-          });
-        }
+        const existing = latestByPurchaseId.get(r.purchaseId);
+        if (!existing || r.updatedAt > existing.updatedAt) latestByPurchaseId.set(r.purchaseId, r);
+      }
+      const latest = [...latestByPurchaseId.values()];
+      const [items, entries] = await Promise.all([
+        app.deps.repos.listMerchantPurchaseItemsByIds(
+          userId,
+          latest.flatMap((r) => (r.purchaseItemId ? [r.purchaseItemId] : [])),
+        ),
+        app.deps.repos.listMoneyLedgerByRefs(
+          userId,
+          latest.map((r) => r.id),
+          "REFUND",
+        ),
+      ]);
+      const titleByItemId = new Map(items.map((i) => [i.id, i.title]));
+      for (const [purchaseId, r] of latestByPurchaseId) {
+        returnsByPurchaseId.set(purchaseId, {
+          id: r.id,
+          state: r.state,
+          refundMinor: r.refundMinor,
+          tracking: r.tracking,
+          merchant: null,
+          itemTitle: r.purchaseItemId ? (titleByItemId.get(r.purchaseItemId) ?? null) : null,
+          updatedAt: r.updatedAt,
+          createdAt: r.createdAt,
+        });
       }
 
       const ledgerByReturnId = new Map<string, { amountMinor: number; creditedAt: Date }>();
-      for (const r of returnsByPurchaseId.values()) {
-        try {
-          const entry = await app.deps.repos.findMoneyLedgerByRef(userId, r.id, "REFUND");
-          if (entry) {
-            ledgerByReturnId.set(r.id, {
-              amountMinor: entry.delta,
-              creditedAt: entry.createdAt,
-            });
-          }
-        } catch {
-          // best-effort
-        }
+      for (const entry of entries) {
+        if (!entry.refId || ledgerByReturnId.has(entry.refId)) continue;
+        ledgerByReturnId.set(entry.refId, { amountMinor: entry.delta, creditedAt: entry.createdAt });
       }
+      const purchaseById = new Map(purchases.map((p) => [p.id, p]));
 
       const board = buildRtoRecoveryBoard(
         purchases.map((p) => ({
@@ -158,7 +162,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
         ledgerByReturnId,
         { all },
       ).map((row) => {
-        const p = purchases.find((x) => x.id === row.purchaseId);
+        const p = purchaseById.get(row.purchaseId);
         return {
           ...row,
           deliveryAddressNote: p?.deliveryAddressNote ?? null,
@@ -206,27 +210,42 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       const returns = await app.deps.repos.listReturnRequests(userId);
       let linked = returns.find((r) => r.purchaseId === id) ?? null;
       if (!linked) {
+        // One open whole-order return per purchase (#61): a double tap gets the same one back, so
+        // its refund keeps one ledger ref.
         const windowDeadline = computeWindowDeadline(existing.purchasedAt, existing.merchant);
         const exchangeDeadline = computeExchangeDeadline(existing.purchasedAt, existing.merchant);
-        const created = await app.deps.repos.createReturnRequest({
+        const opened = await app.deps.repos.openReturnRequest({
           userId,
           purchaseId: id,
+          purchaseItemId: null,
           windowDeadline,
           exchangeDeadline,
           method: request.body.method ?? "RTO_REFUND",
-        });
-        linked = (await app.deps.repos.updateReturnRequest(created.id, { state: "INITIATED" })) ?? created;
-        await scheduleReturnDeadlineReminder({
-          returnId: linked.id,
-          userId,
-          windowDeadline: windowDeadline.toISOString(),
-          merchant: existing.merchant,
-        });
-      } else if (linked.state === "REQUESTED") {
-        linked = (await app.deps.repos.updateReturnRequest(linked.id, {
           state: "INITIATED",
-          method: request.body.method ?? linked.method,
-        })) ?? linked;
+        });
+        linked = opened.request;
+        if (opened.created) {
+          await scheduleReturnDeadlineReminder({
+            returnId: linked.id,
+            userId,
+            windowDeadline: windowDeadline.toISOString(),
+            merchant: existing.merchant,
+          });
+        }
+      }
+      if (linked.state === "REQUESTED") {
+        try {
+          linked =
+            (await app.deps.repos.updateReturnRequest(
+              linked.id,
+              { state: "INITIATED", method: request.body.method ?? linked.method },
+              { userId, fromStates: ["REQUESTED"] },
+            )) ?? linked;
+        } catch (err) {
+          if (!(err instanceof ReturnStateConflictError)) throw err;
+          // Moved on concurrently: answer with where it is now.
+          linked = (await app.deps.repos.findReturnRequest(linked.id, userId)) ?? linked;
+        }
       }
 
       trackServerEvent("rto_refund_started", {
@@ -285,10 +304,10 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const all = request.query.all === "1";
-      const purchases = await app.deps.repos.listMerchantPurchases(userId);
-      const filtered = all
-        ? purchases
-        : purchases.filter((p) => isInTransitStatus(p.deliveryStatus));
+      const filtered = await app.deps.repos.listMerchantPurchases(
+        userId,
+        all ? {} : { deliveryStatuses: IN_TRANSIT_STATUSES },
+      );
 
       const ids = filtered.map((p) => p.id);
       const itemsByPurchase =

@@ -34,10 +34,12 @@ import { requireConsent } from "../lib/auth/consent.js";
 import { audit } from "../lib/audit.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import {
-  scheduleWarrantyReminder,
+  scheduleWarrantyReminders,
   snoozeWarrantyReminder,
   WARRANTY_SNOOZE_DEFAULT_MS,
 } from "../lib/expiry.js";
+import { sendSpendEnvelopeAlerts } from "../lib/budget.js";
+import type { CreateWarrantyInput } from "../lib/repositories/types.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -345,6 +347,22 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
           .send({ error: "Not Found", message: "Receipt not found" });
       }
 
+      // Confirm happens once per receipt: a repeat or a double tap gets the purchase it made,
+      // and nothing is written again.
+      const sendConfirmed = async (purchaseId: string, currency: string) => {
+        const current = (await app.deps.repos.getReceipt(id, userId)) ?? existing;
+        const imageUrl = await app.deps.storage.getSignedUrl(current.imageKey);
+        return reply.code(200).send(
+          toReceiptResponse({ ...current, currency, purchaseId, imageUrl }),
+        );
+      };
+      if (existing.purchaseId) {
+        const linked = await app.deps.repos.findMerchantPurchaseById(existing.purchaseId);
+        if (linked && linked.userId === userId) {
+          return sendConfirmed(linked.id, linked.currency);
+        }
+      }
+
       // Persist manual corrections from the confirm body onto the receipt row.
       const correctedOcrJson: Record<string, unknown> = {
         ...existing.ocrJson,
@@ -376,18 +394,13 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         category: w.category,
         title: null as string | null,
       }));
+      let dupWarnings = 0;
       const itemInputs = body.items.map((item) => {
         const warning = findDuplicateWarnings(
           [{ title: item.title, brand: null }],
           owned,
         )[0];
-        if (warning) {
-          trackServerEvent("dup_rebuy_warned", {
-            userId,
-            count: 1,
-            source: "ingest",
-          });
-        }
+        if (warning) dupWarnings += 1;
         return {
           title: item.title,
           priceMinor: item.priceMinor,
@@ -395,22 +408,6 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
           duplicateWardrobeItemId: warning?.matches[0]?.wardrobeItemId ?? null,
         };
       });
-
-      const { purchase } = await app.deps.repos.createMerchantPurchase({
-        userId,
-        source: "RECEIPT",
-        merchant: body.merchant,
-        purchasedAt,
-        currency: body.currency,
-        totalMinor: body.totalMinor,
-        deliveryStatus: "ORDERED",
-        etaAt: defaultEtaForStatus("ORDERED", purchasedAt),
-        returnWindowDeadline: computeReturnWindowDeadline(purchasedAt, body.merchant),
-        exchangeWindowDeadline: computeExchangeWindowDeadline(purchasedAt, body.merchant),
-        items: itemInputs,
-      });
-
-      await app.deps.repos.updateReceiptPurchaseId(id, userId, purchase.id);
 
       // Explicit warranties from manual-correct UI
       const ocrClaimContact =
@@ -421,6 +418,8 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
             )
           : null;
 
+      const warrantyInputs: CreateWarrantyInput[] = [];
+      const autoDetected: Array<{ itemIndex: number; months: number; source?: "category_rules" }> = [];
       for (const w of body.warranties ?? []) {
         const item = body.items[w.itemIndex];
         if (!item) continue;
@@ -428,7 +427,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
           w.category ??
           inferWarrantyCategory(item.title, item.category) ??
           null;
-        const warranty = await app.deps.repos.createWarranty({
+        warrantyInputs.push({
           userId,
           receiptId: id,
           itemTitle: item.title,
@@ -440,7 +439,6 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
             defaultClaimContactFromMerchant(body.merchant),
           category,
         });
-        await scheduleWarrantyReminder(warranty);
       }
 
       // Auto-detect: if no explicit warranties but OCR hint suggests one, create it
@@ -461,7 +459,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
               category as WarrantyCategory,
               hint.months,
             );
-            const warranty = await app.deps.repos.createWarranty({
+            warrantyInputs.push({
               userId,
               receiptId: id,
               itemTitle: item.title,
@@ -472,13 +470,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
                 defaultClaimContactFromMerchant(body.merchant),
               category,
             });
-            await scheduleWarrantyReminder(warranty);
-            trackServerEvent("warranty_auto_detected", {
-              userId,
-              receiptId: id,
-              itemIndex: idx,
-              months: hint.months,
-            });
+            autoDetected.push({ itemIndex: idx, months: hint.months });
           }
         } else if (!body.warranties) {
           // U010 — category-rule drafts only when client omitted warranties entirely
@@ -490,7 +482,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
           for (const draft of drafts) {
             const item = body.items[draft.itemIndex];
             if (!item) continue;
-            const warranty = await app.deps.repos.createWarranty({
+            warrantyInputs.push({
               userId,
               receiptId: id,
               itemTitle: item.title,
@@ -501,16 +493,58 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
                 defaultClaimContactFromMerchant(body.merchant),
               category: draft.category,
             });
-            await scheduleWarrantyReminder(warranty);
-            trackServerEvent("warranty_auto_detected", {
-              userId,
-              receiptId: id,
-              itemIndex: draft.itemIndex,
-              months: draft.months,
-              source: "category_rules",
-            });
+            autoDetected.push({ itemIndex: draft.itemIndex, months: draft.months, source: "category_rules" });
           }
         }
+      }
+
+      // Purchase, lines, warranties and the receipt link in one transaction (receipt locked).
+      const confirmed = await app.deps.repos.confirmReceiptPurchase({
+        receiptId: id,
+        userId,
+        purchase: {
+          userId,
+          source: "RECEIPT",
+          merchant: body.merchant,
+          purchasedAt,
+          currency: body.currency,
+          totalMinor: body.totalMinor,
+          deliveryStatus: "ORDERED",
+          etaAt: defaultEtaForStatus("ORDERED", purchasedAt),
+          returnWindowDeadline: computeReturnWindowDeadline(purchasedAt, body.merchant),
+          exchangeWindowDeadline: computeExchangeWindowDeadline(purchasedAt, body.merchant),
+          items: itemInputs,
+        },
+        warranties: warrantyInputs,
+      });
+      if (!confirmed) {
+        return reply
+          .code(404)
+          .send({ error: "Not Found", message: "Receipt not found" });
+      }
+      const { purchase } = confirmed;
+      if (!confirmed.created) {
+        return sendConfirmed(purchase.id, purchase.currency);
+      }
+
+      await scheduleWarrantyReminders(confirmed.warranties);
+      // N42: a new purchase may put a budget past 80%; the push runs off the response path.
+      void sendSpendEnvelopeAlerts(app.deps.repos, userId).catch((err) =>
+        app.log.warn({ err, userId }, "spend envelope alert failed"),
+      );
+      for (let i = 0; i < dupWarnings; i += 1) {
+        trackServerEvent("dup_rebuy_warned", {
+          userId,
+          count: 1,
+          source: "ingest",
+        });
+      }
+      for (const detected of autoDetected) {
+        trackServerEvent("warranty_auto_detected", {
+          userId,
+          receiptId: id,
+          ...detected,
+        });
       }
 
       audit(app.log, "receipt.confirmed", {

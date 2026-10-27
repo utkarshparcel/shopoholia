@@ -85,6 +85,48 @@ describe("disposition", () => {
     await app.close();
   });
 
+  it("one ACTIVE listing per item: a double tap reuses it, another mode is 409, another user's item is 404", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const other = await login(app, "919876500012");
+    const item = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "saree", costMinor: 20000, imageKeys: ["s.jpg"], garmentImageKey: "s.jpg" },
+    });
+    const itemId = (item.json() as WardrobeItem).id;
+    const sell = () =>
+      app.inject({
+        method: "POST",
+        url: "/disposition",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { wardrobeItemId: itemId, mode: "SELL", priceMinor: 9000 },
+      });
+    const [a, b] = await Promise.all([sell(), sell()]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 201]);
+    expect((a.json() as DispositionListing).id).toBe((b.json() as DispositionListing).id);
+    expect((await repos.listDispositionListings(userId)).filter((l) => l.status === "ACTIVE").length).toBe(1);
+    expect((await repos.listListingsByUser(userId)).length).toBe(1);
+
+    const donate = await app.inject({
+      method: "POST",
+      url: "/disposition",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { wardrobeItemId: itemId, mode: "DONATE" },
+    });
+    expect(donate.statusCode).toBe(409);
+
+    const foreign = await app.inject({
+      method: "POST",
+      url: "/disposition",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { wardrobeItemId: itemId, mode: "SELL" },
+    });
+    expect(foreign.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("waste dispose creates disposition listing (real)", async () => {
     const { app } = await buildTestServer();
     const { accessToken } = await login(app);

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { giftOccasionEnum, giftOrderStatusEnum, recipientRelationshipEnum } from "./enums.js";
 import { users } from "./users.js";
@@ -89,10 +89,15 @@ export const groupGiftContributions = pgTable(
     contributorName: text("contributor_name"),
     amountMinor: integer("amount_minor").notNull(),
     note: text("note"),
+    /** Client key per contribution tap: a retry returns the same row (#25). */
+    idempotencyKey: text("idempotency_key"),
     ...timestamps,
   },
   (t) => [
     index("group_gift_contributions_order_created_idx").on(t.giftOrderId, t.createdAt.desc().nullsFirst()),
+    uniqueIndex("group_gift_contributions_order_idem_uidx")
+      .on(t.giftOrderId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} IS NOT NULL`),
     index("group_gift_contributions_contributor_idx")
       .on(t.contributorUserId)
       .where(sql`${t.contributorUserId} IS NOT NULL`),

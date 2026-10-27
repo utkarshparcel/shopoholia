@@ -7,10 +7,13 @@ import {
   CpwGoalsResponseSchema,
   SetCpwGoalBodySchema,
   SetCpwGoalResponseSchema,
+  PageQuerySchema,
   TaxPackResponseSchema,
   collectCpwThresholdAlerts,
   cpwGoalNudgeCopy,
   cpwGoalProgress,
+  localMonthRange,
+  resolveTimeZone,
   sumRepairSpend,
 } from "@worn/shared";
 import type { FastifyReply } from "fastify";
@@ -23,9 +26,10 @@ import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
 import {
   allocatePurchaseToBudgetCategories,
+  budgetActualMinor,
+  budgetPeriodStart,
   evaluateSpendEnvelope,
   isBudgetExceeded,
-  maybeSendSpendEnvelopeAlert,
 } from "../lib/budget.js";
 import { scheduleAccountantMonthlyDigest } from "../lib/accountant-jobs.js";
 import { reconcileMoneyAccounts } from "../lib/money-reconcile.js";
@@ -34,14 +38,15 @@ import {
   markReconcileInvestigated,
   reconcileMismatchActions,
 } from "../lib/user-reconcile.js";
+import { getCpwThreshold, setCpwThreshold } from "../lib/closet-ops-prefs.js";
 import { aggregateSeasonRoi } from "../lib/roi-season.js";
 import {
   buildStoreZip,
   buildWorkwearTaxPack,
   resolveTaxPackRange,
 } from "../lib/tax-pack.js";
-import { getCpwThreshold, setCpwThreshold } from "../lib/closet-ops-prefs.js";
-import type { BudgetRecord } from "../lib/repositories/types.js";
+import { decodeCursor, InvalidCursorError, pageInMemory } from "../lib/paging.js";
+import type { BudgetRecord, WardrobeItemRecord } from "../lib/repositories/types.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -57,18 +62,16 @@ function toBudgetJson(b: BudgetRecord) {
   };
 }
 
-function monthLabelFor(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
-}
-
 function csvEscape(value: string): string {
   if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
 }
 
 export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
+  /** One wardrobe read for a metrics loop, instead of a findWardrobeItem per metric (#18). */
+  const wardrobeItemsById = async (userId: string) =>
+    new Map((await app.deps.repos.listWardrobeItems(userId)).map((i) => [i.id, i]));
+
   // GET /accountant/summary - P&L: spend by category, costPerWear, budgets vs actual
   app.get(
     "/accountant/summary",
@@ -89,7 +92,11 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      const purchases = await app.deps.repos.listMerchantPurchasesByUser(userId);
+      const timeZone = resolveTimeZone((await app.deps.repos.findUserById(userId))?.timeZone);
+      // A DUPLICATE (merged or backfilled #38 duplicate) is not spend; its lines may still exist.
+      const purchases = (await app.deps.repos.listMerchantPurchasesByUser(userId)).filter(
+        (p) => p.status !== "DUPLICATE",
+      );
       const metrics = await app.deps.repos.getItemMetrics(userId);
       const budgets = await app.deps.repos.listBudgets(userId);
       const repairs = await app.deps.repos.listRepairLogs(userId);
@@ -100,8 +107,8 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         await app.deps.repos.listMerchantPurchaseItemsByPurchaseIds(purchaseIds);
 
       const now = new Date();
-      const monthLabel = monthLabelFor(now);
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      // "This month" is the user's local month (C1), not the server's.
+      const { start: monthStart, monthKey: monthLabel } = localMonthRange(now, timeZone);
       const repairSpend = sumRepairSpend(repairs, { monthStart, now });
 
       // spend by category via per-item budget-category allocation (M7)
@@ -135,21 +142,12 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // budgets vs actual (current period) — per-item allocation, not full purchase total
       const budgetSummaries = budgets.map((b) => {
-        const periodStart =
-          b.period === "MONTHLY"
-            ? new Date(now.getFullYear(), now.getMonth(), 1)
-            : new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-        let actual = 0;
-        for (const p of purchases) {
-          if (new Date(p.purchasedAt) < periodStart) continue;
-          if (b.category === "GENERAL") {
-            actual += p.totalMinor;
-            continue;
-          }
-          const items = itemsByPurchase.get(p.id) ?? [];
-          const allocated = allocatePurchaseToBudgetCategories(items);
-          actual += allocated.get(b.category) ?? 0;
-        }
+        const actual = budgetActualMinor(
+          b.category,
+          purchases,
+          itemsByPurchase,
+          budgetPeriodStart(b.period, now, timeZone),
+        );
         const envelope = evaluateSpendEnvelope(actual, b.limitMinor);
         const exceeded = envelope.status === "EXCEEDED";
         if (exceeded) {
@@ -171,33 +169,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         };
       });
 
-      // N42 — mid-period envelope push at 80% (best-effort; never block summary)
-      await Promise.all(
-        budgetSummaries
-          .filter((b) => b.envelopeStatus === "WARN")
-          .map(async (b) => {
-            try {
-              const status = await maybeSendSpendEnvelopeAlert(app.deps.repos, {
-                userId,
-                category: b.category,
-                period: b.period,
-                limitMinor: b.limitMinor,
-                actualMinor: b.actualMinor,
-                now,
-              });
-              if (status === "sent" || status === "queued") {
-                trackServerEvent("spend_envelope_alerted", {
-                  userId,
-                  category: b.category,
-                  limitMinor: b.limitMinor,
-                  actualMinor: b.actualMinor,
-                });
-              }
-            } catch {
-              // ignore — alerts must not break P&L reads
-            }
-          }),
-      );
+      // N42: the 80% envelope push is sent from the purchase write paths (sendSpendEnvelopeAlerts), never from this GET.
 
       audit(app.log, "money.read", { userId, surface: "accountant.summary" });
       trackServerEvent("accountant_viewed", { userId, totalSpendMinor: totalSpend });
@@ -217,9 +189,12 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         costMinor: number;
         cpwGoal: ReturnType<typeof cpwGoalProgress>;
       }> = [];
+      const goalItems = metrics.some((m) => m.targetCpwMinor != null && m.targetCpwMinor > 0)
+        ? await wardrobeItemsById(userId)
+        : new Map<string, WardrobeItemRecord>();
       for (const m of metrics) {
         if (m.targetCpwMinor == null || m.targetCpwMinor <= 0) continue;
-        const item = await app.deps.repos.findWardrobeItem(m.wardrobeItemId, userId);
+        const item = goalItems.get(m.wardrobeItemId);
         const costMinor = item?.costMinor ?? 0;
         const goal = cpwGoalProgress(costMinor, m.wearCount, m.targetCpwMinor);
         if (!goal.active) continue;
@@ -297,11 +272,19 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        response: { 200: AccountantLedgerResponseSchema, 401: ErrorSchema },
+        querystring: PageQuerySchema,
+        response: { 200: AccountantLedgerResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
+      let after;
+      try {
+        after = decodeCursor(request.query.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
+      }
       const ledger = await app.deps.repos.listMoneyLedgerByUser(userId);
       const purchases = await app.deps.repos.listMerchantPurchasesByUser(userId);
       const repairs = await app.deps.repos.listRepairLogs(userId);
@@ -348,11 +331,18 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      // One page, newest first (C3): `limit` entries and a cursor to the next page.
+      const page = pageInMemory(
+        entries,
+        request.query.limit,
+        after,
+        (e) => new Date(e.createdAt),
+        (e) => e.id,
+      );
 
-      audit(app.log, "money.read", { userId, surface: "accountant.ledger", entryCount: entries.length });
-      trackServerEvent("ledger_viewed", { userId, entryCount: entries.length });
-      return { entries };
+      audit(app.log, "money.read", { userId, surface: "accountant.ledger", entryCount: page.items.length });
+      trackServerEvent("ledger_viewed", { userId, entryCount: page.items.length });
+      return { entries: page.items, nextCursor: page.nextCursor };
     },
   );
 
@@ -602,9 +592,12 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const metrics = await app.deps.repos.getItemMetrics(userId);
       const goals = [];
+      const items = metrics.some((m) => m.targetCpwMinor != null && m.targetCpwMinor > 0)
+        ? await wardrobeItemsById(userId)
+        : new Map<string, WardrobeItemRecord>();
       for (const m of metrics) {
         if (m.targetCpwMinor == null || m.targetCpwMinor <= 0) continue;
-        const item = await app.deps.repos.findWardrobeItem(m.wardrobeItemId, userId);
+        const item = items.get(m.wardrobeItemId);
         const costMinor = item?.costMinor ?? 0;
         const cpwGoal = cpwGoalProgress(costMinor, m.wearCount, m.targetCpwMinor);
         if (!cpwGoal.active) continue;
@@ -652,9 +645,10 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const prefs = await getCpwThreshold(app.deps.repos, userId);
       const metrics = await app.deps.repos.getItemMetrics(userId);
+      const items = metrics.length ? await wardrobeItemsById(userId) : new Map<string, WardrobeItemRecord>();
       const rows = [];
       for (const m of metrics) {
-        const item = await app.deps.repos.findWardrobeItem(m.wardrobeItemId, userId);
+        const item = items.get(m.wardrobeItemId);
         rows.push({
           wardrobeItemId: m.wardrobeItemId,
           category: item?.category ?? "item",
@@ -811,7 +805,8 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const fix = request.query.fix === true;
-      const result = await reconcileMoneyAccounts(app.deps.repos, app.log, { fix });
+      // Only the caller's accounts: never a cross-user scan or fix from here.
+      const result = await reconcileMoneyAccounts(app.deps.repos, app.log, { fix, userId });
       const rows = annotateUserMismatches(userId, result.mismatches);
       audit(app.log, "money.read", {
         userId,
@@ -860,21 +855,24 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request, reply) => {
       const userId = request.user!.sub;
-      const accounts = await app.deps.repos.listMoneyAccounts(userId);
-      if (!accounts.some((a) => a.id === request.params.accountId)) {
+      const { accountId } = request.params;
+      const r = await app.deps.repos.reconcileMoneyAccount(accountId, userId, { fix: true });
+      if (!r) {
         return reply.code(404).send({ error: "Not Found", message: "Account not found" });
       }
-      const result = await reconcileMoneyAccounts(app.deps.repos, app.log, { fix: true });
-      const row = result.mismatches.find(
-        (m) => m.accountId === request.params.accountId && m.userId === userId,
-      );
-      const refreshed = (await app.deps.repos.listMoneyAccounts(userId)).find(
-        (a) => a.id === request.params.accountId,
-      );
+      if (r.fixed) {
+        audit(app.log, "money.reconciled", {
+          userId,
+          accountId,
+          cachedMinor: r.cachedMinor,
+          ledgerSumMinor: r.ledgerSumMinor,
+        });
+      }
       return {
-        accountId: request.params.accountId,
-        fixed: row?.fixed ?? true,
-        cachedMinor: refreshed?.balanceCacheMinor ?? row?.lastBalanceAfter ?? null,
+        accountId,
+        // Fixed means the cache now equals the ledger sum.
+        fixed: r.fixed || r.cachedMinor === r.ledgerSumMinor,
+        cachedMinor: r.fixed ? r.ledgerSumMinor : r.cachedMinor,
       };
     },
   );

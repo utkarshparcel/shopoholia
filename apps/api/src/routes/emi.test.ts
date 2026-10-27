@@ -99,6 +99,49 @@ describe("emi routes + schedule nudge", () => {
     await app.close();
   });
 
+  it("pay with one idempotencyKey records the installment once; a stale plan is 409; others get 404", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    await withConsent(app, accessToken, userId);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    const plan = (
+      await app.inject({
+        method: "POST",
+        url: "/emi",
+        headers: auth,
+        payload: { provider: "Simpl", principalMinor: 30_000, installmentMinor: 10_000, nextDueOn: "2026-09-15" },
+      })
+    ).json() as EmiPlan;
+    const key = "6f0c1d7e-3b1a-4c55-9a0e-1f6f3b2a9c01";
+    const pay = () =>
+      app.inject({ method: "POST", url: `/emi/${plan.id}/pay`, headers: auth, payload: { idempotencyKey: key } });
+    const [a, b] = await Promise.all([pay(), pay()]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    const again = await pay();
+    expect(again.statusCode).toBe(200);
+    expect((again.json() as EmiPlan).remainingMinor).toBe(20_000);
+    expect((again.json() as EmiPlan).nextDueOn).toBe("2026-10-15");
+
+    // The plan as read no longer matches: nothing is written.
+    const stale = await repos.payEmiPlan(plan.id, userId, {
+      from: { remainingMinor: 30_000, nextDueOn: "2026-09-15", status: "ACTIVE" },
+      to: { remainingMinor: 20_000, nextDueOn: "2026-10-15", status: "ACTIVE" },
+    });
+    expect(stale?.outcome).toBe("CONFLICT");
+    expect((await repos.findEmiPlan(plan.id, userId))?.remainingMinor).toBe(20_000);
+
+    const other = await login(app, "919876500021");
+    await withConsent(app, other.accessToken, other.userId);
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/emi/${plan.id}/pay`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: {},
+    });
+    expect(foreign.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("parses EMI due SMS fixture and mark paid writes audit ledger note (U007)", async () => {
     const { app } = await buildTestServer();
     const { accessToken, userId } = await login(app);
