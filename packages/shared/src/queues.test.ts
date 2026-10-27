@@ -186,4 +186,26 @@ describe("createJobProcessor", () => {
     await expect(processor(fakeJob({ data: emi, attemptsMade: 2 }))).rejects.toThrow("boom");
     expect(alerts).toEqual(["Error: pg down", "Error: boom"]);
   });
+
+  it("settles the job's row on the last failure only; a failing hook is alerted", async () => {
+    const alerts: unknown[] = [];
+    const onFinalFailure = vi.fn(async () => {
+      throw new Error("row gone");
+    });
+    const processor = createJobProcessor({
+      queue: "emi-due",
+      handle: async () => {
+        throw new Error("render down");
+      },
+      recordDeadLetter: async () => undefined,
+      onDeadLetter: (_e, err) => alerts.push(String(err)),
+      onFinalFailure,
+      errors,
+    });
+    await expect(processor(fakeJob({ data: emi, attemptsMade: 1 }))).rejects.toThrow("render down");
+    expect(onFinalFailure).not.toHaveBeenCalled();
+    await expect(processor(fakeJob({ data: emi, attemptsMade: 2 }))).rejects.toThrow("render down");
+    expect(onFinalFailure).toHaveBeenCalledWith(emi, "render down");
+    expect(alerts).toEqual(["Error: row gone", "Error: render down"]);
+  });
 });

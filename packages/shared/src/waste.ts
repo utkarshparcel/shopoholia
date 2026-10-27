@@ -163,8 +163,8 @@ export function wearChallengeNudgeCopy(
   }
   if (progress.progress === 0) {
     return name
-      ? `Wear ${name} ${progress.target}× before you dispose it.`
-      : `Wear it ${progress.target}× before you dispose it.`;
+      ? `Wear ${name} ${progress.target}× before you dispose of it.`
+      : `Wear it ${progress.target}× before you dispose of it.`;
   }
   return `${progress.label} — ${progress.remaining} to go.`;
 }

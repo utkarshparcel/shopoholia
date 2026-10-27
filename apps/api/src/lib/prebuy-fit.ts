@@ -256,7 +256,7 @@ export function computePrebuyFit(
 
   const parts: string[] = [];
   if (uniqueOverlaps.length > 0) {
-    parts.push(`Looks similar to ${uniqueOverlaps.length} piece(s) you already own`);
+    parts.push(`Looks similar to ${uniqueOverlaps.length} piece${uniqueOverlaps.length === 1 ? "" : "s"} you already own`);
   }
   if (gaps.length > 0) {
     parts.push(`Fills ${gaps.length} closet gap(s)`);

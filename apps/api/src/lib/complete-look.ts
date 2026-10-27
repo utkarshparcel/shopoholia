@@ -105,7 +105,7 @@ export function detectMissingSlots(items: LookOwnedItem[]): MissingSlotGap[] {
       ownedCompanions: companions,
       message:
         companions > 0
-          ? `Need a ${slot} to complete ${companions} owned piece(s)`
+          ? `Need a ${slot} to complete ${companions} owned piece${companions === 1 ? "" : "s"}`
           : `Need a ${slot} to start a look`,
     });
   }

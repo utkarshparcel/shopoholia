@@ -1795,18 +1795,6 @@ export interface Repositories {
     spendCapMinor?: number | null;
     spentMinor?: number;
   }): Promise<HouseholdVaultSettingsRecord>;
-  /**
-   * Atomic `spentMinor += deltaMinor`. A positive delta applies only while the member has SPEND
-   * access and stays within the cap (null otherwise); a negative one releases a reservation
-   * (floored at 0). Backed by the vault-settings store: in Postgres this is
-   * `UPDATE ... SET spent_minor = spent_minor + $d WHERE vault_access = 'SPEND' AND
-   * (spend_cap_minor IS NULL OR spent_minor + $d <= spend_cap_minor) RETURNING *`.
-   */
-  addHouseholdVaultSpent(
-    householdId: string,
-    userId: string,
-    deltaMinor: number,
-  ): Promise<HouseholdVaultSettingsRecord | null>;
   listHouseholdVaultSettings(
     householdId: string,
   ): Promise<HouseholdVaultSettingsRecord[]>;

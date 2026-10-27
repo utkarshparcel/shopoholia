@@ -142,7 +142,7 @@ export function buildWhyThis(input: {
   }
   const favorites = input.selected.filter((it) => (wearCount.get(it.id) ?? 0) > 0);
   if (favorites.length) {
-    whyThis.push(`Included ${favorites.length} piece(s) you wear often`);
+    whyThis.push(`Included ${favorites.length} piece${favorites.length === 1 ? "" : "s"} you wear often`);
   }
   if (weather) {
     whyThis.push(`Weather ${weather.tempC}°C, ${weather.condition.replace(/_/g, " ")}`);

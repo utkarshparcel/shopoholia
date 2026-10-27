@@ -121,7 +121,7 @@ export function suggestShoeBagRotation(
     const reason =
       count === 0
         ? `Never worn ${kind} — good rotation pick`
-        : `Rested ${Math.floor(daysSince)}d · worn ${count}×`;
+        : `Rested ${daysSince < 1 ? "<1" : Math.floor(daysSince)}d · worn ${count}×`;
     return {
       ...it,
       kind,

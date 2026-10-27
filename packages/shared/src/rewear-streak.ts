@@ -102,7 +102,7 @@ export function rewearStreakNudgeCopy(streak: RewearStreak): string {
   if (!streak.todayLogged) {
     return `Keep your ${streak.currentStreak}-day streak — log a wear today.`;
   }
-  return `${streak.label} — keep rewearing before you buy.`;
+  return "Logged today — keep rewearing before you buy.";
 }
 
 export function rewearStreakCelebrateCopy(currentStreak: number): string {

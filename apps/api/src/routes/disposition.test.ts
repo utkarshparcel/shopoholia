@@ -93,7 +93,7 @@ describe("disposition", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "saree", costMinor: 20000, imageKeys: ["s.jpg"], garmentImageKey: "s.jpg" },
+      payload: { category: "saree", costMinor: 20000, imageKeys: [`u/${userId}/wardrobe/s.jpg`], garmentImageKey: `u/${userId}/wardrobe/s.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const sell = () =>

@@ -10,20 +10,6 @@ import {
 } from "./push-delivery.js";
 import { resolveTimeZone } from "./local-time.js";
 
-export {
-  GIFT_OCCASION_EVENT,
-  GIFT_BIRTHDAY_LEAD_DAYS,
-  GIFT_FESTIVAL_LEAD_DAYS,
-  computeGiftOccasionReminderDelayMs,
-  deliverGiftOccasionPush,
-  giftOccasionDedupeKey,
-  giftOccasionJobId,
-  giftOccasionLeadDays,
-  giftOccasionPushCopy,
-  isFestivalOccasion,
-  type GiftOccasionDeliveryDeps,
-} from "./gift-occasion-push.js";
-
 /**
  * Shared Closet push flow used by deadline workers (and optionally API):
  * gate (opt-out / frequency cap / quiet hours) → insert QUEUED with deep link

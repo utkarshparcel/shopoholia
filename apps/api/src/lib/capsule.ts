@@ -103,7 +103,7 @@ export function applyCapsulePreference<T extends ScoredLike>(
     preferredCount,
     whyHint:
       preferredCount > 0
-        ? `Preferred ${preferredCount} piece(s) from your capsule`
+        ? `Preferred ${preferredCount} piece${preferredCount === 1 ? "" : "s"} from your capsule`
         : null,
   };
 }

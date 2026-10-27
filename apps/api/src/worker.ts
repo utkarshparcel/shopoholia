@@ -1,8 +1,12 @@
 import { createDb, recordJobDeadLetter } from "@worn/db";
+import { decryptToken } from "@worn/shared/token-crypto";
 import pino from "pino";
 import type { JobDeps } from "./jobs/deps.js";
 import { JOB_HANDLERS, JOB_SCHEDULES } from "./jobs/registry.js";
 import { startJobRunner, type JobRunnerAlert } from "./jobs/runner.js";
+import { createPurchaseVerifier } from "./lib/coin-purchases.js";
+import { storeConnectionsFromEnv } from "./lib/iap/stores.js";
+import { createRenderProvider } from "./lib/render/provider.js";
 import { createPostgresRepositories } from "./lib/repositories/postgres.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import { createStorageFromEnv, hasR2Config } from "./lib/storage/r2.js";
@@ -38,16 +42,25 @@ async function main() {
     captureException(error ?? new Error(message), { tags });
   };
 
+  const storage = createStorageFromEnv();
+  const storeConnections = storeConnectionsFromEnv();
   const runner = await startJobRunner<JobDeps>({
     redisUrl,
     handlers: JOB_HANDLERS,
     schedules: JOB_SCHEDULES,
     deps: {
       repos: createPostgresRepositories(db),
-      storage: createStorageFromEnv(),
+      storage,
       log,
       recordDeadLetter,
       now: () => new Date(),
+      renderProvider: createRenderProvider({
+        apiKey: process.env.FASHN_API_KEY,
+        resolveImage: (key) => storage.getSignedUrl(key),
+      }),
+      storeConnections,
+      purchaseVerifier: createPurchaseVerifier(storeConnections),
+      decryptToken,
     },
     recordDeadLetter,
     alert,

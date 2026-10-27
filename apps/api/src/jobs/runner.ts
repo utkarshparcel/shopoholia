@@ -26,6 +26,8 @@ export type JobDefinition<D> = {
   /** Jobs of this queue run at once in one process (default 1). */
   concurrency?: number;
   timeoutMs?: number;
+  /** After the last attempt failed: settle the job's row (raw payload, error message). */
+  onFinalFailure?: (data: unknown, deps: D, error: string) => Promise<void>;
 };
 
 export function defineJob<T, D>(definition: {
@@ -34,6 +36,7 @@ export function defineJob<T, D>(definition: {
   handle: (data: T, deps: D) => Promise<void>;
   concurrency?: number;
   timeoutMs?: number;
+  onFinalFailure?: (data: unknown, deps: D, error: string) => Promise<void>;
 }): JobDefinition<D> {
   // createJobProcessor parses `data` with `schema` before the handler sees it.
   return { ...definition, handle: (data, deps) => definition.handle(data as T, deps) };
@@ -158,6 +161,10 @@ export async function startJobRunner<D>(options: JobRunnerOptions<D>): Promise<J
       queue.on("error", (err) => alertConnection("queue error", definition.queue, err));
       queues.set(definition.queue, queue);
 
+      const settle = definition.onFinalFailure;
+      const onFinalFailure = settle
+        ? (data: unknown, error: string) => settle(data, options.deps, error)
+        : undefined;
       const processor = createJobProcessor({
         queue: definition.queue,
         schema: definition.schema,
@@ -165,6 +172,7 @@ export async function startJobRunner<D>(options: JobRunnerOptions<D>): Promise<J
         timeoutMs: definition.timeoutMs,
         recordDeadLetter: options.recordDeadLetter,
         onDeadLetter: alertDeadLetter,
+        onFinalFailure,
         errors: { DelayedError, UnrecoverableError },
       });
       const worker = new Worker(definition.queue, processor, {
@@ -181,6 +189,7 @@ export async function startJobRunner<D>(options: JobRunnerOptions<D>): Promise<J
         queue: definition.queue,
         recordDeadLetter: options.recordDeadLetter,
         onDeadLetter: alertDeadLetter,
+        onFinalFailure,
       });
       workers.push(worker);
     }

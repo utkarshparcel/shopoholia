@@ -9,7 +9,7 @@ const REVOKE_TIMEOUT_MS = 10_000;
 export type GmailTokenRevokeDeps = {
   /**
    * Decrypts an `ingestion_sources.encrypted_token` blob (AES-256-GCM, OAUTH_TOKEN_SECRET).
-   * The worker passes `decryptToken` from services/worker-ingest/src/crypto.ts.
+   * The worker passes `decryptToken` from @worn/shared/token-crypto.
    */
   decryptToken: (blob: string) => unknown;
   fetch?: typeof fetch;

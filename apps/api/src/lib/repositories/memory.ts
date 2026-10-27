@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline, checkHouseholdVaultSpendCap } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
@@ -3918,32 +3918,6 @@ export function createMemoryRepositories(): Repositories {
           input.spentMinor !== undefined
             ? input.spentMinor
             : (prev?.spentMinor ?? 0),
-        updatedAt: now(),
-      };
-      householdVaultSettingsStore.set(key, next);
-      return next;
-    },
-    async addHouseholdVaultSpent(householdId, userId, deltaMinor) {
-      // Check and write with no await between them, so concurrent spends can't both pass the cap.
-      const key = `${householdId}:${userId}`;
-      const prev = householdVaultSettingsStore.get(key);
-      const spent = prev?.spentMinor ?? 0;
-      if (deltaMinor > 0) {
-        const cap = checkHouseholdVaultSpendCap({
-          isMember: true,
-          vaultAccess: prev?.vaultAccess,
-          spendCapMinor: prev?.spendCapMinor,
-          spentMinor: spent,
-          amountMinor: deltaMinor,
-        });
-        if (!cap.allowed) return null;
-      }
-      const next: HouseholdVaultSettingsRecord = {
-        householdId,
-        userId,
-        vaultAccess: prev?.vaultAccess ?? "VIEW",
-        spendCapMinor: prev?.spendCapMinor ?? null,
-        spentMinor: Math.max(0, spent + deltaMinor),
         updatedAt: now(),
       };
       householdVaultSettingsStore.set(key, next);

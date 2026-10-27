@@ -41,6 +41,10 @@ function depsWith(repos: unknown, now: Date): JobDeps {
     log: { info: vi.fn(), error: vi.fn() } as unknown as JobDeps["log"],
     recordDeadLetter: vi.fn(async () => undefined),
     now: () => now,
+    renderProvider: {} as JobDeps["renderProvider"],
+    purchaseVerifier: {} as JobDeps["purchaseVerifier"],
+    storeConnections: {} as JobDeps["storeConnections"],
+    decryptToken: vi.fn(),
   };
 }
 
@@ -236,15 +240,28 @@ describe("job registry", () => {
       "cal-event-outfit",
       "cooling-off-release",
       "emi-due",
+      "fit-preview",
+      "gmail-token-revoke",
       "ingest-dead-letter",
+      "ingestion-retention",
       "interview-kit",
       "lent-overdue",
+      "play-store-reconcile",
       "price-drop",
+      "privacy-erase",
+      "privacy-export",
       "retention-sweep",
+      "wardrobe-discard-purge",
+      "wardrobe-tryon",
     ]);
     expect(JOB_SCHEDULES).toContainEqual(
       expect.objectContaining({ queue: "retention-sweep", pattern: "0 3 * * *", tz: "Asia/Kolkata" }),
     );
+    expect(JOB_SCHEDULES).toContainEqual(
+      expect.objectContaining({ queue: "play-store-reconcile", pattern: "0 4 * * *", tz: "Asia/Kolkata" }),
+    );
+    expect(JOB_HANDLERS.find((h) => h.queue === "wardrobe-tryon")?.onFinalFailure).toBeDefined();
+    expect(JOB_HANDLERS.find((h) => h.queue === "privacy-erase")?.onFinalFailure).toBeDefined();
   });
 
   it("rejects a queue registered twice, a schedule without a handler, a repeated schedule id", () => {

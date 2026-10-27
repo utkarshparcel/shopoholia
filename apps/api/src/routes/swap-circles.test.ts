@@ -179,7 +179,7 @@ describe("N37 swap circle", () => {
           method: "POST",
           url: "/wardrobe",
           headers: auth(owner.accessToken),
-          payload: { category: "lehenga", costMinor: 50000, imageKeys: ["l.jpg"], garmentImageKey: "l.jpg" },
+          payload: { category: "lehenga", costMinor: 50000, imageKeys: [`u/${owner.userId}/wardrobe/l.jpg`], garmentImageKey: `u/${owner.userId}/wardrobe/l.jpg` },
         })
       ).json() as WardrobeItem
     ).id;

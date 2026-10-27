@@ -92,6 +92,27 @@
       "when": 1792990069211,
       "tag": "0012_closet_old_table_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793110178991,
+      "tag": "0013_closet_dedupe_before_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793110180077,
+      "tag": "0014_closet_integration",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793110293169,
+      "tag": "0015_closet_backfill_consent_guard",
+      "breakpoints": true
     }
   ]
 }

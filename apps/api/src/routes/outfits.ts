@@ -254,7 +254,7 @@ async function generateOutfitForUser(app: any, userId: string, opts: GenerateOut
   const seasonal = preferActiveCloset(pool);
   pool = seasonal.pool;
   if (seasonal.applied) {
-    whyHints.push(`Skipped ${seasonal.storedCount} stored off-season piece(s)`);
+    whyHints.push(`Skipped ${seasonal.storedCount} stored off-season piece${seasonal.storedCount === 1 ? "" : "s"}`);
   }
 
   // Avoid-repeat: exclude pieces worn in the last N days
@@ -267,7 +267,7 @@ async function generateOutfitForUser(app: any, userId: string, opts: GenerateOut
   const avoided = applyAvoidRepeat(pool, recentlyWorn);
   pool = avoided.pool;
   if (avoided.applied) {
-    whyHints.push(`Skipped ${avoided.excludedCount} piece(s) worn in the last ${avoidDays} days`);
+    whyHints.push(`Skipped ${avoided.excludedCount} piece${avoided.excludedCount === 1 ? "" : "s"} worn in the last ${avoidDays} days`);
   }
 
   // N32 / W052: prefer user-defined capsule when toggle allows and members remain

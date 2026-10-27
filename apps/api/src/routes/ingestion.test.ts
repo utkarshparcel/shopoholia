@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../index.js";
 import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import { createMockStorage } from "../lib/storage/r2.js";
@@ -115,6 +115,32 @@ describe("ingestion routes", () => {
     expect(body.source.id).toBeTruthy();
     expect(body.oauthUrl).toContain("accounts.google.com");
     expect(verifyState(stateOf(body.oauthUrl))).toMatchObject({ userId, sourceId: body.source.id });
+  });
+
+  it("POST /ingestion/sources answers 503 before the consent check when Gmail connect is unset", async () => {
+    // A production server without GOOGLE_CLIENT_ID / OAUTH_STATE_SECRET.
+    const postUnconfigured = async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("GOOGLE_CLIENT_ID", "");
+      vi.stubEnv("OAUTH_STATE_SECRET", "");
+      try {
+        return await app.inject({
+          method: "POST",
+          url: "/ingestion/sources",
+          headers: { authorization: `Bearer ${token}` },
+          payload: { kind: "EMAIL", provider: "gmail" },
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    };
+    const noConsent = await postUnconfigured();
+    expect(noConsent.statusCode).toBe(503);
+    expect(noConsent.json()).toMatchObject({ message: "Email connect is unavailable" });
+
+    await grantConsent(app, token, userId, "EMAIL");
+    expect((await postUnconfigured()).statusCode).toBe(503);
+    expect(await app.deps.repos.listIngestionSources(userId)).toHaveLength(0);
   });
 
   it("GET /ingestion/sources lists created sources", async () => {

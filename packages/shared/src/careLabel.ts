@@ -206,7 +206,50 @@ export function careLabelBadge(rules: CareRules | null | undefined): string | nu
   return "Care";
 }
 
-/** Expanded care line for badge tap / detail. */
+const WASH_TEXT: Record<CareWash, string | null> = {
+  machine_cold: "Machine wash cold",
+  machine_warm: "Machine wash warm",
+  machine_hot: "Machine wash hot",
+  hand: "Hand wash",
+  do_not_wash: "Do not wash",
+  unknown: null,
+};
+const BLEACH_TEXT: Record<CareBleach, string | null> = {
+  any: "Bleach when needed",
+  non_chlorine: "Non-chlorine bleach only",
+  do_not_bleach: "Do not bleach",
+  unknown: null,
+};
+const DRY_TEXT: Record<CareDry, string | null> = {
+  tumble_low: "Tumble dry low",
+  tumble_hot: "Tumble dry high",
+  line: "Line dry",
+  flat: "Dry flat",
+  do_not_tumble: "Do not tumble dry",
+  unknown: null,
+};
+const IRON_TEXT: Record<CareIron, string | null> = {
+  low: "Iron low",
+  medium: "Iron medium",
+  high: "Iron high",
+  do_not_iron: "Do not iron",
+  unknown: null,
+};
+const DRY_CLEAN_TEXT: Record<CareDryClean, string | null> = {
+  ok: "Dry-clean",
+  petroleum: "Dry-clean, petroleum solvent only",
+  do_not_dry_clean: "Do not dry-clean",
+  unknown: null,
+};
+
+/** Expanded care line for badge tap / detail, as the label would say it. Unread symbols are left out. */
 export function formatCareRulesExpanded(rules: CareRules): string {
-  return `Wash ${rules.wash} · Bleach ${rules.bleach} · Dry ${rules.dry} · Iron ${rules.iron} · Dry-clean ${rules.dryClean}`;
+  const parts = [
+    WASH_TEXT[rules.wash],
+    BLEACH_TEXT[rules.bleach],
+    DRY_TEXT[rules.dry],
+    IRON_TEXT[rules.iron],
+    DRY_CLEAN_TEXT[rules.dryClean],
+  ].filter((p): p is string => Boolean(p));
+  return parts.length ? parts.join(" · ") : "No care instructions could be read from the label.";
 }

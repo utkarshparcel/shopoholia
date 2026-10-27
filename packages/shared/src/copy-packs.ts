@@ -51,7 +51,7 @@ export const COPY_PACK_EN: ClosetCopyPack = {
 export const COPY_PACK_HINGLISH: ClosetCopyPack = {
   id: "hinglish",
   label: "Hinglish",
-  chipLabel: "IN",
+  chipLabel: "Hinglish",
   vault: {
     title: "Vault",
     subtitle: "Bhooli hui gift cards / store credit — paisa jo pehle se hai.",

@@ -13,6 +13,9 @@ import {
   consentRecords,
   dispositionListings,
   emiPlans,
+  entitlementEvents,
+  entitlementGrants,
+  fitPreviews,
   giftOrders,
   groupGiftContributions,
   householdMembers,
@@ -34,6 +37,7 @@ import {
   orderItems,
   orders,
   outfits,
+  paymentIntents,
   privacyRequests,
   pushEvents,
   receipts,
@@ -80,6 +84,10 @@ export const USER_DATA_TABLES: UserTableSpec[] = [
   { table: cartItems, parent: carts, fk: cartItems.cartId },
   { table: coinLedger, owner: coinLedger.userId },
   { table: iapReceipts, owner: iapReceipts.userId },
+  // The store ref (App Store transaction id / Play purchase token) is a store credential.
+  { table: entitlementGrants, owner: entitlementGrants.userId, omit: ["storeRef"] },
+  { table: entitlementEvents, owner: entitlementEvents.userId },
+  { table: paymentIntents, owner: paymentIntents.userId },
   { table: orders, owner: orders.userId },
   { table: orderItems, parent: orders, fk: orderItems.orderId },
   { table: renders, parent: orderItems, fk: renders.orderItemId },
@@ -88,6 +96,7 @@ export const USER_DATA_TABLES: UserTableSpec[] = [
   { table: listings, parent: sellers, fk: listings.sellerId },
   { table: listingVariants, parent: listings, fk: listingVariants.listingId },
   { table: tryonPreviews, owner: tryonPreviews.userId },
+  { table: fitPreviews, owner: fitPreviews.userId },
   { table: consentGrants, owner: consentGrants.userId },
   { table: consentRecords, owner: consentRecords.userId, omit: ["subjectRef"] },
   { table: auditLog, owner: auditLog.userId, omit: ["subjectRef"] },
@@ -139,6 +148,9 @@ export const USER_DATA_TABLES: UserTableSpec[] = [
 export const EXEMPT_TABLES: Record<string, string> = {
   refresh_tokens: "session secrets; revoked with the account, not user content",
   customization_templates: "shared catalog of tailoring templates; no user column",
+  oauth_states: "one-time OAuth nonces, deleted by the callback; go with the user",
+  otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column",
+  job_dead_letters: "worker failure log, ids only; no user column",
 };
 
 /**

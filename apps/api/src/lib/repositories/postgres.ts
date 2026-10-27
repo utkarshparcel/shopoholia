@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, checkHouseholdVaultSpendCap } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import {
   avatars,
@@ -5594,32 +5594,6 @@ export function createPostgresRepositories(db: Db): Repositories {
         })
         .returning();
       return mapHouseholdVaultSettings(row!);
-    },
-    async addHouseholdVaultSpent(householdId, userId, deltaMinor) {
-      // Check and write with no await between them, so concurrent spends can't both pass the cap.
-      const key = `${householdId}:${userId}`;
-      const prev = householdVaultSettingsStore.get(key);
-      const spent = prev?.spentMinor ?? 0;
-      if (deltaMinor > 0) {
-        const cap = checkHouseholdVaultSpendCap({
-          isMember: true,
-          vaultAccess: prev?.vaultAccess,
-          spendCapMinor: prev?.spendCapMinor,
-          spentMinor: spent,
-          amountMinor: deltaMinor,
-        });
-        if (!cap.allowed) return null;
-      }
-      const next: HouseholdVaultSettingsRecord = {
-        householdId,
-        userId,
-        vaultAccess: prev?.vaultAccess ?? "VIEW",
-        spendCapMinor: prev?.spendCapMinor ?? null,
-        spentMinor: Math.max(0, spent + deltaMinor),
-        updatedAt: now(),
-      };
-      householdVaultSettingsStore.set(key, next);
-      return next;
     },
     async listHouseholdVaultSettings(householdId) {
       const rows = await db

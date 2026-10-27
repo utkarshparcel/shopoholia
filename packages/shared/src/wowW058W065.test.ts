@@ -89,7 +89,7 @@ describe("W058–W065 acceptance helpers", () => {
     const rules = parseCareLabel("Machine wash cold\nDo not dry clean");
     expect(careLabelBadge(rules)).toBe("Cold wash");
     expect(careLabelBadge(null)).toBeNull();
-    expect(formatCareRulesExpanded(rules)).toMatch(/Wash machine_cold/);
+    expect(formatCareRulesExpanded(rules)).toBe("Machine wash cold · Do not dry-clean");
     expect(careLabelBadge(parseCareLabel("Dry clean only"))).toBe("Dry-clean");
   });
 

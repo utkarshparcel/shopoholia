@@ -111,6 +111,11 @@ export type JobProcessorOptions<T> = {
   recordDeadLetter: (entry: DeadLetter) => Promise<void>;
   /** Alert for a final failure (Sentry). Also gets sink failures. */
   onDeadLetter?: (entry: DeadLetter, error: unknown) => void;
+  /**
+   * Runs once after the dead letter, with the raw payload and the error message: settles the
+   * job's own row (e.g. PROCESSING → FAILED) so the app stops waiting. Its errors go to onDeadLetter.
+   */
+  onFinalFailure?: (data: unknown, error: string) => Promise<void>;
   /** bullmq's classes, passed in so this module needs no bullmq import. */
   errors: {
     DelayedError: new (message?: string) => Error;
@@ -173,6 +178,13 @@ export function createJobProcessor<T>(options: JobProcessorOptions<T>) {
           // The job still fails (and stays in Redis' failed set); the alert says the copy is missing.
           options.onDeadLetter?.(entry, sinkErr);
         }
+        if (options.onFinalFailure) {
+          try {
+            await options.onFinalFailure(job.data, err instanceof Error ? err.message : String(err));
+          } catch (hookErr) {
+            options.onDeadLetter?.(entry, hookErr);
+          }
+        }
         options.onDeadLetter?.(entry, err);
       }
       throw err;
@@ -196,7 +208,7 @@ export type FailedJob = {
  */
 export function attachStalledDeadLetters(
   worker: { on(event: "failed", listener: (job: FailedJob | undefined, err: Error) => void): unknown },
-  options: Pick<JobProcessorOptions<unknown>, "queue" | "recordDeadLetter" | "onDeadLetter">,
+  options: Pick<JobProcessorOptions<unknown>, "queue" | "recordDeadLetter" | "onDeadLetter" | "onFinalFailure">,
 ): void {
   worker.on("failed", (job, err) => {
     if (!job?.deferredFailure) return;
@@ -212,6 +224,8 @@ export function attachStalledDeadLetters(
     options
       .recordDeadLetter(entry)
       .catch((sinkErr: unknown) => options.onDeadLetter?.(entry, sinkErr))
+      .then(() => options.onFinalFailure?.(job.data, err.message))
+      .catch((hookErr: unknown) => options.onDeadLetter?.(entry, hookErr))
       .finally(() => options.onDeadLetter?.(entry, err));
   });
 }

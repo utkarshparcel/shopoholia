@@ -95,3 +95,22 @@ export async function privacyErase(data: unknown, deps: PrivacyEraseDeps): Promi
     throw err;
   }
 }
+
+/**
+ * For the worker once the queue has given up on a privacy-erase or privacy-export job: store
+ * FAILED so the request is no longer open (open-request index) and a new DELETE /vault or
+ * POST /vault/export makes a new request with a new job id. A no-op once the request is DONE.
+ */
+export async function failPrivacyRequestJob(
+  data: unknown,
+  deps: Pick<AppDeps, "repos">,
+  error: string,
+): Promise<void> {
+  const { requestId } = PrivacyEraseJobSchema.parse(data);
+  const request = await deps.repos.getPrivacyRequest(requestId);
+  if (!request || request.status === "DONE") return;
+  await deps.repos.updatePrivacyRequest(requestId, {
+    status: "FAILED",
+    error: error.slice(0, MAX_ERROR_LENGTH),
+  });
+}

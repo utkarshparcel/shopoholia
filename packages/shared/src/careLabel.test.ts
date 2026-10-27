@@ -158,6 +158,8 @@ describe("careLabelBadge / formatCareRulesExpanded (W061)", () => {
       notes: [],
     };
     expect(careLabelBadge(bare)).toBe("Care");
-    expect(formatCareRulesExpanded(cold)).toMatch(/Wash machine_cold/);
+    expect(formatCareRulesExpanded(cold)).toMatch(/^Machine wash cold/);
+    expect(formatCareRulesExpanded(cold)).not.toMatch(/_|unknown/);
+    expect(formatCareRulesExpanded(bare)).toBe("No care instructions could be read from the label.");
   });
 });
