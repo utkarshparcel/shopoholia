@@ -28,6 +28,7 @@ import {
   type PatchHouseholdWardrobeBody,
   type PatchHouseholdVaultMemberBody,
   type HouseholdVaultSpendBody,
+  type HouseholdVaultSpendResponse,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -115,6 +116,9 @@ function authzMessage(reason: string): string {
       return "Forbidden";
   }
 }
+
+/** Tries of one vault-spend ledger post when Postgres aborts it for a concurrent write. */
+const LEDGER_POST_ATTEMPTS = 3;
 
 export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
@@ -409,12 +413,8 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Household not found" });
       }
       const members = await app.deps.repos.listHouseholdMembers(id);
-      const denial = denyUnlessHouseholdMember(members, userId);
-      if (denial) {
-        return reply.code(403).send({
-          error: "Forbidden",
-          message: friendlyHouseholdVaultAclCopy(denial),
-        });
+      if (denyUnlessHouseholdMember(members, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Household not found" });
       }
       const mySettings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
       const memberIds = householdMemberUserIds(members);
@@ -485,6 +485,9 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       }
       const members = await app.deps.repos.listHouseholdMembers(id);
       const denial = denyUnlessHouseholdOwner(members, userId);
+      if (denial === "NOT_MEMBER") {
+        return reply.code(404).send({ error: "Not Found", message: "Household not found" });
+      }
       if (denial) {
         return reply.code(403).send({
           error: "Forbidden",
@@ -530,6 +533,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
     },
@@ -542,26 +546,8 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Household not found" });
       }
       const members = await app.deps.repos.listHouseholdMembers(id);
-      const denial = denyUnlessHouseholdMember(members, userId);
-      if (denial) {
-        return reply.code(403).send({
-          error: "Forbidden",
-          message: friendlyHouseholdVaultAclCopy(denial),
-        });
-      }
-      const settings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
-      const capCheck = checkHouseholdVaultSpendCap({
-        isMember: true,
-        vaultAccess: settings.vaultAccess,
-        spendCapMinor: settings.spendCapMinor,
-        spentMinor: settings.spentMinor,
-        amountMinor: body.amountMinor,
-      });
-      if (!capCheck.allowed) {
-        return reply.code(403).send({
-          error: "Forbidden",
-          message: friendlyHouseholdVaultAclCopy(capCheck.reason),
-        });
+      if (denyUnlessHouseholdMember(members, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Household not found" });
       }
       // Find account owned by any household member (no card secrets returned).
       let account = null as Awaited<
@@ -579,42 +565,92 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!account || !ownerId) {
         return reply.code(404).send({ error: "Not Found", message: "Credit not found in shared vault" });
       }
-      try {
-        await app.deps.repos.postMoneyLedger({
-          accountId: account.id,
-          userId: ownerId,
-          delta: -body.amountMinor,
-          type: "SPEND",
-          refType: "household.vault.spend",
-          refId: body.idempotencyKey,
+      const owner = ownerId;
+      const remaining = (s: { spendCapMinor: number | null; spentMinor: number }) =>
+        s.spendCapMinor == null ? null : Math.max(0, s.spendCapMinor - s.spentMinor);
+
+      // A retry with the same key returns the first result; the key reused for a different
+      // spend is a conflict, never a second charge.
+      const replay = async (): Promise<HouseholdVaultSpendResponse | "conflict" | null> => {
+        const prior = await app.deps.repos.findMoneyLedgerByRef(owner, body.idempotencyKey, "SPEND");
+        if (!prior) return null;
+        if (
+          prior.refType !== "household.vault.spend" ||
+          prior.accountId !== body.accountId ||
+          prior.delta !== -body.amountMinor
+        ) {
+          return "conflict";
+        }
+        const current = await app.deps.repos.getHouseholdVaultSettings(id, userId);
+        return { balanceMinor: prior.balanceAfter, spentMinor: current.spentMinor, remainingCapMinor: remaining(current) };
+      };
+      const sendReplay = (r: HouseholdVaultSpendResponse | "conflict") =>
+        r === "conflict"
+          ? reply.code(409).send({ error: "Conflict", message: "idempotencyKey was already used for another spend" })
+          : r;
+
+      const prior = await replay();
+      if (prior) return sendReplay(prior);
+
+      // One conditional update checks access and cap and adds the amount, so two concurrent
+      // spends cannot both fit under the cap.
+      const reserved = await app.deps.repos.tryReserveHouseholdVaultSpend(id, userId, body.amountMinor);
+      if (!reserved) {
+        const settings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
+        const capCheck = checkHouseholdVaultSpendCap({
+          isMember: true,
+          vaultAccess: settings.vaultAccess,
+          spendCapMinor: settings.spendCapMinor,
+          spentMinor: settings.spentMinor,
+          amountMinor: body.amountMinor,
         });
-      } catch (err) {
-        const raced = await app.deps.repos.findMoneyLedgerByRef(
-          ownerId,
-          body.idempotencyKey,
-          "SPEND",
-        );
-        if (!raced) throw err;
+        return reply.code(403).send({
+          error: "Forbidden",
+          message: friendlyHouseholdVaultAclCopy(capCheck.allowed ? "SPEND_CAP_EXCEEDED" : capCheck.reason),
+        });
       }
-      const refreshed = await app.deps.repos.findMoneyAccount(account.id, ownerId);
-      const nextSpent = settings.spentMinor + body.amountMinor;
-      await app.deps.repos.upsertHouseholdVaultSettings({
-        householdId: id,
-        userId,
-        spentMinor: nextSpent,
-      });
+      // The ledger write runs SERIALIZABLE, so a concurrent post can abort it (40001) or
+      // deadlock it (40P01). Nothing was written then, so try again a bounded number of times;
+      // the (user, refId, type) unique index stops a same-key retry from charging twice.
+      const postSpend = async (): Promise<{ balanceAfter: number }> => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await app.deps.repos.postMoneyLedger({
+              accountId: account.id,
+              userId: owner,
+              delta: -body.amountMinor,
+              type: "SPEND",
+              refType: "household.vault.spend",
+              refId: body.idempotencyKey,
+            });
+          } catch (err) {
+            const code = (err as { code?: unknown } | null)?.code;
+            if (attempt >= LEDGER_POST_ATTEMPTS || (code !== "40001" && code !== "40P01")) throw err;
+          }
+        }
+      };
+      let balanceAfter: number;
+      try {
+        ({ balanceAfter } = await postSpend());
+      } catch (err) {
+        // Nothing was charged: give the reservation back.
+        await app.deps.repos.releaseHouseholdVaultSpend(id, userId, body.amountMinor);
+        const raced = await replay();
+        if (raced) return sendReplay(raced);
+        if (err instanceof Error && /Insufficient money balance/.test(err.message)) {
+          return reply.code(409).send({ error: "Conflict", message: "Not enough balance left on this credit" });
+        }
+        throw err;
+      }
       trackServerEvent("household_vault_spent", {
         userId,
         householdId: id,
         amountMinor: body.amountMinor,
       });
       return {
-        balanceMinor: refreshed?.balanceCacheMinor ?? Math.max(0, account.balanceCacheMinor - body.amountMinor),
-        spentMinor: nextSpent,
-        remainingCapMinor:
-          settings.spendCapMinor == null
-            ? null
-            : Math.max(0, settings.spendCapMinor - nextSpent),
+        balanceMinor: balanceAfter,
+        spentMinor: reserved.spentMinor,
+        remainingCapMinor: remaining(reserved),
       };
     },
   );

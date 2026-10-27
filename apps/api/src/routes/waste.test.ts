@@ -79,6 +79,18 @@ describe("waste share card + wear challenge", () => {
     const events = await app.deps.push.listEvents(userId);
     expect(events.some((e) => e.eventType === "WEAR_CHALLENGE")).toBe(true);
 
+    // A retry starts it once and nudges once.
+    const retry = await app.inject({
+      method: "POST",
+      url: `/waste/${itemId}/challenge`,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().pushQueued).toBe(false);
+    const after = await app.deps.push.listEvents(userId);
+    expect(after.filter((e) => e.eventType === "WEAR_CHALLENGE")).toHaveLength(1);
+    expect(await app.deps.repos.listWearChallengeItemIds(userId)).toEqual([itemId]);
+
     // Complete challenge via 3 wears → conflict on re-start
     for (let i = 0; i < 3; i++) {
       const wear = await app.inject({
@@ -137,6 +149,17 @@ describe("waste share card + wear challenge", () => {
     });
     expect(dispose.statusCode).toBe(200);
     expect((dispose.json() as DisposeResponse).listingId).toBeTruthy();
+
+    // A retry returns the same open listing.
+    const retry = await app.inject({
+      method: "POST",
+      url: `/waste/${itemId}/dispose`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { mode: "SELL" },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect((retry.json() as DisposeResponse).listingId).toBe((dispose.json() as DisposeResponse).listingId);
+    expect(await repos.listDispositionListings(userId)).toHaveLength(1);
   });
 
   it("GET /waste/rewear-streak counts consecutive wear days", async () => {

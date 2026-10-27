@@ -8,6 +8,8 @@ import {
   computeNightBeforeReminder,
   type OutfitOccasion,
 } from "./cal-event-outfit.js";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
+import type { InterviewKitRecord as InterviewKitRow, Repositories } from "./repositories/types.js";
 
 export type InterviewKitKind = "interview" | "ceremony";
 
@@ -26,6 +28,7 @@ export type InterviewKitRecord = {
   updatedAt: string;
 };
 
+/** Every lookup is by id and owner: another user's kit reads as missing. */
 export type InterviewKitStore = {
   save(input: {
     userId: string;
@@ -35,17 +38,24 @@ export type InterviewKitStore = {
     eventAt: string;
     occasion?: OutfitOccasion;
     now?: Date;
-  }): InterviewKitRecord;
-  get(id: string): InterviewKitRecord | null;
-  listByUser(userId: string): InterviewKitRecord[];
-  markReminderScheduled(id: string, remindAt: string): InterviewKitRecord | null;
+  }): Promise<InterviewKitRecord>;
+  get(id: string, userId: string): Promise<InterviewKitRecord | null>;
+  listByUser(userId: string): Promise<InterviewKitRecord[]>;
+  markReminderScheduled(id: string, userId: string, remindAt: string): Promise<InterviewKitRecord | null>;
   /** W056 — clear night-before reminder. */
-  cancelReminder(id: string): InterviewKitRecord | null;
+  cancelReminder(id: string, userId: string): Promise<InterviewKitRecord | null>;
   /** W056 — move event (recomputes remindAt). */
-  updateEvent(id: string, eventAt: string, opts?: { now?: Date }): InterviewKitRecord | null;
-  remove(id: string): boolean;
-  clear(): void;
+  updateEvent(
+    id: string,
+    userId: string,
+    eventAt: string,
+    opts?: { now?: Date },
+  ): Promise<InterviewKitRecord | null>;
+  remove(id: string, userId: string): Promise<boolean>;
 };
+
+/** Kits listed per user (newest events last). */
+const MAX_KITS_LISTED = 200;
 
 export function defaultOccasionForKitKind(kind: InterviewKitKind): OutfitOccasion {
   return kind === "interview" ? "FORMAL" : "FORMAL";
@@ -65,17 +75,21 @@ export function planInterviewKitReminder(
   });
 }
 
-/** Stable BullMQ job id for kit reminders. */
-export function interviewKitReminderJobId(userId: string, kitId: string): string {
-  return `interview-kit:${userId}:${kitId}`;
+/**
+ * Stable BullMQ job id for one kit reminder. It includes remindAt, so moving the event queues a
+ * new reminder; the worker skips a job whose remindAt no longer matches the kit.
+ */
+export function interviewKitReminderJobId(userId: string, kitId: string, remindAt: string): string {
+  return jobIdFrom("interview-kit", userId, kitId, remindAt);
 }
 
 export const INTERVIEW_KIT_QUEUE = "interview-kit";
 export const INTERVIEW_KIT_JOB = "interview-kit-reminder";
 
 /**
- * Best-effort enqueue of night-before kit reminder (−1d).
- * Skips when Redis is unavailable or the reminder window has passed.
+ * Queues the night-before kit reminder (−1d) through the C6 producer. "past" when the window
+ * has gone; "skipped" only outside production without REDIS_URL (enqueueJob logs it). A Redis
+ * failure throws QueueUnavailableError, so callers can say the reminder is not set.
  */
 export async function scheduleInterviewKitReminder(input: {
   userId: string;
@@ -85,43 +99,58 @@ export async function scheduleInterviewKitReminder(input: {
   eventAt: string;
   remindAt: string;
   occasion: OutfitOccasion;
-}): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.WARDROBE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
+}): Promise<"published" | "skipped" | "past"> {
   const delayMs = new Date(input.remindAt).getTime() - Date.now();
-  if (delayMs <= 0) return "skipped";
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(INTERVIEW_KIT_QUEUE, { connection: redisUrl });
-    await queue.add(
-      INTERVIEW_KIT_JOB,
-      {
-        userId: input.userId,
-        kitId: input.kitId,
-        name: input.name,
-        kind: input.kind,
-        eventAt: input.eventAt,
-        occasion: input.occasion,
-      },
-      {
-        delay: Math.max(100, delayMs),
-        jobId: interviewKitReminderJobId(input.userId, input.kitId),
-      },
-    );
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[interview-kit] reminder enqueue failed", String(err));
-    return "skipped";
-  }
+  if (delayMs <= 0) return "past";
+  const result = await enqueueJob(
+    INTERVIEW_KIT_QUEUE,
+    INTERVIEW_KIT_JOB,
+    {
+      userId: input.userId,
+      kitId: input.kitId,
+      name: input.name,
+      kind: input.kind,
+      eventAt: input.eventAt,
+      remindAt: input.remindAt,
+      occasion: input.occasion,
+    },
+    {
+      delay: Math.max(100, delayMs),
+      jobId: interviewKitReminderJobId(input.userId, input.kitId, input.remindAt),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }
 
-/** Ephemeral in-process kit store (N40). Fine for beta; swap for Postgres later. */
-export function createInterviewKitStore(): InterviewKitStore {
-  const byId = new Map<string, InterviewKitRecord>();
+function toKit(row: InterviewKitRow): InterviewKitRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    name: row.name,
+    kind: row.kind,
+    itemIds: row.itemIds,
+    eventAt: row.eventAt.toISOString(),
+    occasion: (row.occasion ?? defaultOccasionForKitKind(row.kind)) as OutfitOccasion,
+    remindAt: row.remindAt?.toISOString() ?? null,
+    reminderScheduled: row.reminderScheduled,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** Interview / ceremony kits in Postgres (`interview_kits`, N40). */
+export function createInterviewKitStore(repos: Repositories): InterviewKitStore {
+  const patch = async (
+    id: string,
+    userId: string,
+    p: Parameters<Repositories["updateInterviewKit"]>[2],
+  ) => {
+    const row = await repos.updateInterviewKit(id, userId, p);
+    return row ? toKit(row) : null;
+  };
 
   return {
-    save(input) {
+    async save(input) {
       const now = input.now ?? new Date();
       const kind = input.kind ?? "interview";
       const event = new Date(input.eventAt);
@@ -132,82 +161,46 @@ export function createInterviewKitStore(): InterviewKitStore {
         throw new Error("itemIds required");
       }
       const rem = planInterviewKitReminder(event, { now });
-      const id = randomUUID();
-      const iso = now.toISOString();
-      const record: InterviewKitRecord = {
-        id,
+      const row = await repos.createInterviewKit({
+        id: randomUUID(),
         userId: input.userId,
         name: input.name.trim() || (kind === "interview" ? "Interview kit" : "Ceremony kit"),
         kind,
         itemIds: [...input.itemIds],
-        eventAt: event.toISOString(),
+        eventAt: event,
         occasion: input.occasion ?? defaultOccasionForKitKind(kind),
-        remindAt: rem?.remindAt.toISOString() ?? null,
+        remindAt: rem?.remindAt ?? null,
         reminderScheduled: false,
-        createdAt: iso,
-        updatedAt: iso,
-      };
-      byId.set(id, record);
-      return record;
+      });
+      return toKit(row);
     },
-    get(id) {
-      return byId.get(id) ?? null;
+    async get(id, userId) {
+      const row = await repos.findInterviewKit(id, userId);
+      return row ? toKit(row) : null;
     },
-    listByUser(userId) {
-      return [...byId.values()]
-        .filter((k) => k.userId === userId)
-        .sort((a, b) => a.eventAt.localeCompare(b.eventAt));
+    async listByUser(userId) {
+      return (await repos.listInterviewKits(userId, MAX_KITS_LISTED)).map(toKit);
     },
-    markReminderScheduled(id, remindAt) {
-      const kit = byId.get(id);
-      if (!kit) return null;
-      const updated: InterviewKitRecord = {
-        ...kit,
-        remindAt,
-        reminderScheduled: true,
-        updatedAt: new Date().toISOString(),
-      };
-      byId.set(id, updated);
-      return updated;
+    markReminderScheduled(id, userId, remindAt) {
+      return patch(id, userId, { remindAt: new Date(remindAt), reminderScheduled: true });
     },
-    cancelReminder(id) {
-      const kit = byId.get(id);
-      if (!kit) return null;
-      const updated: InterviewKitRecord = {
-        ...kit,
-        remindAt: null,
-        reminderScheduled: false,
-        updatedAt: new Date().toISOString(),
-      };
-      byId.set(id, updated);
-      return updated;
+    cancelReminder(id, userId) {
+      return patch(id, userId, { remindAt: null, reminderScheduled: false });
     },
-    updateEvent(id, eventAt, opts) {
-      const kit = byId.get(id);
-      if (!kit) return null;
+    async updateEvent(id, userId, eventAt, opts) {
       const event = new Date(eventAt);
       if (Number.isNaN(event.getTime())) {
         throw new Error("Invalid eventAt");
       }
-      const now = opts?.now ?? new Date();
-      const rem = planInterviewKitReminder(event, { now });
-      const updated: InterviewKitRecord = {
-        ...kit,
-        eventAt: event.toISOString(),
-        remindAt: rem?.remindAt.toISOString() ?? null,
+      const rem = planInterviewKitReminder(event, { now: opts?.now ?? new Date() });
+      return patch(id, userId, {
+        eventAt: event,
+        remindAt: rem?.remindAt ?? null,
         reminderScheduled: false,
-        updatedAt: now.toISOString(),
-      };
-      byId.set(id, updated);
-      return updated;
+      });
     },
-    remove(id) {
-      return byId.delete(id);
-    },
-    clear() {
-      byId.clear();
+    remove(id, userId) {
+      return repos.deleteInterviewKit(id, userId);
     },
   };
 }
-
-export const interviewKitStore = createInterviewKitStore();

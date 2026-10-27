@@ -47,7 +47,17 @@ function now(): Date {
 /** DB-backed implementation of {@link IngestPersister}. */
 export function createDbPersister(db: Db): IngestPersister {
   return {
+    /**
+     * One transaction: the purchase, its items and (with `rawDocId`) the document's MATCHED
+     * link commit together. A retry for a document that is already matched returns the
+     * existing purchase instead of inserting a second one (the document row is locked).
+     */
     async insertPurchase(purchase, opts) {
+      if (!opts.userId) {
+        // No owner means no purchase: never attribute a purchase to a placeholder user.
+        throw new Error("insertPurchase: userId is required");
+      }
+      const userId = opts.userId;
       const purchaseId = randomUUID();
       const purchasedAt = new Date(purchase.purchasedAt);
       const deliveryStatus = purchase.deliveryStatus ?? "ORDERED";
@@ -63,40 +73,57 @@ export function createDbPersister(db: Db): IngestPersister {
         purchase.merchant,
       );
 
-      await db.insert(merchantPurchases).values({
-        id: purchaseId,
-        userId: opts.userId ?? "00000000-0000-0000-0000-000000000000",
-        source: opts.sourceKind,
-        merchant: purchase.merchant,
-        orderRef: purchase.orderRef ?? null,
-        purchasedAt,
-        currency: purchase.currency,
-        totalMinor: purchase.totalMinor,
-        status: "CONFIRMED",
-        rawDocId: opts.rawDocId ?? null,
-        deliveryStatus,
-        etaAt,
-        trackingCode: purchase.trackingCode ?? null,
-        deliveredAt: deliveryStatus === "DELIVERED" ? purchasedAt : null,
-        returnWindowDeadline,
-        exchangeWindowDeadline,
-      });
+      return db.transaction(async (tx) => {
+        if (opts.rawDocId) {
+          const [doc] = await tx
+            .select({ matchedPurchaseId: ingestionDocuments.matchedPurchaseId })
+            .from(ingestionDocuments)
+            .where(eq(ingestionDocuments.id, opts.rawDocId))
+            .for("update");
+          if (doc?.matchedPurchaseId) return doc.matchedPurchaseId;
+        }
 
-      if (purchase.items.length > 0) {
-        await db.insert(merchantPurchaseItems).values(
-          purchase.items.map((item) => ({
-            id: randomUUID(),
-            purchaseId,
-            title: item.title,
-            category: item.category ?? null,
-            brand: item.brand ?? null,
-            priceMinor: item.priceMinor,
-            imageKey: item.imageKey ?? null,
-            qty: item.qty,
-          })),
-        );
-      }
-      return purchaseId;
+        await tx.insert(merchantPurchases).values({
+          id: purchaseId,
+          userId,
+          source: opts.sourceKind,
+          merchant: purchase.merchant,
+          orderRef: purchase.orderRef ?? null,
+          purchasedAt,
+          currency: purchase.currency,
+          totalMinor: purchase.totalMinor,
+          status: "CONFIRMED",
+          rawDocId: opts.rawDocId ?? null,
+          deliveryStatus,
+          etaAt,
+          trackingCode: purchase.trackingCode ?? null,
+          deliveredAt: deliveryStatus === "DELIVERED" ? purchasedAt : null,
+          returnWindowDeadline,
+          exchangeWindowDeadline,
+        });
+
+        if (purchase.items.length > 0) {
+          await tx.insert(merchantPurchaseItems).values(
+            purchase.items.map((item) => ({
+              id: randomUUID(),
+              purchaseId,
+              title: item.title,
+              category: item.category ?? null,
+              brand: item.brand ?? null,
+              priceMinor: item.priceMinor,
+              imageKey: item.imageKey ?? null,
+              qty: item.qty,
+            })),
+          );
+        }
+        if (opts.rawDocId) {
+          await tx
+            .update(ingestionDocuments)
+            .set({ status: "MATCHED", matchedPurchaseId: purchaseId, userId, updatedAt: now() })
+            .where(eq(ingestionDocuments.id, opts.rawDocId));
+        }
+        return purchaseId;
+      });
     },
 
     async markDocument(documentId, status, matchedPurchaseId) {

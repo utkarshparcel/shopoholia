@@ -1,21 +1,33 @@
 import {
+  CONSENT_NOTICE_VERSION,
   ConsentListResponseSchema,
+  ConsentRecordSchema,
   ConsentScopeSchema,
   GrantConsentBodySchema,
   GrantConsentResponseSchema,
   NotificationPreferencesResponseSchema,
+  PRIVACY_ERASE_QUEUE,
+  PRIVACY_EXPORT_QUEUE,
+  PrivacyRequestSchema,
   UpdateNotificationPreferencesBodySchema,
   VaultExportSchema,
+  mapLimit,
   mergeNotificationPreferences,
   parseNotificationPreferences,
-  NOTIFICATION_PREFS_FLAG_KEY,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
-import { audit, listAuditRecords } from "../lib/audit.js";
+import { audit, flushAudit, registerAuditSink } from "../lib/audit.js";
 import { trackServerEvent } from "../lib/analytics.js";
-import type { ConsentGrantRecord } from "../lib/repositories/types.js";
+import { assertPrivacySecretConfigured, subjectRefFor } from "../lib/privacy-hmac.js";
+import { enqueueJob, jobIdFrom } from "../lib/queues/enqueue.js";
+import type {
+  AuditLogRecord,
+  ConsentGrantRecord,
+  PrivacyRequestRecord,
+} from "../lib/repositories/types.js";
+import { disconnectEmailSources } from "../jobs/gmail-token-revoke.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -28,6 +40,90 @@ function toConsentJson(g: ConsentGrantRecord) {
     revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
     source: g.source,
     meta: g.meta,
+    noticeVersion: g.noticeVersion ?? null,
+  };
+}
+
+/** Signed export links are short-lived; the file itself is deleted after 7 days. */
+const EXPORT_URL_TTL_SECONDS = 15 * 60;
+/** Rows per table in the synchronous GET /vault/export (the full file is POST /vault/export). */
+const SYNC_EXPORT_MAX_ROWS = 1_000;
+
+/** Tables the legacy GET /vault/export fields already carry; the rest go under `tables`. */
+const LEGACY_EXPORT_TABLES = new Set([
+  "users",
+  "consent_grants",
+  "money_accounts",
+  "money_ledger",
+  "receipts",
+  "warranties",
+  "ingestion_sources",
+  "merchant_purchases",
+  "merchant_purchase_items",
+  "ingestion_documents",
+  "orders",
+  "order_items",
+  "carts",
+  "cart_items",
+  "sellers",
+  "listings",
+  "listing_variants",
+  "avatars",
+  "renders",
+  "tryon_previews",
+  "push_events",
+  "coin_ledger",
+  "iap_receipts",
+  "cashback_events",
+  "budgets",
+  "spend_rollups",
+  "return_requests",
+  "return_events",
+  "recipients",
+  "recipient_profiles",
+  "gift_orders",
+  "measurement_profiles",
+  "tailoring_orders",
+  "wardrobe_items",
+  "outfits",
+  "wear_log",
+  "item_metrics",
+  "disposition_listings",
+]);
+
+/** Runs the loaders at most 4 at a time instead of holding one pool connection per loader. */
+function loadAll<T extends readonly (() => Promise<unknown>)[]>(loaders: [...T]) {
+  return mapLimit(loaders, 4, (load) => load()) as Promise<{
+    [K in keyof T]: T[K] extends () => Promise<infer R> ? R : never;
+  }>;
+}
+
+const AuditRecordJsonSchema = z.object({
+  id: z.string(),
+  event: z.string(),
+  userId: z.string().optional(),
+  timestamp: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
+function toAuditJson(r: AuditLogRecord) {
+  return {
+    id: r.id,
+    event: r.event,
+    ...(r.userId ? { userId: r.userId } : {}),
+    timestamp: r.at.toISOString(),
+    payload: r.meta,
+  };
+}
+
+function toPrivacyRequestJson(r: PrivacyRequestRecord, downloadUrl?: string | null) {
+  return {
+    id: r.id,
+    kind: r.kind,
+    status: r.status,
+    requestedAt: r.requestedAt.toISOString(),
+    completedAt: r.completedAt ? r.completedAt.toISOString() : null,
+    ...(downloadUrl !== undefined ? { downloadUrl } : {}),
   };
 }
 
@@ -141,6 +237,26 @@ function serializeRecords(records: unknown[]): Record<string, unknown>[] {
 }
 
 export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
+  // Production refuses to boot without PRIVACY_HMAC_SECRET (subject refs, poll tokens).
+  assertPrivacySecretConfigured();
+  // Durable audit: every audit() call is also written to audit_log, in micro-batches.
+  const unregisterAuditSink = registerAuditSink(
+    app.deps.repos,
+    (rows) => app.deps.repos.appendAuditRecords(rows),
+    app.log,
+  );
+  app.addHook("onClose", async () => {
+    await flushAudit();
+    unregisterAuditSink();
+  });
+
+  /** Newest first, at most `limit`, optionally one event (filtered within the newest 500). */
+  async function listAudit(userId: string, event: string | undefined, limit: number) {
+    await flushAudit();
+    const rows = await app.deps.repos.listAuditRecordsByUser(userId, { limit: event ? 500 : limit });
+    return rows.filter((r) => !event || r.event === event).slice(0, limit).map(toAuditJson);
+  }
+
   // Source of truth: live grants from the consent ledger (consent_grants).
   // The mobile Consent Center reads this endpoint directly — no cached flags.
   app.get(
@@ -175,17 +291,7 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
           limit: z.coerce.number().int().min(1).max(200).optional(),
         }),
         response: {
-          200: z.object({
-            records: z.array(
-              z.object({
-                id: z.string(),
-                event: z.string(),
-                userId: z.string().optional(),
-                timestamp: z.string(),
-                payload: z.record(z.string(), z.unknown()),
-              }),
-            ),
-          }),
+          200: z.object({ records: z.array(AuditRecordJsonSchema) }),
           401: ErrorSchema,
         },
       },
@@ -193,12 +299,11 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const { event, limit } = request.query as { event?: string; limit?: number };
-      const records = listAuditRecords({ userId, event, limit });
-      return { records };
+      return { records: await listAudit(userId, event, limit ?? 100) };
     },
   );
 
-  // Alias for generic audit query: GET /audit?userId= (admin) or self
+  // Alias for generic audit query: GET /audit (self only; another user's id is 404).
   app.get(
     "/audit",
     {
@@ -211,36 +316,55 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
           limit: z.coerce.number().int().min(1).max(200).optional(),
         }),
         response: {
-          200: z.object({
-            records: z.array(
-              z.object({
-                id: z.string(),
-                event: z.string(),
-                userId: z.string().optional(),
-                timestamp: z.string(),
-                payload: z.record(z.string(), z.unknown()),
-              }),
-            ),
-          }),
+          200: z.object({ records: z.array(AuditRecordJsonSchema) }),
           401: ErrorSchema,
+          404: ErrorSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const callerId = request.user!.sub;
       const { userId, event, limit } = request.query as {
         userId?: string;
         event?: string;
         limit?: number;
       };
-      // Non-admin callers can only query their own audit rows.
-      const targetUserId = userId ?? callerId;
+      // Owner-only: another user's audit trail is not found, not forbidden.
       if (userId && userId !== callerId) {
-        // In production check admin role; for now restrict to self.
-        return { records: [] };
+        return reply.code(404).send({ error: "Not Found", message: "Audit records not found" });
       }
-      const records = listAuditRecords({ userId: targetUserId, event, limit });
-      return { records };
+      return { records: await listAudit(callerId, event, limit ?? 100) };
+    },
+  );
+
+  // Append-only consent history (every grant and withdrawal, with the notice version).
+  app.get(
+    "/vault/consent/records",
+    {
+      preHandler: requireAuth,
+      schema: {
+        tags: ["vault"],
+        querystring: z.object({ limit: z.coerce.number().int().min(1).max(200).optional() }),
+        response: {
+          200: z.object({ records: z.array(ConsentRecordSchema) }),
+          401: ErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const userId = request.user!.sub;
+      const rows = await app.deps.repos.listConsentRecords(userId, request.query.limit ?? 100);
+      return {
+        records: rows.map((r) => ({
+          id: r.id,
+          scope: r.scope,
+          action: r.action,
+          noticeVersion: r.noticeVersion,
+          source: r.source,
+          grantId: r.grantId,
+          createdAt: r.createdAt.toISOString(),
+        })),
+      };
     },
   );
 
@@ -252,26 +376,25 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["vault"],
         body: GrantConsentBodySchema,
         response: {
+          200: GrantConsentResponseSchema,
           201: GrantConsentResponseSchema,
           401: ErrorSchema,
-          409: ErrorSchema,
         },
       },
     },
     async (request, reply) => {
+      // body.userId is ignored: a grant is always for the signed-in user.
       const userId = request.user!.sub;
       const { scope, source, meta } = request.body;
+      const noticeVersion = request.body.noticeVersion ?? CONSENT_NOTICE_VERSION;
 
+      // Granting twice returns the live grant (200). grantConsent is itself race-safe: a
+      // concurrent duplicate gets the row the other request inserted.
       const existing = await app.deps.repos.findActiveConsent(userId, scope);
-      if (existing) {
-        return reply.code(409).send({
-          error: "Conflict",
-          message: `Consent for ${scope} already granted`,
-        });
-      }
+      if (existing) return reply.code(200).send(toConsentJson(existing));
 
-      const grant = await app.deps.repos.grantConsent({ userId, scope, source, meta });
-      audit(app.log, "consent.granted", { userId, scope });
+      const grant = await app.deps.repos.grantConsent({ userId, scope, source, meta, noticeVersion });
+      audit(app.log, "consent.granted", { userId, scope, grantId: grant.id });
       trackServerEvent("consent_granted", { userId, scope });
       return reply.code(201).send(toConsentJson(grant));
     },
@@ -287,16 +410,98 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
         response: {
           204: z.null(),
           401: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const { scope } = request.params;
+      // Withdrawal stops processing: requireConsent fails from here on, and for EMAIL the Gmail
+      // sources are disconnected and their tokens revoked at Google (a C6 job per token).
+      // Safe to retry: a repeat revokes nothing new and the revoke jobs dedupe by id.
       await app.deps.repos.revokeConsent(userId, scope);
+      if (scope === "EMAIL") {
+        const result = await disconnectEmailSources(app.deps.repos, userId);
+        audit(app.log, "ingestion.source.disconnected", {
+          userId,
+          disconnected: result.disconnected,
+          revokesQueued: result.revokesQueued,
+        });
+      }
       audit(app.log, "consent.revoked", { userId, scope });
       trackServerEvent("consent_revoked", { userId, scope });
       return reply.code(204).send(null);
+    },
+  );
+
+  // Full export, off the request path: 202 with the request; poll GET /vault/requests/:id.
+  app.post(
+    "/vault/export",
+    {
+      preHandler: requireAuth,
+      config: {
+        rateLimit: {
+          max: process.env.NODE_ENV === "test" ? 1000 : 5,
+          timeWindow: "1 minute",
+        },
+      },
+      schema: {
+        tags: ["vault"],
+        response: {
+          202: PrivacyRequestSchema,
+          401: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const userId = request.user!.sub;
+      // A second request while one is open returns that one (open-request unique index).
+      const { request: req, created } = await app.deps.repos.createPrivacyRequest({
+        userId,
+        subjectRef: subjectRefFor(userId),
+        kind: "EXPORT",
+      });
+      await enqueueJob(
+        PRIVACY_EXPORT_QUEUE,
+        "export",
+        { requestId: req.id },
+        { jobId: jobIdFrom("privacy-export", req.id) },
+      );
+      if (created) {
+        audit(app.log, "privacy.export.requested", { userId, requestId: req.id });
+        trackServerEvent("vault_export", { userId });
+      }
+      return reply.code(202).send(toPrivacyRequestJson(req));
+    },
+  );
+
+  app.get(
+    "/vault/requests/:id",
+    {
+      preHandler: requireAuth,
+      schema: {
+        tags: ["vault"],
+        params: z.object({ id: z.string().uuid() }),
+        response: {
+          200: PrivacyRequestSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const userId = request.user!.sub;
+      const req = await app.deps.repos.getPrivacyRequest(request.params.id);
+      if (!req || req.userId !== userId) {
+        return reply.code(404).send({ error: "Not Found", message: "Request not found" });
+      }
+      const downloadUrl =
+        req.kind === "EXPORT" && req.status === "DONE" && req.resultKey
+          ? await app.deps.storage.getSignedUrl(req.resultKey, EXPORT_URL_TTL_SECONDS)
+          : null;
+      return toPrivacyRequestJson(req, downloadUrl);
     },
   );
 
@@ -353,44 +558,47 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
         wearLog,
         itemMetrics,
         dispositionListings,
-      ] = await Promise.all([
-        app.deps.repos.listActiveConsents(userId),
-        app.deps.repos.listMoneyAccounts(userId),
-        app.deps.repos.listMoneyLedgerByUser(userId),
-        app.deps.repos.listReceipts(userId),
-        app.deps.repos.listWarranties(userId),
-        app.deps.repos.listIngestionSources(userId),
-        app.deps.repos.listMerchantPurchasesByUser(userId),
-        app.deps.repos.listIngestionDocumentsByUser(userId),
-        app.deps.repos.listOrdersByUserId(userId),
-        app.deps.repos.listOrderItemsByUser(userId),
-        app.deps.repos.listCartsByUser(userId),
-        app.deps.repos.listCartItemsByUser(userId),
-        app.deps.repos.listSellersByUser(userId),
-        app.deps.repos.listListingsByUser(userId),
-        app.deps.repos.listListingVariantsByUser(userId),
-        app.deps.repos.listAvatarsByUser(userId),
-        app.deps.repos.listRendersByUser(userId),
-        app.deps.repos.listTryonPreviewsByUser(userId),
-        app.deps.repos.listPushEvents(userId),
-        app.deps.repos.listCoinLedgerByUser(userId),
-        app.deps.repos.listIapReceiptsByUser(userId),
-        app.deps.repos.listCashbackEvents(userId),
-        app.deps.repos.listBudgets(userId),
-        app.deps.repos.getSpendRollups(userId),
-        app.deps.repos.listReturnRequests(userId),
-        app.deps.repos.listReturnEventsByUser(userId),
-        app.deps.repos.listRecipients(userId),
-        app.deps.repos.listRecipientProfilesByUser(userId),
-        app.deps.repos.listGiftOrders(userId),
-        app.deps.repos.listMeasurementProfiles(userId),
-        app.deps.repos.listCustomizationTemplates(),
-        app.deps.repos.listTailoringOrders(userId),
-        app.deps.repos.listWardrobeItems(userId),
-        app.deps.repos.listOutfits(userId),
-        app.deps.repos.listWearLogs(userId),
-        app.deps.repos.getItemMetrics(userId),
-        app.deps.repos.listDispositionListings(userId),
+        allTables,
+      ] = await loadAll([
+        () => app.deps.repos.listActiveConsents(userId),
+        () => app.deps.repos.listMoneyAccounts(userId),
+        () => app.deps.repos.listMoneyLedgerByUser(userId),
+        () => app.deps.repos.listReceipts(userId),
+        () => app.deps.repos.listWarranties(userId),
+        () => app.deps.repos.listIngestionSources(userId),
+        () => app.deps.repos.listMerchantPurchasesByUser(userId),
+        () => app.deps.repos.listIngestionDocumentsByUser(userId),
+        () => app.deps.repos.listOrdersByUserId(userId),
+        () => app.deps.repos.listOrderItemsByUser(userId),
+        () => app.deps.repos.listCartsByUser(userId),
+        () => app.deps.repos.listCartItemsByUser(userId),
+        () => app.deps.repos.listSellersByUser(userId),
+        () => app.deps.repos.listListingsByUser(userId),
+        () => app.deps.repos.listListingVariantsByUser(userId),
+        () => app.deps.repos.listAvatarsByUser(userId),
+        () => app.deps.repos.listRendersByUser(userId),
+        () => app.deps.repos.listTryonPreviewsByUser(userId),
+        () => app.deps.repos.listPushEvents(userId),
+        () => app.deps.repos.listCoinLedgerByUser(userId),
+        () => app.deps.repos.listIapReceiptsByUser(userId),
+        () => app.deps.repos.listCashbackEvents(userId),
+        () => app.deps.repos.listBudgets(userId),
+        () => app.deps.repos.getSpendRollups(userId),
+        () => app.deps.repos.listReturnRequests(userId),
+        () => app.deps.repos.listReturnEventsByUser(userId),
+        () => app.deps.repos.listRecipients(userId),
+        () => app.deps.repos.listRecipientProfilesByUser(userId),
+        () => app.deps.repos.listGiftOrders(userId),
+        () => app.deps.repos.listMeasurementProfiles(userId),
+        () => app.deps.repos.listCustomizationTemplates(),
+        () => app.deps.repos.listTailoringOrders(userId),
+        () => app.deps.repos.listWardrobeItems(userId),
+        () => app.deps.repos.listOutfits(userId),
+        () => app.deps.repos.listWearLogs(userId),
+        () => app.deps.repos.getItemMetrics(userId),
+        () => app.deps.repos.listDispositionListings(userId),
+        // Every other user table (closet profiles, households, polls, consent history...).
+        () => app.deps.repos.exportUserTables(userId, SYNC_EXPORT_MAX_ROWS),
       ]);
 
       // Redact tokens — never export secrets. Keep the metadata so the user
@@ -407,6 +615,13 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
       const itemsByPurchase =
         await app.deps.repos.listMerchantPurchaseItemsByPurchaseIds(purchaseIds);
       const merchantPurchaseItems = [...itemsByPurchase.values()].flat();
+
+      const tables = Object.fromEntries(
+        Object.entries(allTables.tables)
+          .filter(([name]) => !LEGACY_EXPORT_TABLES.has(name))
+          .map(([name, rows]) => [name, serializeRecords(rows)]),
+      );
+      const userRow = allTables.tables.users?.[0];
 
       audit(app.log, "consent.exported", { userId });
       trackServerEvent("vault_export", { userId });
@@ -449,6 +664,8 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
         wearLog: serializeRecords(wearLog),
         itemMetrics: serializeRecords(itemMetrics),
         dispositionListings: serializeRecords(dispositionListings),
+        ...(userRow ? { user: serializeRecords([userRow])[0] } : {}),
+        tables,
       };
     },
   );
@@ -466,48 +683,36 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["vault"],
         response: {
-          204: z.null(),
+          202: PrivacyRequestSchema,
           401: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
-
-      // Collect object-storage keys before hard-delete so R2/mock blobs
-      // can be removed after the DB wipe.
-      const [receipts, documents, avatars] = await Promise.all([
-        app.deps.repos.listReceipts(userId),
-        app.deps.repos.listIngestionDocumentsByUser(userId),
-        app.deps.repos.listAvatarsByUser(userId),
-      ]);
-      const storageKeys: string[] = [];
-      for (const r of receipts) {
-        if (r.imageKey) storageKeys.push(r.imageKey);
+      // Erasure runs as the privacy-erase job (rows, stored objects, Gmail tokens). A repeated
+      // DELETE while one is open returns the same request and enqueues the same job id.
+      const { request: req, created } = await app.deps.repos.createPrivacyRequest({
+        userId,
+        subjectRef: subjectRefFor(userId),
+        kind: "ERASE",
+      });
+      await enqueueJob(
+        PRIVACY_ERASE_QUEUE,
+        "erase",
+        { requestId: req.id },
+        { jobId: jobIdFrom("privacy-erase", req.id), attempts: 5 },
+      );
+      if (created) {
+        audit(app.log, "privacy.erase.requested", { userId, requestId: req.id });
+        trackServerEvent("vault_deleted", { userId });
       }
-      for (const d of documents) {
-        if (d.rawKey) storageKeys.push(d.rawKey);
-      }
-      for (const a of avatars) {
-        if (a.referenceImageKey) storageKeys.push(a.referenceImageKey);
-        for (const k of a.sourceUploadKeys ?? []) storageKeys.push(k);
-      }
-
-      await app.deps.repos.deleteAllUserData(userId);
-
-      if (storageKeys.length > 0 && app.deps.storage?.deleteMany) {
-        await app.deps.storage.deleteMany(storageKeys).catch((err) => {
-          app.log.warn({ err, userId, count: storageKeys.length }, "vault.delete.storage_cleanup_failed");
-        });
-      }
-
-      audit(app.log, "vault.deleted", { userId });
-      trackServerEvent("vault_deleted", { userId });
-      return reply.code(204).send(null);
+      return reply.code(202).send(toPrivacyRequestJson(req));
     },
   );
 
-  // Stored under users.consentFlags.notifications (no migration).
+  // Stored under users.prefs.notifications (C2: written only through patchUserPrefs).
   app.get(
     "/vault/notification-preferences",
     {
@@ -522,8 +727,8 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      const user = await app.deps.repos.findUserById(userId);
-      return parseNotificationPreferences(user?.consentFlags);
+      const prefs = await app.deps.repos.getUserPrefs(userId);
+      return parseNotificationPreferences(prefs);
     },
   );
 
@@ -537,19 +742,18 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
         response: {
           200: NotificationPreferencesResponseSchema,
           401: ErrorSchema,
+          404: ErrorSchema,
         },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
-      const user = await app.deps.repos.findUserById(userId);
-      const current = parseNotificationPreferences(user?.consentFlags);
-      const next = mergeNotificationPreferences(current, request.body);
-      const consentFlags = {
-        ...(user?.consentFlags ?? {}),
-        [NOTIFICATION_PREFS_FLAG_KEY]: next,
-      };
-      await app.deps.repos.updateUser(userId, { consentFlags });
+      const prefs = await app.deps.repos.getUserPrefs(userId);
+      if (!prefs) return reply.code(404).send({ error: "Not Found", message: "User not found" });
+      const next = mergeNotificationPreferences(parseNotificationPreferences(prefs), request.body);
+      // One atomic jsonb update of this key only; other prefs keys written concurrently survive.
+      const saved = await app.deps.repos.patchUserPrefs(userId, { notifications: next });
+      if (!saved) return reply.code(404).send({ error: "Not Found", message: "User not found" });
       audit(app.log, "vault.notification_preferences.updated", { userId });
       return next;
     },

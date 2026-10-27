@@ -253,6 +253,151 @@ describe("U015 household vault spend cap", () => {
     });
     expect(over.statusCode).toBe(403);
     expect((over.json() as { message: string }).message).toMatch(/cap/i);
+
+    // A retry with the first key returns the first result and charges nothing more.
+    const retry = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: {
+        accountId,
+        amountMinor: 1000,
+        idempotencyKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual(ok.json());
+    // The same key for a different amount is a conflict.
+    const reused = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: {
+        accountId,
+        amountMinor: 200,
+        idempotencyKey: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      },
+    });
+    expect(reused.statusCode).toBe(409);
+
+    // Outsiders see no household at all.
+    const outsider = await login(app, "919810000117");
+    for (const req of [
+      { method: "GET" as const, url: `/households/${household.id}/vault` },
+      {
+        method: "POST" as const,
+        url: `/households/${household.id}/vault/spend`,
+        payload: { accountId, amountMinor: 1, idempotencyKey: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" },
+      },
+      {
+        method: "PATCH" as const,
+        url: `/households/${household.id}/vault/members`,
+        payload: { userId: outsider.userId, vaultAccess: "SPEND", spendCapMinor: 1 },
+      },
+    ]) {
+      const res = await app.inject({ ...req, headers: { authorization: `Bearer ${outsider.accessToken}` } });
+      expect(res.statusCode).toBe(404);
+    }
+  });
+
+  it("concurrent spends never pass the cap, and a failed charge gives the cap back", async () => {
+    const { app, repos } = await buildTestServer();
+    const owner = await login(app, "919810000125");
+    const partner = await login(app, "919810000126");
+    for (const u of [owner, partner]) {
+      await app.inject({
+        method: "POST",
+        url: "/vault/consent",
+        headers: { authorization: `Bearer ${u.accessToken}` },
+        payload: { scope: "FINANCIAL", source: "onboarding" },
+      });
+    }
+    const household = (
+      await app.inject({
+        method: "POST",
+        url: "/households",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        payload: { name: "Cap home" },
+      })
+    ).json() as Household;
+    await app.inject({
+      method: "POST",
+      url: "/households/join",
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: { inviteCode: household.inviteCode },
+    });
+    const accountId = (
+      await app.inject({
+        method: "POST",
+        url: "/credits",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        payload: { kind: "GIFT_CARD", merchant: "Myntra", currency: "INR", balanceMinor: 50000 },
+      })
+    ).json().id as string;
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: 3000 },
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        app.inject({
+          method: "POST",
+          url: `/households/${household.id}/vault/spend`,
+          headers: { authorization: `Bearer ${partner.accessToken}` },
+          payload: { accountId, amountMinor: 1000, idempotencyKey: `eeeeeeee-eeee-4eee-8eee-${String(i).padStart(12, "0")}` },
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.statusCode === 200)).toHaveLength(3);
+    expect(results.filter((r) => r.statusCode === 403)).toHaveLength(3);
+    expect((await repos.getHouseholdVaultSettings(household.id, partner.userId)).spentMinor).toBe(3000);
+
+    // More than the credit holds: 409, and the cap is given back.
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: null },
+    });
+    const tooMuch = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: { accountId, amountMinor: 900000, idempotencyKey: "ffffffff-ffff-4fff-8fff-ffffffffffff" },
+    });
+    expect(tooMuch.statusCode).toBe(409);
+    expect((await repos.getHouseholdVaultSettings(household.id, partner.userId)).spentMinor).toBe(3000);
+
+    // A ledger post aborted for a concurrent write (40001) is tried again, and charges once.
+    const post = repos.postMoneyLedger.bind(repos);
+    let aborts = 1;
+    repos.postMoneyLedger = async (input) => {
+      if (aborts-- > 0) throw Object.assign(new Error("could not serialize access"), { code: "40001" });
+      return post(input);
+    };
+    const retried = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: { accountId, amountMinor: 500, idempotencyKey: "abababab-abab-4bab-8bab-abababababab" },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toMatchObject({ balanceMinor: 46500, spentMinor: 3500 });
+
+    // Still aborted after the bounded tries: an error, and the cap is given back.
+    aborts = 3;
+    const gaveUp = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: { accountId, amountMinor: 500, idempotencyKey: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd" },
+    });
+    expect(gaveUp.statusCode).toBe(500);
+    expect(aborts).toBe(0);
+    expect((await repos.getHouseholdVaultSettings(household.id, partner.userId)).spentMinor).toBe(3500);
   });
 });
 

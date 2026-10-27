@@ -2,7 +2,7 @@
  * Per-data-type retention schedule for raw ingestion blobs.
  *
  * Mirrors `apps/api/src/lib/retention.ts` so the ingest worker can decide
- * whether a document's raw payload is past TTL (e.g. after MATCHED) without
+ * whether a document's raw payload is past TTL (any status) without
  * importing the API package. The API admin job
  * `POST /admin/ingestion/retention/purge` performs R2 + DB purge; this module
  * is the shared schedule contract for worker-side checks and tests.
@@ -26,8 +26,6 @@ const KIND_ENV: Record<RetentionDataType, string> = {
   SMS: "INGESTION_RETENTION_DAYS_SMS",
   RECEIPT: "INGESTION_RETENTION_DAYS_RECEIPT",
 };
-
-const PURGEABLE_STATUSES = new Set(["PARSED", "MATCHED", "UNMATCHED"]);
 
 function parsePositiveDays(raw: string | undefined): number | null {
   if (!raw) return null;
@@ -59,7 +57,10 @@ export function isRetentionKind(kind: string): kind is RetentionDataType {
   return kind === "EMAIL" || kind === "SMS" || kind === "RECEIPT";
 }
 
-/** True when a parsed/matched doc's raw blob is past the kind TTL. */
+/**
+ * True when a doc's raw blob is past the kind TTL. Every status counts: a doc stuck in RECEIVED
+ * or ERROR holds the same raw mail as a parsed one. `status` stays in the input for callers.
+ */
 export function shouldPurgeRaw(input: {
   kind: string;
   status: string;
@@ -68,7 +69,6 @@ export function shouldPurgeRaw(input: {
   now?: number;
 }): boolean {
   if (!input.rawKey) return false;
-  if (!PURGEABLE_STATUSES.has(input.status)) return false;
   if (!isRetentionKind(input.kind)) return false;
   return input.createdAt < retentionCutoffFor(input.kind, input.now ?? Date.now());
 }

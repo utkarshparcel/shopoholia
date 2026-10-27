@@ -57,6 +57,8 @@ export function tallyReturnVotes(votes: ReturnPollVote[]): ReturnPollTally {
 
 export type ReturnPollShareInput = {
   pollId: string;
+  /** Unguessable public token for the link; without it the link carries pollId (legacy). */
+  shareToken?: string;
   /** Redacted / safe item label (no PII). */
   itemLabel: string;
   origin?: string;
@@ -78,7 +80,7 @@ export function buildReturnPollShare(input: ReturnPollShareInput): ReturnPollSha
   const origin = (input.origin ?? "https://worn.app").replace(/\/+$/, "");
   const watermark = input.watermark ?? WASTE_SHARE_WATERMARK;
   const label = String(input.itemLabel ?? "this piece").trim() || "this piece";
-  const deepLink = `${origin}/p/return/${input.pollId}`;
+  const deepLink = `${origin}/p/return/${input.shareToken ?? input.pollId}`;
   const shareText = [
     `Should I return ${label}?`,
     "Tap KEEP or RETURN:",

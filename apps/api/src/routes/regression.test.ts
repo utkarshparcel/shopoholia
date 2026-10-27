@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { privacyErase } from "../jobs/privacy-erase.js";
 import { buildTestServer, login } from "../test-utils.js";
 
 describe("regression Track 0 P0", () => {
@@ -332,7 +333,9 @@ describe("regression Track 0 P0", () => {
       url: "/vault",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(del.statusCode).toBe(204);
+    // DELETE /vault queues the erasure (202); the privacy-erase job does the work.
+    expect(del.statusCode).toBe(202);
+    await privacyErase({ requestId: del.json().id }, { repos, storage: app.deps.storage, log: app.log });
     expect(await repos.findUserById(userId)).toBeNull();
 
     // Assert zero rows for deleted user across all user-scoped tables

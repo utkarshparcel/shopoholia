@@ -1,6 +1,7 @@
 /**
- * In-process Closet ops prefs (U032 laundry rules, U034 dismiss, U035 keep snooze, U036 CPW).
- * Memory-backed for tests; mirrors pattern used by declutter challenges.
+ * Closet ops prefs. Laundry rules (U032), missing-layer dismissals (U034) and the CPW threshold
+ * (U036) live in `users.prefs` (C2: written only through repos.patchUserPrefs). The rest is still
+ * in process memory (keep snooze, measure meta, tailor pickup, photo-dump triage, lent notes).
  */
 
 import {
@@ -11,10 +12,21 @@ import {
   type CpwThresholdPrefs,
   type LaundryRulesPrefs,
 } from "@worn/shared";
+import type { Repositories } from "./repositories/types.js";
 
-const laundryRulesByUser = new Map<string, LaundryRulesPrefs>();
-const cpwThresholdByUser = new Map<string, CpwThresholdPrefs>();
-const missingLayerDismissed = new Map<string, Set<string>>();
+/** `users.prefs.dismissedMissingLayerIds` keeps the newest 50. */
+const MAX_DISMISSED_LAYERS = 50;
+export const MAX_MISSING_LAYER_ID_LENGTH = 64;
+
+/** C2 write; a missing user (erased mid-request) is an error, not a silent no-op. */
+async function savePrefs(
+  repos: Repositories,
+  userId: string,
+  patch: Parameters<Repositories["patchUserPrefs"]>[1],
+): Promise<void> {
+  if (!(await repos.patchUserPrefs(userId, patch))) throw new Error("user prefs not saved: user not found");
+}
+
 const keepSnoozeByItem = new Map<string, { userId: string; until: string }>();
 const measureMeta = new Map<
   string,
@@ -27,41 +39,55 @@ const tailorPickupByOrder = new Map<
 const photoDumpTriageAt = new Map<string, string>();
 const lentWasteNotes = new Map<string, string[]>();
 
-export function getLaundryRules(userId: string): LaundryRulesPrefs {
-  return laundryRulesByUser.get(userId) ?? { ...DEFAULT_LAUNDRY_RULES };
+export async function getLaundryRules(repos: Repositories, userId: string): Promise<LaundryRulesPrefs> {
+  const prefs = await repos.getUserPrefs(userId);
+  return prefs?.laundryRules ? normalizeLaundryRules(prefs.laundryRules) : { ...DEFAULT_LAUNDRY_RULES };
 }
 
-export function setLaundryRules(
+export async function setLaundryRules(
+  repos: Repositories,
   userId: string,
   patch: Partial<LaundryRulesPrefs>,
-): LaundryRulesPrefs {
-  const next = normalizeLaundryRules({ ...getLaundryRules(userId), ...patch });
-  laundryRulesByUser.set(userId, next);
+): Promise<LaundryRulesPrefs> {
+  const next = normalizeLaundryRules({ ...(await getLaundryRules(repos, userId)), ...patch });
+  await savePrefs(repos, userId, { laundryRules: next });
   return next;
 }
 
-export function getCpwThreshold(userId: string): CpwThresholdPrefs {
-  return cpwThresholdByUser.get(userId) ?? { ...DEFAULT_CPW_THRESHOLD };
+export async function getCpwThreshold(repos: Repositories, userId: string): Promise<CpwThresholdPrefs> {
+  const prefs = await repos.getUserPrefs(userId);
+  return prefs?.cpwThreshold ? normalizeCpwThreshold(prefs.cpwThreshold) : { ...DEFAULT_CPW_THRESHOLD };
 }
 
-export function setCpwThreshold(
+export async function setCpwThreshold(
+  repos: Repositories,
   userId: string,
   patch: Partial<CpwThresholdPrefs>,
-): CpwThresholdPrefs {
-  const next = normalizeCpwThreshold({ ...getCpwThreshold(userId), ...patch });
-  cpwThresholdByUser.set(userId, next);
+): Promise<CpwThresholdPrefs> {
+  const next = normalizeCpwThreshold({ ...(await getCpwThreshold(repos, userId)), ...patch });
+  await savePrefs(repos, userId, { cpwThreshold: next });
   return next;
 }
 
-export function dismissMissingLayer(userId: string, gapId: string): string[] {
-  const set = missingLayerDismissed.get(userId) ?? new Set<string>();
-  set.add(gapId);
-  missingLayerDismissed.set(userId, set);
-  return [...set];
+/** Adds a dismissed gap id (newest last, at most 50). A repeat dismissal changes nothing. */
+export async function dismissMissingLayer(
+  repos: Repositories,
+  userId: string,
+  gapId: string,
+): Promise<string[]> {
+  if (gapId.length > MAX_MISSING_LAYER_ID_LENGTH) {
+    throw new RangeError(`gap id longer than ${MAX_MISSING_LAYER_ID_LENGTH} characters`);
+  }
+  const current = await listDismissedMissingLayers(repos, userId);
+  if (current.includes(gapId)) return current;
+  const next = [...current, gapId].slice(-MAX_DISMISSED_LAYERS);
+  await savePrefs(repos, userId, { dismissedMissingLayerIds: next });
+  return next;
 }
 
-export function listDismissedMissingLayers(userId: string): string[] {
-  return [...(missingLayerDismissed.get(userId) ?? [])];
+export async function listDismissedMissingLayers(repos: Repositories, userId: string): Promise<string[]> {
+  const prefs = await repos.getUserPrefs(userId);
+  return [...(prefs?.dismissedMissingLayerIds ?? [])];
 }
 
 export function setKeepSnooze(userId: string, wardrobeItemId: string, until: string): void {
@@ -128,9 +154,6 @@ export function listLentWasteNotes(userId: string): string[] {
 
 /** Test helper */
 export function __resetClosetOpsPrefsForTests(): void {
-  laundryRulesByUser.clear();
-  cpwThresholdByUser.clear();
-  missingLayerDismissed.clear();
   keepSnoozeByItem.clear();
   measureMeta.clear();
   tailorPickupByOrder.clear();

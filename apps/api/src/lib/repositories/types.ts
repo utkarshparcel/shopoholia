@@ -319,10 +319,59 @@ export type ConsentGrantRecord = {
   revokedAt: Date | null;
   source: string;
   meta: Record<string, unknown> | null;
+  /** Privacy notice version shown at grant time (null for grants from before consent v2). */
+  noticeVersion?: string | null;
+};
+
+/** Append-only consent history row (consent_records). */
+export type ConsentHistoryRecord = {
+  id: string;
+  userId: string | null;
+  subjectRef: string;
+  scope: ConsentGrantRecord["scope"];
+  action: "GRANT" | "WITHDRAW";
+  noticeVersion: string | null;
+  source: string;
+  grantId: string | null;
+  createdAt: Date;
+};
+
+/** Durable audit row (audit_log): ids and event names only. */
+export type AuditLogRecord = {
+  id: string;
+  userId: string | null;
+  event: string;
+  meta: Record<string, unknown>;
+  at: Date;
+};
+
+export type PrivacyRequestRecord = {
+  id: string;
+  userId: string | null;
+  subjectRef: string;
+  kind: "ERASE" | "EXPORT";
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+  storageKeys: string[];
+  steps: Record<string, unknown>;
+  resultKey: string | null;
+  attempts: number;
+  error: string | null;
+  requestedAt: Date;
+  completedAt: Date | null;
+  updatedAt: Date;
+};
+
+/** Every user-owned row, keyed by table name (see user-data-tables.ts). */
+export type UserTablesExport = {
+  tables: Record<string, Array<Record<string, unknown>>>;
+  /** Tables that hit the per-table row cap; the export is incomplete for these. */
+  truncated: string[];
 };
 
 export type IngestionSourceRecord = {
   id: string;
+  /** Owner (null only on rows from before the owner column; resolved through the consent grant). */
+  userId?: string | null;
   kind: "EMAIL" | "SMS" | "RECEIPT";
   provider: string;
   consentGrantId: string;
@@ -337,6 +386,8 @@ export type IngestionSourceRecord = {
 
 export type IngestionDocumentRecord = {
   id: string;
+  /** Owner (null only on rows from before the owner column and not yet backfilled). */
+  userId?: string | null;
   kind: "EMAIL" | "SMS" | "RECEIPT";
   rawKey: string;
   parsedJson: Record<string, unknown>;
@@ -515,6 +566,7 @@ export type GrantConsentInput = {
   scope: ConsentGrantRecord["scope"];
   source: string;
   meta?: Record<string, unknown> | null;
+  noticeVersion?: string | null;
 };
 
 export type CreateIngestionSourceInput = {
@@ -916,14 +968,59 @@ export interface Repositories {
     userId: string,
     scope: ConsentGrantRecord["scope"],
   ): Promise<ConsentGrantRecord | null>;
+  /**
+   * One transaction: inserts the grant unless an active one exists (then returns that one),
+   * appends a GRANT consent record and sets the consent flag. Safe to call twice.
+   */
   grantConsent(input: GrantConsentInput): Promise<ConsentGrantRecord>;
+  /** One transaction: closes the active grant, appends a WITHDRAW record, clears the flag. */
   revokeConsent(
     userId: string,
     scope: ConsentGrantRecord["scope"],
   ): Promise<void>;
   listActiveConsents(userId: string): Promise<ConsentGrantRecord[]>;
-  /** Hard-delete all P0 user data (cascade) and the user row. */
+  /** Append-only consent history for the user, newest first (at most `limit`, default 200). */
+  listConsentRecords(userId: string, limit?: number): Promise<ConsentHistoryRecord[]>;
+  /**
+   * Hard-delete all user data and the user row in one transaction. Consent records and
+   * audit rows are kept with `user_id` nulled (their `subject_ref` remains as proof).
+   */
   deleteAllUserData(userId: string): Promise<void>;
+  /** Every storage object key referenced by the user's rows (avatars, wardrobe, receipts…). */
+  listUserStorageKeys(userId: string): Promise<string[]>;
+  /** Every user-owned row in every table of the registry, capped per table. */
+  exportUserTables(userId: string, maxRowsPerTable?: number): Promise<UserTablesExport>;
+  appendAuditRecords(
+    rows: Array<{ userId: string | null; event: string; meta: Record<string, unknown>; at: Date }>,
+  ): Promise<void>;
+  /** Newest first; `before` pages by `at`. */
+  listAuditRecordsByUser(
+    userId: string,
+    opts: { limit: number; before?: Date },
+  ): Promise<AuditLogRecord[]>;
+  /** Deletes at most `limit` audit rows older than `cutoff`; returns how many. */
+  purgeAuditRecordsBefore(cutoff: Date, limit: number): Promise<number>;
+  /**
+   * Opens a privacy request, or returns the one already PENDING/RUNNING for this subject and
+   * kind (`created: false`). Race-safe through the open-request unique index.
+   */
+  createPrivacyRequest(input: {
+    userId: string;
+    subjectRef: string;
+    kind: PrivacyRequestRecord["kind"];
+  }): Promise<{ request: PrivacyRequestRecord; created: boolean }>;
+  getPrivacyRequest(id: string): Promise<PrivacyRequestRecord | null>;
+  updatePrivacyRequest(
+    id: string,
+    patch: Partial<
+      Pick<
+        PrivacyRequestRecord,
+        "userId" | "status" | "storageKeys" | "steps" | "resultKey" | "attempts" | "error" | "completedAt"
+      >
+    >,
+  ): Promise<PrivacyRequestRecord | null>;
+  /** DONE exports whose file is older than `cutoff` and still has a result key. */
+  listExpiredPrivacyExports(cutoff: Date, limit: number): Promise<PrivacyRequestRecord[]>;
 
   // --- Universe P0: ingestion ---
   listIngestionSources(userId: string): Promise<IngestionSourceRecord[]>;
@@ -974,6 +1071,14 @@ export interface Repositories {
    * workers stop syncing. Row is retained for audit / metrics.
    */
   disconnectIngestionSource(id: string): Promise<IngestionSourceRecord | null>;
+  /**
+   * Consent withdrawal: disconnects every source of `kind` the user owns in one transaction
+   * and returns the tokens it cleared, so the caller can revoke them at the provider.
+   */
+  disconnectIngestionSourcesByKind(
+    userId: string,
+    kind: IngestionSourceRecord["kind"],
+  ): Promise<Array<{ id: string; encryptedToken: { data: string } | null }>>;
   /** Patch linked merchant purchase fields after a document correction / merge. */
   updateMerchantPurchase(
     id: string,
@@ -1021,9 +1126,18 @@ export interface Repositories {
   /**
    * Retention purge: delete raw blob metadata while keeping the row + status
    * so metrics still count the document. Clears `rawKey` and strips PII from
-   * `parsedJson` (preserves `__userId` when present). Does not flip status to ERROR.
+   * `parsedJson` (the owner lives in `user_id`). Does not flip status to ERROR.
    */
   purgeIngestionDocumentRaw(id: string): Promise<void>;
+  /**
+   * Retention batch: documents of `kind` (any status) older than `cutoff` that still hold raw
+   * content, oldest first, at most `limit`. No parsed bodies are loaded.
+   */
+  listIngestionDocumentsForRetention(
+    kind: IngestionDocumentRecord["kind"],
+    cutoff: Date,
+    limit: number,
+  ): Promise<Array<Pick<IngestionDocumentRecord, "id" | "kind" | "rawKey" | "status" | "createdAt">>>;
 
   // --- Universe P0: money / credits (read) ---
   listMoneyAccounts(
@@ -1377,6 +1491,48 @@ export interface Repositories {
   listHouseholdVaultSettings(
     householdId: string,
   ): Promise<HouseholdVaultSettingsRecord[]>;
+  /**
+   * Atomically adds `amountMinor` to the member's spent total if it stays within the cap
+   * and the member has SPEND access. Returns the new settings, or null when refused.
+   */
+  tryReserveHouseholdVaultSpend(
+    householdId: string,
+    userId: string,
+    amountMinor: number,
+  ): Promise<HouseholdVaultSettingsRecord | null>;
+  /** Gives back a reservation whose ledger write failed. */
+  releaseHouseholdVaultSpend(
+    householdId: string,
+    userId: string,
+    amountMinor: number,
+  ): Promise<void>;
+
+  // --- Wear challenges, interview kits, friend polls (Plan #6: were process memory) ---
+  /** `created: false` when the user already started a challenge for this item. */
+  startWearChallenge(userId: string, wardrobeItemId: string): Promise<{ created: boolean }>;
+  listWearChallengeItemIds(userId: string): Promise<string[]>;
+  createInterviewKit(input: Omit<InterviewKitRecord, "createdAt" | "updatedAt">): Promise<InterviewKitRecord>;
+  findInterviewKit(id: string, userId: string): Promise<InterviewKitRecord | null>;
+  listInterviewKits(userId: string, limit: number): Promise<InterviewKitRecord[]>;
+  updateInterviewKit(
+    id: string,
+    userId: string,
+    patch: Partial<Pick<InterviewKitRecord, "eventAt" | "remindAt" | "reminderScheduled">>,
+  ): Promise<InterviewKitRecord | null>;
+  deleteInterviewKit(id: string, userId: string): Promise<boolean>;
+  createSocialPoll(input: Omit<SocialPollRecord, "createdAt" | "winnerAppliedAt" | "closedAt">): Promise<SocialPollRecord>;
+  findSocialPollById(id: string): Promise<SocialPollRecord | null>;
+  findSocialPollByTokenHash(tokenHash: string): Promise<SocialPollRecord | null>;
+  /** One vote per voter; `inserted: false` returns the choice already on record. */
+  castSocialPollVote(
+    pollId: string,
+    voterHash: string,
+    choice: string,
+  ): Promise<{ inserted: boolean; choice: string }>;
+  /** Votes per choice. */
+  countSocialPollVotes(pollId: string): Promise<Record<string, number>>;
+  /** Sets winnerAppliedAt once; false when it was already set. */
+  markSocialPollWinnerApplied(pollId: string): Promise<boolean>;
   /** Find wardrobe item by id only (for household ACL; authz checked by caller). */
   findWardrobeItemById(id: string): Promise<WardrobeItemRecord | null>;
   /** Update wardrobe item by id only (household partner laundry). */
@@ -1462,7 +1618,13 @@ export interface Repositories {
   listIngestionDocuments(): Promise<IngestionDocumentRecord[]>;
 
   // --- Vault export helpers (per-user full graph) ---
-  listIngestionDocumentsByUser(userId: string): Promise<IngestionDocumentRecord[]>;
+  /** Newest first. `limit` bounds the read; `kind` filters. */
+  listIngestionDocumentsByUser(
+    userId: string,
+    opts?: { kind?: IngestionDocumentRecord["kind"]; limit?: number },
+  ): Promise<IngestionDocumentRecord[]>;
+  /** One query for many purchases (missing ids are skipped). */
+  findMerchantPurchasesByIds(ids: string[]): Promise<MerchantPurchaseRecord[]>;
   listOrderItemsByUser(userId: string): Promise<OrderItemRecord[]>;
   listCartsByUser(userId: string): Promise<CartRecord[]>;
   listCartItemsByUser(userId: string): Promise<CartItemRecord[]>;
@@ -1681,6 +1843,35 @@ export type HouseholdVaultSettingsRecord = {
   spendCapMinor: number | null;
   spentMinor: number;
   updatedAt: Date;
+};
+
+export type InterviewKitRecord = {
+  id: string;
+  userId: string;
+  name: string;
+  kind: "interview" | "ceremony";
+  itemIds: string[];
+  eventAt: Date;
+  occasion: string | null;
+  remindAt: Date | null;
+  reminderScheduled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type SocialPollRecord = {
+  id: string;
+  userId: string;
+  kind: "return" | "outfit";
+  tokenHash: string;
+  itemLabel: string | null;
+  returnRequestId: string | null;
+  options: Array<{ id: string; label: string; itemIds: string[]; occasion?: string | null }>;
+  plannedFor: string | null;
+  winnerAppliedAt: Date | null;
+  expiresAt: Date;
+  closedAt: Date | null;
+  createdAt: Date;
 };
 
 export type ClosetProfileRecord = {

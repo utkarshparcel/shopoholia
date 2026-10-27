@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
+import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import {
@@ -15,6 +16,9 @@ import {
   entitlementGrants,
   coinLedger,
   consentGrants,
+  consentRecords,
+  auditLog,
+  privacyRequests,
   createDb,
   customizationTemplates,
   dispositionListings,
@@ -56,6 +60,11 @@ import {
   swapListings,
   households,
   householdMembers,
+  householdVaultSettings,
+  wearChallenges,
+  interviewKits,
+  socialPolls,
+  socialPollVotes,
   closetProfiles,
   tailoringOrders,
   tailoringReviews,
@@ -68,6 +77,8 @@ import {
   type Db,
 } from "@worn/db";
 import { InsufficientCoinsError } from "./errors.js";
+import { subjectRefFor } from "../privacy-hmac.js";
+import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import {
   LISTING_WORD_SEPARATOR,
   decodeListingCursor,
@@ -106,6 +117,11 @@ import type {
   UserRecord,
 
   ConsentGrantRecord,
+  ConsentHistoryRecord,
+  AuditLogRecord,
+  PrivacyRequestRecord,
+  InterviewKitRecord,
+  SocialPollRecord,
   DispositionListingRecord,
   IngestionDocumentRecord,
   IngestionSourceRecord,
@@ -532,12 +548,115 @@ function mapConsentGrant(row: ConsentGrantRow): ConsentGrantRecord {
     revokedAt: row.revokedAt ?? null,
     source: row.source,
     meta: (row.meta ?? null) as Record<string, unknown> | null,
+    noticeVersion: row.noticeVersion ?? null,
   };
 }
+
+type ConsentRecordRow = typeof consentRecords.$inferSelect;
+type PrivacyRequestRow = typeof privacyRequests.$inferSelect;
+type InterviewKitRow = typeof interviewKits.$inferSelect;
+type SocialPollRow = typeof socialPolls.$inferSelect;
+type HouseholdVaultSettingsRow = typeof householdVaultSettings.$inferSelect;
+
+function mapConsentRecord(row: ConsentRecordRow): ConsentHistoryRecord {
+  return {
+    id: row.id,
+    userId: row.userId ?? null,
+    subjectRef: row.subjectRef,
+    scope: row.scope as ConsentGrantRecord["scope"],
+    action: row.action,
+    noticeVersion: row.noticeVersion ?? null,
+    source: row.source,
+    grantId: row.grantId ?? null,
+    createdAt: row.createdAt,
+  };
+}
+
+function mapPrivacyRequest(row: PrivacyRequestRow): PrivacyRequestRecord {
+  return {
+    id: row.id,
+    userId: row.userId ?? null,
+    subjectRef: row.subjectRef,
+    kind: row.kind,
+    status: row.status,
+    storageKeys: row.storageKeys ?? [],
+    steps: row.steps ?? {},
+    resultKey: row.resultKey ?? null,
+    attempts: row.attempts,
+    error: row.error ?? null,
+    requestedAt: row.requestedAt,
+    completedAt: row.completedAt ?? null,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapInterviewKit(row: InterviewKitRow): InterviewKitRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    name: row.name,
+    kind: row.kind,
+    itemIds: row.itemIds ?? [],
+    eventAt: row.eventAt,
+    occasion: row.occasion ?? null,
+    remindAt: row.remindAt ?? null,
+    reminderScheduled: row.reminderScheduled,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapSocialPoll(row: SocialPollRow): SocialPollRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    kind: row.kind,
+    tokenHash: row.tokenHash,
+    itemLabel: row.itemLabel ?? null,
+    returnRequestId: row.returnRequestId ?? null,
+    options: row.options ?? [],
+    plannedFor: row.plannedFor ?? null,
+    winnerAppliedAt: row.winnerAppliedAt ?? null,
+    expiresAt: row.expiresAt,
+    closedAt: row.closedAt ?? null,
+    createdAt: row.createdAt,
+  };
+}
+
+function mapHouseholdVaultSettings(row: HouseholdVaultSettingsRow): HouseholdVaultSettingsRecord {
+  return {
+    householdId: row.householdId,
+    userId: row.userId,
+    vaultAccess: row.vaultAccess,
+    spendCapMinor: row.spendCapMinor ?? null,
+    spentMinor: row.spentMinor,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Storage keys we own (not external URLs), deduplicated. */
+function ownStorageKeys(values: Array<string | null | undefined>): string[] {
+  const keys = new Set<string>();
+  for (const v of values) {
+    if (typeof v !== "string") continue;
+    const key = v.trim();
+    if (!key || /^[a-z][a-z0-9+.-]*:\/\//i.test(key) || key.startsWith("data:")) continue;
+    keys.add(key);
+  }
+  return [...keys];
+}
+
+const SOURCE_DISCONNECTED_META = (disconnectedAt: string) => ({
+  disconnectedAt,
+  lastError: "Disconnected — reconnect to resume sync",
+  lastErrorAt: disconnectedAt,
+  errorCode: "DISCONNECTED",
+});
 
 function mapIngestionSource(row: IngestionSourceRow): IngestionSourceRecord {
   return {
     id: row.id,
+    userId: row.userId ?? null,
     kind: row.kind as IngestionSourceRecord["kind"],
     provider: row.provider,
     consentGrantId: row.consentGrantId,
@@ -554,6 +673,7 @@ function mapIngestionSource(row: IngestionSourceRow): IngestionSourceRecord {
 function mapIngestionDocument(row: IngestionDocumentRow): IngestionDocumentRecord {
   return {
     id: row.id,
+    userId: row.userId ?? null,
     kind: row.kind as IngestionDocumentRecord["kind"],
     rawKey: row.rawKey,
     parsedJson: (row.parsedJson ?? {}) as Record<string, unknown>,
@@ -815,9 +935,6 @@ function mapDispositionListing(row: DispositionListingRow): DispositionListingRe
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
-  /** U015 — process-local vault ACL until persisted columns land. */
-  const householdVaultSettingsStore = new Map<string, HouseholdVaultSettingsRecord>();
-
   const repos: Repositories = {
     async findUserByPhone(phone) {
       const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
@@ -2429,37 +2546,94 @@ export function createPostgresRepositories(db: Db): Repositories {
         return row ? mapConsentGrant(row) : null;
     },
     async grantConsent(input) {
-        const [row] = await db
+      const active = and(
+        eq(consentGrants.userId, input.userId),
+        eq(consentGrants.scope, input.scope),
+        isNull(consentGrants.revokedAt),
+      );
+      return db.transaction(async (tx) => {
+        // The partial unique index allows one active grant per scope. A concurrent grant makes
+        // the insert a no-op and the read returns the winner's row; if that row was revoked in
+        // between, the next insert succeeds.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const [inserted] = await tx
             .insert(consentGrants)
             .values({
-            id: randomUUID(),
-            userId: input.userId,
-            scope: input.scope,
-            source: input.source,
-            meta: input.meta ?? null,
-        })
+              id: randomUUID(),
+              userId: input.userId,
+              scope: input.scope,
+              source: input.source,
+              meta: input.meta ?? null,
+              noticeVersion: input.noticeVersion ?? null,
+            })
+            .onConflictDoNothing({
+              target: [consentGrants.userId, consentGrants.scope],
+              where: isNull(consentGrants.revokedAt),
+            })
             .returning();
-        await db
+          if (!inserted) {
+            const [existing] = await tx.select().from(consentGrants).where(active).limit(1);
+            if (existing) return mapConsentGrant(existing);
+            continue;
+          }
+          await tx.insert(consentRecords).values({
+            userId: input.userId,
+            subjectRef: subjectRefFor(input.userId),
+            scope: input.scope,
+            action: "GRANT",
+            noticeVersion: input.noticeVersion ?? null,
+            source: input.source,
+            grantId: inserted.id,
+          });
+          await tx
             .update(users)
             .set({
-            consentFlags: sql `${users.consentFlags} || ${JSON.stringify({ [input.scope]: true })}::jsonb`,
-            updatedAt: now(),
-        })
+              consentFlags: sql`${users.consentFlags} || ${JSON.stringify({ [input.scope]: true })}::jsonb`,
+              updatedAt: now(),
+            })
             .where(eq(users.id, input.userId));
-        return mapConsentGrant(row);
+          return mapConsentGrant(inserted);
+        }
+        throw new Error(`grantConsent: no stable active ${input.scope} grant after 3 attempts`);
+      });
     },
     async revokeConsent(userId, scope) {
-        await db
-            .update(consentGrants)
-            .set({ revokedAt: now() })
-            .where(and(eq(consentGrants.userId, userId), eq(consentGrants.scope, scope), isNull(consentGrants.revokedAt)));
-        await db
-            .update(users)
-            .set({
-            consentFlags: sql `${users.consentFlags} || ${JSON.stringify({ [scope]: false })}::jsonb`,
+      await db.transaction(async (tx) => {
+        const closed = await tx
+          .update(consentGrants)
+          .set({ revokedAt: now() })
+          .where(and(eq(consentGrants.userId, userId), eq(consentGrants.scope, scope), isNull(consentGrants.revokedAt)))
+          .returning({ id: consentGrants.id, source: consentGrants.source });
+        if (closed.length > 0) {
+          await tx.insert(consentRecords).values(
+            closed.map((g) => ({
+              userId,
+              subjectRef: subjectRefFor(userId),
+              scope,
+              action: "WITHDRAW" as const,
+              noticeVersion: null,
+              source: g.source,
+              grantId: g.id,
+            })),
+          );
+        }
+        await tx
+          .update(users)
+          .set({
+            consentFlags: sql`${users.consentFlags} || ${JSON.stringify({ [scope]: false })}::jsonb`,
             updatedAt: now(),
-        })
-            .where(eq(users.id, userId));
+          })
+          .where(eq(users.id, userId));
+      });
+    },
+    async listConsentRecords(userId, limit = 200) {
+      const rows = await db
+        .select()
+        .from(consentRecords)
+        .where(eq(consentRecords.userId, userId))
+        .orderBy(desc(consentRecords.createdAt), desc(consentRecords.id))
+        .limit(Math.min(Math.max(limit, 1), 1000));
+      return rows.map(mapConsentRecord);
     },
     async listActiveConsents(userId) {
         const rows = await db
@@ -2543,6 +2717,12 @@ export function createPostgresRepositories(db: Db): Repositories {
 
         // 2. gift & recipients
         await tx.delete(giftOrders).where(eq(giftOrders.userId, userId));
+        // The user's contributions to other people's gifts stay for that total; the name and
+        // note go now and the contributor id with the user row (ON DELETE SET NULL).
+        await tx
+          .update(groupGiftContributions)
+          .set({ contributorName: null, note: null, updatedAt: now() })
+          .where(eq(groupGiftContributions.contributorUserId, userId));
         if (recipientIds.length > 0) {
           await tx
             .delete(recipientProfiles)
@@ -2633,12 +2813,39 @@ export function createPostgresRepositories(db: Db): Repositories {
         await tx.delete(moneyAccounts).where(eq(moneyAccounts.userId, userId));
 
         // 14. ingestion sources BEFORE consent grants
+        await tx.delete(ingestionDocuments).where(eq(ingestionDocuments.userId, userId));
+        await tx.delete(ingestionSources).where(eq(ingestionSources.userId, userId));
         if (grantIds.length > 0) {
           await tx
             .delete(ingestionSources)
             .where(inArray(ingestionSources.consentGrantId, grantIds));
         }
+        // Consent history is append-only: close the open grants as withdrawals first. The
+        // records keep subject_ref; their user_id goes NULL with the user row (ON DELETE SET NULL).
+        const openGrants = await tx
+          .select({ id: consentGrants.id, scope: consentGrants.scope, source: consentGrants.source })
+          .from(consentGrants)
+          .where(and(eq(consentGrants.userId, userId), isNull(consentGrants.revokedAt)));
+        if (openGrants.length > 0) {
+          await tx.insert(consentRecords).values(
+            openGrants.map((g) => ({
+              userId,
+              subjectRef: subjectRefFor(userId),
+              scope: g.scope,
+              action: "WITHDRAW" as const,
+              noticeVersion: null,
+              source: "erasure",
+              grantId: g.id,
+            })),
+          );
+        }
         await tx.delete(consentGrants).where(eq(consentGrants.userId, userId));
+        // Audit rows outlive the user (no FK), pseudonymised by subject_ref.
+        await tx.update(auditLog).set({ userId: null }).where(eq(auditLog.userId, userId));
+        await tx
+          .update(privacyRequests)
+          .set({ userId: null })
+          .where(and(eq(privacyRequests.userId, userId), eq(privacyRequests.kind, "EXPORT")));
 
         // 15. budgets, spend rollups
         await tx.delete(budgets).where(eq(budgets.userId, userId));
@@ -2649,14 +2856,217 @@ export function createPostgresRepositories(db: Db): Repositories {
         await tx.delete(users).where(eq(users.id, userId));
       });
     },
+    async listUserStorageKeys(userId) {
+      const userOrders = db.select({ id: orders.id }).from(orders).where(eq(orders.userId, userId));
+      const userItems = db.select({ id: orderItems.id }).from(orderItems).where(inArray(orderItems.orderId, userOrders));
+      const userPurchases = db
+        .select({ id: merchantPurchases.id })
+        .from(merchantPurchases)
+        .where(eq(merchantPurchases.userId, userId));
+      const userSellers = db.select({ id: sellers.id }).from(sellers).where(eq(sellers.userId, userId));
+      const userListings = db.select({ id: listings.id }).from(listings).where(inArray(listings.sellerId, userSellers));
+      const [
+        avatarRows,
+        wardrobeRows,
+        wearRows,
+        receiptRows,
+        previewRows,
+        renderRows,
+        returnRows,
+        purchaseItemRows,
+        purchaseRows,
+        tailoringRows,
+        docRows,
+        listingRows,
+        variantRows,
+        exportRows,
+      ] = await Promise.all([
+        db.select({ a: avatars.referenceImageKey, b: avatars.sourceUploadKeys }).from(avatars).where(eq(avatars.userId, userId)),
+        db.select({ a: wardrobeItems.garmentImageKey, b: wardrobeItems.imageKeys }).from(wardrobeItems).where(eq(wardrobeItems.userId, userId)),
+        db.select({ a: wearLog.imageKey }).from(wearLog).where(eq(wearLog.userId, userId)),
+        db.select({ a: receipts.imageKey }).from(receipts).where(eq(receipts.userId, userId)),
+        db.select({ a: tryonPreviews.imageKey }).from(tryonPreviews).where(eq(tryonPreviews.userId, userId)),
+        db.select({ a: renders.imageKey }).from(renders).where(inArray(renders.orderItemId, userItems)),
+        db.select({ a: returnRequests.labelImageKey }).from(returnRequests).where(eq(returnRequests.userId, userId)),
+        db.select({ a: merchantPurchaseItems.imageKey }).from(merchantPurchaseItems).where(inArray(merchantPurchaseItems.purchaseId, userPurchases)),
+        db.select({ a: merchantPurchases.deliveryProofKeys }).from(merchantPurchases).where(eq(merchantPurchases.userId, userId)),
+        db.select({ b: tailoringOrders.fabricPhotoKeys }).from(tailoringOrders).where(eq(tailoringOrders.userId, userId)),
+        db
+          .select({ a: ingestionDocuments.rawKey })
+          .from(ingestionDocuments)
+          .where(
+            and(
+              ne(ingestionDocuments.rawKey, ""),
+              sql`(${ingestionDocuments.userId} = ${userId} OR (${ingestionDocuments.userId} IS NULL AND (${ingestionDocuments.parsedJson}->>'__userId' = ${userId} OR ${ingestionDocuments.matchedPurchaseId} IN ${userPurchases})))`,
+            ),
+          ),
+        db.select({ a: listings.houseModelRenderKey, b: listings.productImageKeys }).from(listings).where(inArray(listings.sellerId, userSellers)),
+        db.select({ a: listingVariants.garmentImageKey }).from(listingVariants).where(inArray(listingVariants.listingId, userListings)),
+        db.select({ a: privacyRequests.resultKey }).from(privacyRequests).where(eq(privacyRequests.userId, userId)),
+      ]);
+      const values: Array<string | null | undefined> = [];
+      const push = (a?: string | null, b?: string[] | null) => {
+        values.push(a);
+        if (Array.isArray(b)) values.push(...b);
+      };
+      for (const r of avatarRows) push(r.a, r.b);
+      for (const r of wardrobeRows) push(r.a, r.b);
+      for (const rows of [wearRows, receiptRows, previewRows, renderRows, returnRows, purchaseItemRows, docRows, variantRows, exportRows]) {
+        for (const r of rows) push(r.a);
+      }
+      for (const r of purchaseRows) {
+        if (!r.a) continue;
+        try {
+          const parsed: unknown = JSON.parse(r.a);
+          if (Array.isArray(parsed)) push(null, parsed.filter((k): k is string => typeof k === "string"));
+        } catch {
+          push(r.a);
+        }
+      }
+      for (const r of tailoringRows) push(null, r.b);
+      for (const r of listingRows) push(r.a, r.b);
+      return ownStorageKeys(values);
+    },
+    async exportUserTables(userId, maxRowsPerTable = 10_000) {
+      const cap = Math.min(Math.max(maxRowsPerTable, 1), 50_000);
+      const nameOf = (t: PgTable) => getTableConfig(t).name;
+      const specByTable = new Map(USER_DATA_TABLES.map((s) => [s.table, s] as const));
+      // Rows of a spec's table that belong to the user, as an SQL condition (children nest).
+      const condition = (spec: UserTableSpec): SQL => {
+        if ("owner" in spec) return eq(spec.owner, userId);
+        const parent = specByTable.get(spec.parent);
+        if (!parent) throw new Error(`user-data-tables: parent of ${nameOf(spec.table)} is not listed`);
+        const parentId = (spec.parent as unknown as Record<string, AnyPgColumn>).id!;
+        return inArray(spec.fk, db.select({ id: parentId }).from(spec.parent).where(condition(parent)));
+      };
+      const tables: Record<string, Array<Record<string, unknown>>> = {};
+      const truncated: string[] = [];
+      // A few tables at a time keeps the pool free for other requests.
+      for (let i = 0; i < USER_DATA_TABLES.length; i += 4) {
+        await Promise.all(
+          USER_DATA_TABLES.slice(i, i + 4).map(async (spec) => {
+            const name = nameOf(spec.table);
+            const rows = (await db
+              .select()
+              .from(spec.table)
+              .where(condition(spec))
+              .limit(cap + 1)) as Array<Record<string, unknown>>;
+            if (rows.length > cap) {
+              rows.length = cap;
+              truncated.push(name);
+            }
+            const omit = new Set(spec.omit ?? []);
+            tables[name] = omit.size
+              ? rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !omit.has(k))))
+              : rows;
+          }),
+        );
+      }
+      return { tables, truncated: truncated.sort() };
+    },
+    async appendAuditRecords(rows) {
+      if (rows.length === 0) return;
+      await db.insert(auditLog).values(
+        rows.map((r) => ({
+          userId: r.userId,
+          subjectRef: r.userId ? subjectRefFor(r.userId) : null,
+          event: r.event,
+          meta: r.meta,
+          at: r.at,
+        })),
+      );
+    },
+    async listAuditRecordsByUser(userId, opts) {
+      const conditions = [eq(auditLog.userId, userId)];
+      if (opts.before) conditions.push(lt(auditLog.at, opts.before));
+      const rows = await db
+        .select()
+        .from(auditLog)
+        .where(and(...conditions))
+        .orderBy(desc(auditLog.at), desc(auditLog.id))
+        .limit(Math.min(Math.max(opts.limit, 1), 500));
+      return rows.map(
+        (r) =>
+          ({
+            id: r.id,
+            userId: r.userId ?? null,
+            event: r.event,
+            meta: r.meta ?? {},
+            at: r.at,
+          }) satisfies AuditLogRecord,
+      );
+    },
+    async purgeAuditRecordsBefore(cutoff, limit) {
+      const doomed = db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(lt(auditLog.at, cutoff))
+        .orderBy(asc(auditLog.at))
+        .limit(Math.min(Math.max(limit, 1), 10_000));
+      const deleted = await db
+        .delete(auditLog)
+        .where(inArray(auditLog.id, doomed))
+        .returning({ id: auditLog.id });
+      return deleted.length;
+    },
+    async createPrivacyRequest(input) {
+      const open = and(
+        eq(privacyRequests.subjectRef, input.subjectRef),
+        eq(privacyRequests.kind, input.kind),
+        inArray(privacyRequests.status, ["PENDING", "RUNNING"]),
+      );
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const [inserted] = await db
+          .insert(privacyRequests)
+          .values({ userId: input.userId, subjectRef: input.subjectRef, kind: input.kind })
+          .onConflictDoNothing({
+            target: [privacyRequests.subjectRef, privacyRequests.kind],
+            where: sql`${privacyRequests.status} IN ('PENDING', 'RUNNING')`,
+          })
+          .returning();
+        if (inserted) return { request: mapPrivacyRequest(inserted), created: true };
+        const [existing] = await db.select().from(privacyRequests).where(open).limit(1);
+        if (existing) return { request: mapPrivacyRequest(existing), created: false };
+      }
+      throw new Error("createPrivacyRequest: open request kept changing");
+    },
+    async getPrivacyRequest(id) {
+      const [row] = await db.select().from(privacyRequests).where(eq(privacyRequests.id, id)).limit(1);
+      return row ? mapPrivacyRequest(row) : null;
+    },
+    async updatePrivacyRequest(id, patch) {
+      const [row] = await db
+        .update(privacyRequests)
+        .set({ ...patch, updatedAt: now() })
+        .where(eq(privacyRequests.id, id))
+        .returning();
+      return row ? mapPrivacyRequest(row) : null;
+    },
+    async listExpiredPrivacyExports(cutoff, limit) {
+      const rows = await db
+        .select()
+        .from(privacyRequests)
+        .where(
+          and(
+            eq(privacyRequests.kind, "EXPORT"),
+            eq(privacyRequests.status, "DONE"),
+            sql`${privacyRequests.resultKey} IS NOT NULL`,
+            lt(privacyRequests.completedAt, cutoff),
+          ),
+        )
+        .orderBy(asc(privacyRequests.completedAt))
+        .limit(Math.min(Math.max(limit, 1), 1000));
+      return rows.map(mapPrivacyRequest);
+    },
     async listIngestionSources(userId) {
+        // user_id is the owner; rows from before the column resolve through their consent grant.
         const rows = await db
             .select()
             .from(ingestionSources)
-            .where(inArray(ingestionSources.consentGrantId, db
+            .where(sql`(${ingestionSources.userId} = ${userId} OR (${ingestionSources.userId} IS NULL AND ${ingestionSources.consentGrantId} IN ${db
             .select({ id: consentGrants.id })
             .from(consentGrants)
-            .where(eq(consentGrants.userId, userId))))
+            .where(eq(consentGrants.userId, userId))}))`)
             .orderBy(desc(ingestionSources.createdAt));
         return rows.map(mapIngestionSource);
     },
@@ -2666,6 +3076,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             .insert(ingestionSources)
             .values({
             id: randomUUID(),
+            userId: input.userId,
             kind: input.kind,
             provider: input.provider,
             consentGrantId: input.consentGrantId,
@@ -2685,9 +3096,10 @@ export function createPostgresRepositories(db: Db): Repositories {
         .insert(ingestionDocuments)
         .values({
         id: randomUUID(),
+        userId: input.userId,
         kind: input.kind,
         rawKey: input.rawKey,
-        parsedJson: { ...input.parsedJson, __userId: input.userId },
+        parsedJson: input.parsedJson,
             matchedPurchaseId: null,
             status: "RECEIVED",
         })
@@ -2752,31 +3164,48 @@ export function createPostgresRepositories(db: Db): Repositories {
         return row ? mapIngestionSource(row) : null;
     },
     async disconnectIngestionSource(id) {
-        const [existing] = await db
-            .select()
-            .from(ingestionSources)
-            .where(eq(ingestionSources.id, id))
-            .limit(1);
-        if (!existing) return null;
-        const prevMeta = (existing.meta ?? {}) as Record<string, unknown>;
+        // One statement: a concurrent meta patch (mute rules) is merged, not overwritten.
         const disconnectedAt = now().toISOString();
         const [row] = await db
             .update(ingestionSources)
             .set({
                 status: "ERROR",
                 encryptedToken: null,
-                meta: {
-                    ...prevMeta,
-                    disconnectedAt,
-                    lastError: "Disconnected — reconnect to resume sync",
-                    lastErrorAt: disconnectedAt,
-                    errorCode: "DISCONNECTED",
-                },
+                meta: sql`coalesce(${ingestionSources.meta}, '{}'::jsonb) || ${JSON.stringify(SOURCE_DISCONNECTED_META(disconnectedAt))}::jsonb`,
                 updatedAt: now(),
             })
             .where(eq(ingestionSources.id, id))
             .returning();
         return row ? mapIngestionSource(row) : null;
+    },
+    async disconnectIngestionSourcesByKind(userId, kind) {
+      return db.transaction(async (tx) => {
+        const owned = sql`(${ingestionSources.userId} = ${userId} OR (${ingestionSources.userId} IS NULL AND ${ingestionSources.consentGrantId} IN ${tx
+          .select({ id: consentGrants.id })
+          .from(consentGrants)
+          .where(eq(consentGrants.userId, userId))}))`;
+        // Lock first so the tokens returned are the ones this call cleared.
+        const locked = await tx
+          .select({ id: ingestionSources.id, encryptedToken: ingestionSources.encryptedToken })
+          .from(ingestionSources)
+          .where(and(eq(ingestionSources.kind, kind), owned))
+          .for("update");
+        if (locked.length === 0) return [];
+        const disconnectedAt = now().toISOString();
+        await tx
+          .update(ingestionSources)
+          .set({
+            status: "ERROR",
+            encryptedToken: null,
+            meta: sql`coalesce(${ingestionSources.meta}, '{}'::jsonb) || ${JSON.stringify(SOURCE_DISCONNECTED_META(disconnectedAt))}::jsonb`,
+            updatedAt: now(),
+          })
+          .where(inArray(ingestionSources.id, locked.map((s) => s.id)));
+        return locked.map((s) => ({
+          id: s.id,
+          encryptedToken: (s.encryptedToken ?? null) as { data: string } | null,
+        }));
+      });
     },
     async updateMerchantPurchase(id, patch) {
         const updates: Record<string, unknown> = { updatedAt: now() };
@@ -2850,26 +3279,30 @@ export function createPostgresRepositories(db: Db): Repositories {
             .where(eq(returnRequests.purchaseId, fromPurchaseId));
     },
     async purgeIngestionDocumentRaw(id) {
-        const [row] = await db
-            .select()
-            .from(ingestionDocuments)
-            .where(eq(ingestionDocuments.id, id))
-            .limit(1);
-        if (!row) return;
-        const prev = (row.parsedJson ?? {}) as Record<string, unknown>;
-        const userId = typeof prev.__userId === "string" ? prev.__userId : undefined;
+        // One statement; a legacy owner in parsed_json moves to user_id before the body goes.
         await db
             .update(ingestionDocuments)
             .set({
+                userId: sql`coalesce(${ingestionDocuments.userId}, (select ${users.id} from ${users} where ${users.id}::text = ${ingestionDocuments.parsedJson}->>'__userId'))`,
                 rawKey: "",
-                parsedJson: {
-                    purged: true,
-                    purgedAt: now().toISOString(),
-                    ...(userId ? { __userId: userId } : {}),
-                },
+                parsedJson: { purged: true, purgedAt: now().toISOString() },
                 updatedAt: now(),
             })
             .where(eq(ingestionDocuments.id, id));
+    },
+    async listIngestionDocumentsForRetention(kind, cutoff, limit) {
+        return db
+            .select({
+                id: ingestionDocuments.id,
+                kind: ingestionDocuments.kind,
+                rawKey: ingestionDocuments.rawKey,
+                status: ingestionDocuments.status,
+                createdAt: ingestionDocuments.createdAt,
+            })
+            .from(ingestionDocuments)
+            .where(and(eq(ingestionDocuments.kind, kind), ne(ingestionDocuments.rawKey, ""), lt(ingestionDocuments.createdAt, cutoff)))
+            .orderBy(asc(ingestionDocuments.createdAt))
+            .limit(Math.min(Math.max(limit, 1), 1000));
     },
     async listIngestionDocuments() {
         const rows = await db
@@ -4411,9 +4844,12 @@ export function createPostgresRepositories(db: Db): Repositories {
       );
     },
     async getHouseholdVaultSettings(householdId, userId) {
-      const key = `${householdId}:${userId}`;
-      const existing = householdVaultSettingsStore.get(key);
-      if (existing) return existing;
+      const [row] = await db
+        .select()
+        .from(householdVaultSettings)
+        .where(and(eq(householdVaultSettings.householdId, householdId), eq(householdVaultSettings.userId, userId)))
+        .limit(1);
+      if (row) return mapHouseholdVaultSettings(row);
       return {
         householdId,
         userId,
@@ -4424,29 +4860,181 @@ export function createPostgresRepositories(db: Db): Repositories {
       } satisfies HouseholdVaultSettingsRecord;
     },
     async upsertHouseholdVaultSettings(input) {
-      const key = `${input.householdId}:${input.userId}`;
-      const prev = householdVaultSettingsStore.get(key);
-      const next: HouseholdVaultSettingsRecord = {
-        householdId: input.householdId,
-        userId: input.userId,
-        vaultAccess: input.vaultAccess ?? prev?.vaultAccess ?? "VIEW",
-        spendCapMinor:
-          input.spendCapMinor !== undefined
-            ? input.spendCapMinor
-            : (prev?.spendCapMinor ?? null),
-        spentMinor:
-          input.spentMinor !== undefined
-            ? input.spentMinor
-            : (prev?.spentMinor ?? 0),
-        updatedAt: now(),
-      };
-      householdVaultSettingsStore.set(key, next);
-      return next;
+      // One statement: only the given fields change, so concurrent patches don't undo each other.
+      const set: Record<string, unknown> = { updatedAt: now() };
+      if (input.vaultAccess !== undefined) set.vaultAccess = input.vaultAccess;
+      if (input.spendCapMinor !== undefined) set.spendCapMinor = input.spendCapMinor;
+      if (input.spentMinor !== undefined) set.spentMinor = input.spentMinor;
+      const [row] = await db
+        .insert(householdVaultSettings)
+        .values({
+          householdId: input.householdId,
+          userId: input.userId,
+          vaultAccess: input.vaultAccess ?? "VIEW",
+          spendCapMinor: input.spendCapMinor ?? null,
+          spentMinor: input.spentMinor ?? 0,
+        })
+        .onConflictDoUpdate({
+          target: [householdVaultSettings.householdId, householdVaultSettings.userId],
+          set,
+        })
+        .returning();
+      return mapHouseholdVaultSettings(row!);
     },
     async listHouseholdVaultSettings(householdId) {
-      return [...householdVaultSettingsStore.values()].filter(
-        (s) => s.householdId === householdId,
-      );
+      const rows = await db
+        .select()
+        .from(householdVaultSettings)
+        .where(eq(householdVaultSettings.householdId, householdId));
+      return rows.map(mapHouseholdVaultSettings);
+    },
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+      const [row] = await db
+        .update(householdVaultSettings)
+        .set({
+          spentMinor: sql`${householdVaultSettings.spentMinor} + ${amountMinor}`,
+          updatedAt: now(),
+        })
+        .where(
+          and(
+            eq(householdVaultSettings.householdId, householdId),
+            eq(householdVaultSettings.userId, userId),
+            eq(householdVaultSettings.vaultAccess, "SPEND"),
+            sql`(${householdVaultSettings.spendCapMinor} IS NULL OR ${householdVaultSettings.spentMinor} + ${amountMinor} <= ${householdVaultSettings.spendCapMinor})`,
+          ),
+        )
+        .returning();
+      return row ? mapHouseholdVaultSettings(row) : null;
+    },
+    async releaseHouseholdVaultSpend(householdId, userId, amountMinor) {
+      await db
+        .update(householdVaultSettings)
+        .set({
+          spentMinor: sql`greatest(${householdVaultSettings.spentMinor} - ${amountMinor}, 0)`,
+          updatedAt: now(),
+        })
+        .where(and(eq(householdVaultSettings.householdId, householdId), eq(householdVaultSettings.userId, userId)));
+    },
+    async startWearChallenge(userId, wardrobeItemId) {
+      const inserted = await db
+        .insert(wearChallenges)
+        .values({ userId, wardrobeItemId })
+        .onConflictDoNothing({ target: [wearChallenges.userId, wearChallenges.wardrobeItemId] })
+        .returning({ id: wearChallenges.id });
+      return { created: inserted.length > 0 };
+    },
+    async listWearChallengeItemIds(userId) {
+      const rows = await db
+        .select({ id: wearChallenges.wardrobeItemId })
+        .from(wearChallenges)
+        .where(eq(wearChallenges.userId, userId))
+        .orderBy(desc(wearChallenges.startedAt))
+        .limit(500);
+      return rows.map((r) => r.id);
+    },
+    async createInterviewKit(input) {
+      const [row] = await db
+        .insert(interviewKits)
+        .values({
+          id: input.id,
+          userId: input.userId,
+          name: input.name,
+          kind: input.kind,
+          itemIds: input.itemIds,
+          eventAt: input.eventAt,
+          occasion: input.occasion,
+          remindAt: input.remindAt,
+          reminderScheduled: input.reminderScheduled,
+        })
+        .returning();
+      return mapInterviewKit(row!);
+    },
+    async findInterviewKit(id, userId) {
+      const [row] = await db
+        .select()
+        .from(interviewKits)
+        .where(and(eq(interviewKits.id, id), eq(interviewKits.userId, userId)))
+        .limit(1);
+      return row ? mapInterviewKit(row) : null;
+    },
+    async listInterviewKits(userId, limit) {
+      const rows = await db
+        .select()
+        .from(interviewKits)
+        .where(eq(interviewKits.userId, userId))
+        .orderBy(asc(interviewKits.eventAt), asc(interviewKits.id))
+        .limit(Math.min(Math.max(limit, 1), 500));
+      return rows.map(mapInterviewKit);
+    },
+    async updateInterviewKit(id, userId, patch) {
+      const [row] = await db
+        .update(interviewKits)
+        .set({ ...patch, updatedAt: now() })
+        .where(and(eq(interviewKits.id, id), eq(interviewKits.userId, userId)))
+        .returning();
+      return row ? mapInterviewKit(row) : null;
+    },
+    async deleteInterviewKit(id, userId) {
+      const deleted = await db
+        .delete(interviewKits)
+        .where(and(eq(interviewKits.id, id), eq(interviewKits.userId, userId)))
+        .returning({ id: interviewKits.id });
+      return deleted.length > 0;
+    },
+    async createSocialPoll(input) {
+      const [row] = await db
+        .insert(socialPolls)
+        .values({
+          id: input.id,
+          userId: input.userId,
+          kind: input.kind,
+          tokenHash: input.tokenHash,
+          itemLabel: input.itemLabel,
+          returnRequestId: input.returnRequestId,
+          options: input.options,
+          plannedFor: input.plannedFor,
+          expiresAt: input.expiresAt,
+        })
+        .returning();
+      return mapSocialPoll(row!);
+    },
+    async findSocialPollById(id) {
+      const [row] = await db.select().from(socialPolls).where(eq(socialPolls.id, id)).limit(1);
+      return row ? mapSocialPoll(row) : null;
+    },
+    async findSocialPollByTokenHash(tokenHash) {
+      const [row] = await db.select().from(socialPolls).where(eq(socialPolls.tokenHash, tokenHash)).limit(1);
+      return row ? mapSocialPoll(row) : null;
+    },
+    async castSocialPollVote(pollId, voterHash, choice) {
+      const inserted = await db
+        .insert(socialPollVotes)
+        .values({ pollId, voterHash, choice })
+        .onConflictDoNothing({ target: [socialPollVotes.pollId, socialPollVotes.voterHash] })
+        .returning({ choice: socialPollVotes.choice });
+      if (inserted.length > 0) return { inserted: true, choice };
+      const [existing] = await db
+        .select({ choice: socialPollVotes.choice })
+        .from(socialPollVotes)
+        .where(and(eq(socialPollVotes.pollId, pollId), eq(socialPollVotes.voterHash, voterHash)))
+        .limit(1);
+      return { inserted: false, choice: existing?.choice ?? choice };
+    },
+    async countSocialPollVotes(pollId) {
+      const rows = await db
+        .select({ choice: socialPollVotes.choice, n: sql<number>`count(*)::int` })
+        .from(socialPollVotes)
+        .where(eq(socialPollVotes.pollId, pollId))
+        .groupBy(socialPollVotes.choice);
+      return Object.fromEntries(rows.map((r) => [r.choice, Number(r.n)]));
+    },
+    async markSocialPollWinnerApplied(pollId) {
+      const updated = await db
+        .update(socialPolls)
+        .set({ winnerAppliedAt: now(), updatedAt: now() })
+        .where(and(eq(socialPolls.id, pollId), isNull(socialPolls.winnerAppliedAt)))
+        .returning({ id: socialPolls.id });
+      return updated.length > 0;
     },
     async findWardrobeItemById(id) {
       const [row] = await db.select().from(wardrobeItems).where(eq(wardrobeItems.id, id)).limit(1);
@@ -4864,45 +5452,32 @@ export function createPostgresRepositories(db: Db): Repositories {
       return map;
     },
 
-    async listIngestionDocumentsByUser(userId) {
-      const purchases = await db
-        .select({ id: merchantPurchases.id, rawDocId: merchantPurchases.rawDocId })
+    async listIngestionDocumentsByUser(userId, opts) {
+      // user_id is the owner. Rows from before the column (not yet backfilled) are found through
+      // the legacy parsed_json owner or the user's purchases.
+      const userPurchases = db
+        .select({ id: merchantPurchases.id })
         .from(merchantPurchases)
         .where(eq(merchantPurchases.userId, userId));
-      const purchaseIds = purchases.map((p) => p.id);
-      const rawDocIds = purchases
-        .map((p) => p.rawDocId)
-        .filter((id): id is string => Boolean(id));
-
-      const byUser = await db
+      const userRawDocs = db
+        .select({ id: merchantPurchases.rawDocId })
+        .from(merchantPurchases)
+        .where(and(eq(merchantPurchases.userId, userId), sql`${merchantPurchases.rawDocId} IS NOT NULL`));
+      const owned = sql`(${ingestionDocuments.userId} = ${userId} OR (${ingestionDocuments.userId} IS NULL AND (${ingestionDocuments.parsedJson}->>'__userId' = ${userId} OR ${ingestionDocuments.matchedPurchaseId} IN ${userPurchases} OR ${ingestionDocuments.id} IN ${userRawDocs})))`;
+      const rows = await db
         .select()
         .from(ingestionDocuments)
-        .where(sql`${ingestionDocuments.parsedJson}->>'__userId' = ${userId}`);
+        .where(opts?.kind ? and(owned, eq(ingestionDocuments.kind, opts.kind)) : owned)
+        .orderBy(desc(ingestionDocuments.createdAt), desc(ingestionDocuments.id))
+        .limit(Math.min(Math.max(opts?.limit ?? 5_000, 1), 5_000));
+      return rows.map(mapIngestionDocument);
+    },
 
-      const byMatch =
-        purchaseIds.length > 0
-          ? await db
-              .select()
-              .from(ingestionDocuments)
-              .where(inArray(ingestionDocuments.matchedPurchaseId, purchaseIds))
-          : [];
-
-      const byRaw =
-        rawDocIds.length > 0
-          ? await db
-              .select()
-              .from(ingestionDocuments)
-              .where(inArray(ingestionDocuments.id, rawDocIds))
-          : [];
-
-      const seen = new Set<string>();
-      const docs = [];
-      for (const row of [...byUser, ...byMatch, ...byRaw]) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        docs.push(mapIngestionDocument(row));
-      }
-      return docs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    async findMerchantPurchasesByIds(ids) {
+      const unique = [...new Set(ids)];
+      if (unique.length === 0) return [];
+      const rows = await db.select().from(merchantPurchases).where(inArray(merchantPurchases.id, unique));
+      return rows.map(mapMerchantPurchase);
     },
 
     async listOrderItemsByUser(userId) {

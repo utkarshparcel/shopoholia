@@ -13,6 +13,7 @@ import {
   buildNeverWornShareCard,
   computeCo2WaterSavings,
   cpwGoalProgress,
+  mapLimit,
   wearChallengeProgress,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
@@ -26,11 +27,34 @@ import { loadRewearStreak } from "../lib/rewear-streak.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
-/** In-process “started” set so progress stays eligible after status flips ACTIVE. */
-const startedWearChallenges = new Set<string>();
+/** Concurrent signed-URL lookups per request. */
+const SIGN_CONCURRENCY = 8;
 
-function challengeKey(userId: string, itemId: string) {
-  return `${userId}:${itemId}`;
+/**
+ * Metrics joined to their signed wardrobe items: one wardrobe query and one wear-challenge
+ * query per request (no per-item lookups), signing bounded by SIGN_CONCURRENCY.
+ */
+async function metricsWithItems(app: any, userId: string, metrics: any[]) {
+  const [items, started] = await Promise.all([
+    app.deps.repos.listWardrobeItems(userId) as Promise<any[]>,
+    app.deps.repos.listWearChallengeItemIds(userId) as Promise<string[]>,
+  ]);
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const startedIds = new Set(started);
+  return mapLimit(metrics, SIGN_CONCURRENCY, async (m: any) => {
+    const item = byId.get(m.wardrobeItemId);
+    const signed = item ? await signWardrobeItem(app, item) : undefined;
+    return attachWearChallenge({
+      wardrobeItemId: m.wardrobeItemId,
+      wearCount: m.wearCount,
+      lastWornAt: m.lastWornAt ? m.lastWornAt.toISOString() : null,
+      costPerWearMinor: m.costPerWearMinor,
+      status: m.status as "ACTIVE" | "DORMANT" | "DEAD",
+      item: signed,
+      started: startedIds.has(m.wardrobeItemId),
+      targetCpwMinor: m.targetCpwMinor ?? null,
+    });
+  });
 }
 
 async function signWardrobeItem(app: any, item: any) {
@@ -97,22 +121,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       const q = request.query as { breakOnPurchase?: string };
       const breakOnPurchase = q.breakOnPurchase === "1" || q.breakOnPurchase === "true";
       const metrics = await app.deps.repos.getItemMetrics(userId);
-      const withItems = await Promise.all(
-        metrics.map(async (m) => {
-          const item = await app.deps.repos.findWardrobeItem(m.wardrobeItemId, userId);
-          const signed = item ? await signWardrobeItem(app, item) : undefined;
-          return attachWearChallenge({
-            wardrobeItemId: m.wardrobeItemId,
-            wearCount: m.wearCount,
-            lastWornAt: m.lastWornAt ? m.lastWornAt.toISOString() : null,
-            costPerWearMinor: m.costPerWearMinor,
-            status: m.status as "ACTIVE" | "DORMANT" | "DEAD",
-            item: signed,
-            started: startedWearChallenges.has(challengeKey(userId, m.wardrobeItemId)),
-            targetCpwMinor: m.targetCpwMinor ?? null,
-          });
-        }),
-      );
+      const withItems = await metricsWithItems(app, userId, metrics);
       const totalItems = metrics.length;
       const active = metrics.filter((m) => m.status === "ACTIVE").length;
       const dormant = metrics.filter((m) => m.status === "DORMANT").length;
@@ -200,22 +209,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const metrics = await app.deps.repos.getItemMetrics(userId);
       const dead = metrics.filter((m) => m.status === "DEAD");
-      const withItems = await Promise.all(
-        dead.map(async (m) => {
-          const item = await app.deps.repos.findWardrobeItem(m.wardrobeItemId, userId);
-          const signed = item ? await signWardrobeItem(app, item) : undefined;
-          return attachWearChallenge({
-            wardrobeItemId: m.wardrobeItemId,
-            wearCount: m.wearCount,
-            lastWornAt: m.lastWornAt ? m.lastWornAt.toISOString() : null,
-            costPerWearMinor: m.costPerWearMinor,
-            status: m.status as "ACTIVE" | "DORMANT" | "DEAD",
-            item: signed,
-            started: startedWearChallenges.has(challengeKey(userId, m.wardrobeItemId)),
-            targetCpwMinor: m.targetCpwMinor ?? null,
-          });
-        }),
-      );
+      const withItems = await metricsWithItems(app, userId, dead);
       return { items: withItems };
     },
   );
@@ -354,10 +348,11 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      startedWearChallenges.add(challengeKey(userId, itemId));
+      // Stored in wear_challenges: a retry or a double tap starts it once and nudges once.
+      const { created } = await app.deps.repos.startWearChallenge(userId, itemId);
 
       const label = item.brand || item.category;
-      await app.deps.push.send({
+      if (created) await app.deps.push.send({
         userId,
         eventType: "WEAR_CHALLENGE",
         title: "Wear it 3×",
@@ -371,16 +366,18 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       });
 
-      trackServerEvent("wear_challenge_started", {
-        userId,
-        wardrobeItemId: itemId,
-        progress: challenge.progress,
-      });
+      if (created) {
+        trackServerEvent("wear_challenge_started", {
+          userId,
+          wardrobeItemId: itemId,
+          progress: challenge.progress,
+        });
+      }
 
       return {
         wardrobeItemId: itemId,
         wearChallenge: challenge,
-        pushQueued: true,
+        pushQueued: created,
       };
     },
   );
@@ -404,6 +401,18 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!item) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       const mode = body.mode ?? "SELL";
       const priceMinor = body.priceMinor ?? null;
+      // A retry returns the item's open listing instead of listing it twice.
+      const open = (await app.deps.repos.listDispositionListings(userId)).find(
+        (l) => l.wardrobeItemId === itemId && l.status === "ACTIVE",
+      );
+      if (open) {
+        return reply.code(200).send({
+          listingId: open.id,
+          wardrobeItemId: open.wardrobeItemId,
+          mode: open.mode,
+          status: open.status,
+        });
+      }
       const { sellerId } = await prepareDispositionRails(
         app.deps.repos,
         userId,

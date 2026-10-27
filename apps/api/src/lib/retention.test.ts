@@ -140,7 +140,9 @@ describe("purgeExpiredIngestionDocuments", () => {
     expect(afterOld!.status).not.toBe("ERROR");
     expect(afterOld!.rawKey).toBe("");
     expect(afterOld!.parsedJson.purged).toBe(true);
-    expect(afterOld!.parsedJson.__userId).toBe(user.id);
+    // The owner lives in the user_id column, not in the purged JSON.
+    expect(afterOld!.parsedJson.merchant).toBeUndefined();
+    expect(afterOld!.userId).toBe(user.id);
 
     const afterRecent = await repos.getIngestionDocumentById(recent.id);
     expect(afterRecent!.rawKey).toBe("raw/recent.eml");
@@ -203,7 +205,7 @@ describe("purgeExpiredIngestionDocuments", () => {
     expect((await repos.getIngestionDocumentById(receipt.id))!.rawKey).toBe("");
   });
 
-  it("skips RECEIVED and already-purged documents", async () => {
+  it("purges expired documents in every status and skips already-purged ones", async () => {
     clearRetentionEnv();
     const repos = createMemoryRepositories();
     const storage = stubStorage();
@@ -213,10 +215,22 @@ describe("purgeExpiredIngestionDocuments", () => {
       userId: user.id,
       kind: "SMS",
       rawKey: "raw/received.txt",
-      parsedJson: { __userId: user.id },
+      parsedJson: { body: "Your OTP", __userId: user.id },
     });
     (received as { createdAt: Date }).createdAt = new Date(
       Date.now() - (retentionDaysFor("SMS") + 10) * 86_400_000,
+    );
+
+    const errored = await repos.createIngestionDocument({
+      userId: user.id,
+      kind: "EMAIL",
+      rawKey: "raw/error.eml",
+      parsedJson: {},
+    });
+    await repos.updateIngestionDocumentStatus(errored.id, "ERROR", "parse failed");
+    const erroredFresh = (await repos.getIngestionDocumentById(errored.id))!;
+    (erroredFresh as { createdAt: Date }).createdAt = new Date(
+      Date.now() - (retentionDaysFor("EMAIL") + 10) * 86_400_000,
     );
 
     const already = await repos.createIngestionDocument({
@@ -233,8 +247,52 @@ describe("purgeExpiredIngestionDocuments", () => {
     await repos.purgeIngestionDocumentRaw(already.id);
 
     const result = await purgeExpiredIngestionDocuments(repos, storage, stubLog());
-    expect(result.purged).toBe(0);
-    expect(storage.deleted).toEqual([]);
-    expect((await repos.getIngestionDocumentById(received.id))!.status).toBe("RECEIVED");
+    expect(result.purged).toBe(2);
+    expect(storage.deleted.sort()).toEqual(["raw/error.eml", "raw/received.txt"]);
+    const receivedAfter = (await repos.getIngestionDocumentById(received.id))!;
+    expect(receivedAfter.status).toBe("RECEIVED");
+    expect(receivedAfter.rawKey).toBe("");
+    expect(receivedAfter.parsedJson.body).toBeUndefined();
+    expect((await repos.getIngestionDocumentById(errored.id))!.status).toBe("ERROR");
+  });
+
+  it("keeps the row when the storage delete fails and pages through big backlogs", async () => {
+    clearRetentionEnv();
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919999000003");
+    const old = new Date(Date.now() - 60 * 86_400_000);
+    for (let i = 0; i < 7; i++) {
+      const doc = await repos.createIngestionDocument({
+        userId: user.id,
+        kind: "EMAIL",
+        rawKey: `raw/${i}.eml`,
+        parsedJson: {},
+      });
+      (doc as { createdAt: Date }).createdAt = new Date(old.getTime() + i);
+    }
+    const deleted: string[] = [];
+    const storage = {
+      ...stubStorage(),
+      async delete(key: string) {
+        if (key === "raw/2.eml") throw new Error("R2 down");
+        deleted.push(key);
+      },
+    };
+
+    const result = await purgeExpiredIngestionDocuments(repos, storage, stubLog(), Date.now(), {
+      batchSize: 3,
+    });
+    expect(result.purged).toBe(6);
+    expect(result.failed).toBe(1);
+    expect(deleted).toHaveLength(6);
+    const left = await repos.listIngestionDocumentsForRetention("EMAIL", new Date(), 100);
+    expect(left.map((d) => d.rawKey)).toEqual(["raw/2.eml"]);
+
+    // Run twice: nothing new is purged, the failed one is retried.
+    const again = await purgeExpiredIngestionDocuments(repos, storage, stubLog(), Date.now(), {
+      batchSize: 3,
+    });
+    expect(again.purged).toBe(0);
+    expect(again.failed).toBe(1);
   });
 });

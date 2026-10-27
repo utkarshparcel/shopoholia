@@ -40,6 +40,8 @@ import {
   writeMuteRulesToMeta,
 } from "../lib/mute-rules.js";
 import { computeLastSyncScopeDiff } from "../lib/consent-scope-diff.js";
+import type { Repositories } from "../lib/repositories/types.js";
+import { enqueueGmailTokenRevoke } from "../jobs/gmail-token-revoke.js";
 import {
   computeRetentionCountdown,
   listRetentionCountdowns,
@@ -52,9 +54,9 @@ import {
 } from "../lib/parser-break-banner.js";
 // Retention: raw ingestion_documents use a per-kind TTL (EMAIL 7d / SMS 14d /
 // RECEIPT 30d by default; see apps/api/src/lib/retention.ts) then purged via
-// purgeExpiredIngestionDocuments after PARSED/MATCHED/UNMATCHED. R2 objects
-// are SSE-S3 encrypted at rest (see lib/storage/r2.ts) and tokens are
-// AES-256-GCM encrypted at rest (see services/worker-ingest/src/crypto.ts).
+// purgeExpiredIngestionDocuments after PARSED/MATCHED/UNMATCHED. R2 encrypts
+// every object at rest with AES-256 (R2 takes no per-request SSE setting) and
+// tokens are AES-256-GCM encrypted at rest (see services/worker-ingest/src/crypto.ts).
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -218,28 +220,29 @@ function toSourceJson(s: {
   };
 }
 
-async function documentBelongsToUser(
-  repos: {
-    listIngestionDocumentsByUser(userId: string): Promise<{ id: string }[]>;
-    getIngestionDocumentById(id: string): Promise<{
-      parsedJson: Record<string, unknown>;
-    } | null>;
-  },
-  userId: string,
-  documentId: string,
-): Promise<boolean> {
-  const docs = await repos.listIngestionDocumentsByUser(userId);
-  if (docs.some((d) => d.id === documentId)) return true;
+/** The caller's document, or null: another user's document reads as missing. */
+async function findOwnedDocument(repos: Repositories, userId: string, documentId: string) {
   const doc = await repos.getIngestionDocumentById(documentId);
-  if (!doc) return false;
-  return doc.parsedJson.__userId === userId;
+  if (!doc) return null;
+  if (doc.userId) return doc.userId === userId ? doc : null;
+  // Rows from before the owner column (not yet backfilled) use the repo's legacy owner rules.
+  const legacy = await repos.listIngestionDocumentsByUser(userId);
+  return legacy.some((d) => d.id === documentId) ? doc : null;
+}
+
+function secretsEqual(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     "/ingestion/sources",
     {
-      preHandler: [requireAuth, requireConsent("EMAIL")],
+      // EMAIL consent is checked in the handler (403), after the provider availability check,
+      // so an unavailable connect answers 503 whatever the caller's consent.
+      preHandler: requireAuth,
       config: {
         rateLimit: {
           max: process.env.NODE_ENV === "test" ? 1000 : 10,
@@ -318,6 +321,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
           204: z.null(),
           401: ErrorSchema,
           404: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
@@ -332,6 +336,11 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Source not found" });
       }
 
+      // Queued before the token is cleared: a queue outage (503) leaves the source connected
+      // so the user can retry, instead of dropping a token Google still honours.
+      if (source.kind === "EMAIL" && source.encryptedToken?.data) {
+        await enqueueGmailTokenRevoke(source.id, source.encryptedToken.data);
+      }
       const disconnected = await app.deps.repos.disconnectIngestionSource(source.id);
       if (!disconnected) {
         return reply.code(404).send({ error: "Not Found", message: "Source not found" });
@@ -544,24 +553,22 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
-  async function listActivityForUser(userId: string, kindFilter?: "EMAIL" | "SMS" | "RECEIPT") {
-    const docs = await app.deps.repos.listIngestionDocumentsByUser(userId);
-    const filtered = kindFilter ? docs.filter((d) => d.kind === kindFilter) : docs;
-    const purchaseIds = filtered
+  async function listActivityForUser(
+    userId: string,
+    opts: { kind?: "EMAIL" | "SMS" | "RECEIPT"; limit: number },
+  ) {
+    const docs = await app.deps.repos.listIngestionDocumentsByUser(userId, opts);
+    const purchaseIds = docs
       .map((d) => d.matchedPurchaseId)
       .filter((id): id is string => Boolean(id));
+    // Only the caller's own purchases are joined in.
     const purchaseMap = new Map(
-      (
-        await Promise.all(
-          purchaseIds.map(async (id) => {
-            const p = await app.deps.repos.findMerchantPurchaseById(id);
-            return p ? ([id, p] as const) : null;
-          }),
-        )
-      ).filter((x): x is readonly [string, NonNullable<typeof x>[1]] => Boolean(x)),
+      (await app.deps.repos.findMerchantPurchasesByIds(purchaseIds))
+        .filter((p) => p.userId === userId)
+        .map((p) => [p.id, p] as const),
     );
 
-    const items = filtered.slice(0, 50).map((doc) =>
+    const items = docs.map((doc) =>
       toIngestionActivityItem(
         doc,
         doc.matchedPurchaseId ? purchaseMap.get(doc.matchedPurchaseId) : null,
@@ -588,13 +595,12 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      const result = await listActivityForUser(userId);
-      const limit = request.query.limit ?? 50;
+      const result = await listActivityForUser(userId, { limit: request.query.limit ?? 50 });
       trackServerEvent("ingestion_activity_viewed", {
         userId,
-        count: Math.min(result.items.length, limit),
+        count: result.items.length,
       });
-      return { items: result.items.slice(0, limit) };
+      return result;
     },
   );
 
@@ -623,7 +629,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!owned.some((s) => s.id === source.id)) {
         return reply.code(404).send({ error: "Not Found", message: "Source not found" });
       }
-      const result = await listActivityForUser(userId, source.kind);
+      const result = await listActivityForUser(userId, { kind: source.kind, limit: 50 });
       trackServerEvent("ingestion_activity_viewed", {
         userId,
         sourceId: source.id,
@@ -658,12 +664,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const docId = request.params.id;
-      const owns = await documentBelongsToUser(app.deps.repos, userId, docId);
-      if (!owns) {
-        return reply.code(404).send({ error: "Not Found", message: "Document not found" });
-      }
-
-      const doc = await app.deps.repos.getIngestionDocumentById(docId);
+      const doc = await findOwnedDocument(app.deps.repos, userId, docId);
       if (!doc) {
         return reply.code(404).send({ error: "Not Found", message: "Document not found" });
       }
@@ -671,7 +672,6 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       const prev = doc.parsedJson ?? {};
       const nextParsed: Record<string, unknown> = {
         ...prev,
-        __userId: userId,
         correctedAt: new Date().toISOString(),
         correctedBy: "user",
       };
@@ -860,8 +860,8 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["ingestion"],
         body: z.object({
-          alias: z.string().min(1),
-          canonical: z.string().min(1),
+          alias: z.string().min(1).max(200),
+          canonical: z.string().min(1).max(200),
           documentId: z.string().uuid().optional(),
         }),
         response: {
@@ -882,18 +882,13 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       let reprocessedPurchaseId: string | null = null;
 
       if (documentId) {
-        const owns = await documentBelongsToUser(app.deps.repos, userId, documentId);
-        if (!owns) {
-          return reply.code(404).send({ error: "Not Found", message: "Document not found" });
-        }
-        const doc = await app.deps.repos.getIngestionDocumentById(documentId);
+        const doc = await findOwnedDocument(app.deps.repos, userId, documentId);
         if (!doc) {
           return reply.code(404).send({ error: "Not Found", message: "Document not found" });
         }
         const nextParsed = {
           ...(doc.parsedJson ?? {}),
           merchant: row.canonical,
-          __userId: userId,
         };
         await app.deps.repos.updateIngestionDocumentParsedJson(documentId, nextParsed);
         if (doc.matchedPurchaseId) {
@@ -942,7 +937,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
           type: z.enum(["merchant", "sender", "subject"]),
-          pattern: z.string().min(1),
+          pattern: z.string().min(1).max(200),
         }),
         response: {
           200: z.object({
@@ -986,7 +981,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
           type: z.enum(["merchant", "sender", "subject"]),
-          pattern: z.string().min(1),
+          pattern: z.string().min(1).max(200),
         }),
         response: {
           200: z.object({
@@ -1181,6 +1176,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
           400: ErrorSchema,
           401: ErrorSchema,
           404: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
@@ -1190,17 +1186,21 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!request.body.confirm) {
         return reply.code(400).send({ error: "Bad Request", message: "confirm required" });
       }
-      const owns = await documentBelongsToUser(app.deps.repos, userId, docId);
-      if (!owns) {
-        return reply.code(404).send({ error: "Not Found", message: "Document not found" });
-      }
-      const doc = await app.deps.repos.getIngestionDocumentById(docId);
+      const doc = await findOwnedDocument(app.deps.repos, userId, docId);
       if (!doc) {
         return reply.code(404).send({ error: "Not Found", message: "Document not found" });
       }
       const before = computeRetentionCountdown(doc);
       if (doc.rawKey) {
-        await app.deps.storage.delete(doc.rawKey).catch(() => undefined);
+        try {
+          await app.deps.storage.delete(doc.rawKey);
+        } catch (err) {
+          request.log.error({ err, documentId: docId }, "ingestion.raw_delete_failed");
+          return reply.code(503).send({
+            error: "Service Unavailable",
+            message: "The raw copy could not be deleted. Try again.",
+          });
+        }
       }
       await app.deps.repos.purgeIngestionDocumentRaw(docId);
       audit(app.log, "ingestion.raw.deleted", {
@@ -1271,7 +1271,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        body: z.object({ merchant: z.string().min(1).optional() }),
+        body: z.object({ merchant: z.string().min(1).max(100).optional() }),
         response: {
           200: z.object({
             banner: z.object({
@@ -1296,17 +1296,30 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
-  /** Ops/test helper — set parser break flag (mirrors admin playbook). */
+  /**
+   * Ops/test helper — set parser break flag (mirrors admin playbook). The flag shows a banner to
+   * every user, so in production it needs X-Admin-Secret (fails closed without ADMIN_SECRET).
+   */
   app.post(
     "/ingestion/parser-health/flag",
     {
-      preHandler: requireAuth,
+      preHandler: [
+        requireAuth,
+        async (request, reply) => {
+          if (process.env.NODE_ENV !== "production") return;
+          const expected = process.env.ADMIN_SECRET;
+          const provided = request.headers["x-admin-secret"];
+          if (!expected || typeof provided !== "string" || !secretsEqual(provided, expected)) {
+            return reply.code(403).send({ error: "Forbidden", message: "Ops only" });
+          }
+        },
+      ],
       schema: {
         tags: ["ingestion"],
         body: z.object({
-          merchant: z.string().min(1),
+          merchant: z.string().min(1).max(100),
           broken: z.boolean(),
-          reason: z.string().optional(),
+          reason: z.string().max(500).optional(),
         }),
         response: {
           200: z.object({
@@ -1316,6 +1329,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
             setAt: z.string().datetime(),
           }),
           401: ErrorSchema,
+          403: ErrorSchema,
         },
       },
     },

@@ -629,7 +629,7 @@ describe("ingestion routes", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("correct resolves ownership via parsedJson.__userId when list omits the doc", async () => {
+  it("correct resolves ownership via the owner column when the list omits the doc", async () => {
     await grantConsent(app, token, userId, "EMAIL");
     const doc = await app.deps.repos.createIngestionDocument({
       userId,
@@ -726,6 +726,211 @@ describe("ingestion routes", () => {
       expect(res.statusCode).toBe(404);
     } finally {
       app.deps.repos.getIngestionDocumentById = orig;
+    }
+  });
+
+  it("another user's document is 404 on correct, delete-raw and alias", async () => {
+    await grantConsent(app, token, userId, "EMAIL");
+    const doc = await app.deps.repos.createIngestionDocument({
+      userId,
+      kind: "EMAIL",
+      rawKey: "k-owner-only",
+      parsedJson: { merchant: "Ajio", totalMinor: 700 },
+    });
+    const other = await login(app, "919800000098");
+    await grantConsent(app, other.token, other.userId, "EMAIL");
+    const headers = { authorization: `Bearer ${other.token}` };
+    const correct = await app.inject({
+      method: "POST",
+      url: `/ingestion/documents/${doc.id}/correct`,
+      headers,
+      payload: { totalMinor: 1 },
+    });
+    const raw = await app.inject({
+      method: "POST",
+      url: `/ingestion/documents/${doc.id}/delete-raw`,
+      headers,
+      payload: { confirm: true },
+    });
+    const alias = await app.inject({
+      method: "POST",
+      url: "/ingestion/merchant-aliases",
+      headers,
+      payload: { alias: "AJIO", canonical: "Ajio", documentId: doc.id },
+    });
+    expect([correct.statusCode, raw.statusCode, alias.statusCode]).toEqual([404, 404, 404]);
+    const after = await app.deps.repos.getIngestionDocumentById(doc.id);
+    expect(after?.rawKey).toBe("k-owner-only");
+    expect(after?.parsedJson.totalMinor).toBe(700);
+  });
+
+  it("correct no longer writes the owner into parsed_json", async () => {
+    await grantConsent(app, token, userId, "EMAIL");
+    const doc = await app.deps.repos.createIngestionDocument({
+      userId,
+      kind: "EMAIL",
+      rawKey: "k-no-owner-json",
+      parsedJson: { merchant: "Ajio", totalMinor: 700 },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/ingestion/documents/${doc.id}/correct`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { totalMinor: 650 },
+    });
+    expect(res.statusCode).toBe(200);
+    const after = await app.deps.repos.getIngestionDocumentById(doc.id);
+    expect(after?.parsedJson).not.toHaveProperty("__userId");
+    expect(after?.userId).toBe(userId);
+  });
+
+  it("activity reads one bounded page and joins purchases in one query", async () => {
+    await grantConsent(app, token, userId, "EMAIL");
+    for (let i = 0; i < 4; i++) {
+      const { purchase } = await app.deps.repos.createMerchantPurchase({
+        userId,
+        source: "EMAIL",
+        merchant: `M${i}`,
+        purchasedAt: new Date(),
+        currency: "INR",
+        totalMinor: 100 + i,
+        items: [{ title: "Tee", priceMinor: 100 + i, qty: 1 }],
+      });
+      const doc = await app.deps.repos.createIngestionDocument({
+        userId,
+        kind: "EMAIL",
+        rawKey: `k-act-${i}`,
+        parsedJson: { merchant: `M${i}` },
+      });
+      await app.deps.repos.updateIngestionDocumentStatus(doc.id, "MATCHED", purchase.id);
+    }
+    const repos = app.deps.repos;
+    const one = repos.findMerchantPurchaseById.bind(repos);
+    const many = repos.findMerchantPurchasesByIds.bind(repos);
+    const list = repos.listIngestionDocumentsByUser.bind(repos);
+    let singleCalls = 0;
+    let batchCalls = 0;
+    let listLimit: number | undefined;
+    repos.findMerchantPurchaseById = async (id) => {
+      singleCalls++;
+      return one(id);
+    };
+    repos.findMerchantPurchasesByIds = async (ids) => {
+      batchCalls++;
+      return many(ids);
+    };
+    repos.listIngestionDocumentsByUser = async (uid, opts) => {
+      listLimit = opts?.limit;
+      return list(uid, opts);
+    };
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/ingestion/activity?limit=2",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { items: unknown[] }).items).toHaveLength(2);
+      expect([singleCalls, batchCalls, listLimit]).toEqual([0, 1, 2]);
+    } finally {
+      repos.findMerchantPurchaseById = one;
+      repos.findMerchantPurchasesByIds = many;
+      repos.listIngestionDocumentsByUser = list;
+    }
+  });
+
+  it("delete-raw reports a storage failure and keeps the key for a retry", async () => {
+    const doc = await app.deps.repos.createIngestionDocument({
+      userId,
+      kind: "EMAIL",
+      rawKey: "k-flaky-raw",
+      parsedJson: { merchant: "Ajio" },
+    });
+    const storage = app.deps.storage;
+    const del = storage.delete.bind(storage);
+    let calls = 0;
+    storage.delete = async (key) => {
+      calls++;
+      if (calls === 1) throw new Error("R2 down");
+      return del(key);
+    };
+    try {
+      const first = await app.inject({
+        method: "POST",
+        url: `/ingestion/documents/${doc.id}/delete-raw`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { confirm: true },
+      });
+      expect(first.statusCode).toBe(503);
+      expect((await app.deps.repos.getIngestionDocumentById(doc.id))?.rawKey).toBe("k-flaky-raw");
+      const second = await app.inject({
+        method: "POST",
+        url: `/ingestion/documents/${doc.id}/delete-raw`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { confirm: true },
+      });
+      expect(second.statusCode).toBe(200);
+      expect((await app.deps.repos.getIngestionDocumentById(doc.id))?.rawKey).toBe("");
+      // A repeat is a no-op on storage.
+      const third = await app.inject({
+        method: "POST",
+        url: `/ingestion/documents/${doc.id}/delete-raw`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { confirm: true },
+      });
+      expect(third.statusCode).toBe(200);
+      expect(calls).toBe(2);
+    } finally {
+      storage.delete = del;
+    }
+  });
+
+  it("in production, disconnect keeps the token when the revoke cannot be queued", async () => {
+    await grantConsent(app, token, userId, "EMAIL");
+    const created = await app.inject({
+      method: "POST",
+      url: "/ingestion/sources",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { kind: "EMAIL", provider: "gmail" },
+    });
+    const sourceId = (created.json() as { source: { id: string } }).source.id;
+    await app.deps.repos.updateIngestionSourceToken(sourceId, { data: "enc-token" });
+    const env = { NODE_ENV: process.env.NODE_ENV, REDIS_URL: process.env.REDIS_URL };
+    process.env.NODE_ENV = "production";
+    delete process.env.REDIS_URL;
+    try {
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/ingestion/sources/${sourceId}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(503);
+      expect((await app.deps.repos.getIngestionSourceById(sourceId))?.encryptedToken).toEqual({ data: "enc-token" });
+    } finally {
+      process.env.NODE_ENV = env.NODE_ENV;
+      if (env.REDIS_URL !== undefined) process.env.REDIS_URL = env.REDIS_URL;
+    }
+  });
+
+  it("in production, the global parser flag needs the admin secret", async () => {
+    const env = { NODE_ENV: process.env.NODE_ENV, ADMIN_SECRET: process.env.ADMIN_SECRET };
+    process.env.NODE_ENV = "production";
+    process.env.ADMIN_SECRET = "ops-secret";
+    try {
+      const flag = (headers: Record<string, string>) =>
+        app.inject({
+          method: "POST",
+          url: "/ingestion/parser-health/flag",
+          headers: { authorization: `Bearer ${token}`, ...headers },
+          payload: { merchant: "Myntra", broken: true },
+        });
+      expect((await flag({})).statusCode).toBe(403);
+      expect((await flag({ "x-admin-secret": "wrong" })).statusCode).toBe(403);
+      expect((await flag({ "x-admin-secret": "ops-secret" })).statusCode).toBe(200);
+    } finally {
+      process.env.NODE_ENV = env.NODE_ENV;
+      if (env.ADMIN_SECRET === undefined) delete process.env.ADMIN_SECRET;
+      else process.env.ADMIN_SECRET = env.ADMIN_SECRET;
     }
   });
 });

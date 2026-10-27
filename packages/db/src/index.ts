@@ -1,5 +1,11 @@
 export { createDb, type Db } from "./client.js";
-export { consentGrants } from "./schema/consent.js";
+export { consentGrants, consentRecords } from "./schema/consent.js";
+export {
+  auditLog,
+  privacyRequests,
+  type PrivacyRequestKind,
+  type PrivacyRequestStatus,
+} from "./schema/privacy.js";
 export { moneyAccounts, moneyLedger } from "./schema/money.js";
 export {
   ingestionSources,
@@ -84,6 +90,8 @@ export {
   type HouseholdMemberRow,
   type ClosetProfileRow,
 } from "./schema/household.js";
+export { wearChallenges, interviewKits, householdVaultSettings } from "./schema/closet-state.js";
+export { socialPolls, socialPollVotes } from "./schema/social-polls.js";
 export {
   getCoinBalance,
   grantCoins,

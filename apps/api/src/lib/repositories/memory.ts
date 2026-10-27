@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { InsufficientCoinsError } from "./errors.js";
+import { subjectRefFor } from "../privacy-hmac.js";
 import {
   compareText,
   decodeListingCursor,
@@ -45,6 +46,11 @@ import type {
   CartRecord,
   CoinLedgerRecord,
   ConsentGrantRecord,
+  ConsentHistoryRecord,
+  AuditLogRecord,
+  PrivacyRequestRecord,
+  InterviewKitRecord,
+  SocialPollRecord,
   CreateIngestionDocumentInput,
   CreateIngestionSourceInput,
   CreateOrderInput,
@@ -177,6 +183,15 @@ export function createMemoryRepositories(): Repositories {
   const entitlementEventUsers = new Map<string, string>();
   const paymentIntents = new Map<string, PaymentIntentRecord>();
   const consentGrants = new Map<string, ConsentGrantRecord>();
+  const consentRecordsStore: ConsentHistoryRecord[] = [];
+  const auditLogStore: AuditLogRecord[] = [];
+  const privacyRequestsStore = new Map<string, PrivacyRequestRecord>();
+  // `${userId}:${wardrobeItemId}` -> started at
+  const wearChallengesStore = new Map<string, { userId: string; wardrobeItemId: string; startedAt: Date }>();
+  const interviewKitsStore = new Map<string, InterviewKitRecord>();
+  const socialPollsStore = new Map<string, SocialPollRecord>();
+  // pollId -> voterHash -> choice
+  const socialPollVotesStore = new Map<string, Map<string, string>>();
   const ingestionSources = new Map<string, IngestionSourceRecord>();
   const ingestionDocuments = new Map<string, IngestionDocumentRecord>();
   const ingestionDocumentUser = new Map<string, string>();
@@ -1584,6 +1599,11 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async grantConsent(input: GrantConsentInput) {
+      for (const existing of consentGrants.values()) {
+        if (existing.userId === input.userId && existing.scope === input.scope && !existing.revokedAt) {
+          return existing;
+        }
+      }
       const grant: ConsentGrantRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -1592,8 +1612,20 @@ export function createMemoryRepositories(): Repositories {
         revokedAt: null,
         source: input.source,
         meta: input.meta ?? null,
+        noticeVersion: input.noticeVersion ?? null,
       };
       consentGrants.set(grant.id, grant);
+      consentRecordsStore.push({
+        id: randomUUID(),
+        userId: input.userId,
+        subjectRef: subjectRefFor(input.userId),
+        scope: input.scope,
+        action: "GRANT",
+        noticeVersion: input.noticeVersion ?? null,
+        source: input.source,
+        grantId: grant.id,
+        createdAt: now(),
+      });
 
       const user = users.get(input.userId);
       if (user) {
@@ -1607,6 +1639,17 @@ export function createMemoryRepositories(): Repositories {
       for (const [id, grant] of consentGrants) {
         if (grant.userId === userId && grant.scope === scope && !grant.revokedAt) {
           consentGrants.set(id, { ...grant, revokedAt: now() });
+          consentRecordsStore.push({
+            id: randomUUID(),
+            userId,
+            subjectRef: subjectRefFor(userId),
+            scope,
+            action: "WITHDRAW",
+            noticeVersion: null,
+            source: grant.source,
+            grantId: id,
+            createdAt: now(),
+          });
         }
       }
       const user = users.get(userId);
@@ -1620,6 +1663,239 @@ export function createMemoryRepositories(): Repositories {
       return [...consentGrants.values()]
         .filter((g) => g.userId === userId && !g.revokedAt)
         .sort((a, b) => b.grantedAt.getTime() - a.grantedAt.getTime());
+    },
+
+    async listConsentRecords(userId, limit = 200) {
+      return consentRecordsStore
+        .filter((r) => r.userId === userId)
+        .reverse()
+        .slice(0, Math.min(Math.max(limit, 1), 1000));
+    },
+
+    async listUserStorageKeys(userId) {
+      const keys = new Set<string>();
+      const add = (k: string | null | undefined) => {
+        if (typeof k === "string" && k.trim() && !/^[a-z][a-z0-9+.-]*:\/\//i.test(k) && !k.startsWith("data:")) {
+          keys.add(k.trim());
+        }
+      };
+      const avatarId = avatarsByUser.get(userId);
+      const avatar = avatarId ? avatars.get(avatarId) : undefined;
+      if (avatar) {
+        add(avatar.referenceImageKey);
+        avatar.sourceUploadKeys.forEach(add);
+      }
+      for (const w of wardrobeItemsStore.values()) {
+        if (w.userId !== userId) continue;
+        add(w.garmentImageKey);
+        w.imageKeys.forEach(add);
+      }
+      for (const w of wearLogsStore.values()) if (w.userId === userId) add(w.imageKey);
+      for (const r of receiptsStore.values()) if (r.userId === userId) add(r.imageKey);
+      for (const t of tryonPreviews.values()) if (t.userId === userId) add(t.imageKey);
+      for (const r of returnRequestsStore.values()) if (r.userId === userId) add(r.labelImageKey);
+      for (const p of merchantPurchasesStore.values()) {
+        if (p.userId !== userId) continue;
+        p.deliveryProofKeys.forEach(add);
+        for (const iid of merchantPurchaseItemsByPurchase.get(p.id) ?? []) {
+          add(merchantPurchaseItemsStore.get(iid)?.imageKey);
+        }
+      }
+      for (const t of tailoringOrdersStore.values()) if (t.userId === userId) t.fabricPhotoKeys.forEach(add);
+      for (const oid of ordersByUser.get(userId) ?? []) {
+        for (const iid of orderItemsByOrder.get(oid) ?? []) {
+          for (const rid of rendersByOrderItem.get(iid) ?? []) add(renders.get(rid)?.imageKey);
+        }
+      }
+      for (const d of ingestionDocuments.values()) {
+        if (d.rawKey && (d.userId ?? ingestionDocumentUser.get(d.id)) === userId) add(d.rawKey);
+      }
+      for (const r of privacyRequestsStore.values()) if (r.userId === userId) add(r.resultKey);
+      return [...keys];
+    },
+
+    async exportUserTables(userId, maxRowsPerTable = 10_000) {
+      const cap = Math.min(Math.max(maxRowsPerTable, 1), 50_000);
+      const tables: Record<string, Array<Record<string, unknown>>> = {};
+      const truncated: string[] = [];
+      const put = (name: string, rows: object[]) => {
+        if (rows.length > cap) truncated.push(name);
+        tables[name] = rows.slice(0, cap).map((r) => ({ ...r }) as Record<string, unknown>);
+      };
+      const mine = <T extends { userId?: string | null }>(values: Iterable<T>) =>
+        [...values].filter((v) => v.userId === userId);
+      const user = users.get(userId);
+      put("users", user ? [user] : []);
+      const avatarId = avatarsByUser.get(userId);
+      put("avatars", avatarId && avatars.get(avatarId) ? [avatars.get(avatarId)!] : []);
+      put("coin_ledger", ledger.filter((e) => e.userId === userId));
+      const orderIds = new Set(ordersByUser.get(userId) ?? []);
+      put("orders", [...orderIds].map((id) => orders.get(id)).filter((o) => o !== undefined));
+      const itemIds = [...orderIds].flatMap((id) => orderItemsByOrder.get(id) ?? []);
+      put("order_items", itemIds.map((id) => orderItems.get(id)).filter((i) => i !== undefined));
+      put(
+        "renders",
+        itemIds.flatMap((id) => rendersByOrderItem.get(id) ?? []).map((id) => renders.get(id)).filter((r) => r !== undefined),
+      );
+      put("push_events", pushEvents.filter((e) => e.userId === userId));
+      put("tryon_previews", mine(tryonPreviews.values()));
+      put("consent_grants", mine(consentGrants.values()));
+      put(
+        "consent_records",
+        consentRecordsStore.filter((r) => r.userId === userId).map(({ subjectRef: _s, ...r }) => r),
+      );
+      put("audit_log", auditLogStore.filter((r) => r.userId === userId));
+      put(
+        "privacy_requests",
+        [...privacyRequestsStore.values()]
+          .filter((r) => r.userId === userId)
+          .map(({ subjectRef: _s, storageKeys: _k, ...r }) => r),
+      );
+      put(
+        "ingestion_sources",
+        [...ingestionSources.values()]
+          .filter((s) => (s.userId ?? consentGrants.get(s.consentGrantId)?.userId) === userId)
+          .map(({ encryptedToken: _t, ...s }) => s),
+      );
+      put(
+        "ingestion_documents",
+        [...ingestionDocuments.values()].filter((d) => (d.userId ?? ingestionDocumentUser.get(d.id)) === userId),
+      );
+      put("money_accounts", mine(moneyAccounts.values()));
+      put("money_ledger", mine(moneyLedger.values()));
+      const purchases = mine(merchantPurchasesStore.values());
+      put("merchant_purchases", purchases);
+      put(
+        "merchant_purchase_items",
+        purchases
+          .flatMap((p) => merchantPurchaseItemsByPurchase.get(p.id) ?? [])
+          .map((id) => merchantPurchaseItemsStore.get(id))
+          .filter((i) => i !== undefined),
+      );
+      put("receipts", mine(receiptsStore.values()));
+      put("warranties", mine(warrantiesStore.values()));
+      put("wardrobe_items", mine(wardrobeItemsStore.values()));
+      put("outfits", mine(outfitsStore.values()));
+      put("wear_log", mine(wearLogsStore.values()));
+      put("item_metrics", mine(itemMetricsStore.values()));
+      put("repair_logs", mine(repairLogsStore.values()));
+      put("disposition_listings", mine(dispositionStore.values()));
+      put("budgets", mine(budgetsStore.values()));
+      put("spend_rollups", mine(spendRollupsStore.values()));
+      const returns = mine(returnRequestsStore.values());
+      put("return_requests", returns);
+      put("return_events", returns.flatMap((r) => returnEventsStore.get(r.id) ?? []));
+      const recipientRows = mine(recipientsStore.values());
+      put("recipients", recipientRows);
+      put(
+        "recipient_profiles",
+        recipientRows
+          .map((r) => recipientProfileByRecipient.get(r.id))
+          .map((id) => (id ? recipientProfilesStore.get(id) : undefined))
+          .filter((p) => p !== undefined),
+      );
+      put("gift_orders", mine(giftOrdersStore.values()));
+      put(
+        "group_gift_contributions",
+        [...groupGiftContributionsStore.values()].filter((c) => c.contributorUserId === userId),
+      );
+      put("measurement_profiles", mine(measurementStore.values()));
+      put("tailoring_orders", mine(tailoringOrdersStore.values()));
+      put("tailoring_reviews", mine(tailoringReviewsStore.values()));
+      put("swap_circles", [...swapCirclesStore.values()].filter((c) => c.ownerId === userId));
+      put("swap_circle_members", mine(swapMembersStore.values()));
+      put("swap_listings", [...swapListingsStore.values()].filter((l) => l.ownerUserId === userId));
+      put("closet_profiles", [...closetProfilesStore.values()].filter((p) => p.ownerUserId === userId));
+      put("households", [...householdsStore.values()].filter((h) => h.ownerId === userId));
+      put("household_members", mine(householdMembersStore.values()));
+      put("household_vault_settings", mine(householdVaultSettingsStore.values()));
+      put("interview_kits", mine(interviewKitsStore.values()));
+      put("wear_challenges", mine(wearChallengesStore.values()));
+      const polls = mine(socialPollsStore.values());
+      put("social_polls", polls.map(({ tokenHash: _h, ...p }) => p));
+      put(
+        "social_poll_votes",
+        polls.flatMap((p) => [...(socialPollVotesStore.get(p.id)?.values() ?? [])].map((choice) => ({ pollId: p.id, choice }))),
+      );
+      put("brand_price_watches", mine(brandPriceWatchesStore.values()));
+      put("emi_plans", mine(emiPlansStore.values()));
+      put("cashback_claims", mine(cashbackClaimsStore.values()));
+      put("cashback_events", mine(cashbackEvents.values()));
+      return { tables, truncated };
+    },
+
+    async appendAuditRecords(rows) {
+      for (const r of rows) {
+        auditLogStore.push({ id: randomUUID(), userId: r.userId, event: r.event, meta: r.meta, at: r.at });
+      }
+    },
+
+    async listAuditRecordsByUser(userId, opts) {
+      return auditLogStore
+        .filter((r) => r.userId === userId && (!opts.before || r.at < opts.before))
+        .sort((a, b) => b.at.getTime() - a.at.getTime())
+        .slice(0, Math.min(Math.max(opts.limit, 1), 500));
+    },
+
+    async purgeAuditRecordsBefore(cutoff, limit) {
+      let purged = 0;
+      for (let i = auditLogStore.length - 1; i >= 0 && purged < limit; i--) {
+        if (auditLogStore[i]!.at < cutoff) {
+          auditLogStore.splice(i, 1);
+          purged++;
+        }
+      }
+      return purged;
+    },
+
+    async createPrivacyRequest(input) {
+      for (const r of privacyRequestsStore.values()) {
+        if (
+          r.subjectRef === input.subjectRef &&
+          r.kind === input.kind &&
+          (r.status === "PENDING" || r.status === "RUNNING")
+        ) {
+          return { request: r, created: false };
+        }
+      }
+      const request: PrivacyRequestRecord = {
+        id: randomUUID(),
+        userId: input.userId,
+        subjectRef: input.subjectRef,
+        kind: input.kind,
+        status: "PENDING",
+        storageKeys: [],
+        steps: {},
+        resultKey: null,
+        attempts: 0,
+        error: null,
+        requestedAt: now(),
+        completedAt: null,
+        updatedAt: now(),
+      };
+      privacyRequestsStore.set(request.id, request);
+      return { request, created: true };
+    },
+
+    async getPrivacyRequest(id) {
+      return privacyRequestsStore.get(id) ?? null;
+    },
+
+    async updatePrivacyRequest(id, patch) {
+      const prev = privacyRequestsStore.get(id);
+      if (!prev) return null;
+      const next = { ...prev, ...patch, updatedAt: now() };
+      privacyRequestsStore.set(id, next);
+      return next;
+    },
+
+    async listExpiredPrivacyExports(cutoff, limit) {
+      return [...privacyRequestsStore.values()]
+        .filter(
+          (r) =>
+            r.kind === "EXPORT" && r.status === "DONE" && r.resultKey !== null && r.completedAt !== null && r.completedAt < cutoff,
+        )
+        .slice(0, limit);
     },
 
     async deleteAllUserData(userId) {
@@ -1676,6 +1952,14 @@ export function createMemoryRepositories(): Repositories {
       // 2. gift & recipients
       for (const [id, g] of giftOrdersStore) {
         if (g.userId === userId) giftOrdersStore.delete(id);
+      }
+      // Contributions to the user's gifts go with them (FK cascade); the user's contributions to
+      // other people's gifts stay for that total, without the user's name, note or id.
+      for (const [id, c] of groupGiftContributionsStore) {
+        if (!giftOrdersStore.has(c.giftOrderId)) groupGiftContributionsStore.delete(id);
+        else if (c.contributorUserId === userId) {
+          groupGiftContributionsStore.set(id, { ...c, contributorUserId: null, contributorName: null, note: null });
+        }
       }
       for (const rid of recipientIds) {
         const pid = recipientProfileByRecipient.get(rid);
@@ -1876,12 +2160,49 @@ export function createMemoryRepositories(): Repositories {
       }
 
       // 14. ingestion sources (must be before consent grants)
+      for (const [id, d] of ingestionDocuments) {
+        if (d.userId === userId) {
+          ingestionDocuments.delete(id);
+          ingestionDocumentUser.delete(id);
+        }
+      }
       for (const [id, s] of ingestionSources) {
         const grant = consentGrants.get(s.consentGrantId);
-        if (grant?.userId === userId) ingestionSources.delete(id);
+        if (s.userId === userId || grant?.userId === userId) ingestionSources.delete(id);
       }
       for (const [id, g] of consentGrants) {
-        if (g.userId === userId) consentGrants.delete(id);
+        if (g.userId !== userId) continue;
+        if (!g.revokedAt) {
+          consentRecordsStore.push({
+            id: randomUUID(),
+            userId,
+            subjectRef: subjectRefFor(userId),
+            scope: g.scope,
+            action: "WITHDRAW",
+            noticeVersion: null,
+            source: "erasure",
+            grantId: id,
+            createdAt: now(),
+          });
+        }
+        consentGrants.delete(id);
+      }
+      // Consent history and audit rows stay, pseudonymised (user_id cleared, subject_ref kept).
+      for (const r of consentRecordsStore) if (r.userId === userId) r.userId = null;
+      for (const r of auditLogStore) if (r.userId === userId) r.userId = null;
+      for (const [id, r] of privacyRequestsStore) {
+        if (r.userId === userId && r.kind === "EXPORT") privacyRequestsStore.set(id, { ...r, userId: null });
+      }
+      for (const [key, c] of wearChallengesStore) if (c.userId === userId) wearChallengesStore.delete(key);
+      for (const [id, k] of interviewKitsStore) if (k.userId === userId) interviewKitsStore.delete(id);
+      for (const [id, p] of socialPollsStore) {
+        if (p.userId === userId) {
+          socialPollsStore.delete(id);
+          socialPollVotesStore.delete(id);
+        }
+      }
+      for (const [key, v] of householdVaultSettingsStore) {
+        if (v.userId === userId) householdVaultSettingsStore.delete(key);
       }
 
       // 15. budgets, spend rollups
@@ -1915,8 +2236,8 @@ export function createMemoryRepositories(): Repositories {
     async listIngestionSources(userId) {
       const result: IngestionSourceRecord[] = [];
       for (const source of ingestionSources.values()) {
-        const grant = consentGrants.get(source.consentGrantId);
-        if (grant?.userId === userId) result.push(source);
+        const owner = source.userId ?? consentGrants.get(source.consentGrantId)?.userId;
+        if (owner === userId) result.push(source);
       }
       return result.sort(
         (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
@@ -1927,6 +2248,7 @@ export function createMemoryRepositories(): Repositories {
       const timestamp = now();
       const source: IngestionSourceRecord = {
         id: randomUUID(),
+        userId: input.userId,
         kind: input.kind,
         provider: input.provider,
         consentGrantId: input.consentGrantId,
@@ -1946,9 +2268,10 @@ export function createMemoryRepositories(): Repositories {
       const timestamp = now();
       const doc: IngestionDocumentRecord = {
         id: randomUUID(),
+        userId: input.userId,
         kind: input.kind,
         rawKey: input.rawKey,
-        parsedJson: { ...input.parsedJson, __userId: input.userId },
+        parsedJson: input.parsedJson,
         matchedPurchaseId: null,
         status: "RECEIVED",
         createdAt: timestamp,
@@ -2039,6 +2362,29 @@ export function createMemoryRepositories(): Repositories {
       };
       ingestionSources.set(id, updated);
       return updated;
+    },
+    async disconnectIngestionSourcesByKind(userId, kind) {
+      const cleared: Array<{ id: string; encryptedToken: { data: string } | null }> = [];
+      for (const source of ingestionSources.values()) {
+        const owner = source.userId ?? consentGrants.get(source.consentGrantId)?.userId;
+        if (owner !== userId || source.kind !== kind) continue;
+        cleared.push({ id: source.id, encryptedToken: source.encryptedToken });
+        const disconnectedAt = now().toISOString();
+        ingestionSources.set(source.id, {
+          ...source,
+          status: "ERROR",
+          encryptedToken: null,
+          meta: {
+            ...(source.meta ?? {}),
+            disconnectedAt,
+            lastError: "Disconnected — reconnect to resume sync",
+            lastErrorAt: disconnectedAt,
+            errorCode: "DISCONNECTED",
+          },
+          updatedAt: now(),
+        });
+      }
+      return cleared;
     },
     async updateMerchantPurchase(id, patch) {
       const purchase = merchantPurchasesStore.get(id);
@@ -2169,20 +2515,23 @@ export function createMemoryRepositories(): Repositories {
     async purgeIngestionDocumentRaw(id) {
       const doc = ingestionDocuments.get(id);
       if (!doc) return;
-      const userId =
-        typeof doc.parsedJson.__userId === "string"
-          ? doc.parsedJson.__userId
-          : ingestionDocumentUser.get(id);
+      const legacyOwner =
+        typeof doc.parsedJson.__userId === "string" ? doc.parsedJson.__userId : undefined;
       ingestionDocuments.set(id, {
         ...doc,
+        userId: doc.userId ?? legacyOwner ?? ingestionDocumentUser.get(id) ?? null,
         rawKey: "",
-        parsedJson: {
-          purged: true,
-          purgedAt: now().toISOString(),
-          ...(userId ? { __userId: userId } : {}),
-        },
+        parsedJson: { purged: true, purgedAt: now().toISOString() },
         updatedAt: now(),
       });
+    },
+
+    async listIngestionDocumentsForRetention(kind, cutoff, limit) {
+      return [...ingestionDocuments.values()]
+        .filter((d) => d.kind === kind && d.rawKey !== "" && d.createdAt < cutoff)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .slice(0, Math.min(Math.max(limit, 1), 1000))
+        .map(({ id, kind: k, rawKey, status, createdAt }) => ({ id, kind: k, rawKey, status, createdAt }));
     },
 
     async listIngestionDocuments() {
@@ -3108,6 +3457,102 @@ export function createMemoryRepositories(): Repositories {
         (s) => s.householdId === householdId,
       );
     },
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+      const key = `${householdId}:${userId}`;
+      const prev = householdVaultSettingsStore.get(key);
+      if (!prev || prev.vaultAccess !== "SPEND") return null;
+      if (prev.spendCapMinor !== null && prev.spentMinor + amountMinor > prev.spendCapMinor) return null;
+      const next = { ...prev, spentMinor: prev.spentMinor + amountMinor, updatedAt: now() };
+      householdVaultSettingsStore.set(key, next);
+      return next;
+    },
+    async releaseHouseholdVaultSpend(householdId, userId, amountMinor) {
+      const key = `${householdId}:${userId}`;
+      const prev = householdVaultSettingsStore.get(key);
+      if (!prev) return;
+      householdVaultSettingsStore.set(key, {
+        ...prev,
+        spentMinor: Math.max(prev.spentMinor - amountMinor, 0),
+        updatedAt: now(),
+      });
+    },
+    async startWearChallenge(userId, wardrobeItemId) {
+      const key = `${userId}:${wardrobeItemId}`;
+      if (wearChallengesStore.has(key)) return { created: false };
+      wearChallengesStore.set(key, { userId, wardrobeItemId, startedAt: now() });
+      return { created: true };
+    },
+    async listWearChallengeItemIds(userId) {
+      return [...wearChallengesStore.values()]
+        .filter((c) => c.userId === userId)
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+        .slice(0, 500)
+        .map((c) => c.wardrobeItemId);
+    },
+    async createInterviewKit(input) {
+      const kit: InterviewKitRecord = { ...input, itemIds: [...input.itemIds], createdAt: now(), updatedAt: now() };
+      interviewKitsStore.set(kit.id, kit);
+      return kit;
+    },
+    async findInterviewKit(id, userId) {
+      const kit = interviewKitsStore.get(id);
+      return kit && kit.userId === userId ? kit : null;
+    },
+    async listInterviewKits(userId, limit) {
+      return [...interviewKitsStore.values()]
+        .filter((k) => k.userId === userId)
+        .sort((a, b) => a.eventAt.getTime() - b.eventAt.getTime() || a.id.localeCompare(b.id))
+        .slice(0, Math.min(Math.max(limit, 1), 500));
+    },
+    async updateInterviewKit(id, userId, patch) {
+      const kit = interviewKitsStore.get(id);
+      if (!kit || kit.userId !== userId) return null;
+      const next = { ...kit, ...patch, updatedAt: now() };
+      interviewKitsStore.set(id, next);
+      return next;
+    },
+    async deleteInterviewKit(id, userId) {
+      const kit = interviewKitsStore.get(id);
+      if (!kit || kit.userId !== userId) return false;
+      interviewKitsStore.delete(id);
+      return true;
+    },
+    async createSocialPoll(input) {
+      for (const p of socialPollsStore.values()) {
+        if (p.tokenHash === input.tokenHash) throw Object.assign(new Error("duplicate token"), { code: "23505" });
+      }
+      const poll: SocialPollRecord = { ...input, winnerAppliedAt: null, closedAt: null, createdAt: now() };
+      socialPollsStore.set(poll.id, poll);
+      return poll;
+    },
+    async findSocialPollById(id) {
+      return socialPollsStore.get(id) ?? null;
+    },
+    async findSocialPollByTokenHash(tokenHash) {
+      for (const p of socialPollsStore.values()) if (p.tokenHash === tokenHash) return p;
+      return null;
+    },
+    async castSocialPollVote(pollId, voterHash, choice) {
+      const votes = socialPollVotesStore.get(pollId) ?? new Map<string, string>();
+      socialPollVotesStore.set(pollId, votes);
+      const existing = votes.get(voterHash);
+      if (existing !== undefined) return { inserted: false, choice: existing };
+      votes.set(voterHash, choice);
+      return { inserted: true, choice };
+    },
+    async countSocialPollVotes(pollId) {
+      const counts: Record<string, number> = {};
+      for (const choice of socialPollVotesStore.get(pollId)?.values() ?? []) {
+        counts[choice] = (counts[choice] ?? 0) + 1;
+      }
+      return counts;
+    },
+    async markSocialPollWinnerApplied(pollId) {
+      const poll = socialPollsStore.get(pollId);
+      if (!poll || poll.winnerAppliedAt) return false;
+      socialPollsStore.set(pollId, { ...poll, winnerAppliedAt: now() });
+      return true;
+    },
     async findWardrobeItemById(id) {
       return wardrobeItemsStore.get(id) ?? null;
     },
@@ -3671,19 +4116,16 @@ export function createMemoryRepositories(): Repositories {
     },
 
     // --- Vault export helpers ---
-    async listIngestionDocumentsByUser(userId) {
+    async listIngestionDocumentsByUser(userId, opts) {
       const purchaseIds = new Set(
         [...receiptsStore.values()].filter((r) => r.userId === userId && r.purchaseId).map((r) => r.purchaseId as string),
       );
       const docs: IngestionDocumentRecord[] = [];
       const seen = new Set<string>();
-      for (const [id, docUserId] of ingestionDocumentUser) {
-        if (docUserId === userId) {
-          const doc = ingestionDocuments.get(id);
-          if (doc && !seen.has(id)) {
-            seen.add(id);
-            docs.push(doc);
-          }
+      for (const doc of ingestionDocuments.values()) {
+        if ((doc.userId ?? ingestionDocumentUser.get(doc.id)) === userId && !seen.has(doc.id)) {
+          seen.add(doc.id);
+          docs.push(doc);
         }
       }
       // also include docs linked via purchaseIds via matchedPurchaseId
@@ -3695,7 +4137,16 @@ export function createMemoryRepositories(): Repositories {
           }
         }
       }
-      return docs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      return docs
+        .filter((d) => !opts?.kind || d.kind === opts.kind)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, Math.min(Math.max(opts?.limit ?? 5_000, 1), 5_000));
+    },
+
+    async findMerchantPurchasesByIds(ids) {
+      return [...new Set(ids)]
+        .map((id) => merchantPurchasesStore.get(id))
+        .filter((p): p is MerchantPurchaseRecord => p !== undefined);
     },
 
     async listOrderItemsByUser(userId) {

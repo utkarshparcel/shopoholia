@@ -64,6 +64,8 @@ export function tallyAskFriendVotes(
 
 export type AskFriendShareInput = {
   pollId: string;
+  /** Unguessable public token for the link; without it the link carries pollId (legacy). */
+  shareToken?: string;
   options: AskFriendOption[];
   origin?: string;
   watermark?: string;
@@ -83,7 +85,7 @@ export type AskFriendShareCard = {
 export function buildAskFriendShare(input: AskFriendShareInput): AskFriendShareCard {
   const origin = (input.origin ?? "https://worn.app").replace(/\/+$/, "");
   const watermark = input.watermark ?? WASTE_SHARE_WATERMARK;
-  const deepLink = `${origin}/p/outfit/${input.pollId}`;
+  const deepLink = `${origin}/p/outfit/${input.shareToken ?? input.pollId}`;
   const lines = input.options.slice(0, 3).map((o, i) => {
     const letter = String.fromCharCode(65 + i);
     return `${letter}) ${o.label}`;

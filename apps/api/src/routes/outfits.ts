@@ -42,9 +42,10 @@ import {
 } from "../lib/capsule.js";
 import { buildCompleteLook } from "../lib/complete-look.js";
 import {
-  interviewKitStore,
+  createInterviewKitStore,
   scheduleInterviewKitReminder,
 } from "../lib/interview-kit.js";
+import { QueueUnavailableError } from "../lib/queues/enqueue.js";
 import {
   applyAvoidRepeat,
   DEFAULT_AVOID_REPEAT_DAYS,
@@ -1070,6 +1071,30 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
+  const interviewKitStore = createInterviewKitStore(app.deps.repos);
+  /** A queue outage leaves the kit saved with reminderScheduled false instead of failing the save. */
+  const scheduleKitReminder = async (
+    log: { warn: (obj: object, msg: string) => void },
+    kit: Awaited<ReturnType<typeof interviewKitStore.save>>,
+    remindAt: string,
+  ) => {
+    try {
+      return await scheduleInterviewKitReminder({
+        userId: kit.userId,
+        kitId: kit.id,
+        name: kit.name,
+        kind: kit.kind,
+        eventAt: kit.eventAt,
+        remindAt,
+        occasion: kit.occasion,
+      });
+    } catch (err) {
+      if (!(err instanceof QueueUnavailableError)) throw err;
+      log.warn({ err, kitId: kit.id }, "interview_kit.reminder_unavailable");
+      return "unavailable" as const;
+    }
+  };
+
   /** N40 — list saved interview / ceremony kits. */
   app.get(
     "/outfits/interview-kit",
@@ -1082,7 +1107,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      const kits = interviewKitStore.listByUser(userId).map((k) => ({
+      const kits = (await interviewKitStore.listByUser(userId)).map((k) => ({
         ...k,
         outfit: null,
       }));
@@ -1115,7 +1140,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const now = new Date();
       let kit;
       try {
-        kit = interviewKitStore.save({
+        kit = await interviewKitStore.save({
           userId,
           name: body.name,
           kind: body.kind ?? "interview",
@@ -1153,19 +1178,12 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       let reminderScheduled = false;
       const wantRemind = body.remindNightBefore !== false;
       if (wantRemind && kit.remindAt) {
-        const status = await scheduleInterviewKitReminder({
-          userId,
-          kitId: kit.id,
-          name: kit.name,
-          kind: kit.kind,
-          eventAt: kit.eventAt,
-          remindAt: kit.remindAt,
-          occasion: kit.occasion,
-        });
-        // Persist schedule intent even when Redis is unavailable (local/dev).
-        interviewKitStore.markReminderScheduled(kit.id, kit.remindAt);
-        kit = interviewKitStore.get(kit.id) ?? kit;
-        reminderScheduled = status === "published" || kit.reminderScheduled;
+        const status = await scheduleKitReminder(request.log, kit, kit.remindAt);
+        // "skipped" only happens outside production without REDIS_URL; the intent is kept.
+        if (status === "published" || status === "skipped") {
+          kit = (await interviewKitStore.markReminderScheduled(kit.id, userId, kit.remindAt)) ?? kit;
+        }
+        reminderScheduled = kit.reminderScheduled;
         if (app.deps.repos.recordPushEvent) {
           try {
             await app.deps.repos.recordPushEvent({
@@ -1233,31 +1251,21 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
         cancelReminder?: boolean;
         remindNightBefore?: boolean;
       };
-      let kit = interviewKitStore.get(id);
-      if (!kit || kit.userId !== userId) {
+      let kit = await interviewKitStore.get(id, userId);
+      if (!kit) {
         return reply.code(404).send({ error: "Not Found", message: "Kit not found" });
       }
 
       try {
         if (body.eventAt) {
-          kit = interviewKitStore.updateEvent(id, body.eventAt) ?? kit;
+          kit = (await interviewKitStore.updateEvent(id, userId, body.eventAt)) ?? kit;
         }
         if (body.cancelReminder) {
-          kit = interviewKitStore.cancelReminder(id) ?? kit;
+          kit = (await interviewKitStore.cancelReminder(id, userId)) ?? kit;
         } else if (body.remindNightBefore && kit.remindAt) {
-          const status = await scheduleInterviewKitReminder({
-            userId,
-            kitId: kit.id,
-            name: kit.name,
-            kind: kit.kind,
-            eventAt: kit.eventAt,
-            remindAt: kit.remindAt,
-            occasion: kit.occasion,
-          });
-          interviewKitStore.markReminderScheduled(kit.id, kit.remindAt);
-          kit = interviewKitStore.get(kit.id) ?? kit;
-          if (status === "published" || kit.reminderScheduled) {
-            kit = { ...kit, reminderScheduled: true };
+          const status = await scheduleKitReminder(request.log, kit, kit.remindAt);
+          if (status === "published" || status === "skipped") {
+            kit = (await interviewKitStore.markReminderScheduled(kit.id, userId, kit.remindAt)) ?? kit;
           }
         }
       } catch (err) {

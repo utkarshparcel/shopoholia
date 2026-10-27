@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../index.js";
+import { privacyErase } from "../jobs/privacy-erase.js";
+import { privacyExport } from "../jobs/privacy-export.js";
 import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import { createMockStorage, type StorageClient } from "../lib/storage/r2.js";
 import { login } from "../test-utils.js";
@@ -41,6 +43,20 @@ describe("vault", () => {
   afterEach(async () => {
     await app.close();
   });
+
+  /** DELETE /vault answers 202 and the privacy-erase job does the work; run it here. */
+  async function deleteVault() {
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/vault",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(del.statusCode).toBe(202);
+    const body = del.json() as { id: string; kind: string; status: string };
+    expect(body).toMatchObject({ kind: "ERASE", status: "PENDING" });
+    await privacyErase({ requestId: body.id }, { repos, storage, log: app.log });
+    return body.id;
+  }
 
   it("rejects unauthenticated consent grant with 401", async () => {
     const res = await app.inject({
@@ -84,20 +100,81 @@ describe("vault", () => {
     expect(exp2.json().grants).toHaveLength(0);
   });
 
-  it("returns 409 on duplicate active consent", async () => {
-    await app.inject({
+  it("granting twice returns the existing grant", async () => {
+    const first = await app.inject({
       method: "POST",
       url: "/vault/consent",
       headers: { authorization: `Bearer ${token}` },
       payload: { userId, scope: "EMAIL", source: "test" },
     });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().noticeVersion).toBeTruthy();
     const dup = await app.inject({
       method: "POST",
       url: "/vault/consent",
       headers: { authorization: `Bearer ${token}` },
       payload: { userId, scope: "EMAIL", source: "test" },
     });
-    expect(dup.statusCode).toBe(409);
+    expect(dup.statusCode).toBe(200);
+    expect(dup.json().id).toBe(first.json().id);
+    expect(await repos.listActiveConsents(userId)).toHaveLength(1);
+  });
+
+  it("ignores a userId in the body: the grant is for the caller", async () => {
+    const other = "00000000-0000-4000-8000-000000000042";
+    const res = await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { userId: other, scope: "SMS", source: "test" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().userId).toBe(userId);
+    expect(await repos.listActiveConsents(other)).toHaveLength(0);
+  });
+
+  it("keeps an append-only consent history with the notice version", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { scope: "SMS", source: "onboarding", noticeVersion: "2026-09-01" },
+    });
+    await app.inject({
+      method: "DELETE",
+      url: "/vault/consent/SMS",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/vault/consent/records",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const records = (res.json() as { records: Array<{ action: string; noticeVersion: string | null }> })
+      .records;
+    expect(records.map((r) => r.action).sort()).toEqual(["GRANT", "WITHDRAW"]);
+    expect(records.find((r) => r.action === "GRANT")?.noticeVersion).toBe("2026-09-01");
+  });
+
+  it("withdrawing EMAIL consent disconnects Gmail and clears the token", async () => {
+    const grant = await repos.grantConsent({ userId, scope: "EMAIL", source: "test" });
+    const source = await repos.createIngestionSource({
+      userId,
+      kind: "EMAIL",
+      provider: "gmail",
+      consentGrantId: grant.id,
+    });
+    await repos.updateIngestionSourceToken(source.id, { data: "blob" });
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/vault/consent/EMAIL",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(204);
+    const [after] = await repos.listIngestionSources(userId);
+    expect(after!.encryptedToken).toBeNull();
+    expect(after!.status).toBe("ERROR");
   });
 
   it("hard-deletes the user vault", async () => {
@@ -107,12 +184,7 @@ describe("vault", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { userId, scope: "EMAIL", source: "test" },
     });
-    const del = await app.inject({
-      method: "DELETE",
-      url: "/vault",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(del.statusCode).toBe(204);
+    await deleteVault();
 
     const exp = await app.inject({
       method: "GET",
@@ -174,12 +246,7 @@ describe("vault", () => {
       contentType: "image/jpeg",
     });
 
-    const del = await app.inject({
-      method: "DELETE",
-      url: "/vault",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(del.statusCode).toBe(204);
+    await deleteVault();
     expect(await repos.findUserById(userId)).toBeNull();
     expect(await repos.findRefreshToken(refreshToken)).toBeNull();
     expect(storage.deletedKeys).toEqual(
@@ -284,12 +351,7 @@ describe("vault", () => {
       claimContact: null,
     });
 
-    const del = await app.inject({
-      method: "DELETE",
-      url: "/vault",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(del.statusCode).toBe(204);
+    await deleteVault();
     expect(await repos.findUserById(userId)).toBeNull();
     expect(await repos.listReceipts(userId)).toHaveLength(0);
     expect(await repos.listWarranties(userId)).toHaveLength(0);
@@ -399,8 +461,7 @@ describe("vault", () => {
     expect(body.dispositionListings.length).toBe(1);
 
     // --- hard delete and verify zero rows ---
-    const del = await app.inject({ method: "DELETE", url: "/vault", headers: { authorization: `Bearer ${token}` } });
-    expect(del.statusCode).toBe(204);
+    await deleteVault();
     expect(await repos.findUserById(userId)).toBeNull();
     expect(await repos.listActiveConsents(userId)).toHaveLength(0);
     expect(await repos.listMoneyAccounts(userId)).toHaveLength(0);
@@ -474,12 +535,11 @@ describe("vault", () => {
     expect(updated.categories.warranty).toBe(true);
     expect(updated.categories.outfits).toBe(false);
 
+    // C2: stored in users.prefs, not consent flags.
+    const prefs = await repos.getUserPrefs(userId);
+    expect(prefs?.notifications?.quietHoursStart).toBe("23:30");
     const user = await repos.findUserById(userId);
-    const flags = user?.consentFlags as
-      | { notifications?: { quietHoursStart?: string } }
-      | null
-      | undefined;
-    expect(flags?.notifications?.quietHoursStart).toBe("23:30");
+    expect((user?.consentFlags as Record<string, unknown> | null)?.notifications).toBeUndefined();
 
     const get2 = await app.inject({
       method: "GET",
@@ -489,7 +549,7 @@ describe("vault", () => {
     expect((get2.json() as NotifPrefs).quietHoursStart).toBe("23:30");
   });
 
-  it("GET /audit returns self records and blanks other users", async () => {
+  it("GET /audit returns self records and 404 for other users", async () => {
     const { listAuditRecords } = await import("../lib/audit.js");
 
     const grant = await app.inject({
@@ -519,7 +579,88 @@ describe("vault", () => {
       url: `/audit?userId=00000000-0000-4000-8000-000000000099`,
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(other.statusCode).toBe(200);
-    expect((other.json() as { records: unknown[] }).records).toEqual([]);
+    expect(other.statusCode).toBe(404);
+  });
+
+  it("exports off the request path; only the owner can read the request", async () => {
+    await repos.grantConsent({ userId, scope: "FINANCIAL", source: "test" });
+    const first = await app.inject({
+      method: "POST",
+      url: "/vault/export",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(first.statusCode).toBe(202);
+    const requestId = (first.json() as { id: string }).id;
+    // Same request while it is open.
+    const again = await app.inject({
+      method: "POST",
+      url: "/vault/export",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((again.json() as { id: string }).id).toBe(requestId);
+
+    await privacyExport({ requestId }, { repos, storage, log: app.log });
+    // Run twice: the DONE request is left alone.
+    await privacyExport({ requestId }, { repos, storage, log: app.log });
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/vault/requests/${requestId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ kind: "EXPORT", status: "DONE" });
+    expect(typeof status.json().downloadUrl).toBe("string");
+    const done = await repos.getPrivacyRequest(requestId);
+    expect(done!.resultKey).toBe(`u/${userId}/exports/${requestId}.json`);
+
+    const other = await login(app, "+919999123499");
+    const peek = await app.inject({
+      method: "GET",
+      url: `/vault/requests/${requestId}`,
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    expect(peek.statusCode).toBe(404);
+  });
+
+  it("erasure retries the storage objects that failed and is safe to run twice", async () => {
+    await repos.createReceipt({
+      userId,
+      imageKey: "receipts/user/a.jpg",
+      merchant: "Mock",
+      purchasedAt: new Date(),
+      totalMinor: 100,
+      ocrJson: {},
+    });
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/vault",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const requestId = (del.json() as { id: string }).id;
+    let failOnce = true;
+    const flaky: StorageClient = {
+      ...storage,
+      async delete(key) {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error("R2 down");
+        }
+        await storage.delete(key);
+      },
+    };
+    await expect(
+      privacyErase({ requestId }, { repos, storage: flaky, log: app.log }),
+    ).rejects.toThrow(/not deleted/);
+    const mid = await repos.getPrivacyRequest(requestId);
+    expect(mid!.status).toBe("RUNNING");
+    expect(mid!.storageKeys).toEqual(["receipts/user/a.jpg"]);
+    expect(await repos.findUserById(userId)).toBeNull();
+
+    await privacyErase({ requestId }, { repos, storage: flaky, log: app.log });
+    await privacyErase({ requestId }, { repos, storage: flaky, log: app.log });
+    const done = await repos.getPrivacyRequest(requestId);
+    expect(done).toMatchObject({ status: "DONE", userId: null, storageKeys: [] });
+    expect(storage.deletedKeys.filter((k) => k === "receipts/user/a.jpg")).toHaveLength(1);
   });
 });

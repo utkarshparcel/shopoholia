@@ -7,11 +7,14 @@ import {
   ingestionStatusEnum,
 } from "./enums.js";
 import { consentGrants } from "./consent.js";
+import { users } from "./users.js";
 
 export const ingestionSources = pgTable(
   "ingestion_sources",
   {
     id: id(),
+    /** Owner. Nullable until FIX/privacy/backfill.sql has filled old rows; every new row sets it. */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     kind: ingestionKindEnum("kind").notNull(),
     provider: text("provider").notNull(),
     consentGrantId: uuid("consent_grant_id")
@@ -31,13 +34,18 @@ export const ingestionSources = pgTable(
       .default(null),
     ...timestamps,
   },
-  (t) => [index("ingestion_sources_consent_grant_idx").on(t.consentGrantId)],
+  (t) => [
+    index("ingestion_sources_consent_grant_idx").on(t.consentGrantId),
+    index("ingestion_sources_user_created_idx").on(t.userId, t.createdAt.desc()),
+  ],
 );
 
 export const ingestionDocuments = pgTable(
   "ingestion_documents",
   {
     id: id(),
+    /** Owner. Nullable until FIX/privacy/backfill.sql has filled old rows; every new row sets it. */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     kind: ingestionKindEnum("kind").notNull(),
     rawKey: text("raw_key").notNull(),
     parsedJson: jsonb("parsed_json")
@@ -48,7 +56,7 @@ export const ingestionDocuments = pgTable(
     ...timestamps,
   },
   (t) => [
-    // The table has no user_id column yet; listIngestionDocumentsByUser filters on parsed_json->>'__userId'.
+    // Legacy rows without user_id are found through parsed_json->>'__userId' until the backfill runs.
     index("ingestion_documents_user_created_idx").on(
       sql`(${t.parsedJson}->>'__userId')`,
       t.createdAt.desc().nullsFirst(),
@@ -56,5 +64,10 @@ export const ingestionDocuments = pgTable(
     index("ingestion_documents_matched_purchase_idx")
       .on(t.matchedPurchaseId)
       .where(sql`${t.matchedPurchaseId} IS NOT NULL`),
+    index("ingestion_documents_user_id_created_idx").on(t.userId, t.createdAt.desc(), t.id.desc()),
+    // Retention sweep: rows that still hold a raw object, oldest first per kind.
+    index("ingestion_documents_retention_idx")
+      .on(t.kind, t.createdAt)
+      .where(sql`${t.rawKey} <> ''`),
   ],
 );

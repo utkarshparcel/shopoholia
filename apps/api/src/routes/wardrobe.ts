@@ -1664,7 +1664,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // U032 — auto-dirty after wear per laundry rules
       try {
-        const rules = getLaundryRules(userId);
+        const rules = await getLaundryRules(app.deps.repos, userId);
         const itemIds: string[] = [];
         if (body.wardrobeItemId) itemIds.push(body.wardrobeItemId);
         if (body.outfitId) {
@@ -1760,7 +1760,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         },
       },
     },
-    async (request) => getLaundryRules(request.user!.sub),
+    async (request) => getLaundryRules(app.deps.repos, request.user!.sub),
   );
 
   app.put(
@@ -1785,7 +1785,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const body = request.body as Partial<LaundryRulesPrefs>;
-      const next = setLaundryRules(userId, body);
+      const next = await setLaundryRules(app.deps.repos, userId, body);
       audit(app.log, "wardrobe.laundry_rules", { userId, ...next });
       trackServerEvent("laundry_rules_updated", { userId });
       return next;
@@ -1879,7 +1879,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         weather: { tempC: q.tempC, condition: q.condition },
         occasion: q.occasion,
         owned,
-        dismissedIds: listDismissedMissingLayers(userId),
+        dismissedIds: await listDismissedMissingLayers(app.deps.repos, userId),
       });
       return { gaps };
     },
@@ -1891,7 +1891,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ gapId: z.string().min(1) }),
+        params: z.object({ gapId: z.string().min(1).max(64) }),
         response: {
           200: z.object({ dismissedIds: z.array(z.string()) }),
           401: ErrorSchema,
@@ -1901,7 +1901,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const { gapId } = request.params as { gapId: string };
-      const dismissedIds = dismissMissingLayer(userId, gapId);
+      const dismissedIds = await dismissMissingLayer(app.deps.repos, userId, gapId);
       trackServerEvent("missing_layer_dismissed", { userId, gapId });
       return { dismissedIds };
     },

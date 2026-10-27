@@ -95,7 +95,11 @@ export type AuditEvent =
   | "fit.measurement.updated"
   | "fit.tailor.received"
   | "fit.tailor.pickup_nudge"
-  | "dispose.tree.resolved";
+  | "dispose.tree.resolved"
+  | "privacy.erase.requested"
+  | "privacy.erase.completed"
+  | "privacy.export.requested"
+  | "privacy.export.completed";
 
 export type AuditRecord = {
   id: string;
@@ -105,12 +109,114 @@ export type AuditRecord = {
   payload: Record<string, unknown>;
 };
 
-// In-memory audit log — queryable via GET /vault/audit.
-// In production this would be a Postgres `audit_log` table; the
-// in-memory store keeps the contract while the Postgres repos are
-// still stubbed to memory (see repositories/postgres.ts).
+/** A row for the durable sink (`repos.appendAuditRecords`). */
+export type AuditSinkRow = {
+  userId: string | null;
+  event: string;
+  meta: Record<string, unknown>;
+  at: Date;
+};
+
+// Log ids and event names only, never emails, phone numbers, names or message bodies: the
+// payload is reduced to an allowlist before it reaches the log line, the in-process mirror or
+// the audit_log table.
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PHONE_LIKE_RE = /^\+?\d{7,}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ENUM_RE = /^[A-Za-z0-9_.-]{1,40}$/;
+const ISO_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+/** Keys whose string values are short codes (scope names, statuses, field names), not free text. */
+const ENUM_KEYS = new Set([
+  "scope",
+  "surface",
+  "kind",
+  "status",
+  "source",
+  "mode",
+  "format",
+  "period",
+  "category",
+  "type",
+  "provider",
+  "decision",
+  "nextAction",
+  "fields",
+  "patch",
+  "reason",
+]);
+const MAX_ARRAY = 50;
+const MAX_KEYS = 50;
+
+function isIdKey(key: string): boolean {
+  return key === "id" || key === "userId" || /Id$/.test(key);
+}
+
+function safeId(value: unknown): string | undefined {
+  return typeof value === "string" && ID_RE.test(value) && !PHONE_LIKE_RE.test(value) ? value : undefined;
+}
+
+function safeEnum(value: unknown): string | undefined {
+  return typeof value === "string" && ENUM_RE.test(value) && !PHONE_LIKE_RE.test(value) ? value : undefined;
+}
+
+function safeValue(key: string, value: unknown): unknown {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "boolean") return value;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+  if (typeof value === "string") {
+    if (isIdKey(key)) return safeId(value);
+    if (ISO_RE.test(value)) return value;
+    if (ENUM_KEYS.has(key)) return safeEnum(value);
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    const pick = /Ids$/.test(key) ? safeId : ENUM_KEYS.has(key) ? safeEnum : null;
+    if (!pick) return undefined;
+    const out = value.slice(0, MAX_ARRAY).map(pick).filter((v): v is string => v !== undefined);
+    return out;
+  }
+  if (value && typeof value === "object") {
+    // Counters such as { created: 2, skipped: 1 }; anything with text inside is dropped.
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > MAX_KEYS) return undefined;
+    if (!entries.every(([k, v]) => ENUM_RE.test(k) && typeof v === "number" && Number.isFinite(v))) {
+      return undefined;
+    }
+    return Object.fromEntries(entries);
+  }
+  return undefined;
+}
+
+/** The part of an audit payload that may be stored: ids, numbers, flags, dates and short codes. */
+export function sanitizeAuditPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  let kept = 0;
+  for (const [key, value] of Object.entries(payload)) {
+    if (kept >= MAX_KEYS) break;
+    const safe = safeValue(key, value);
+    if (safe === undefined) continue;
+    out[key] = safe;
+    kept += 1;
+  }
+  return out;
+}
+
+// In-process mirror of recent records (tests read it synchronously). The durable copy is the
+// audit_log table, written through the sink that vaultRoutes registers.
 const MAX_AUDIT_ROWS = 5000;
 const auditLog: AuditRecord[] = [];
+
+/** Rows waiting for the sinks. Bounded: past MAX_PENDING the oldest are dropped and counted. */
+const MAX_PENDING = 2000;
+const SINK_BATCH = 200;
+const FLUSH_DELAY_MS = 250;
+type Sink = { write: (rows: AuditSinkRow[]) => Promise<void>; log: FastifyBaseLogger };
+/** Keyed by the repositories object, so one app registers once however often it is built. */
+const sinks = new Map<object, Sink>();
+let pending: AuditSinkRow[] = [];
+let dropped = 0;
+let flushTimer: NodeJS.Timeout | null = null;
+let flushing: Promise<void> | null = null;
 
 function randomId(): string {
   try {
@@ -121,21 +227,96 @@ function randomId(): string {
   }
 }
 
+/**
+ * Registers a durable audit sink (repos.appendAuditRecords) under `key`. Rows are written in
+ * micro-batches; `flushAudit` writes what is pending. Returns the unregister function.
+ */
+export function registerAuditSink(
+  key: object,
+  write: (rows: AuditSinkRow[]) => Promise<void>,
+  log: FastifyBaseLogger,
+): () => void {
+  sinks.set(key, { write, log });
+  return () => {
+    if (sinks.get(key)?.write === write) sinks.delete(key);
+    if (sinks.size === 0) {
+      pending = [];
+      if (flushTimer) clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  };
+}
+
+function scheduleFlush() {
+  if (flushTimer || sinks.size === 0) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushAudit();
+  }, FLUSH_DELAY_MS);
+  flushTimer.unref?.();
+}
+
+/** Writes every pending row to the sinks. A failed batch is logged with its size, not retried. */
+export async function flushAudit(): Promise<void> {
+  while (flushing) await flushing;
+  if (sinks.size === 0 || pending.length === 0) return;
+  flushing = (async () => {
+    while (pending.length > 0) {
+      const batch = pending.splice(0, SINK_BATCH);
+      await Promise.all(
+        [...sinks.values()].map(async (s) => {
+          try {
+            await s.write(batch);
+          } catch (err) {
+            s.log.error({ err, count: batch.length }, "audit.sink.write_failed");
+          }
+        }),
+      );
+    }
+    if (dropped > 0) {
+      for (const s of sinks.values()) s.log.error({ count: dropped }, "audit.sink.dropped_overflow");
+      dropped = 0;
+    }
+  })();
+  try {
+    await flushing;
+  } finally {
+    flushing = null;
+  }
+}
+
 export function audit(
   log: FastifyBaseLogger,
   event: AuditEvent,
   payload: Record<string, unknown>,
 ): void {
-  log.info({ audit: true, event, ...payload });
+  const safe = sanitizeAuditPayload(payload);
+  log.info({ audit: true, event, ...safe });
+  const userId = typeof safe.userId === "string" ? safe.userId : undefined;
   const record: AuditRecord = {
     id: randomId(),
     event,
-    userId: typeof payload.userId === "string" ? payload.userId : undefined,
+    userId,
     timestamp: new Date().toISOString(),
-    payload,
+    payload: safe,
   };
   auditLog.push(record);
   if (auditLog.length > MAX_AUDIT_ROWS) auditLog.shift();
+
+  if (sinks.size > 0) {
+    const { userId: _userId, ...meta } = safe;
+    pending.push({
+      userId: userId && UUID_RE.test(userId) ? userId : null,
+      event,
+      meta,
+      at: new Date(record.timestamp),
+    });
+    if (pending.length > MAX_PENDING) {
+      dropped += pending.length - MAX_PENDING;
+      pending.splice(0, pending.length - MAX_PENDING);
+    }
+    scheduleFlush();
+  }
 }
 
 export function listAuditRecords(filter?: { userId?: string; event?: string; limit?: number }): AuditRecord[] {

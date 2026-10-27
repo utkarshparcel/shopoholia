@@ -7,29 +7,55 @@ import {
 } from "./persistence.js";
 import type { ParsedPurchase } from "./parsers/types.js";
 
-function mockDb() {
+function mockDb(opts: { matchedPurchaseId?: string | null; failItems?: boolean } = {}) {
   const inserts: Array<{ values: unknown }> = [];
   const updates: Array<{ values: unknown }> = [];
-  return {
+  const committed = { inserts, updates };
+  const exec = (staged: { inserts: typeof inserts; updates: typeof updates }) => ({
     insert: () => ({
       values: (v: unknown) => {
-        inserts.push({ values: v });
+        if (opts.failItems && Array.isArray(v)) return Promise.reject(new Error("items insert failed"));
+        staged.inserts.push({ values: v });
         return Promise.resolve();
       },
     }),
     update: () => ({
       set: (v: unknown) => ({
         where: () => {
-          updates.push({ values: v });
+          staged.updates.push({ values: v });
           return Promise.resolve();
         },
       }),
     }),
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          for: () => Promise.resolve([{ matchedPurchaseId: opts.matchedPurchaseId ?? null }]),
+        }),
+      }),
+    }),
+  });
+  let transactions = 0;
+  return {
+    ...exec(committed),
+    // All-or-nothing like Postgres: staged writes land only when the callback resolves.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>) => {
+      transactions += 1;
+      const staged = { inserts: [] as typeof inserts, updates: [] as typeof updates };
+      const out = await fn(exec(staged));
+      inserts.push(...staged.inserts);
+      updates.push(...staged.updates);
+      return out;
+    },
+    get transactions() {
+      return transactions;
+    },
     inserts,
     updates,
   } as unknown as Db & {
     inserts: Array<{ values: unknown }>;
     updates: Array<{ values: unknown }>;
+    transactions: number;
   };
 }
 
@@ -127,7 +153,15 @@ describe("createDbPersister", () => {
     expect(id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
+    expect(db.transactions).toBe(1);
     expect(db.inserts).toHaveLength(2);
+    // The document link commits in the same transaction as the purchase.
+    expect(db.updates).toHaveLength(1);
+    expect(db.updates[0]!.values).toMatchObject({
+      status: "MATCHED",
+      matchedPurchaseId: id,
+      userId: "user-1",
+    });
     const purchaseRow = db.inserts[0]!.values as Record<string, unknown>;
     expect(purchaseRow).toMatchObject({
       id,
@@ -168,13 +202,14 @@ describe("createDbPersister", () => {
         etaAt: "2026-01-18T00:00:00.000Z",
         trackingCode: "TRK-1",
       },
-      { sourceKind: "SMS" },
+      { sourceKind: "SMS", userId: "user-2" },
     );
     expect(db.inserts).toHaveLength(1);
+    expect(db.updates).toHaveLength(0);
     const row = db.inserts[0]!.values as Record<string, unknown>;
     expect(row).toMatchObject({
       id,
-      userId: "00000000-0000-0000-0000-000000000000",
+      userId: "user-2",
       source: "SMS",
       orderRef: null,
       rawDocId: null,
@@ -183,6 +218,43 @@ describe("createDbPersister", () => {
     });
     expect(row.deliveredAt).toBeInstanceOf(Date);
     expect((row.etaAt as Date).toISOString()).toBe("2026-01-18T00:00:00.000Z");
+  });
+
+  it("refuses a purchase without an owner instead of using a placeholder user", async () => {
+    const db = mockDb();
+    const persister = createDbPersister(db);
+    await expect(
+      persister.insertPurchase(basePurchase, { sourceKind: "SMS", rawDocId: "doc-1" }),
+    ).rejects.toThrow(/userId is required/);
+    expect(db.inserts).toHaveLength(0);
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it("a retry for an already matched document returns the existing purchase", async () => {
+    const db = mockDb({ matchedPurchaseId: "existing-purchase" });
+    const persister = createDbPersister(db);
+    const id = await persister.insertPurchase(basePurchase, {
+      sourceKind: "EMAIL",
+      rawDocId: "doc-1",
+      userId: "user-1",
+    });
+    expect(id).toBe("existing-purchase");
+    expect(db.inserts).toHaveLength(0);
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it("writes nothing when the item insert fails (one transaction)", async () => {
+    const db = mockDb({ failItems: true });
+    const persister = createDbPersister(db);
+    await expect(
+      persister.insertPurchase(basePurchase, {
+        sourceKind: "EMAIL",
+        rawDocId: "doc-1",
+        userId: "user-1",
+      }),
+    ).rejects.toThrow(/items insert failed/);
+    expect(db.inserts).toHaveLength(0);
+    expect(db.updates).toHaveLength(0);
   });
 
   it("markDocument and updateSourceCursor write updates", async () => {

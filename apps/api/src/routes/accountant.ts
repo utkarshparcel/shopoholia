@@ -650,7 +650,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      const prefs = getCpwThreshold(userId);
+      const prefs = await getCpwThreshold(app.deps.repos, userId);
       const metrics = await app.deps.repos.getItemMetrics(userId);
       const rows = [];
       for (const m of metrics) {
@@ -688,7 +688,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const body = request.body as { maxCpwMinor: number | null };
-      const next = setCpwThreshold(userId, { maxCpwMinor: body.maxCpwMinor });
+      const next = await setCpwThreshold(app.deps.repos, userId, { maxCpwMinor: body.maxCpwMinor });
       audit(app.log, "cpw_threshold.set", { userId, maxCpwMinor: next.maxCpwMinor });
       trackServerEvent("cpw_threshold_updated", { userId });
       return next;

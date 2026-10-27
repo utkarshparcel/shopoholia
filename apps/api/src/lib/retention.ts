@@ -2,9 +2,10 @@
  * Ingestion document retention — per data-type schedule.
  *
  * Raw `ingestion_documents` blobs (R2 `rawKey` + rich `parsedJson`) are only
- * needed until the worker parses them into merchant_purchases / items. After
- * PARSED / MATCHED / UNMATCHED we keep a redacted DB row for metrics and
- * delete the raw blob once the kind's TTL elapses.
+ * needed until the worker parses them into merchant_purchases / items. Once the
+ * kind's TTL elapses the raw blob goes whatever the status: a document stuck in
+ * RECEIVED or ERROR holds the same raw mail as a parsed one. The DB row stays,
+ * redacted, for metrics.
  *
  * Defaults (Limited Use / DPDP minimization):
  *   EMAIL   7d  — minimize raw mail retention (Gmail policy)
@@ -19,8 +20,12 @@
  *
  * Purge actions:
  * 1. R2 object at `rawKey` is deleted (if R2 is configured).
- * 2. Row keeps parse status (PARSED/MATCHED/UNMATCHED); `rawKey` cleared and
- *    PII stripped from `parsedJson`. We deliberately do NOT flip status to ERROR.
+ * 2. Row keeps its status; `rawKey` cleared and PII stripped from `parsedJson`.
+ *    We deliberately do NOT flip status to ERROR.
+ *
+ * Runs in batches (oldest first) and stops after MAX_BATCHES_PER_KIND per kind, so one run is
+ * bounded; the next scheduled run continues. A storage delete that fails leaves the row as it
+ * is (counted in `failed`) so the next run retries it instead of orphaning the object.
  */
 
 import { audit } from "./audit.js";
@@ -98,69 +103,77 @@ export type RetentionResult = {
   retentionDays: number;
   schedule: Record<RetentionDataType, number>;
   purgedByKind: Record<RetentionDataType, number>;
+  /** Documents whose storage delete or row update failed; retried on the next run. */
+  failed?: number;
 };
 
-const PURGEABLE_STATUSES = new Set(["PARSED", "MATCHED", "UNMATCHED"]);
-
-function isRetentionKind(kind: string): kind is RetentionDataType {
-  return kind === "EMAIL" || kind === "SMS" || kind === "RECEIPT";
-}
+const RETENTION_KINDS: RetentionDataType[] = ["EMAIL", "SMS", "RECEIPT"];
+const DEFAULT_BATCH_SIZE = 200;
+const MAX_BATCHES_PER_KIND = 25;
 
 export async function purgeExpiredIngestionDocuments(
   repos: Repositories,
   storage: StorageClient,
   log: FastifyBaseLogger,
   now = Date.now(),
+  opts: { batchSize?: number } = {},
 ): Promise<RetentionResult> {
   const schedule = retentionSchedule();
-  const docs = await repos.listIngestionDocuments();
+  const batchSize = Math.min(Math.max(opts.batchSize ?? DEFAULT_BATCH_SIZE, 1), 1000);
   const purgedByKind: Record<RetentionDataType, number> = {
     EMAIL: 0,
     SMS: 0,
     RECEIPT: 0,
   };
+  let checked = 0;
+  let failed = 0;
 
-  // Only purge documents that have already been parsed/matched (i.e. not RECEIVED)
-  // and are older than the kind's cutoff. Skip rows already stripped of raw content.
-  const toPurge = docs.filter((d) => {
-    if (!PURGEABLE_STATUSES.has(d.status) || !d.rawKey) return false;
-    if (!isRetentionKind(d.kind)) return false;
-    const cutoff = retentionCutoffFor(d.kind, now);
-    return d.createdAt < cutoff;
-  });
-
-  let purged = 0;
-  for (const doc of toPurge) {
-    try {
-      if (doc.rawKey) {
-        await storage.delete(doc.rawKey).catch(() => undefined);
+  for (const kind of RETENTION_KINDS) {
+    const cutoff = retentionCutoffFor(kind, now);
+    // Rows that failed stay in the result set; skip them so the loop still makes progress.
+    const failedIds = new Set<string>();
+    for (let batch = 0; batch < MAX_BATCHES_PER_KIND; batch++) {
+      const docs = (
+        await repos.listIngestionDocumentsForRetention(kind, cutoff, batchSize + failedIds.size)
+      ).filter((d) => !failedIds.has(d.id));
+      if (docs.length === 0) break;
+      checked += docs.length;
+      for (const doc of docs) {
+        try {
+          if (doc.rawKey) await storage.delete(doc.rawKey);
+          await repos.purgeIngestionDocumentRaw(doc.id);
+          purgedByKind[kind]++;
+        } catch (err) {
+          failed++;
+          failedIds.add(doc.id);
+          log.warn({ err, documentId: doc.id, kind }, "ingestion.retention.purge_failed");
+        }
       }
-      await repos.purgeIngestionDocumentRaw(doc.id);
-      purged++;
-      if (isRetentionKind(doc.kind)) purgedByKind[doc.kind]++;
-    } catch {
-      // per-doc failure shouldn't abort the job
+      if (docs.length < batchSize) break;
     }
   }
 
+  const purged = purgedByKind.EMAIL + purgedByKind.SMS + purgedByKind.RECEIPT;
   const shortestDays = Math.min(schedule.EMAIL, schedule.SMS, schedule.RECEIPT);
   const cutoff = new Date(now - shortestDays * 24 * 60 * 60 * 1000);
 
-  if (purged > 0) {
+  if (purged > 0 || failed > 0) {
     audit(log, "ingestion.retention.purged", {
       purged,
-      checked: docs.length,
+      checked,
+      failed,
       schedule,
       purgedByKind,
     });
   }
 
   return {
-    checked: docs.length,
+    checked,
     purged,
     cutoff: cutoff.toISOString(),
     retentionDays: schedule.EMAIL,
     schedule,
     purgedByKind,
+    failed,
   };
 }

@@ -49,18 +49,20 @@ describe("worker retention schedule", () => {
     ).toBe(false);
   });
 
-  it("never purges RECEIVED or empty rawKey", () => {
+  it("purges every status past TTL, never an empty rawKey", () => {
     clearEnv();
     const now = Date.now();
-    expect(
-      shouldPurgeRaw({
-        kind: "EMAIL",
-        status: "RECEIVED",
-        createdAt: new Date(now - 40 * 86_400_000),
-        rawKey: "raw/c.eml",
-        now,
-      }),
-    ).toBe(false);
+    for (const status of ["RECEIVED", "PARSED", "MATCHED", "UNMATCHED", "ERROR"]) {
+      expect(
+        shouldPurgeRaw({
+          kind: "EMAIL",
+          status,
+          createdAt: new Date(now - 40 * 86_400_000),
+          rawKey: "raw/c.eml",
+          now,
+        }),
+      ).toBe(true);
+    }
     expect(
       shouldPurgeRaw({
         kind: "EMAIL",

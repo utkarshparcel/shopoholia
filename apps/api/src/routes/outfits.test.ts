@@ -1,7 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { TodayOutfitResponse, WeekOutfitsResponse } from "@worn/shared";
 import { buildTestServer, login } from "../test-utils.js";
-import { interviewKitStore } from "../lib/interview-kit.js";
 import { mockWeatherFromDateLat, resolveWeather } from "../lib/weather.js";
 import * as weatherReroll from "../lib/weather-reroll.js";
 
@@ -525,7 +524,6 @@ describe("outfits", () => {
   it("POST /outfits/interview-kit saves look and schedules −1d reminder (N40)", async () => {
     // The interview below is a fixed date; reminders are only set for future ones.
     vi.useFakeTimers({ now: new Date("2026-08-27T12:00:00.000Z"), toFake: ["Date"] });
-    interviewKitStore.clear();
     const { app } = await buildTestServer();
     const { accessToken } = await login(app);
     const createdIds: string[] = [];
