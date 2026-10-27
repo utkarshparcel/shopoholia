@@ -7,7 +7,8 @@ import {
   utcMsForLocalWallClock,
   DEFAULT_OUTFIT_TZ,
 } from "./wardrobe-jobs.js";
-import type { sendExpoPush } from "@worn/shared";
+import { resolveTimeZone, type sendExpoPush } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const DRY_CLEAN_QUEUE = "dry-clean-pickup";
 export const DRY_CLEAN_JOB = "dry-clean-pickup-reminder";
@@ -58,44 +59,35 @@ export async function scheduleDryCleanPickup(
   payload: DryCleanPickupPayload,
   opts: { now?: Date; timeZone?: string } = {},
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.WARDROBE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
-
-  const timeZone = opts.timeZone ?? payload.timeZone ?? DEFAULT_OUTFIT_TZ;
-  const delayMs =
-    process.env.NODE_ENV === "test" && !opts.now
-      ? 100
-      : computeDryCleanPickupDelayMs(payload.pickupOn, {
-          now: opts.now,
-          timeZone,
-        });
+  const timeZone = resolveTimeZone(opts.timeZone ?? payload.timeZone);
+  const delayMs = computeDryCleanPickupDelayMs(payload.pickupOn, {
+    now: opts.now,
+    timeZone,
+  });
   if (delayMs === null) return "skipped";
 
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(DRY_CLEAN_QUEUE, { connection: redisUrl });
-    await queue.add(
-      DRY_CLEAN_JOB,
-      { ...payload, timeZone },
-      {
-        delay: delayMs,
-        jobId: dryCleanPickupJobId(payload.wardrobeItemId, payload.pickupOn),
-      },
-    );
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[dry-clean] pickup enqueue failed", String(err));
-    return "skipped";
-  }
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(
+    DRY_CLEAN_QUEUE,
+    DRY_CLEAN_JOB,
+    { ...payload, timeZone },
+    {
+      delay: delayMs,
+      jobId: jobIdFrom(dryCleanPickupJobId(payload.wardrobeItemId, payload.pickupOn)),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 export async function processDryCleanPickup(
   payload: DryCleanPickupPayload,
   repos: {
-    recordPushEvent: (input: Record<string, unknown>) => Promise<{ id: string }>;
+    recordPushEvent: (
+      input: Record<string, unknown>,
+    ) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
     findUserById?: (id: string) => Promise<{
-      consentFlags?: Record<string, unknown>;
+      prefs?: Record<string, unknown> | null;
+      timeZone?: string | null;
       pushToken?: string | null;
     } | null>;
     findWardrobeItem?: (
@@ -122,14 +114,15 @@ export async function processDryCleanPickup(
   }
 
   const { runClosetPushDelivery } = await import("@worn/shared");
-  const user = (await repos.findUserById?.(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = repos.findUserById
+    ? await repos.findUserById(payload.userId)
+    : { prefs: {}, timeZone: null, pushToken: null };
+  if (!user) return { status: "skipped" as const, reason: "user_gone" };
   const label = payload.category ?? item?.category ?? "item";
   return runClosetPushDelivery({
     eventType: DRY_CLEAN_PICKUP_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: "Dry-clean pickup today",
     body: `Ticket ${payload.ticket} · ${label} ready for pickup`,
@@ -152,7 +145,7 @@ export async function processDryCleanPickup(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

@@ -7,7 +7,9 @@ import {
   utcMsForLocalWallClock,
   DEFAULT_OUTFIT_TZ,
 } from "./wardrobe-jobs.js";
-import type { sendExpoPush } from "@worn/shared";
+import { resolveTimeZone, type sendExpoPush } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
+import type { RecordPushEventInput } from "./repositories/types.js";
 
 export const LENT_OVERDUE_QUEUE = "lent-overdue";
 export const LENT_OVERDUE_JOB = "lent-overdue-nudge";
@@ -60,48 +62,46 @@ export function computeLentOverdueDelayMs(
   return delay <= 0 ? 100 : delay;
 }
 
+/**
+ * Throws QueueUnavailableError when Redis can't take the job; "skipped" means a bad due date,
+ * or no Redis outside production.
+ */
 export async function scheduleLentOverdueNudge(
   payload: LentOverduePayload,
   opts: { now?: Date; timeZone?: string } = {},
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.WARDROBE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
-
-  const timeZone = opts.timeZone ?? payload.timeZone ?? DEFAULT_OUTFIT_TZ;
-  const delayMs =
-    process.env.NODE_ENV === "test" && !opts.now
-      ? 100
-      : computeLentOverdueDelayMs(payload.dueOn, {
-          now: opts.now,
-          timeZone,
-        });
+  const timeZone = resolveTimeZone(opts.timeZone ?? payload.timeZone);
+  const delayMs = computeLentOverdueDelayMs(payload.dueOn, {
+    now: opts.now,
+    timeZone,
+  });
   if (delayMs === null) return "skipped";
 
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(LENT_OVERDUE_QUEUE, { connection: redisUrl });
-    await queue.add(
-      LENT_OVERDUE_JOB,
-      { ...payload, timeZone },
-      {
-        delay: delayMs,
-        jobId: lentOverdueJobId(payload.wardrobeItemId, payload.dueOn),
-      },
-    );
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[borrow-lent] overdue enqueue failed", String(err));
-    return "skipped";
-  }
+  const result = await enqueueJob(
+    LENT_OVERDUE_QUEUE,
+    LENT_OVERDUE_JOB,
+    { ...payload, timeZone },
+    {
+      delay: delayMs,
+      jobId: jobIdFrom(lentOverdueJobId(payload.wardrobeItemId, payload.dueOn)),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }
 
+/**
+ * Sends the overdue push unless the item is gone, came back, or was lent again with another
+ * due date. Safe to run twice: the push row is keyed on (item, due date).
+ */
 export async function processLentOverdueNudge(
   payload: LentOverduePayload,
   repos: {
-    recordPushEvent: (input: Record<string, unknown>) => Promise<{ id: string }>;
+    recordPushEvent: (
+      input: RecordPushEventInput,
+    ) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
     findUserById?: (id: string) => Promise<{
-      consentFlags?: Record<string, unknown>;
+      prefs?: Record<string, unknown> | null;
+      timeZone?: string | null;
       pushToken?: string | null;
     } | null>;
     findWardrobeItem?: (
@@ -120,22 +120,37 @@ export async function processLentOverdueNudge(
   },
   opts: { now?: Date; sendExpo?: typeof sendExpoPush; asOf?: string } = {},
 ) {
-  const item = await repos.findWardrobeItem?.(payload.wardrobeItemId, payload.userId);
+  const item = repos.findWardrobeItem
+    ? await repos.findWardrobeItem(payload.wardrobeItemId, payload.userId)
+    : undefined;
+  if (item === null) return { status: "skipped" as const, reason: "item_gone" };
   if (item) {
     const stillLent = Boolean((item.lentTo ?? "").trim());
     if (!stillLent) return { status: "skipped" as const, reason: "returned" };
+    if (item.lentDueOn && item.lentDueOn !== payload.dueOn) {
+      return { status: "skipped" as const, reason: "due_date_changed" };
+    }
   }
 
   const { runClosetPushDelivery } = await import("@worn/shared");
-  const user = (await repos.findUserById?.(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = repos.findUserById
+    ? await repos.findUserById(payload.userId)
+    : { prefs: {}, timeZone: null, pushToken: null };
+  if (!user) return { status: "skipped" as const, reason: "user_gone" };
+  // Run early (a promoted or replayed job): not overdue yet on the user's clock, so wait.
+  const untilOverdueMs = computeLentOverdueDelayMs(payload.dueOn, {
+    now: opts.now,
+    timeZone: resolveTimeZone(user.timeZone ?? payload.timeZone),
+  });
+  if (untilOverdueMs !== null && untilOverdueMs > 1_000) {
+    return { status: "delayed" as const, delayMs: untilOverdueMs };
+  }
   const label = payload.category ?? item?.category ?? "item";
   const who = payload.lentTo || item?.lentTo || "friend";
   return runClosetPushDelivery({
     eventType: LENT_OVERDUE_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: "Lent item overdue",
     body: `${label} with ${who} was due ${payload.dueOn}`,
@@ -158,7 +173,7 @@ export async function processLentOverdueNudge(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

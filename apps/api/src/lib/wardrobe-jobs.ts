@@ -1,8 +1,11 @@
+import { DEFAULT_TIME_ZONE, resolveTimeZone } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
+
 export const OUTFIT_QUEUE = "outfit-generation";
 export const OUTFIT_JOB = "outfit-generate";
 
-/** Default TZ for India-first Closet; override via consentFlags.timezone. */
-export const DEFAULT_OUTFIT_TZ = "Asia/Kolkata";
+/** Default TZ for India-first Closet when the user has none (C1). */
+export const DEFAULT_OUTFIT_TZ = DEFAULT_TIME_ZONE;
 /** Local hour for the morning “your outfit today” push. */
 export const OUTFIT_PUSH_LOCAL_HOUR = 7;
 
@@ -41,16 +44,11 @@ function formatParts(
   );
 }
 
-/**
- * Resolve IANA timezone from consentFlags (or default).
- * Accepts `timezone` / `timeZone` string keys on the jsonb bag.
- */
+/** The user's IANA zone (C1: `users.time_zone`), or the default when unset or invalid. */
 export function resolveUserTimeZone(
-  consentFlags?: Record<string, unknown> | null,
+  user?: { timeZone?: string | null } | null,
 ): string {
-  const raw = consentFlags?.timezone ?? consentFlags?.timeZone;
-  if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
-  return DEFAULT_OUTFIT_TZ;
+  return resolveTimeZone(user?.timeZone);
 }
 
 /** Stable BullMQ jobId so re-scheduling replaces rather than duplicates. */
@@ -130,8 +128,8 @@ export function msUntilLocalHour(
 
 /**
  * Schedules the morning outfit generation + push for ~7am in the user's TZ.
- * Best effort — skips when Redis is unavailable.
- * Idempotent via `outfit:{userId}:{YYYY-MM-DD}` jobId (local day).
+ * Throws QueueUnavailableError when Redis can't take the job; "skipped" only without Redis
+ * outside production. Idempotent via the (user, local day) jobId.
  *
  * Quiet hours are enforced at delivery time in worker-wardrobe (not here),
  * so a 7am fire that lands inside an extended quiet window is delayed there.
@@ -140,37 +138,24 @@ export async function scheduleMorningOutfit(
   userId: string,
   opts: ScheduleMorningOutfitOpts = {},
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.WARDROBE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
-
   const now = opts.now ?? new Date();
-  const timeZone = opts.timeZone ?? DEFAULT_OUTFIT_TZ;
+  const timeZone = resolveTimeZone(opts.timeZone);
   const localHour = opts.localHour ?? OUTFIT_PUSH_LOCAL_HOUR;
-  const delayMs =
-    process.env.NODE_ENV === "test" && !opts.now
-      ? 100
-      : msUntilLocalHour(now, timeZone, localHour);
+  const delayMs = msUntilLocalHour(now, timeZone, localHour);
 
   // Day key for the morning the job will fire (local), not "now"
   const fireAt = new Date(now.getTime() + delayMs);
   const dayKey = localDayKey(fireAt, timeZone);
-  const jobId = outfitJobId(userId, dayKey);
-
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(OUTFIT_QUEUE, { connection: redisUrl });
-    const payload: OutfitPayload = {
-      userId,
-      trigger: "morning",
-      timeZone,
-    };
-    await queue.add(OUTFIT_JOB, payload, { delay: delayMs, jobId });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[audit] outfit.enqueue.failed", { userId, error: String(err) });
-    return "skipped";
-  }
+  const payload: OutfitPayload = {
+    userId,
+    trigger: "morning",
+    timeZone,
+  };
+  const result = await enqueueJob(OUTFIT_QUEUE, OUTFIT_JOB, payload, {
+    delay: delayMs,
+    jobId: jobIdFrom(outfitJobId(userId, dayKey)),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /** @deprecated Prefer scheduleMorningOutfit — kept for call-site compat. */

@@ -7,9 +7,12 @@ import {
   FREQUENCY_CAP_WINDOW_MS,
   parseNotificationPreferences,
 } from "./schemas/notifications.js";
+import { isInLocalQuietHours, isValidTimeZone, nextLocalSendAt } from "./local-time.js";
 
 /** Expo Push API endpoint (override in tests). */
 export const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
+/** Upper bound on one Expo send. */
+export const EXPO_PUSH_TIMEOUT_MS = 10_000;
 
 export type NotificationCategory = keyof NotificationCategories;
 
@@ -85,65 +88,46 @@ export type ExpoPushResult =
 
 export { FREQUENCY_CAP_WINDOW_MS };
 
-function parseHhMmToMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map((p) => Number(p));
-  return (h ?? 0) * 60 + (m ?? 0);
-}
-
-function utcMinutesOfDay(now: Date): number {
-  return now.getUTCHours() * 60 + now.getUTCMinutes();
-}
-
 /**
- * Quiet hours in UTC (HH:mm). Overnight windows (e.g. 22:00–07:00) wrap midnight.
- * End is exclusive: at quietHoursEnd the window is open again.
+ * Quiet hours (HH:mm) on the wall clock of `timeZone` (C1: pass `resolveTimeZone(user.timeZone)`).
+ * Overnight windows (e.g. 22:00–07:00) wrap midnight. End is exclusive: at quietHoursEnd the
+ * window is open again. `timeZone` defaults to UTC only for callers that predate C1.
  */
 export function isInQuietHours(
   now: Date,
   quietHoursStart: string,
   quietHoursEnd: string,
+  timeZone: string = "UTC",
 ): boolean {
-  const mins = utcMinutesOfDay(now);
-  const start = parseHhMmToMinutes(quietHoursStart);
-  const end = parseHhMmToMinutes(quietHoursEnd);
-  if (start === end) return false;
-  if (start < end) {
-    return mins >= start && mins < end;
-  }
-  return mins >= start || mins < end;
+  return isInLocalQuietHours(now, quietHoursStart, quietHoursEnd, timeZone);
 }
 
-/** Milliseconds until quietHoursEnd (UTC). 0 when not currently in quiet hours. */
+/** Milliseconds until quietHoursEnd in `timeZone`. 0 when not currently in quiet hours. */
 export function msUntilQuietHoursEnd(
   now: Date,
   quietHoursStart: string,
   quietHoursEnd: string,
+  timeZone: string = "UTC",
 ): number {
-  if (!isInQuietHours(now, quietHoursStart, quietHoursEnd)) return 0;
-  const end = parseHhMmToMinutes(quietHoursEnd);
-  const mins = utcMinutesOfDay(now);
-  const secs = now.getUTCSeconds();
-  const ms = now.getUTCMilliseconds();
-  let deltaMins = end - mins;
-  if (deltaMins <= 0) deltaMins += 24 * 60;
-  return deltaMins * 60_000 - secs * 1000 - ms;
+  return nextLocalSendAt(now, quietHoursStart, quietHoursEnd, timeZone).getTime() - now.getTime();
 }
 
 /**
  * Next moment a Closet push may send (W025).
- * Outside quiet hours → `now`; inside → quietHoursEnd instant.
+ * Outside quiet hours → `now`; inside → the instant quiet hours end in `timeZone`.
  */
 export function nextEligibleSendAt(
   now: Date,
   quietHoursStart: string,
   quietHoursEnd: string,
+  timeZone: string = "UTC",
 ): Date {
-  const delay = msUntilQuietHoursEnd(now, quietHoursStart, quietHoursEnd);
-  return delay <= 0 ? new Date(now.getTime()) : new Date(now.getTime() + delay);
+  return nextLocalSendAt(now, quietHoursStart, quietHoursEnd, timeZone);
 }
 
 /**
- * Human preview: “Next send at 7:00 AM” in the caller's timezone (default UTC).
+ * Human preview: “Next send at 07:00”. Quiet hours are evaluated and shown in `opts.timeZone`
+ * (default UTC).
  */
 export function formatQuietHoursNextSendPreview(
   now: Date,
@@ -151,8 +135,9 @@ export function formatQuietHoursNextSendPreview(
   quietHoursEnd: string,
   opts?: { timeZone?: string; locale?: string },
 ): string {
-  const next = nextEligibleSendAt(now, quietHoursStart, quietHoursEnd);
-  const timeZone = opts?.timeZone ?? "UTC";
+  const requestedZone = opts?.timeZone;
+  const timeZone = isValidTimeZone(requestedZone) ? requestedZone : "UTC";
+  const next = nextEligibleSendAt(now, quietHoursStart, quietHoursEnd, timeZone);
   const locale = opts?.locale ?? "en-IN";
   let timeLabel: string;
   try {
@@ -165,7 +150,7 @@ export function formatQuietHoursNextSendPreview(
   } catch {
     timeLabel = next.toISOString().slice(11, 16);
   }
-  if (!isInQuietHours(now, quietHoursStart, quietHoursEnd)) {
+  if (!isInQuietHours(now, quietHoursStart, quietHoursEnd, timeZone)) {
     return `Next send at ${timeLabel} (quiet hours open)`;
   }
   return `Next send at ${timeLabel}`;
@@ -189,6 +174,9 @@ export function notificationCategoryForEvent(
     case "CPW_GOAL":
     case "REWEAR_STREAK":
     case "DRY_CLEAN_PICKUP":
+    case "LENT_OVERDUE":
+    case "CAL_EVENT_OUTFIT":
+    case "INTERVIEW_KIT_REMINDER":
       return "outfits";
     case "WEEKLY_DIGEST":
       return "digest";
@@ -298,11 +286,14 @@ export function frequencyCapForCategory(
   return caps[category];
 }
 
+/**
+ * Opt-out → skip, frequency cap → skip, quiet hours (local to `opts.timeZone`) → delay.
+ */
 export function evaluateNotificationGate(
   prefs: NotificationPreferences,
   category: NotificationCategory | null,
-  now: Date = new Date(),
-  opts: { recentCategoryCount?: number } = {},
+  now: Date,
+  opts: { recentCategoryCount?: number; timeZone: string },
 ): NotificationGate {
   if (category && prefs.categories[category] === false) {
     return { action: "skip", reason: "category_opt_out" };
@@ -313,20 +304,28 @@ export function evaluateNotificationGate(
       return { action: "skip", reason: "frequency_cap" };
     }
   }
-  if (isInQuietHours(now, prefs.quietHoursStart, prefs.quietHoursEnd)) {
-    const delayMs = msUntilQuietHoursEnd(now, prefs.quietHoursStart, prefs.quietHoursEnd);
+  const delayMs = msUntilQuietHoursEnd(
+    now,
+    prefs.quietHoursStart,
+    prefs.quietHoursEnd,
+    opts.timeZone,
+  );
+  if (delayMs > 0) {
     return { action: "delay", delayMs: Math.max(delayMs, 100) };
   }
   return { action: "send" };
 }
 
+/**
+ * Gate from a settings bag: pass `user.prefs` (C2) and `resolveTimeZone(user.timeZone)` (C1).
+ */
 export function evaluateNotificationGateFromFlags(
-  consentFlags: Record<string, unknown> | null | undefined,
+  prefsBag: Record<string, unknown> | null | undefined,
   eventType: string,
-  now: Date = new Date(),
-  opts: { recentCategoryCount?: number } = {},
+  now: Date,
+  opts: { recentCategoryCount?: number; timeZone: string },
 ): NotificationGate {
-  const prefs = parseNotificationPreferences(consentFlags);
+  const prefs = parseNotificationPreferences(prefsBag);
   return evaluateNotificationGate(
     prefs,
     notificationCategoryForEvent(eventType),
@@ -373,6 +372,7 @@ export function closetDeepLinkForEvent(
       };
     case "WEAR_CHALLENGE":
     case "DRY_CLEAN_PICKUP":
+    case "LENT_OVERDUE":
       return {
         deepLink: extra.wardrobeItemId
           ? `worn://wardrobe?item=${extra.wardrobeItemId}`
@@ -380,6 +380,8 @@ export function closetDeepLinkForEvent(
         screen: "wardrobe",
       };
     case "REWEAR_STREAK":
+    case "CAL_EVENT_OUTFIT":
+    case "INTERVIEW_KIT_REMINDER":
       return {
         deepLink: "worn://today",
         screen: "today",
@@ -486,6 +488,7 @@ export async function sendExpoPush(
   opts: {
     fetchImpl?: typeof fetch;
     endpoint?: string;
+    timeoutMs?: number;
   } = {},
 ): Promise<ExpoPushResult> {
   if (!message.to) {
@@ -513,6 +516,10 @@ export async function sendExpoPush(
     if (message.mutableContent) body.mutableContent = true;
 
     const res = await fetchImpl(opts.endpoint ?? EXPO_PUSH_ENDPOINT, {
+      // Bounded: a hung Expo call must not hold a worker slot (or its job lock) forever.
+      ...(typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+        ? { signal: AbortSignal.timeout(opts.timeoutMs ?? EXPO_PUSH_TIMEOUT_MS) }
+        : {}),
       method: "POST",
       headers: {
         Accept: "application/json",

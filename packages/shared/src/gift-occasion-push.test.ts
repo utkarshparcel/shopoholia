@@ -98,7 +98,7 @@ describe("giftOccasionPushCopy", () => {
       now: new Date("2026-08-26T12:00:00.000Z"),
     });
     expect(oneDay.title).toBe("1 day to Anniversary");
-    expect(oneDay.body).toContain("3 perfect gifts");
+    expect(oneDay.body).toBe("Time to pick a gift for them.");
 
     const other = giftOccasionPushCopy({
       occasion: "CUSTOM",
@@ -125,7 +125,8 @@ describe("deliverGiftOccasionPush", () => {
       label: "Diwali",
       recipientName: "Mom",
       ideaCount: 3,
-      consentFlags: {},
+      prefs: {},
+      timeZone: "UTC",
       pushToken: "ExponentPushToken[gift]",
       now: NOON,
       sendExpo,
@@ -154,7 +155,8 @@ describe("deliverGiftOccasionPush", () => {
       recipientId: "r1",
       occasion: "birthday",
       date: "2026-09-01",
-      consentFlags: {},
+      prefs: {},
+      timeZone: "UTC",
       pushToken: "ExponentPushToken[x]",
       now: new Date("2026-08-26T23:15:00.000Z"),
       insertQueued,

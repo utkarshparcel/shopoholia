@@ -8,6 +8,7 @@ import {
   type ProcessPushResult,
   type sendExpoPush,
 } from "./push-delivery.js";
+import { resolveTimeZone } from "./local-time.js";
 
 export {
   GIFT_OCCASION_EVENT,
@@ -30,10 +31,16 @@ export {
  *
  * Gift occasions (WV07-OCCASION-PUSH): prefer `deliverGiftOccasionPush`, which
  * wraps this helper with festival/birthday lead copy and deep links.
+ *
+ * Safe to run twice: `insertQueued` must be idempotent on its dedupe key and return the
+ * row's status; a row that is already SENT is not sent again.
  */
 export async function runClosetPushDelivery(input: {
   eventType: string;
-  consentFlags: Record<string, unknown> | null | undefined;
+  /** `user.prefs` (C2): notification settings live there, not in consent flags. */
+  prefs: Record<string, unknown> | null | undefined;
+  /** `user.timeZone` (C1): quiet hours are on the user's wall clock. */
+  timeZone: string | null | undefined;
   pushToken: string | null | undefined;
   title: string;
   body: string;
@@ -55,7 +62,7 @@ export async function runClosetPushDelivery(input: {
     title: string;
     body: string;
     payload: ClosetPushDeepLink & Record<string, unknown>;
-  }) => Promise<{ id: string }>;
+  }) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
   markStatus: (
     id: string,
     status: "SENT" | "FAILED",
@@ -63,12 +70,10 @@ export async function runClosetPushDelivery(input: {
   ) => Promise<void>;
 }): Promise<ProcessPushResult> {
   const now = input.now ?? new Date();
-  const gate = evaluateNotificationGateFromFlags(
-    input.consentFlags,
-    input.eventType,
-    now,
-    { recentCategoryCount: input.recentCategoryCount },
-  );
+  const gate = evaluateNotificationGateFromFlags(input.prefs, input.eventType, now, {
+    recentCategoryCount: input.recentCategoryCount,
+    timeZone: resolveTimeZone(input.timeZone),
+  });
 
   if (gate.action === "skip") {
     return { status: "skipped" };
@@ -88,13 +93,16 @@ export async function runClosetPushDelivery(input: {
     ...(input.payloadExtra ?? {}),
   };
 
-  const { id } = await input.insertQueued({
+  const { id, status } = await input.insertQueued({
     title: input.title,
     body: input.body,
     payload,
   });
+  // A rerun of a job whose push already went out: never send it twice.
+  if (status === "SENT") return { status: "skipped" };
 
-  console.info("[push]", input.eventType, link.deepLink, input.title);
+  // Ids only: titles and deep links can carry item names and amounts.
+  console.info("[push]", { eventType: input.eventType, pushEventId: id });
 
   const delivered = await deliverQueuedPush({
     pushToken: input.pushToken,

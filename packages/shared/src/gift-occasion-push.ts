@@ -103,14 +103,17 @@ export function giftOccasionPushCopy(input: {
   const days = utcDaysUntil(input.date, now);
   const label = prettyOccasion(input.occasion, input.label);
   const name = input.recipientName?.trim() || "them";
-  const n = input.ideaCount != null && input.ideaCount > 0 ? input.ideaCount : 3;
   const title =
     days <= 0
       ? `${label} is today`
       : days === 1
         ? `1 day to ${label}`
         : `${days} days to ${label}`;
-  const body = `${n} perfect gifts for ${name}, all in budget.`;
+  // A count only when the caller counted real ideas; otherwise no number is claimed.
+  const body =
+    input.ideaCount != null && input.ideaCount > 0
+      ? `${input.ideaCount} perfect gifts for ${name}, all in budget.`
+      : `Time to pick a gift for ${name}.`;
   return { title, body };
 }
 
@@ -122,7 +125,9 @@ export type GiftOccasionDeliveryDeps = {
   label?: string | null;
   recipientName?: string | null;
   ideaCount?: number;
-  consentFlags: Record<string, unknown> | null | undefined;
+  /** `user.prefs` (C2) and `user.timeZone` (C1). */
+  prefs: Record<string, unknown> | null | undefined;
+  timeZone: string | null | undefined;
   pushToken: string | null | undefined;
   now?: Date;
   sendExpo?: typeof sendExpoPush;
@@ -130,7 +135,7 @@ export type GiftOccasionDeliveryDeps = {
     title: string;
     body: string;
     payload: Record<string, unknown>;
-  }) => Promise<{ id: string }>;
+  }) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
   markStatus: (
     id: string,
     status: "SENT" | "FAILED",
@@ -154,7 +159,8 @@ export async function deliverGiftOccasionPush(
   });
   return runClosetPushDelivery({
     eventType: GIFT_OCCASION_EVENT,
-    consentFlags: input.consentFlags,
+    prefs: input.prefs,
+    timeZone: input.timeZone,
     pushToken: input.pushToken,
     title: copy.title,
     body: copy.body,

@@ -8,6 +8,7 @@ import {
   type sendExpoPush,
 } from "@worn/shared";
 import type { EmiPlanRecord, Repositories } from "./repositories/types.js";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const EMI_QUEUE = "emi-due";
 export const EMI_DUE_JOB = "emi-due-nudge";
@@ -41,52 +42,58 @@ export async function scheduleEmiDueNudge(
   >,
 ): Promise<"published" | "skipped"> {
   if (plan.status !== "ACTIVE" || plan.remainingMinor <= 0) return "skipped";
-  const redisUrl = process.env.EMI_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
 
   const delay = computeEmiNudgeDelayMs(plan.nextDueOn);
   if (delay === null) return "skipped";
 
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(EMI_QUEUE, { connection: redisUrl });
-    const payload: EmiDuePayload = {
-      planId: plan.id,
-      userId: plan.userId,
-      provider: plan.provider,
-      merchant: plan.merchant,
-      remainingMinor: plan.remainingMinor,
-      installmentMinor: plan.installmentMinor,
-      dueOn: plan.nextDueOn,
-      currency: plan.currency,
-    };
-    await queue.add(EMI_DUE_JOB, payload, {
-      delay,
-      jobId: emiDueJobId(plan.id, plan.nextDueOn),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[emi] due nudge enqueue failed", String(err));
-    return "skipped";
-  }
+  const payload: EmiDuePayload = {
+    planId: plan.id,
+    userId: plan.userId,
+    provider: plan.provider,
+    merchant: plan.merchant,
+    remainingMinor: plan.remainingMinor,
+    installmentMinor: plan.installmentMinor,
+    dueOn: plan.nextDueOn,
+    currency: plan.currency,
+  };
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(EMI_QUEUE, EMI_DUE_JOB, payload, {
+    delay,
+    jobId: jobIdFrom(emiDueJobId(plan.id, plan.nextDueOn)),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
+/**
+ * Sends the EMI-due push unless the plan was paid, closed or moved to another due date since
+ * the job was queued. Safe to run twice: the push row is keyed on (plan, due date).
+ */
 export async function processEmiDueNudge(
   payload: EmiDuePayload,
-  repos: Pick<Repositories, "recordPushEvent" | "findUserById" | "updatePushEventStatus">,
+  repos: Pick<
+    Repositories,
+    "recordPushEvent" | "findUserById" | "updatePushEventStatus" | "findEmiPlan"
+  >,
   opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
 ) {
   const { runClosetPushDelivery } = await import("@worn/shared");
-  const user = (await repos.findUserById(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const plan = await repos.findEmiPlan(payload.planId, payload.userId);
+  if (
+    !plan ||
+    plan.status !== "ACTIVE" ||
+    plan.remainingMinor <= 0 ||
+    plan.nextDueOn !== payload.dueOn
+  ) {
+    return { status: "skipped" as const };
+  }
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" as const };
   const amount = (payload.installmentMinor / 100).toFixed(0);
   const label = payload.merchant ? `${payload.provider} · ${payload.merchant}` : payload.provider;
   return runClosetPushDelivery({
     eventType: EMI_DUE_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: `EMI due ${payload.dueOn}`,
     body: `${label}: ₹${amount} installment (₹${(payload.remainingMinor / 100).toFixed(0)} left)`,
@@ -105,7 +112,7 @@ export async function processEmiDueNudge(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

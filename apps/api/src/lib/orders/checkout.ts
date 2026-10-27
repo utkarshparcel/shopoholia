@@ -26,6 +26,7 @@ import {
 } from "../cooling-off-jobs.js";
 import { resolveCandidatePriceMinor } from "../prebuy-fit.js";
 import { trackServerEvent } from "../analytics.js";
+import { captureException } from "../sentry.js";
 import type { OrderRecord } from "../repositories/types.js";
 
 export type CheckoutDeps = {
@@ -148,7 +149,13 @@ export async function checkoutOrder(
     if (decision.action === "soft_lock") {
       if (decision.started) {
         await deps.repos.patchUserPrefs(input.userId, { coolingOff: decision.hold });
-        void scheduleCoolingOffRelease(holdToReleasePayload(input.userId, decision.hold));
+        // The hold still ends on time without the push; a failed enqueue is reported, not hidden.
+        void scheduleCoolingOffRelease(holdToReleasePayload(input.userId, decision.hold)).catch(
+          (err: unknown) => {
+            console.error("[cooling-off] release push not enqueued", { userId: input.userId }, err);
+            captureException(err, { tags: { queue: "cooling-off-release" } });
+          },
+        );
         trackServerEvent("cooling_off_started", {
           userId: input.userId,
           category: decision.hold.category,

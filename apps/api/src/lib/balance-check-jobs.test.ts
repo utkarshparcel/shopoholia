@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -25,13 +28,14 @@ import {
   processBalanceRecheckReminder,
   scheduleBalanceRecheckReminder,
 } from "./balance-check-jobs.js";
+import { jobIdFrom } from "./queues/enqueue.js";
 
 describe("balance-check-jobs reminder", () => {
   beforeEach(() => {
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
     queueMocks.failAdd = false;
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
   });
   afterEach(() => {
     delete process.env.REDIS_URL;
@@ -60,7 +64,8 @@ describe("balance-check-jobs reminder", () => {
         merchant: "Myntra",
       }),
       expect.objectContaining({
-        jobId: "credit-balance-recheck:acc-1",
+        // Keyed on the check day: a later re-check schedules a fresh reminder.
+        jobId: jobIdFrom("credit-balance-recheck:acc-1", "2026-08-01"),
       }),
     );
   });
@@ -78,7 +83,7 @@ describe("balance-check-jobs reminder", () => {
       }),
     ).toBe("skipped");
 
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     expect(
       await scheduleBalanceRecheckReminder({
         id: "acc-1",
@@ -112,13 +117,14 @@ describe("balance-check-jobs reminder", () => {
             merchant: "Myntra",
           }) as never,
         findUserById: async () => ({
-          consentFlags: { push: true, credits: true },
+          prefs: { push: true, credits: true },
+          timeZone: "Asia/Kolkata",
           pushToken: null,
         }),
         recordPushEvent: recordPushEvent as never,
         updatePushEventStatus: vi.fn(),
       },
-      // Midday UTC: outside the default 22:00-07:00 UTC quiet hours.
+      // 17:30 IST: outside the default 22:00-07:00 local quiet hours.
       { now: new Date("2026-07-02T12:00:00.000Z") },
     );
     expect(result).toBeTruthy();

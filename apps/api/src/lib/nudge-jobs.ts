@@ -13,13 +13,13 @@ import {
   foundMoneyWaitingJobId,
   monthlyDigestJobId,
   notificationCategoryForEvent,
-  parseNotificationPreferences,
   utcIsoWeekKey,
   utcMonthKey,
   weeklyDigestJobId,
   type ProcessPushResult,
   type sendExpoPush,
 } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export {
   NUDGE_QUEUE,
@@ -41,6 +41,8 @@ export type FoundMoneyWaitingPayload = {
   totalMinor: number;
   accountCount: number;
   currency?: string;
+  /** ISO week the job was scheduled for; the push dedupes on it so a retry next week can't resend. */
+  weekKey?: string;
 };
 
 export type WeeklyDigestPayload = {
@@ -50,6 +52,7 @@ export type WeeklyDigestPayload = {
   stillHaveMinor?: number | null;
   avgCostPerWearMinor?: number | null;
   currency?: string;
+  weekKey?: string;
 };
 
 export type MonthlyDigestPayload = {
@@ -58,11 +61,14 @@ export type MonthlyDigestPayload = {
   avgCostPerWearMinor?: number | null;
   monthLabel?: string;
   currency?: string;
+  /** Month the job was scheduled for (YYYY-MM); the push dedupes on it. */
+  monthKey?: string;
 };
 
 export type NudgeRepos = {
   findUserById: (id: string) => Promise<{
-    consentFlags?: Record<string, unknown> | null;
+    prefs?: Record<string, unknown> | null;
+    timeZone?: string | null;
     pushToken?: string | null;
   } | null>;
   recordPushEvent: (input: {
@@ -74,7 +80,7 @@ export type NudgeRepos = {
     body: string;
     payload: Record<string, unknown>;
     status: "QUEUED";
-  }) => Promise<{ id: string }>;
+  }) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
   updatePushEventStatus?: (
     id: string,
     status: "SENT" | "FAILED",
@@ -130,24 +136,20 @@ export async function scheduleFoundMoneyWaiting(
   opts: { delayMs?: number; now?: Date } = {},
 ): Promise<"published" | "skipped"> {
   if (payload.totalMinor <= 0) return "skipped";
-  const redisUrl = process.env.NUDGE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
   const now = opts.now ?? new Date();
   const weekKey = utcIsoWeekKey(now);
   const delayMs = opts.delayMs ?? 7 * 86_400_000;
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(NUDGE_QUEUE, { connection: redisUrl });
-    await queue.add(FOUND_MONEY_WAITING_JOB, payload, {
-      delay: Math.max(100, delayMs),
-      jobId: foundMoneyWaitingJobId(payload.userId, weekKey),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[nudge] found-money enqueue failed", String(err));
-    return "skipped";
-  }
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(
+    NUDGE_QUEUE,
+    FOUND_MONEY_WAITING_JOB,
+    { ...payload, weekKey },
+    {
+      delay: Math.max(0, delayMs),
+      jobId: jobIdFrom(foundMoneyWaitingJobId(payload.userId, weekKey)),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /** Schedule weekly digest for the current ISO week (idempotent). */
@@ -155,24 +157,20 @@ export async function scheduleWeeklyDigest(
   payload: WeeklyDigestPayload,
   opts: { delayMs?: number; now?: Date } = {},
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.NUDGE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
   const now = opts.now ?? new Date();
   const weekKey = utcIsoWeekKey(now);
-  const delayMs = opts.delayMs ?? 100;
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(NUDGE_QUEUE, { connection: redisUrl });
-    await queue.add(WEEKLY_DIGEST_JOB, payload, {
-      delay: Math.max(100, delayMs),
-      jobId: weeklyDigestJobId(payload.userId, weekKey),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[nudge] weekly-digest enqueue failed", String(err));
-    return "skipped";
-  }
+  const delayMs = opts.delayMs ?? 0;
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(
+    NUDGE_QUEUE,
+    WEEKLY_DIGEST_JOB,
+    { ...payload, weekKey },
+    {
+      delay: Math.max(0, delayMs),
+      jobId: jobIdFrom(weeklyDigestJobId(payload.userId, weekKey)),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /** Schedule monthly closet P&L digest for the current UTC month (idempotent). */
@@ -180,28 +178,20 @@ export async function scheduleMonthlyDigest(
   payload: MonthlyDigestPayload,
   opts: { delayMs?: number; now?: Date } = {},
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.NUDGE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
   const now = opts.now ?? new Date();
   const monthKey = utcMonthKey(now);
-  const delayMs = opts.delayMs ?? 100;
+  const delayMs = opts.delayMs ?? 0;
   const body: MonthlyDigestPayload = {
     ...payload,
     monthLabel: payload.monthLabel ?? monthKey,
+    monthKey,
   };
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(NUDGE_QUEUE, { connection: redisUrl });
-    await queue.add(MONTHLY_DIGEST_JOB, body, {
-      delay: Math.max(100, delayMs),
-      jobId: monthlyDigestJobId(payload.userId, monthKey),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[nudge] monthly-digest enqueue failed", String(err));
-    return "skipped";
-  }
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(NUDGE_QUEUE, MONTHLY_DIGEST_JOB, body, {
+    delay: Math.max(0, delayMs),
+    jobId: jobIdFrom(monthlyDigestJobId(payload.userId, monthKey)),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 export async function processFoundMoneyWaiting(
@@ -210,24 +200,22 @@ export async function processFoundMoneyWaiting(
   opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
 ): Promise<ProcessPushResult> {
   const now = opts.now ?? new Date();
-  const user = (await repos.findUserById(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" };
+  const weekKey = payload.weekKey ?? utcIsoWeekKey(now);
   const recentCategoryCount = await recentCountForEvent(
     repos,
     payload.userId,
     FOUND_MONEY_WAITING_EVENT,
     now,
   );
-  // Touch prefs so legacy bags backfill digest/caps before gate.
-  parseNotificationPreferences(user.consentFlags);
 
   return deliverFoundMoneyWaiting({
     totalMinor: payload.totalMinor,
     accountCount: payload.accountCount,
     currency: payload.currency,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     recentCategoryCount,
     now,
@@ -237,13 +225,13 @@ export async function processFoundMoneyWaiting(
         userId: payload.userId,
         orderId: null,
         eventType: FOUND_MONEY_WAITING_EVENT,
-        dedupeKey: foundMoneyWaitingJobId(payload.userId, utcIsoWeekKey(now)),
+        dedupeKey: foundMoneyWaitingJobId(payload.userId, weekKey),
         title,
         body,
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);
@@ -257,24 +245,23 @@ export async function processWeeklyDigest(
   opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
 ): Promise<ProcessPushResult> {
   const now = opts.now ?? new Date();
-  const user = (await repos.findUserById(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" };
+  const weekKey = payload.weekKey ?? utcIsoWeekKey(now);
   const recentCategoryCount = await recentCountForEvent(
     repos,
     payload.userId,
     WEEKLY_DIGEST_EVENT,
     now,
   );
-  parseNotificationPreferences(user.consentFlags);
 
   return deliverWeeklyDigest({
     spendMinor: payload.spendMinor,
     stillHaveMinor: payload.stillHaveMinor,
     avgCostPerWearMinor: payload.avgCostPerWearMinor,
     currency: payload.currency,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     recentCategoryCount,
     now,
@@ -284,13 +271,13 @@ export async function processWeeklyDigest(
         userId: payload.userId,
         orderId: null,
         eventType: WEEKLY_DIGEST_EVENT,
-        dedupeKey: weeklyDigestJobId(payload.userId, utcIsoWeekKey(now)),
+        dedupeKey: weeklyDigestJobId(payload.userId, weekKey),
         title,
         body,
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);
@@ -304,26 +291,24 @@ export async function processMonthlyDigest(
   opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
 ): Promise<ProcessPushResult> {
   const now = opts.now ?? new Date();
-  const monthKey = utcMonthKey(now);
+  const monthKey = payload.monthKey ?? utcMonthKey(now);
   const monthLabel = payload.monthLabel ?? monthKey;
-  const user = (await repos.findUserById(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" };
   const recentCategoryCount = await recentCountForEvent(
     repos,
     payload.userId,
     MONTHLY_DIGEST_EVENT,
     now,
   );
-  parseNotificationPreferences(user.consentFlags);
 
   return deliverMonthlyDigest({
     spendMinor: payload.spendMinor,
     avgCostPerWearMinor: payload.avgCostPerWearMinor,
     monthLabel,
     currency: payload.currency,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     recentCategoryCount,
     now,
@@ -339,7 +324,7 @@ export async function processMonthlyDigest(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

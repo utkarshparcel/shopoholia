@@ -353,8 +353,8 @@ export async function maybeSendSpendEnvelopeAlert(
 
   const result = await runClosetPushDelivery({
     eventType: SPEND_ENVELOPE_EVENT,
-    // Notification prefs live in users.prefs (C2).
-    consentFlags: user.prefs,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: copy.title,
     body: copy.body,

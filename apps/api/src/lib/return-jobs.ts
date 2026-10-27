@@ -5,6 +5,7 @@ import {
   computeExchangeWindowDeadline,
   merchantWindowsDiffer,
 } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const RETURN_DEADLINE_QUEUE = "return-deadline";
 export const RETURN_DEADLINE_JOB = "return-deadline-reminder";
@@ -122,29 +123,22 @@ export function computeReturnReminderDelayMs(
 ): number | null {
   const deadline = new Date(windowDeadline).getTime();
   const delayMs = deadline - nowMs;
-  if (delayMs <= 0) return null;
+  // An unparseable deadline is NaN: no reminder rather than a NaN delay.
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return null;
   const reminderDelay = delayMs - leadMs;
   return reminderDelay <= 0 ? 100 : reminderDelay;
 }
 
 export async function scheduleReturnDeadlineReminder(payload: ReturnDeadlinePayload): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.RETURN_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
   const reminderDelay = computeReturnReminderDelayMs(payload.windowDeadline);
   if (reminderDelay === null) return "skipped";
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(RETURN_DEADLINE_QUEUE, { connection: redisUrl });
-    await queue.add(RETURN_DEADLINE_JOB, payload, {
-      delay: reminderDelay,
-      jobId: `return:${payload.returnId}`,
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[audit] return-deadline.enqueue.failed", { returnId: payload.returnId, error: String(err) });
-    return "skipped";
-  }
+  // Keyed on the deadline too, so moving it schedules a new reminder.
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(RETURN_DEADLINE_QUEUE, RETURN_DEADLINE_JOB, payload, {
+    delay: reminderDelay,
+    jobId: jobIdFrom(`return:${payload.returnId}`, payload.windowDeadline),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /**

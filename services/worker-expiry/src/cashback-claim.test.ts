@@ -7,7 +7,8 @@ import {
   processCashbackClaimDeadline,
 } from "./index.js";
 import type { CashbackClaimDeadlinePayload } from "./index.js";
-import type { Db } from "@worn/db";
+import { cashbackClaims } from "@worn/db";
+import { mockDb as mockTables, type MockUser } from "./mock-db.test-helper.js";
 
 const payload: CashbackClaimDeadlinePayload = {
   claimId: "00000000-0000-4000-8000-0000000000c1",
@@ -21,67 +22,10 @@ const payload: CashbackClaimDeadlinePayload = {
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
-function mockDb(opts: {
-  claim?: { status: string } | null;
-  user?: {
-    consentFlags?: Record<string, unknown>;
-    pushToken?: string | null;
-  } | null;
-} = {}) {
-  const inserted: Array<Record<string, unknown>> = [];
-  const updated: Array<Record<string, unknown>> = [];
+function mockDb(opts: { claim?: { status: string } | null; user?: MockUser } = {}) {
   const claimRows =
-    opts.claim === null
-      ? []
-      : [
-          {
-            id: payload.claimId,
-            status: opts.claim?.status ?? "UNCLAIMED",
-          },
-        ];
-  const userRows =
-    opts.user === null
-      ? []
-      : [
-          {
-            consentFlags: opts.user?.consentFlags ?? {},
-            pushToken: opts.user?.pushToken ?? null,
-          },
-        ];
-
-  let selectCall = 0;
-  return {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => {
-            selectCall += 1;
-            // First select is cashbackClaims; second is users.
-            return Promise.resolve(selectCall === 1 ? claimRows : userRows);
-          },
-        }),
-      }),
-    }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        inserted.push(v);
-        return Promise.resolve();
-      },
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => ({
-        where: () => {
-          updated.push(v);
-          return Promise.resolve();
-        },
-      }),
-    }),
-    inserted,
-    updated,
-  } as unknown as Db & {
-    inserted: Array<Record<string, unknown>>;
-    updated: Array<Record<string, unknown>>;
-  };
+    opts.claim === null ? [] : [{ id: payload.claimId, status: opts.claim?.status ?? "UNCLAIMED" }];
+  return mockTables(opts.user, [[cashbackClaims, claimRows]]);
 }
 
 describe("worker-expiry cashback-claim queue (U006)", () => {

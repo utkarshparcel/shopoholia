@@ -21,6 +21,9 @@ vi.mock("bullmq", () => ({
     add(...args: unknown[]) {
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }

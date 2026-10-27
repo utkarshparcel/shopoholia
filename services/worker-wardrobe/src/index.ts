@@ -1,10 +1,15 @@
-import { Worker } from "bullmq";
-import type { RedisOptions } from "ioredis";
+import { DelayedError, UnrecoverableError, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import {
-  attachBullmqFailureReporting,
-  initNodeSentry,
-} from "@worn/shared/node-sentry";
+  JOB_REMOVE_ON_COMPLETE,
+  JOB_REMOVE_ON_FAIL,
+  attachStalledDeadLetters,
+  createJobProcessor,
+  deadLetterAlert,
+  settlePushResult,
+  type DeadLetter,
+} from "@worn/shared";
+import { captureNodeException, initNodeSentry } from "@worn/shared/node-sentry";
 import { processOutfit } from "./handler.js";
 import { processDryCleanPickupJob } from "./dry-clean.js";
 import {
@@ -13,7 +18,7 @@ import {
   type DryCleanPickupPayload,
   type OutfitPayload,
 } from "./queues.js";
-import type { Db } from "@worn/db";
+import { recordJobDeadLetter, type Db } from "@worn/db";
 
 export interface WardrobeWorkerConsumer {
   start(): Promise<void>;
@@ -25,7 +30,10 @@ export interface BullmqWardrobeOptions {
   redisUrl?: string;
   connection?: Redis;
   db?: Db | null;
+  /** Replaces the outfit handler (tests); the dry-clean queue still needs `db`. */
   handler?: WardrobeHandler;
+  /** Where final failures go; defaults to job_dead_letters in `db`. */
+  recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
   concurrency?: number;
 }
 
@@ -37,52 +45,65 @@ export function createBullmqWardrobeWorker(
 } {
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
   if (!redisUrl && !options.connection) {
-    throw new Error("REDIS_URL or explicit connection required for worker-wardrobe");
+    throw new Error("REDIS_URL or an explicit connection is required for worker-wardrobe");
   }
-  const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
   const db = options.db ?? null;
-  const handler: WardrobeHandler =
+  // Without a Db every job would fail: refuse to start instead.
+  if (!db) throw new Error("A Db is required for worker-wardrobe");
+  const recordDeadLetter =
+    options.recordDeadLetter ?? (async (entry: DeadLetter) => void (await recordJobDeadLetter(db, entry)));
+  const ownConnection = !options.connection;
+  const connection = options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
+
+  initNodeSentry({ worker: "wardrobe" });
+  const onDeadLetter = deadLetterAlert((err, tags) => captureNodeException(err, { worker: "wardrobe", ...tags }));
+  const handleOutfit: WardrobeHandler =
     options.handler ??
     (async (payload) => {
-      if (!db) throw new Error("Db required");
-      await processOutfit(payload, db);
+      const result = await processOutfit(payload, db);
+      if (result.push) settlePushResult(OUTFIT_QUEUE, result.push);
     });
   const worker = new Worker<OutfitPayload>(
     OUTFIT_QUEUE,
-    async (job, token) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) throw new Error("Db required");
-      const result = await processOutfit(job.data, db);
-      if (result.push?.status === "delayed" && token) {
-        await job.moveToDelayed(Date.now() + result.push.delayMs, token);
-      }
+    createJobProcessor<OutfitPayload>({
+      queue: OUTFIT_QUEUE,
+      handle: handleOutfit,
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
+    {
+      connection,
+      concurrency: options.concurrency ?? Number(process.env.WARDROBE_CONCURRENCY ?? 4),
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
     },
-    { connection, concurrency: options.concurrency ?? Number(process.env.WARDROBE_CONCURRENCY ?? 4) },
   );
 
   const dryCleanWorker = new Worker<DryCleanPickupPayload>(
     DRY_CLEAN_QUEUE,
-    async (job, token) => {
-      if (!db) throw new Error("Db required");
-      const result = await processDryCleanPickupJob(job.data, db);
-      if (result.status === "delayed" && token && "delayMs" in result) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+    createJobProcessor<DryCleanPickupPayload>({
+      queue: DRY_CLEAN_QUEUE,
+      handle: async (payload) => settlePushResult(DRY_CLEAN_QUEUE, await processDryCleanPickupJob(payload, db)),
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
     {
       connection,
       concurrency: options.concurrency ?? Number(process.env.DRY_CLEAN_CONCURRENCY ?? 2),
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
     },
   );
 
-  initNodeSentry({ worker: "wardrobe" });
-  attachBullmqFailureReporting(worker, "wardrobe");
-  attachBullmqFailureReporting(dryCleanWorker, "wardrobe-dryclean");
+  for (const [queue, w] of [
+    [OUTFIT_QUEUE, worker],
+    [DRY_CLEAN_QUEUE, dryCleanWorker],
+  ] as const) {
+    w.on("error", (err) => console.error(`[worker-wardrobe] ${queue} worker error:`, err.message));
+    attachStalledDeadLetters(w, { queue, recordDeadLetter, onDeadLetter });
+  }
   return {
     worker,
     dryCleanWorker,
@@ -94,9 +115,7 @@ export function createBullmqWardrobeWorker(
     async stop() {
       await worker.close();
       await dryCleanWorker.close();
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
+      if (ownConnection) await connection.quit().catch(() => undefined);
     },
   };
 }

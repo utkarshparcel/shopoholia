@@ -19,7 +19,8 @@
     "test:coverage": "vitest run --coverage",
     "spike": "tsx src/spikes/parser-accuracy/run.ts",
     "spike:check": "tsx src/spikes/parser-accuracy/check.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "worker": "tsx src/main.ts"
   },
   "dependencies": {
     "@worn/db": "workspace:*",

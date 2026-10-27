@@ -7,7 +7,8 @@ import {
   CREDIT_EXPIRY_EVENT,
 } from "./index.js";
 import type { CreditExpiryPayload } from "./index.js";
-import type { Db } from "@worn/db";
+import { moneyAccounts } from "@worn/db";
+import { mockDb as mockTables, type MockUser } from "./mock-db.test-helper.js";
 
 const payload: CreditExpiryPayload = {
   accountId: "00000000-0000-4000-8000-0000000000a1",
@@ -18,52 +19,12 @@ const payload: CreditExpiryPayload = {
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
-function mockDb(opts: {
-  user?: {
-    consentFlags?: Record<string, unknown>;
-    pushToken?: string | null;
-  } | null;
-} = {}) {
-  const inserted: Array<Record<string, unknown>> = [];
-  const updated: Array<Record<string, unknown>> = [];
-  const userRows =
-    opts.user === null
-      ? []
-      : [
-          {
-            consentFlags: opts.user?.consentFlags ?? {},
-            pushToken: opts.user?.pushToken ?? null,
-          },
-        ];
-
-  return {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve(userRows),
-        }),
-      }),
-    }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        inserted.push(v);
-        return Promise.resolve();
-      },
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => ({
-        where: () => {
-          updated.push(v);
-          return Promise.resolve();
-        },
-      }),
-    }),
-    inserted,
-    updated,
-  } as unknown as Db & {
-    inserted: Array<Record<string, unknown>>;
-    updated: Array<Record<string, unknown>>;
-  };
+function mockDb(
+  opts: { user?: MockUser; account?: { status: string; expiresAt: Date | null } | null } = {},
+) {
+  const accountRows =
+    opts.account === null ? [] : [opts.account ?? { status: "ACTIVE", expiresAt: new Date(payload.expiresAt) }];
+  return mockTables(opts.user, [[moneyAccounts, accountRows]]);
 }
 
 describe("worker-expiry queue", () => {
@@ -79,7 +40,7 @@ describe("worker-expiry queue", () => {
     expect(db.inserted).toHaveLength(1);
     expect(db.inserted[0]!.eventType).toBe(CREDIT_EXPIRY_EVENT);
     expect(db.inserted[0]!.userId).toBe(payload.userId);
-    expect(db.inserted[0]!.dedupeKey).toBe(`credit-expiry:${payload.accountId}`);
+    expect(db.inserted[0]!.dedupeKey).toBe(`credit-expiry:${payload.accountId}:${payload.expiresAt}`);
     expect(db.inserted[0]!.status).toBe("QUEUED");
     expect(db.inserted[0]!.payload).toMatchObject({
       deepLink: "worn://vault?focus=expiry",
@@ -87,10 +48,21 @@ describe("worker-expiry queue", () => {
     });
   });
 
+  it("a snoozed reminder is its own push row", async () => {
+    const db = mockDb();
+    await processExpiry(payload, db, { now: NOON });
+    const snoozedUntil = "2026-09-02T04:30:00.000Z";
+    expect((await processExpiry({ ...payload, snoozedUntil }, db, { now: NOON })).status).toBe("queued");
+    expect(db.inserted.map((row) => row.dedupeKey)).toEqual([
+      `credit-expiry:${payload.accountId}:${payload.expiresAt}`,
+      `credit-expiry:${payload.accountId}:${payload.expiresAt}:snooze:${snoozedUntil}`,
+    ]);
+  });
+
   it("skips when credits category is opted out", async () => {
     const db = mockDb({
       user: {
-        consentFlags: {
+        prefs: {
           notifications: {
             quietHoursStart: "22:00",
             quietHoursEnd: "07:00",
@@ -109,19 +81,38 @@ describe("worker-expiry queue", () => {
     expect(db.inserted).toHaveLength(0);
   });
 
-  it("enqueue → send mock marks SENT", async () => {
+  it("enqueue → send mock marks SENT, and a rerun sends nothing", async () => {
     const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-c1" }));
     const db = mockDb({ user: { pushToken: "ExponentPushToken[credit]" } });
     const result = await processExpiry(payload, db, { now: NOON, sendExpo });
     expect(result.status).toBe("sent");
     expect(db.updated[0]).toMatchObject({ status: "SENT", expoTicketId: "ticket-c1" });
+    expect((await processExpiry(payload, db, { now: NOON, sendExpo })).status).toBe("skipped");
+    expect(sendExpo).toHaveBeenCalledTimes(1);
   });
 
-  it("defaults missing user row to empty consentFlags", async () => {
-    const db = mockDb({ user: null });
-    const result = await processExpiry(payload, db, { now: NOON });
-    expect(result.status).toBe("queued");
-    expect(db.inserted).toHaveLength(1);
+  it("skips a missing user, a closed or used-up credit, and a changed expiry", async () => {
+    const cases = [
+      mockDb({ user: null }),
+      mockDb({ account: null }),
+      mockDb({ account: { status: "CLOSED", expiresAt: new Date(payload.expiresAt) } }),
+      mockDb({ account: { status: "ACTIVE", expiresAt: new Date(Date.parse(payload.expiresAt) + 86_400_000) } }),
+      mockDb({ account: { status: "ACTIVE", expiresAt: null } }),
+    ];
+    for (const db of cases) {
+      expect(await processExpiry(payload, db, { now: NOON })).toEqual({ status: "skipped" });
+      expect(db.inserted).toHaveLength(0);
+    }
+  });
+
+  it("shows the expiry date on the user's wall clock", async () => {
+    // 20:00 UTC on the 27th is 01:30 IST on the 28th.
+    const expiresAt = "2026-08-27T20:00:00.000Z";
+    const db = mockDb({ account: { status: "ACTIVE", expiresAt: new Date(expiresAt) } });
+    await processExpiry({ ...payload, expiresAt }, db, { now: NOON });
+    expect(db.inserted[0]!.body).toBe(
+      "Your Amazon gift card or store credit expires on 28 Aug. Use it before it's gone.",
+    );
   });
 
   it("runs in-memory jobs through the handler", async () => {
@@ -136,11 +127,13 @@ describe("worker-expiry queue", () => {
     await worker.stop();
   });
 
-  it("exposes a BullMQ scaffold that needs Redis to start", async () => {
+  it("refuses to build a BullMQ worker without Redis or without a Db", () => {
     expect(() => createBullmqExpiryWorker()).toThrow(/REDIS_URL/);
-    const worker = createBullmqExpiryWorker({
-      redisUrl: "redis://localhost:6379",
-    });
+    expect(() => createBullmqExpiryWorker({ redisUrl: "redis://127.0.0.1:1" })).toThrow(/Db is required/);
+  });
+
+  it.skipIf(!process.env.TEST_REDIS_URL)("builds the BullMQ worker on a real Redis", async () => {
+    const worker = createBullmqExpiryWorker({ redisUrl: process.env.TEST_REDIS_URL, db: mockDb() });
     expect(worker.worker.name).toBe(CREDIT_EXPIRY_QUEUE);
     await worker.stop();
   });

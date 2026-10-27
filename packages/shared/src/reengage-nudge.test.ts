@@ -40,7 +40,7 @@ describe("frequency caps (NOTIF-REENGAGE)", () => {
       DEFAULT_NOTIFICATION_PREFERENCES,
       "digest",
       new Date("2026-08-26T12:00:00.000Z"),
-      { recentCategoryCount: 1 },
+      { recentCategoryCount: 1, timeZone: "UTC" },
     );
     expect(gate).toEqual({ action: "skip", reason: "frequency_cap" });
   });
@@ -51,7 +51,7 @@ describe("frequency caps (NOTIF-REENGAGE)", () => {
         DEFAULT_NOTIFICATION_PREFERENCES,
         "credits",
         new Date("2026-08-26T12:00:00.000Z"),
-        { recentCategoryCount: 0 },
+        { recentCategoryCount: 0, timeZone: "UTC" },
       ),
     ).toEqual({ action: "send" });
   });
@@ -139,7 +139,8 @@ describe("rich push payload (NOTIF-RICH)", () => {
 
     const result = await runClosetPushDelivery({
       eventType: "RETURN_DEADLINE",
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: "ExponentPushToken[x]",
       title: "Return window closes in 3 days",
       body: "Initiate now.",
@@ -277,7 +278,8 @@ describe("re-engage copy + delivery", () => {
     const result = await deliverFoundMoneyWaiting({
       totalMinor: 10_000,
       accountCount: 1,
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: "ExponentPushToken[x]",
       recentCategoryCount: 3, // default credits cap
       now: new Date("2026-08-26T12:00:00.000Z"),
@@ -292,7 +294,8 @@ describe("re-engage copy + delivery", () => {
     const result = await deliverFoundMoneyWaiting({
       totalMinor: 0,
       accountCount: 0,
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: null,
       recentCategoryCount: 0,
       insertQueued: vi.fn(),
@@ -306,7 +309,8 @@ describe("re-engage copy + delivery", () => {
     const result = await deliverWeeklyDigest({
       spendMinor: 12_000,
       avgCostPerWearMinor: 400,
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: null,
       recentCategoryCount: 0,
       now: new Date("2026-08-26T12:00:00.000Z"),
@@ -331,7 +335,8 @@ describe("re-engage copy + delivery", () => {
       spendMinor: 88_000,
       avgCostPerWearMinor: 550,
       monthLabel: "2026-08",
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: null,
       recentCategoryCount: 0,
       now: new Date("2026-08-26T12:00:00.000Z"),
@@ -354,7 +359,8 @@ describe("re-engage copy + delivery", () => {
   it("respects quiet hours for digest", async () => {
     const result = await deliverWeeklyDigest({
       spendMinor: 1000,
-      consentFlags: null,
+      prefs: null,
+      timeZone: "UTC",
       pushToken: "ExponentPushToken[x]",
       recentCategoryCount: 0,
       now: new Date("2026-08-26T23:00:00.000Z"),

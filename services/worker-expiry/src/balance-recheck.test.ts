@@ -7,7 +7,8 @@ import {
   processBalanceRecheck,
 } from "./index.js";
 import type { BalanceRecheckPayload } from "./index.js";
-import type { Db } from "@worn/db";
+import { moneyAccounts } from "@worn/db";
+import { mockDb as mockTables, type MockUser } from "./mock-db.test-helper.js";
 
 const payload: BalanceRecheckPayload = {
   accountId: "00000000-0000-4000-8000-0000000000a1",
@@ -18,67 +19,10 @@ const payload: BalanceRecheckPayload = {
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
-function mockDb(opts: {
-  account?: { status: string } | null;
-  user?: {
-    consentFlags?: Record<string, unknown>;
-    pushToken?: string | null;
-  } | null;
-} = {}) {
-  const inserted: Array<Record<string, unknown>> = [];
-  const updated: Array<Record<string, unknown>> = [];
+function mockDb(opts: { account?: { status: string } | null; user?: MockUser } = {}) {
   const accountRows =
-    opts.account === null
-      ? []
-      : [
-          {
-            id: payload.accountId,
-            status: opts.account?.status ?? "ACTIVE",
-          },
-        ];
-  const userRows =
-    opts.user === null
-      ? []
-      : [
-          {
-            consentFlags: opts.user?.consentFlags ?? {},
-            pushToken: opts.user?.pushToken ?? null,
-          },
-        ];
-
-  let selectCall = 0;
-  return {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => {
-            selectCall += 1;
-            // First select is moneyAccounts; second is users.
-            return Promise.resolve(selectCall === 1 ? accountRows : userRows);
-          },
-        }),
-      }),
-    }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        inserted.push(v);
-        return Promise.resolve();
-      },
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => ({
-        where: () => {
-          updated.push(v);
-          return Promise.resolve();
-        },
-      }),
-    }),
-    inserted,
-    updated,
-  } as unknown as Db & {
-    inserted: Array<Record<string, unknown>>;
-    updated: Array<Record<string, unknown>>;
-  };
+    opts.account === null ? [] : [{ id: payload.accountId, status: opts.account?.status ?? "ACTIVE" }];
+  return mockTables(opts.user, [[moneyAccounts, accountRows]]);
 }
 
 describe("worker-expiry balance-recheck queue (WV02)", () => {
@@ -117,6 +61,12 @@ describe("worker-expiry balance-recheck queue (WV02)", () => {
     });
   });
 
+  it("skips when the user no longer exists", async () => {
+    const db = mockDb({ user: null });
+    expect((await processBalanceRecheck(payload, db, { now: NOON })).status).toBe("skipped");
+    expect(db.inserted).toHaveLength(0);
+  });
+
   it("runs in-memory balance-recheck jobs through the handler", async () => {
     const handler = vi.fn(async () => undefined);
     const worker = createMemoryBalanceRecheckWorker(handler, {
@@ -138,11 +88,13 @@ describe("worker-expiry balance-recheck queue (WV02)", () => {
     if (prev !== undefined) process.env.REDIS_URL = prev;
   });
 
-  it("enqueue → send mock marks SENT for balance recheck", async () => {
+  it("enqueue → send mock marks SENT for balance recheck, once when run twice", async () => {
     const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-b1" }));
     const db = mockDb({ user: { pushToken: "ExponentPushToken[balance]" } });
     const result = await processBalanceRecheck(payload, db, { now: NOON, sendExpo });
     expect(result.status).toBe("sent");
     expect(db.updated[0]).toMatchObject({ status: "SENT", expoTicketId: "ticket-b1" });
+    expect((await processBalanceRecheck(payload, db, { now: NOON, sendExpo })).status).toBe("skipped");
+    expect(sendExpo).toHaveBeenCalledTimes(1);
   });
 });

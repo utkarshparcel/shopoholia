@@ -1,25 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IngestDeadLetterJobSchema, deadLetterData, type DeadLetter } from "@worn/shared";
 import {
   clearBackoff,
-  clearDeadLetters,
   computeBackoffMs,
   enqueueDeadLetterJob,
   getBackoffDelay,
   getBackoffState,
-  getDeadLetterCount,
-  listDeadLetters,
   recordFailure,
   recordSuccess,
-  sendToDeadLetter,
+  toIngestDeadLetter,
 } from "./dead-letter.js";
-import { INGEST_DEAD_LETTER_QUEUE } from "./queues.js";
+import {
+  INGEST_DEAD_LETTER_QUEUE,
+  INGEST_JOB_NAME,
+  INGEST_OAUTH_JOB_NAME,
+  INGEST_RESYNC_JOB_NAME,
+} from "./queues.js";
+
+function failed(jobName: string, data: unknown, jobId = "ingest%3Adoc-1"): DeadLetter {
+  return {
+    queue: "ingest-email",
+    jobId,
+    jobName,
+    data: deadLetterData(data),
+    error: "Error: parse failed",
+    attemptsMade: 3,
+    failedAt: new Date("2026-08-26T10:00:00.000Z"),
+  };
+}
 
 describe("dead-letter queue", () => {
   afterEach(() => {
-    clearDeadLetters();
-    clearBackoff();
-    delete process.env.REDIS_URL;
-    delete process.env.INGEST_REDIS_URL;
     vi.restoreAllMocks();
   });
 
@@ -27,47 +38,53 @@ describe("dead-letter queue", () => {
     expect(INGEST_DEAD_LETTER_QUEUE).toBe("ingest-dead-letter");
   });
 
-  it("sends and lists dead letters", () => {
-    clearDeadLetters();
-    expect(getDeadLetterCount()).toBe(0);
-    sendToDeadLetter({ kind: "EMAIL", error: "parse failed", attempts: 3, sourceId: "s1" });
-    expect(getDeadLetterCount()).toBe(1);
-    const list = listDeadLetters();
-    expect(list[0]!.error).toBe("parse failed");
-    clearDeadLetters();
-    expect(getDeadLetterCount()).toBe(0);
-  });
-
-  it("enqueueDeadLetterJob no-ops without Redis URL", async () => {
-    delete process.env.REDIS_URL;
-    delete process.env.INGEST_REDIS_URL;
-    await expect(
-      enqueueDeadLetterJob({
-        kind: "SMS",
-        error: "boom",
-        attempts: 1,
-        timestamp: new Date().toISOString(),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("enqueueDeadLetterJob best-effort when Queue construction fails", async () => {
-    process.env.INGEST_REDIS_URL = "redis://localhost:6379";
-    vi.doMock("bullmq", () => ({
-      Queue: class {
-        constructor() {
-          throw new Error("no redis");
-        }
-      },
-    }));
-    await expect(
-      enqueueDeadLetterJob({
+  it("keeps ids only: no message body, payload or OAuth code", () => {
+    const email = toIngestDeadLetter(
+      failed(INGEST_JOB_NAME, {
         kind: "EMAIL",
-        error: "x",
-        attempts: 2,
-        timestamp: new Date().toISOString(),
+        documentId: "doc-1",
+        sourceId: "src-1",
+        message: { subject: "Your order", text: "Hi Priya" },
+        payload: { body: "raw" },
       }),
-    ).resolves.toBeUndefined();
+    );
+    expect(IngestDeadLetterJobSchema.parse(email)).toEqual({
+      kind: "EMAIL",
+      documentId: "doc-1",
+      sourceId: "src-1",
+      jobId: "ingest%3Adoc-1",
+      error: "Error: parse failed",
+      attempts: 3,
+      timestamp: "2026-08-26T10:00:00.000Z",
+    });
+
+    const oauth = toIngestDeadLetter(failed(INGEST_OAUTH_JOB_NAME, { sourceId: "src-1", code: "4/0Ab-secret" }));
+    expect(oauth.kind).toBe("OAUTH");
+    expect(JSON.stringify(oauth)).not.toContain("secret");
+
+    expect(toIngestDeadLetter(failed(INGEST_JOB_NAME, { kind: "SMS", documentId: "d" })).kind).toBe("SMS");
+    expect(toIngestDeadLetter(failed(INGEST_RESYNC_JOB_NAME, { sourceId: "s" })).kind).toBe("RESYNC");
+    expect(toIngestDeadLetter(failed("something-else", {})).kind).toBe("UNKNOWN");
+  });
+
+  it("bounds the error text", () => {
+    const long = { ...failed(INGEST_JOB_NAME, {}), error: "x".repeat(5_000) };
+    expect(toIngestDeadLetter(long).error).toHaveLength(1_000);
+  });
+
+  it("adds one message per failed job, under a stable id, and surfaces Redis failures", async () => {
+    const add = vi.fn(async () => undefined);
+    const entry = toIngestDeadLetter(failed(INGEST_JOB_NAME, { kind: "SMS", documentId: "doc-1" }));
+    await enqueueDeadLetterJob({ add }, entry);
+    await enqueueDeadLetterJob({ add }, entry);
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(add.mock.calls[0]).toEqual(["dead-letter", entry, { jobId: "ingest-dl|ingest%253Adoc-1" }]);
+    expect(add.mock.calls[1]![2]).toEqual(add.mock.calls[0]![2]);
+
+    const down = vi.fn(async () => {
+      throw new Error("Connection is closed.");
+    });
+    await expect(enqueueDeadLetterJob({ add: down }, entry)).rejects.toThrow(/Connection is closed/);
   });
 });
 

@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -26,7 +29,8 @@ import {
   processCoolingOffRelease,
   scheduleCoolingOffRelease,
 } from "./cooling-off-jobs.js";
-import { COOLING_OFF_MS, computeHoldWindow, withCoolingOffFlag } from "./cooling-off.js";
+import { COOLING_OFF_MS, computeHoldWindow } from "./cooling-off.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("cooling-off release job (N34)", () => {
   const originalRedis = process.env.REDIS_URL;
@@ -64,7 +68,7 @@ describe("cooling-off release job (N34)", () => {
   });
 
   it("publishes delayed release job", async () => {
-    process.env.COOLING_OFF_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const hold = {
       heldAt: new Date().toISOString(),
       releaseAt: new Date(Date.now() + COOLING_OFF_MS).toISOString(),
@@ -78,7 +82,8 @@ describe("cooling-off release job (N34)", () => {
       COOLING_OFF_JOB,
       expect.objectContaining({ userId: "u1", category: "APPAREL" }),
       expect.objectContaining({
-        jobId: "cooling-off:u1:v1:1",
+        // Keyed on the release time too: a new hold on the same cart is a new job.
+        jobId: jobIdFrom("cooling-off", "u1", "v1:1", hold.releaseAt),
       }),
     );
     const opts = queueMocks.add.mock.calls[0]?.[2] as { delay: number };
@@ -86,8 +91,8 @@ describe("cooling-off release job (N34)", () => {
     expect(opts.delay).toBeLessThanOrEqual(COOLING_OFF_MS);
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
     const hold = computeHoldWindow(
       new Date(Date.now() + 1000),
@@ -100,9 +105,9 @@ describe("cooling-off release job (N34)", () => {
       heldAt: new Date().toISOString(),
       releaseAt: new Date(Date.now() + COOLING_OFF_MS).toISOString(),
     };
-    expect(await scheduleCoolingOffRelease(holdToReleasePayload("u1", futureHold))).toBe(
-      "skipped",
-    );
+    await expect(
+      scheduleCoolingOffRelease(holdToReleasePayload("u1", futureHold)),
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 
   it("processCoolingOffRelease queues notify push when hold ends", async () => {
@@ -125,7 +130,9 @@ describe("cooling-off release job (N34)", () => {
       {
         recordPushEvent,
         findUserById: async () => ({
-          consentFlags: withCoolingOffFlag({}, hold),
+          consentFlags: { coolingOff: hold },
+          prefs: {},
+          timeZone: "Asia/Kolkata",
           pushToken: "ExponentPushToken[test]",
         }),
         updatePushEventStatus,
@@ -145,4 +152,39 @@ describe("cooling-off release job (N34)", () => {
     );
     expect(coolingOffReleaseCopy("APPAREL").title).toMatch(/cooling-off ended/i);
   }, 20_000);
+
+  it("processCoolingOffRelease skips once the hold was cleared or replaced", async () => {
+    const heldAt = new Date("2026-08-25T10:00:00.000Z");
+    const hold = computeHoldWindow(
+      heldAt,
+      { category: "APPAREL", projectedMinor: 12_000, limitMinor: 10_000 },
+      "fp",
+    );
+    const sendExpo = vi.fn();
+    const recordPushEvent = vi.fn();
+    const later = computeHoldWindow(
+      new Date(heldAt.getTime() + 2 * COOLING_OFF_MS),
+      { category: "APPAREL", projectedMinor: 12_000, limitMinor: 10_000 },
+      "fp2",
+    );
+    // Checked out or overrode (flag cleared), then a newer hold (another release time).
+    for (const consentFlags of [{}, { coolingOff: later }]) {
+      const result = await processCoolingOffRelease(
+        holdToReleasePayload("u1", hold),
+        {
+          recordPushEvent,
+          findUserById: async () => ({
+            consentFlags,
+            prefs: {},
+            timeZone: "Asia/Kolkata",
+            pushToken: "ExponentPushToken[test]",
+          }),
+        },
+        { now: new Date(heldAt.getTime() + COOLING_OFF_MS + 1), sendExpo },
+      );
+      expect(result.status).toBe("skipped");
+    }
+    expect(recordPushEvent).not.toHaveBeenCalled();
+    expect(sendExpo).not.toHaveBeenCalled();
+  });
 });

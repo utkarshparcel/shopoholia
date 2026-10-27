@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -19,6 +22,7 @@ vi.mock("bullmq", () => ({
 }));
 
 import { scheduleGiftOccasionReminders, processGiftOccasion } from "./gift-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("scheduleGiftOccasionReminders", () => {
   const originalRedis = process.env.REDIS_URL;
@@ -54,7 +58,7 @@ describe("scheduleGiftOccasionReminders", () => {
   });
 
   it("publishes future occasions and skips past ones", async () => {
-    process.env.GIFT_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await scheduleGiftOccasionReminders(
       {
         userId: "u1",
@@ -72,14 +76,14 @@ describe("scheduleGiftOccasionReminders", () => {
       "gift-occasion-reminder",
       expect.objectContaining({ occasion: "BIRTHDAY", date: "2026-09-10T00:00:00.000Z" }),
       expect.objectContaining({
-        jobId: "gift:r1:BIRTHDAY:2026-09-10T00:00:00.000Z",
+        jobId: jobIdFrom("gift:r1:BIRTHDAY:2026-09-10T00:00:00.000Z"),
         delay: expect.any(Number),
       }),
     );
   });
 
   it("publishes festival + birthday with festival 12d lead", async () => {
-    process.env.GIFT_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await scheduleGiftOccasionReminders(
       {
         userId: "u1",
@@ -97,11 +101,10 @@ describe("scheduleGiftOccasionReminders", () => {
       (c) => (c[1] as { occasion: string }).occasion === "FESTIVAL",
     );
     expect(festivalCall?.[1]).toMatchObject({ label: "Diwali" });
-    expect(queueMocks.close).toHaveBeenCalled();
   });
 
   it("returns skipped when all dates are in the past", async () => {
-    process.env.GIFT_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     expect(
       await scheduleGiftOccasionReminders(
         {
@@ -115,11 +118,11 @@ describe("scheduleGiftOccasionReminders", () => {
     expect(queueMocks.add).not.toHaveBeenCalled();
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
-    expect(
-      await scheduleGiftOccasionReminders(
+    await expect(
+      scheduleGiftOccasionReminders(
         {
           userId: "u1",
           recipientId: "r1",
@@ -127,7 +130,7 @@ describe("scheduleGiftOccasionReminders", () => {
         },
         { now },
       ),
-    ).toBe("skipped");
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 });
 
@@ -151,7 +154,8 @@ describe("processGiftOccasion", () => {
       {
         recordPushEvent,
         findUserById: async () => ({
-          consentFlags: {},
+          prefs: {},
+          timeZone: "Asia/Kolkata",
           pushToken: "ExponentPushToken[test]",
         }),
         updatePushEventStatus,
@@ -213,7 +217,8 @@ describe("processGiftOccasion", () => {
       {
         recordPushEvent,
         findUserById: async () => ({
-          consentFlags: {},
+          prefs: {},
+          timeZone: "Asia/Kolkata",
           pushToken: "ExponentPushToken[test]",
         }),
         updatePushEventStatus,
@@ -240,7 +245,7 @@ describe("processGiftOccasion", () => {
       {
         recordPushEvent,
         findUserById: async () => ({
-          consentFlags: null,
+          prefs: null,
           pushToken: "ExponentPushToken[test]",
         }),
       },

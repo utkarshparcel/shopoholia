@@ -6,7 +6,8 @@ import {
   WARRANTY_EXPIRY_EVENT,
 } from "./index.js";
 import type { WarrantyExpiryPayload } from "./index.js";
-import type { Db } from "@worn/db";
+import { warranties } from "@worn/db";
+import { mockDb as mockTables, type MockUser } from "./mock-db.test-helper.js";
 
 const payload: WarrantyExpiryPayload = {
   warrantyId: "00000000-0000-4000-8000-0000000000c1",
@@ -18,52 +19,10 @@ const payload: WarrantyExpiryPayload = {
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
-function mockDb(opts: {
-  user?: {
-    consentFlags?: Record<string, unknown>;
-    pushToken?: string | null;
-  } | null;
-} = {}) {
-  const inserted: Array<Record<string, unknown>> = [];
-  const updated: Array<Record<string, unknown>> = [];
-  const userRows =
-    opts.user === null
-      ? []
-      : [
-          {
-            consentFlags: opts.user?.consentFlags ?? {},
-            pushToken: opts.user?.pushToken ?? null,
-          },
-        ];
-
-  return {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve(userRows),
-        }),
-      }),
-    }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        inserted.push(v);
-        return Promise.resolve();
-      },
-    }),
-    update: () => ({
-      set: (v: Record<string, unknown>) => ({
-        where: () => {
-          updated.push(v);
-          return Promise.resolve();
-        },
-      }),
-    }),
-    inserted,
-    updated,
-  } as unknown as Db & {
-    inserted: Array<Record<string, unknown>>;
-    updated: Array<Record<string, unknown>>;
-  };
+function mockDb(opts: { user?: MockUser; warranty?: { coverageUntil: Date } | null } = {}) {
+  const warrantyRows =
+    opts.warranty === null ? [] : [opts.warranty ?? { coverageUntil: new Date(payload.coverageUntil) }];
+  return mockTables(opts.user, [[warranties, warrantyRows]]);
 }
 
 describe("worker-expiry warranty queue", () => {
@@ -79,7 +38,9 @@ describe("worker-expiry warranty queue", () => {
     expect(db.inserted).toHaveLength(1);
     expect(db.inserted[0]!.eventType).toBe(WARRANTY_EXPIRY_EVENT);
     expect(db.inserted[0]!.userId).toBe(payload.userId);
-    expect(db.inserted[0]!.dedupeKey).toBe(`warranty-expiry:${payload.warrantyId}`);
+    expect(db.inserted[0]!.dedupeKey).toBe(
+      `warranty-expiry:${payload.warrantyId}:${payload.coverageUntil}`,
+    );
     expect(db.inserted[0]!.status).toBe("QUEUED");
     expect(db.inserted[0]!.payload).toMatchObject({
       deepLink: "worn://vault?focus=warranty",
@@ -90,7 +51,7 @@ describe("worker-expiry warranty queue", () => {
   it("skips when warranty category is opted out", async () => {
     const db = mockDb({
       user: {
-        consentFlags: {
+        prefs: {
           notifications: {
             quietHoursStart: "22:00",
             quietHoursEnd: "07:00",
@@ -127,5 +88,16 @@ describe("worker-expiry warranty queue", () => {
     const result = await processWarrantyExpiry(payload, db, { now: NOON, sendExpo });
     expect(result.status).toBe("sent");
     expect(db.updated[0]).toMatchObject({ status: "SENT", expoTicketId: "ticket-w1" });
+  });
+
+  it("skips a deleted warranty, a changed coverage end and a missing user", async () => {
+    for (const db of [
+      mockDb({ warranty: null }),
+      mockDb({ warranty: { coverageUntil: new Date(Date.parse(payload.coverageUntil) + 86_400_000) } }),
+      mockDb({ user: null }),
+    ]) {
+      expect(await processWarrantyExpiry(payload, db, { now: NOON })).toEqual({ status: "skipped" });
+      expect(db.inserted).toHaveLength(0);
+    }
   });
 });

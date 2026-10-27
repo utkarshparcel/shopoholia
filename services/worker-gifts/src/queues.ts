@@ -15,4 +15,6 @@ export const TAILORING_JOB = "tailoring-state-transition";
 export type TailoringPayload = {
   orderId: string;
   userId: string;
+  /** The state this job moves the order to. It only moves an order still in the step before it. */
+  toState?: string;
 };

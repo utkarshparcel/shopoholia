@@ -1,17 +1,23 @@
-import { Worker } from "bullmq";
+import { DelayedError, UnrecoverableError, Worker } from "bullmq";
 import type { RedisOptions } from "ioredis";
 import { Redis } from "ioredis";
 import {
-  attachBullmqFailureReporting,
-  initNodeSentry,
-} from "@worn/shared/node-sentry";
+  JOB_REMOVE_ON_COMPLETE,
+  JOB_REMOVE_ON_FAIL,
+  attachStalledDeadLetters,
+  createJobProcessor,
+  deadLetterAlert,
+  settlePushResult,
+  type DeadLetter,
+} from "@worn/shared";
+import { captureNodeException, initNodeSentry } from "@worn/shared/node-sentry";
 import { processReturnDeadline } from "./handler.js";
 import {
   RETURN_DEADLINE_JOB,
   RETURN_DEADLINE_QUEUE,
   type ReturnDeadlinePayload,
 } from "./queues.js";
-import type { Db } from "@worn/db";
+import { recordJobDeadLetter, type Db } from "@worn/db";
 
 export interface ReturnsWorkerConsumer {
   start(): Promise<void>;
@@ -25,6 +31,8 @@ export interface BullmqReturnsOptions {
   connection?: Redis;
   db?: Db | null;
   handler?: ReturnsHandler;
+  /** Where final failures go; defaults to job_dead_letters in `db`. */
+  recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
   concurrency?: number;
 }
 
@@ -35,39 +43,42 @@ export function createBullmqReturnsWorker(
   if (!redisUrl && !options.connection) {
     throw new Error("REDIS_URL or an explicit connection is required for the returns worker");
   }
+  const db = options.db ?? null;
+  // Without a Db every job would fail: refuse to start instead.
+  if (!db && !(options.handler && options.recordDeadLetter)) {
+    throw new Error("A Db is required for the returns worker");
+  }
+  const handle: ReturnsHandler =
+    options.handler ??
+    (async (payload) =>
+      settlePushResult(RETURN_DEADLINE_QUEUE, await processReturnDeadline(payload, db!)));
+  const recordDeadLetter =
+    options.recordDeadLetter ?? (async (entry: DeadLetter) => void (await recordJobDeadLetter(db!, entry)));
+
   const ownConnection = !options.connection;
   const connection: Redis | RedisOptions =
     options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
 
-  const db = options.db ?? null;
-  const handler: ReturnsHandler =
-    options.handler ??
-    (async (payload) => {
-      if (!db) throw new Error("A Db is required to process return deadline");
-      await processReturnDeadline(payload, db);
-    });
-
+  initNodeSentry({ worker: "returns" });
+  const onDeadLetter = deadLetterAlert((err, tags) => captureNodeException(err, { worker: "returns", ...tags }));
   const worker = new Worker<ReturnDeadlinePayload>(
     RETURN_DEADLINE_QUEUE,
-    async (job, token) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) throw new Error("A Db is required to process return deadline");
-      const result = await processReturnDeadline(job.data, db);
-      if (result.status === "delayed" && token) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+    createJobProcessor<ReturnDeadlinePayload>({
+      queue: RETURN_DEADLINE_QUEUE,
+      handle,
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
     {
       connection,
       concurrency: options.concurrency ?? Number(process.env.RETURN_CONCURRENCY ?? 4),
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
     },
   );
-
-  initNodeSentry({ worker: "returns" });
-  attachBullmqFailureReporting(worker, "returns");
+  worker.on("error", (err) => console.error("[worker-returns] worker error:", err.message));
+  attachStalledDeadLetters(worker, { queue: RETURN_DEADLINE_QUEUE, recordDeadLetter, onDeadLetter });
 
   return {
     worker,

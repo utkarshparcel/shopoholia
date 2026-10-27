@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import {
   balanceRecheckCopy,
   cashbackClaimReminderJobId,
+  resolveTimeZone,
   runClosetPushDelivery,
   type ProcessPushResult,
   type sendExpoPush,
@@ -11,7 +11,9 @@ import {
   cashbackClaims,
   moneyAccounts,
   pushEvents,
+  recordPushEventIfNew,
   users,
+  warranties,
   type Db,
 } from "@worn/db";
 import type {
@@ -34,33 +36,85 @@ export type ClosetPushHandlerOpts = {
 async function loadUser(db: Db, userId: string) {
   const [user] = await db
     .select({
-      consentFlags: users.consentFlags,
+      prefs: users.prefs,
+      timeZone: users.timeZone,
       pushToken: users.pushToken,
     })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return user ?? { consentFlags: {} as Record<string, unknown>, pushToken: null };
+  return user ?? null;
+}
+
+/** A date on the user's wall clock ("28 Aug"), not the server's. */
+function localDate(iso: string, timeZone: string | null | undefined): string {
+  return new Date(iso).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    timeZone: resolveTimeZone(timeZone),
+  });
+}
+
+function sameInstant(a: Date | null, iso: string): boolean {
+  return a !== null && a.getTime() === new Date(iso).getTime();
+}
+
+/** push_events writes for runClosetPushDelivery: one row per dedupe key, safe to run twice. */
+function pushRow(db: Db, userId: string, eventType: string, dedupeKey: string) {
+  return {
+    insertQueued: async ({ title, body, payload }: { title: string; body: string; payload: Record<string, unknown> }) => {
+      const event = await recordPushEventIfNew(db, {
+        userId,
+        orderId: null,
+        eventType,
+        dedupeKey,
+        title,
+        body,
+        payload,
+        status: "QUEUED",
+      });
+      return { id: event.id, status: event.status };
+    },
+    markStatus: async (id: string, status: "SENT" | "FAILED", expoTicketId?: string | null) => {
+      await db
+        .update(pushEvents)
+        .set({ status, expoTicketId: expoTicketId ?? null })
+        .where(eq(pushEvents.id, id));
+    },
+  };
 }
 
 /**
  * Writes a `push_events` row reminding the user that a gift card / store
  * credit is about to expire, then delivers via the shared Expo send path.
+ * Skips when the credit was used up, closed or its expiry changed (that has its own job).
  */
 export async function processExpiry(
   payload: CreditExpiryPayload,
   db: Db,
   opts: ClosetPushHandlerOpts = {},
 ): Promise<ProcessPushResult> {
+  const [account] = await db
+    .select({ status: moneyAccounts.status, expiresAt: moneyAccounts.expiresAt })
+    .from(moneyAccounts)
+    .where(and(eq(moneyAccounts.id, payload.accountId), eq(moneyAccounts.userId, payload.userId)))
+    .limit(1);
+  if (!account || account.status !== "ACTIVE" || !sameInstant(account.expiresAt, payload.expiresAt)) {
+    return { status: "skipped" };
+  }
   const user = await loadUser(db, payload.userId);
+  if (!user) return { status: "skipped" };
   const title = `${payload.merchant} credit expires soon`;
-  const body = `Your ${payload.merchant} gift card or store credit expires on ${new Date(
+  const body = `Your ${payload.merchant} gift card or store credit expires on ${localDate(
     payload.expiresAt,
-  ).toLocaleDateString()}. Use it before it's gone.`;
+    user.timeZone,
+  )}. Use it before it's gone.`;
+  const snooze = payload.snoozedUntil ? `:snooze:${payload.snoozedUntil}` : "";
 
   return runClosetPushDelivery({
     eventType: CREDIT_EXPIRY_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title,
     body,
@@ -72,27 +126,12 @@ export async function processExpiry(
     },
     now: opts.now,
     sendExpo: opts.sendExpo,
-    insertQueued: async ({ title: t, body: b, payload: p }) => {
-      const id = randomUUID();
-      await db.insert(pushEvents).values({
-        id,
-        userId: payload.userId,
-        orderId: null,
-        eventType: CREDIT_EXPIRY_EVENT,
-        dedupeKey: `credit-expiry:${payload.accountId}`,
-        title: t,
-        body: b,
-        payload: p,
-        status: "QUEUED",
-      });
-      return { id };
-    },
-    markStatus: async (id, status, expoTicketId) => {
-      await db
-        .update(pushEvents)
-        .set({ status, expoTicketId: expoTicketId ?? null })
-        .where(eq(pushEvents.id, id));
-    },
+    ...pushRow(
+      db,
+      payload.userId,
+      CREDIT_EXPIRY_EVENT,
+      `credit-expiry:${payload.accountId}:${payload.expiresAt}${snooze}`,
+    ),
   });
 }
 
@@ -105,15 +144,27 @@ export async function processWarrantyExpiry(
   db: Db,
   opts: ClosetPushHandlerOpts = {},
 ): Promise<ProcessPushResult> {
+  const [warranty] = await db
+    .select({ coverageUntil: warranties.coverageUntil })
+    .from(warranties)
+    .where(and(eq(warranties.id, payload.warrantyId), eq(warranties.userId, payload.userId)))
+    .limit(1);
+  if (!warranty || !sameInstant(warranty.coverageUntil, payload.coverageUntil)) {
+    return { status: "skipped" };
+  }
   const user = await loadUser(db, payload.userId);
+  if (!user) return { status: "skipped" };
   const title = `Warranty for ${payload.itemTitle} expires soon`;
-  const body = `Your ${payload.provider} warranty on ${payload.itemTitle} expires on ${new Date(
+  const body = `Your ${payload.provider} warranty on ${payload.itemTitle} expires on ${localDate(
     payload.coverageUntil,
-  ).toLocaleDateString()}. File a claim before it lapses.`;
+    user.timeZone,
+  )}. File a claim before it lapses.`;
+  const snooze = payload.snoozedUntil ? `:snooze:${payload.snoozedUntil}` : "";
 
   return runClosetPushDelivery({
     eventType: WARRANTY_EXPIRY_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title,
     body,
@@ -126,27 +177,12 @@ export async function processWarrantyExpiry(
     },
     now: opts.now,
     sendExpo: opts.sendExpo,
-    insertQueued: async ({ title: t, body: b, payload: p }) => {
-      const id = randomUUID();
-      await db.insert(pushEvents).values({
-        id,
-        userId: payload.userId,
-        orderId: null,
-        eventType: WARRANTY_EXPIRY_EVENT,
-        dedupeKey: `warranty-expiry:${payload.warrantyId}`,
-        title: t,
-        body: b,
-        payload: p,
-        status: "QUEUED",
-      });
-      return { id };
-    },
-    markStatus: async (id, status, expoTicketId) => {
-      await db
-        .update(pushEvents)
-        .set({ status, expoTicketId: expoTicketId ?? null })
-        .where(eq(pushEvents.id, id));
-    },
+    ...pushRow(
+      db,
+      payload.userId,
+      WARRANTY_EXPIRY_EVENT,
+      `warranty-expiry:${payload.warrantyId}:${payload.coverageUntil}${snooze}`,
+    ),
   });
 }
 
@@ -175,11 +211,13 @@ export async function processBalanceRecheck(
   }
 
   const user = await loadUser(db, payload.userId);
+  if (!user) return { status: "skipped", reason: "account_gone" };
   const copy = balanceRecheckCopy(payload.merchant);
 
   return runClosetPushDelivery({
     eventType: BALANCE_RECHECK_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: copy.title,
     body: copy.body,
@@ -191,27 +229,12 @@ export async function processBalanceRecheck(
     },
     now: opts.now,
     sendExpo: opts.sendExpo,
-    insertQueued: async ({ title: t, body: b, payload: p }) => {
-      const id = randomUUID();
-      await db.insert(pushEvents).values({
-        id,
-        userId: payload.userId,
-        orderId: null,
-        eventType: BALANCE_RECHECK_EVENT,
-        dedupeKey: `credit-balance-recheck:${payload.accountId}:${payload.lastCheckedAt.slice(0, 10)}`,
-        title: t,
-        body: b,
-        payload: p,
-        status: "QUEUED",
-      });
-      return { id };
-    },
-    markStatus: async (id, status, expoTicketId) => {
-      await db
-        .update(pushEvents)
-        .set({ status, expoTicketId: expoTicketId ?? null })
-        .where(eq(pushEvents.id, id));
-    },
+    ...pushRow(
+      db,
+      payload.userId,
+      BALANCE_RECHECK_EVENT,
+      `credit-balance-recheck:${payload.accountId}:${payload.lastCheckedAt.slice(0, 10)}`,
+    ),
   });
 }
 
@@ -247,6 +270,7 @@ export async function processCashbackClaimDeadline(
   }
 
   const user = await loadUser(db, payload.userId);
+  if (!user) return { status: "skipped", reason: "claim_gone" };
   const amount = (payload.amountMinor / 100).toFixed(0);
   const label = payload.merchant
     ? `${payload.source} · ${payload.merchant}`
@@ -254,7 +278,8 @@ export async function processCashbackClaimDeadline(
 
   return runClosetPushDelivery({
     eventType: CASHBACK_CLAIM_DEADLINE_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: "Cashback claim due soon",
     body: `${label}: ₹${amount} — claim before it lapses`,
@@ -262,26 +287,11 @@ export async function processCashbackClaimDeadline(
     payloadExtra: { ...payload },
     now: opts.now,
     sendExpo: opts.sendExpo,
-    insertQueued: async ({ title: t, body: b, payload: p }) => {
-      const id = randomUUID();
-      await db.insert(pushEvents).values({
-        id,
-        userId: payload.userId,
-        orderId: null,
-        eventType: CASHBACK_CLAIM_DEADLINE_EVENT,
-        dedupeKey: cashbackClaimReminderJobId(payload.claimId),
-        title: t,
-        body: b,
-        payload: p,
-        status: "QUEUED",
-      });
-      return { id };
-    },
-    markStatus: async (id, status, expoTicketId) => {
-      await db
-        .update(pushEvents)
-        .set({ status, expoTicketId: expoTicketId ?? null })
-        .where(eq(pushEvents.id, id));
-    },
+    ...pushRow(
+      db,
+      payload.userId,
+      CASHBACK_CLAIM_DEADLINE_EVENT,
+      cashbackClaimReminderJobId(payload.claimId),
+    ),
   });
 }

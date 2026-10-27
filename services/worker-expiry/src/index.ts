@@ -1,10 +1,17 @@
-import { Worker } from "bullmq";
+import { DelayedError, UnrecoverableError, Worker } from "bullmq";
 import type { RedisOptions } from "ioredis";
 import { Redis } from "ioredis";
 import {
-  attachBullmqFailureReporting,
-  initNodeSentry,
-} from "@worn/shared/node-sentry";
+  JOB_REMOVE_ON_COMPLETE,
+  JOB_REMOVE_ON_FAIL,
+  attachStalledDeadLetters,
+  createJobProcessor,
+  deadLetterAlert,
+  settlePushResult,
+  type DeadLetter,
+  type ProcessPushResult,
+} from "@worn/shared";
+import { captureNodeException, initNodeSentry } from "@worn/shared/node-sentry";
 import {
   processBalanceRecheck,
   processCashbackClaimDeadline,
@@ -25,11 +32,95 @@ import {
   type CreditExpiryPayload,
   type WarrantyExpiryPayload,
 } from "./queues.js";
-import type { Db } from "@worn/db";
+import { recordJobDeadLetter, type Db } from "@worn/db";
 
 export interface ExpiryWorkerConsumer {
   start(): Promise<void>;
   stop(): Promise<void>;
+}
+
+type PushJobWorkerOptions<T> = {
+  redisUrl?: string;
+  connection?: Redis;
+  db?: Db | null;
+  handler?: (payload: T) => Promise<void>;
+  /** Where final failures go; defaults to job_dead_letters in `db`. */
+  recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
+  concurrency?: number;
+};
+
+/**
+ * One queue's BullMQ consumer: quiet hours delay the job without spending an attempt, a failed
+ * send is retried, and the last failure is written to job_dead_letters and alerted.
+ */
+function createPushJobWorker<T>(
+  spec: {
+    queue: string;
+    jobName: string;
+    label: string;
+    concurrencyEnv: string;
+    process: (payload: T, db: Db) => Promise<ProcessPushResult>;
+  },
+  options: PushJobWorkerOptions<T>,
+): ExpiryWorkerConsumer & { readonly worker: Worker<T> } {
+  const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
+  if (!redisUrl && !options.connection) {
+    throw new Error(
+      `REDIS_URL or an explicit connection is required for the BullMQ ${spec.label} worker`,
+    );
+  }
+  const db = options.db ?? null;
+  // Without a Db every job would fail: refuse to start instead.
+  if (!db && !(options.handler && options.recordDeadLetter)) {
+    throw new Error(`A Db is required for the BullMQ ${spec.label} worker`);
+  }
+  const handle =
+    options.handler ??
+    (async (payload: T) => settlePushResult(spec.queue, await spec.process(payload, db!)));
+  const recordDeadLetter =
+    options.recordDeadLetter ?? (async (entry: DeadLetter) => void (await recordJobDeadLetter(db!, entry)));
+
+  const ownConnection = !options.connection;
+  const connection: Redis | RedisOptions =
+    options.connection ??
+    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
+
+  initNodeSentry({ worker: "expiry" });
+  const onDeadLetter = deadLetterAlert((err, tags) => captureNodeException(err, { worker: "expiry", ...tags }));
+  const worker = new Worker<T>(
+    spec.queue,
+    createJobProcessor<T>({
+      queue: spec.queue,
+      handle,
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
+    {
+      connection,
+      concurrency: options.concurrency ?? Number(process.env[spec.concurrencyEnv] ?? 4),
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
+    },
+  );
+  worker.on("error", (err) => console.error(`[worker-expiry] ${spec.queue} worker error:`, err.message));
+  attachStalledDeadLetters(worker, { queue: spec.queue, recordDeadLetter, onDeadLetter });
+
+  return {
+    worker,
+    async start() {
+      await worker.waitUntilReady();
+      console.info(
+        `[worker-expiry] BullMQ worker ready on queue "${spec.queue}" (job "${spec.jobName}")`,
+      );
+    },
+    async stop() {
+      await worker.close();
+      if (ownConnection && connection instanceof Redis) {
+        await connection.quit().catch(() => undefined);
+      }
+    },
+  };
 }
 
 export type ExpiryHandler = (payload: CreditExpiryPayload) => Promise<void>;
@@ -41,80 +132,23 @@ export type CashbackClaimDeadlineHandler = (
   payload: CashbackClaimDeadlinePayload,
 ) => Promise<void>;
 
-export interface BullmqExpiryOptions {
-  redisUrl?: string;
-  connection?: Redis;
-  db?: Db | null;
-  handler?: ExpiryHandler;
-  concurrency?: number;
-}
+export type BullmqExpiryOptions = PushJobWorkerOptions<CreditExpiryPayload>;
 
 /** BullMQ consumer wired to Redis via `REDIS_URL`. Connects on `start()`; a
  * live Redis is required to actually drain jobs (see consumer.test.ts). */
 export function createBullmqExpiryWorker(
   options: BullmqExpiryOptions = {},
 ): ExpiryWorkerConsumer & { readonly worker: Worker<CreditExpiryPayload> } {
-  const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
-  if (!redisUrl && !options.connection) {
-    throw new Error(
-      "REDIS_URL or an explicit connection is required for the BullMQ expiry worker",
-    );
-  }
-  const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ??
-    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
-
-  const db = options.db ?? null;
-  const handler: ExpiryHandler =
-    options.handler ??
-    (async (payload) => {
-      if (!db) {
-        throw new Error("A Db is required to process expiry reminders");
-      }
-      await processExpiry(payload, db);
-    });
-
-  const worker = new Worker<CreditExpiryPayload>(
-    CREDIT_EXPIRY_QUEUE,
-    async (job, token) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) {
-        throw new Error("A Db is required to process expiry reminders");
-      }
-      const result = await processExpiry(job.data, db);
-      if (result.status === "delayed" && token) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+  return createPushJobWorker(
     {
-      connection,
-      concurrency:
-        options.concurrency ?? Number(process.env.EXPIRY_CONCURRENCY ?? 4),
+      queue: CREDIT_EXPIRY_QUEUE,
+      jobName: CREDIT_EXPIRY_JOB,
+      label: "expiry",
+      concurrencyEnv: "EXPIRY_CONCURRENCY",
+      process: (payload, db) => processExpiry(payload, db),
     },
+    options,
   );
-
-  initNodeSentry({ worker: "expiry" });
-  attachBullmqFailureReporting(worker, "expiry");
-
-  return {
-    worker,
-    async start() {
-      await worker.waitUntilReady();
-      console.info(
-        `[worker-expiry] BullMQ worker ready on queue "${CREDIT_EXPIRY_QUEUE}" (job "${CREDIT_EXPIRY_JOB}")`,
-      );
-    },
-    async stop() {
-      await worker.close();
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
-    },
-  };
 }
 
 export interface MemoryExpiryOptions {
@@ -176,79 +210,22 @@ export {
 export { processExpiry, CREDIT_EXPIRY_EVENT } from "./handler.js";
 export type { CreditExpiryPayload } from "./queues.js";
 
-export interface BullmqWarrantyOptions {
-  redisUrl?: string;
-  connection?: Redis;
-  db?: Db | null;
-  handler?: WarrantyHandler;
-  concurrency?: number;
-}
+export type BullmqWarrantyOptions = PushJobWorkerOptions<WarrantyExpiryPayload>;
 
 /** BullMQ consumer for the warranty-expiry queue. Mirrors the credit worker. */
 export function createBullmqWarrantyWorker(
   options: BullmqWarrantyOptions = {},
 ): ExpiryWorkerConsumer & { readonly worker: Worker<WarrantyExpiryPayload> } {
-  const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
-  if (!redisUrl && !options.connection) {
-    throw new Error(
-      "REDIS_URL or an explicit connection is required for the BullMQ warranty worker",
-    );
-  }
-  const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ??
-    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
-
-  const db = options.db ?? null;
-  const handler: WarrantyHandler =
-    options.handler ??
-    (async (payload) => {
-      if (!db) {
-        throw new Error("A Db is required to process warranty reminders");
-      }
-      await processWarrantyExpiry(payload, db);
-    });
-
-  const worker = new Worker<WarrantyExpiryPayload>(
-    WARRANTY_EXPIRY_QUEUE,
-    async (job, token) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) {
-        throw new Error("A Db is required to process warranty reminders");
-      }
-      const result = await processWarrantyExpiry(job.data, db);
-      if (result.status === "delayed" && token) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+  return createPushJobWorker(
     {
-      connection,
-      concurrency:
-        options.concurrency ?? Number(process.env.EXPIRY_CONCURRENCY ?? 4),
+      queue: WARRANTY_EXPIRY_QUEUE,
+      jobName: WARRANTY_EXPIRY_JOB,
+      label: "warranty",
+      concurrencyEnv: "EXPIRY_CONCURRENCY",
+      process: (payload, db) => processWarrantyExpiry(payload, db),
     },
+    options,
   );
-
-  initNodeSentry({ worker: "expiry" });
-  attachBullmqFailureReporting(worker, "warranty-expiry");
-
-  return {
-    worker,
-    async start() {
-      await worker.waitUntilReady();
-      console.info(
-        `[worker-expiry] BullMQ worker ready on queue "${WARRANTY_EXPIRY_QUEUE}" (job "${WARRANTY_EXPIRY_JOB}")`,
-      );
-    },
-    async stop() {
-      await worker.close();
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
-    },
-  };
 }
 
 /** In-memory warranty consumer for tests / local dev. */
@@ -308,13 +285,7 @@ export {
 } from "./handler.js";
 export type { WarrantyExpiryPayload } from "./queues.js";
 
-export interface BullmqBalanceRecheckOptions {
-  redisUrl?: string;
-  connection?: Redis;
-  db?: Db | null;
-  handler?: BalanceRecheckHandler;
-  concurrency?: number;
-}
+export type BullmqBalanceRecheckOptions = PushJobWorkerOptions<BalanceRecheckPayload>;
 
 /** BullMQ consumer for WV02 credit-balance-recheck nudges. */
 export function createBullmqBalanceRecheckWorker(
@@ -322,74 +293,16 @@ export function createBullmqBalanceRecheckWorker(
 ): ExpiryWorkerConsumer & {
   readonly worker: Worker<BalanceRecheckPayload>;
 } {
-  const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
-  if (!redisUrl && !options.connection) {
-    throw new Error(
-      "REDIS_URL or an explicit connection is required for the BullMQ balance-recheck worker",
-    );
-  }
-  const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ??
-    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
-
-  const db = options.db ?? null;
-  const handler: BalanceRecheckHandler =
-    options.handler ??
-    (async (payload) => {
-      if (!db) {
-        throw new Error("A Db is required to process balance recheck reminders");
-      }
-      await processBalanceRecheck(payload, db);
-    });
-
-  const worker = new Worker<BalanceRecheckPayload>(
-    BALANCE_RECHECK_QUEUE,
-    async (job, token) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) {
-        throw new Error("A Db is required to process balance recheck reminders");
-      }
-      const result = await processBalanceRecheck(job.data, db);
-      if (
-        result &&
-        typeof result === "object" &&
-        "status" in result &&
-        result.status === "delayed" &&
-        token
-      ) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+  return createPushJobWorker(
     {
-      connection,
-      concurrency:
-        options.concurrency ??
-        Number(process.env.BALANCE_RECHECK_CONCURRENCY ?? 4),
+      queue: BALANCE_RECHECK_QUEUE,
+      jobName: BALANCE_RECHECK_JOB,
+      label: "balance-recheck",
+      concurrencyEnv: "BALANCE_RECHECK_CONCURRENCY",
+      process: (payload, db) => processBalanceRecheck(payload, db),
     },
+    options,
   );
-
-  initNodeSentry({ worker: "expiry" });
-  attachBullmqFailureReporting(worker, "credit-balance-recheck");
-
-  return {
-    worker,
-    async start() {
-      await worker.waitUntilReady();
-      console.info(
-        `[worker-expiry] BullMQ worker ready on queue "${BALANCE_RECHECK_QUEUE}" (job "${BALANCE_RECHECK_JOB}")`,
-      );
-    },
-    async stop() {
-      await worker.close();
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
-    },
-  };
 }
 
 /** In-memory balance-recheck consumer for tests / local dev. */
@@ -449,13 +362,7 @@ export {
 } from "./handler.js";
 export type { BalanceRecheckPayload } from "./queues.js";
 
-export interface BullmqCashbackClaimOptions {
-  redisUrl?: string;
-  connection?: Redis;
-  db?: Db | null;
-  handler?: CashbackClaimDeadlineHandler;
-  concurrency?: number;
-}
+export type BullmqCashbackClaimOptions = PushJobWorkerOptions<CashbackClaimDeadlinePayload>;
 
 /** BullMQ consumer for U006 cashback-claim-deadline T-3d nudges. */
 export function createBullmqCashbackClaimWorker(
@@ -463,65 +370,17 @@ export function createBullmqCashbackClaimWorker(
 ): ExpiryWorkerConsumer & {
   readonly worker: Worker<CashbackClaimDeadlinePayload>;
 } {
-  const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
-  if (!redisUrl && !options.connection) {
-    throw new Error(
-      "REDIS_URL or an explicit connection is required for the BullMQ cashback-claim worker",
-    );
-  }
-  const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ??
-    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
-
-  const db = options.db ?? null;
-  const handler: CashbackClaimDeadlineHandler =
-    options.handler ??
-    (async (payload) => {
-      if (!db) {
-        throw new Error("A Db is required to process cashback claim reminders");
-      }
-      await processCashbackClaimDeadline(payload, db);
-    });
-
-  const worker = new Worker<CashbackClaimDeadlinePayload>(
-    CASHBACK_CLAIM_QUEUE,
-    async (job) => {
-      if (options.handler) {
-        await handler(job.data);
-        return;
-      }
-      if (!db) {
-        throw new Error("A Db is required to process cashback claim reminders");
-      }
-      await processCashbackClaimDeadline(job.data, db);
-    },
+  // The result used to be ignored: quiet hours and failed sends completed the job.
+  return createPushJobWorker(
     {
-      connection,
-      concurrency:
-        options.concurrency ??
-        Number(process.env.CASHBACK_CLAIM_CONCURRENCY ?? 4),
+      queue: CASHBACK_CLAIM_QUEUE,
+      jobName: CASHBACK_CLAIM_JOB,
+      label: "cashback-claim",
+      concurrencyEnv: "CASHBACK_CLAIM_CONCURRENCY",
+      process: (payload, db) => processCashbackClaimDeadline(payload, db),
     },
+    options,
   );
-
-  initNodeSentry({ worker: "expiry" });
-  attachBullmqFailureReporting(worker, "cashback-claim-deadline");
-
-  return {
-    worker,
-    async start() {
-      await worker.waitUntilReady();
-      console.info(
-        `[worker-expiry] BullMQ worker ready on queue "${CASHBACK_CLAIM_QUEUE}" (job "${CASHBACK_CLAIM_JOB}")`,
-      );
-    },
-    async stop() {
-      await worker.close();
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
-    },
-  };
 }
 
 /** In-memory cashback-claim consumer for tests / local dev. */

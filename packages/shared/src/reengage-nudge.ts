@@ -111,7 +111,9 @@ export function monthlyDigestCopy(input: {
 }
 
 export type ReengageDeliveryDeps = {
-  consentFlags: Record<string, unknown> | null | undefined;
+  /** `user.prefs` (C2) and `user.timeZone` (C1). */
+  prefs: Record<string, unknown> | null | undefined;
+  timeZone: string | null | undefined;
   pushToken: string | null | undefined;
   recentCategoryCount: number;
   now?: Date;
@@ -120,7 +122,7 @@ export type ReengageDeliveryDeps = {
     title: string;
     body: string;
     payload: Record<string, unknown>;
-  }) => Promise<{ id: string }>;
+  }) => Promise<{ id: string; status?: "QUEUED" | "SENT" | "FAILED" }>;
   markStatus: (
     id: string,
     status: "SENT" | "FAILED",
@@ -149,7 +151,8 @@ export async function deliverFoundMoneyWaiting(
   };
   return runClosetPushDelivery({
     eventType: FOUND_MONEY_WAITING_EVENT,
-    consentFlags: input.consentFlags,
+    prefs: input.prefs,
+    timeZone: input.timeZone,
     pushToken: input.pushToken,
     title: copy.title,
     body: copy.body,
@@ -189,7 +192,8 @@ export async function deliverWeeklyDigest(
   };
   return runClosetPushDelivery({
     eventType: WEEKLY_DIGEST_EVENT,
-    consentFlags: input.consentFlags,
+    prefs: input.prefs,
+    timeZone: input.timeZone,
     pushToken: input.pushToken,
     title: copy.title,
     body: copy.body,
@@ -227,7 +231,8 @@ export async function deliverMonthlyDigest(
   };
   return runClosetPushDelivery({
     eventType: MONTHLY_DIGEST_EVENT,
-    consentFlags: input.consentFlags,
+    prefs: input.prefs,
+    timeZone: input.timeZone,
     pushToken: input.pushToken,
     title: copy.title,
     body: copy.body,

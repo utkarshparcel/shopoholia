@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -28,6 +31,11 @@ import {
   selectRefundAccount,
   withReturnDeadlineRichFields,
 } from "./return-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
+
+/** The reminder's jobId is keyed on the return and its deadline. */
+const returnJobId = (returnId: string, windowDeadline: string) =>
+  jobIdFrom(`return:${returnId}`, windowDeadline);
 
 describe("return-jobs lead times", () => {
   it("RETURN_LEAD_MS is 3 days", () => {
@@ -186,7 +194,7 @@ describe("scheduleReturnDeadlineReminder", () => {
   });
 
   it("skips when window already closed", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await scheduleReturnDeadlineReminder({
       returnId: "r1",
       userId: "u1",
@@ -197,23 +205,39 @@ describe("scheduleReturnDeadlineReminder", () => {
   });
 
   it("publishes when Queue succeeds", async () => {
-    process.env.RETURN_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
+    const windowDeadline = new Date(Date.now() + 10 * 86_400_000).toISOString();
     const result = await scheduleReturnDeadlineReminder({
       returnId: "r1",
       userId: "u1",
-      windowDeadline: new Date(Date.now() + 10 * 86_400_000).toISOString(),
+      windowDeadline,
       merchant: "Amazon",
     });
     expect(result).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(
       "return-deadline-reminder",
       expect.objectContaining({ returnId: "r1", merchant: "Amazon" }),
-      expect.objectContaining({ jobId: "return:r1" }),
+      expect.objectContaining({ jobId: returnJobId("r1", windowDeadline) }),
     );
   });
 
+  it("a moved deadline gets its own job", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
+    const base = { returnId: "r1", userId: "u1", merchant: "Amazon" };
+    await scheduleReturnDeadlineReminder({
+      ...base,
+      windowDeadline: new Date(Date.now() + 10 * 86_400_000).toISOString(),
+    });
+    await scheduleReturnDeadlineReminder({
+      ...base,
+      windowDeadline: new Date(Date.now() + 20 * 86_400_000).toISOString(),
+    });
+    const ids = queueMocks.add.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
   it("publishes rich payload with imageUrl (WV01-DEADLINE-IMAGE-PUSH)", async () => {
-    process.env.RETURN_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const enriched = withReturnDeadlineRichFields(
       {
         returnId: "r2",
@@ -240,21 +264,22 @@ describe("scheduleReturnDeadlineReminder", () => {
         amountMinor: 199_900,
         currency: "INR",
       }),
-      expect.objectContaining({ jobId: "return:r2" }),
+      expect.objectContaining({ jobId: returnJobId("r2", enriched.windowDeadline) }),
     );
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
     try {
-      const result = await scheduleReturnDeadlineReminder({
-        returnId: "r1",
-        userId: "u1",
-        windowDeadline: new Date(Date.now() + 10 * 86_400_000).toISOString(),
-        merchant: "Amazon",
-      });
-      expect(result).toBe("skipped");
+      await expect(
+        scheduleReturnDeadlineReminder({
+          returnId: "r1",
+          userId: "u1",
+          windowDeadline: new Date(Date.now() + 10 * 86_400_000).toISOString(),
+          merchant: "Amazon",
+        }),
+      ).rejects.toBeInstanceOf(QueueUnavailableError);
     } finally {
       queueMocks.failAdd = false;
     }
@@ -351,7 +376,7 @@ describe("withReturnDeadlineRichFields", () => {
   });
 
   it("publishes rich payload with placeholder image still SENT (W042)", async () => {
-    process.env.RETURN_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const enriched = await enrichDeadlineFromPurchaseItem(
       {
         returnId: "r3",
@@ -373,7 +398,7 @@ describe("withReturnDeadlineRichFields", () => {
         returnId: "r3",
         imageUrl: "https://worn.app/brand/return-deadline.png",
       }),
-      expect.objectContaining({ jobId: "return:r3" }),
+      expect.objectContaining({ jobId: returnJobId("r3", enriched.windowDeadline) }),
     );
   });
 });

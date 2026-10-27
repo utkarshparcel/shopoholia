@@ -70,6 +70,14 @@ export { tryonPreviews } from "./schema/tryon-previews.js";
 export { pushEvents } from "./schema/push-events.js";
 export { oauthStates } from "./schema/oauth-states.js";
 export { otpCodes } from "./schema/otp-codes.js";
+export { jobDeadLetters, type JobDeadLetterRow } from "./schema/jobs.js";
+export {
+  recordJobDeadLetter,
+  recordPushEventIfNew,
+  DEAD_LETTER_ERROR_MAX,
+  type JobDeadLetterInput,
+  type PushEventInsert,
+} from "./queries/jobs.js";
 export { refreshTokens } from "./schema/refresh-tokens.js";
 export { sellers } from "./schema/sellers.js";
 export { recipients, recipientProfiles, giftOrders, groupGiftContributions, type RecipientRow, type RecipientProfileRow, type GiftOrderRow, type GroupGiftContributionRow, type WishlistRef } from "./schema/gift.js";

@@ -11,6 +11,7 @@ import {
   type CalendarEventLike,
   type OutfitOccasion,
 } from "@worn/shared";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export type { CalendarEventLike, OutfitOccasion };
 export { CAL_EVENT_REMINDER_LOCAL_HOUR };
@@ -96,8 +97,10 @@ export function calEventReminderJobId(userId: string, eventKey: string): string 
 }
 
 /**
- * Best-effort enqueue of an optional night-before outfit reminder.
- * Skips when Redis is unavailable or the reminder window has passed.
+ * Enqueue an optional night-before outfit reminder.
+ * Skips when the reminder window has passed (or without Redis outside production); throws
+ * QueueUnavailableError when Redis can't take it. Keyed on the start time too, so moving the
+ * event schedules a new reminder (the old one is skipped by the handler: its event has moved on).
  */
 export async function scheduleCalEventOutfitReminder(input: {
   userId: string;
@@ -108,33 +111,24 @@ export async function scheduleCalEventOutfitReminder(input: {
   startAt: string;
   remindAt: string;
 }): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.WARDROBE_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
   const delayMs = new Date(input.remindAt).getTime() - Date.now();
-  if (delayMs <= 0) return "skipped";
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return "skipped";
   const eventKey = input.eventId ?? `${input.plannedFor}:${input.title.slice(0, 40)}`;
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(CAL_EVENT_OUTFIT_QUEUE, { connection: redisUrl });
-    await queue.add(
-      CAL_EVENT_OUTFIT_JOB,
-      {
-        userId: input.userId,
-        eventId: input.eventId ?? null,
-        title: input.title,
-        occasion: input.occasion,
-        plannedFor: input.plannedFor,
-        startAt: input.startAt,
-      },
-      {
-        delay: Math.max(100, delayMs),
-        jobId: calEventReminderJobId(input.userId, eventKey),
-      },
-    );
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[cal-event] reminder enqueue failed", String(err));
-    return "skipped";
-  }
+  const result = await enqueueJob(
+    CAL_EVENT_OUTFIT_QUEUE,
+    CAL_EVENT_OUTFIT_JOB,
+    {
+      userId: input.userId,
+      eventId: input.eventId ?? null,
+      title: input.title,
+      occasion: input.occasion,
+      plannedFor: input.plannedFor,
+      startAt: input.startAt,
+    },
+    {
+      delay: delayMs,
+      jobId: jobIdFrom(calEventReminderJobId(input.userId, eventKey), input.startAt),
+    },
+  );
+  return result.status === "queued" ? "published" : "skipped";
 }

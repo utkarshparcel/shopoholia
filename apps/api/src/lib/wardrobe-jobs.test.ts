@@ -16,6 +16,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -32,11 +35,13 @@ import {
   scheduleNightlyOutfit,
   utcMsForLocalWallClock,
 } from "./wardrobe-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("morning outfit schedule helpers", () => {
-  it("resolves timezone from consentFlags", () => {
+  it("resolves timezone from users.time_zone", () => {
     expect(resolveUserTimeZone(null)).toBe(DEFAULT_OUTFIT_TZ);
-    expect(resolveUserTimeZone({ timezone: "America/New_York" })).toBe("America/New_York");
+    expect(resolveUserTimeZone({ timeZone: null })).toBe(DEFAULT_OUTFIT_TZ);
+    expect(resolveUserTimeZone({ timeZone: "Not/AZone" })).toBe(DEFAULT_OUTFIT_TZ);
     expect(resolveUserTimeZone({ timeZone: "Europe/London" })).toBe("Europe/London");
   });
 
@@ -105,7 +110,7 @@ describe("scheduleMorningOutfit", () => {
   });
 
   it("publishes with idempotent jobId and morning trigger", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const now = new Date("2026-08-26T02:30:00.000Z"); // past 7am IST → next day
     expect(await scheduleMorningOutfit("user-1", { now, timeZone: "Asia/Kolkata" })).toBe(
       "published",
@@ -114,32 +119,28 @@ describe("scheduleMorningOutfit", () => {
       "outfit-generate",
       { userId: "user-1", trigger: "morning", timeZone: "Asia/Kolkata" },
       expect.objectContaining({
-        jobId: "outfit:user-1:2026-08-27",
+        jobId: jobIdFrom("outfit:user-1:2026-08-27"),
         delay: expect.any(Number),
       }),
     );
-    expect(queueMocks.close).toHaveBeenCalled();
   });
 
-  it("uses 100ms delay in test env when now is omitted", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
-    process.env.NODE_ENV = "test";
+  it("schedules for the next local 7am when now is omitted", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     expect(await scheduleMorningOutfit("user-1")).toBe("published");
-    expect(queueMocks.add).toHaveBeenCalledWith(
-      "outfit-generate",
-      expect.objectContaining({ trigger: "morning" }),
-      expect.objectContaining({ delay: 100 }),
-    );
+    const options = queueMocks.add.mock.calls.at(-1)![2] as { delay: number };
+    expect(options.delay).toBeGreaterThan(0);
+    expect(options.delay).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
-    expect(await scheduleMorningOutfit("user-2")).toBe("skipped");
+    await expect(scheduleMorningOutfit("user-2")).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 
   it("scheduleNightlyOutfit aliases scheduleMorningOutfit", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     process.env.NODE_ENV = "test";
     expect(await scheduleNightlyOutfit("user-3")).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(

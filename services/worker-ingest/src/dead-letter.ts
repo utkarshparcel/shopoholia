@@ -1,52 +1,55 @@
-import { INGEST_DEAD_LETTER_QUEUE } from "./queues.js";
+import { jobIdFrom, type DeadLetter, type IngestDeadLetterJob } from "@worn/shared";
+import {
+  INGEST_JOB_NAME,
+  INGEST_OAUTH_JOB_NAME,
+  INGEST_RESYNC_JOB_NAME,
+} from "./queues.js";
 
-// In-memory dead-letter store (used when Redis unavailable / in tests).
-export type DeadLetterEntry = {
-  kind: "EMAIL" | "SMS" | "RESYNC" | "OAUTH" | "UNKNOWN";
-  sourceId?: string;
-  documentId?: string;
-  error: string;
-  attempts: number;
-  payload?: unknown;
-  timestamp: string;
-};
-
-const inMemoryDLQ: DeadLetterEntry[] = [];
+export const INGEST_DEAD_LETTER_JOB_NAME = "dead-letter";
+const MAX_ERROR_LENGTH = 1_000;
 
 // Per-source exponential backoff state.
 const backoffMap = new Map<string, { failures: number; lastFailureAt: number }>();
 
-export function sendToDeadLetter(entry: Omit<DeadLetterEntry, "timestamp">): DeadLetterEntry {
-  const full: DeadLetterEntry = { ...entry, timestamp: new Date().toISOString() };
-  inMemoryDLQ.push(full);
-  console.warn("[ingest] dead-letter", JSON.stringify(full));
-  return full;
+/**
+ * The ingest-dead-letter message for an ingest job that failed for good: ids only. `entry.data`
+ * has already been through deadLetterData, so message bodies and OAuth codes are gone.
+ */
+export function toIngestDeadLetter(entry: DeadLetter): IngestDeadLetterJob {
+  const { data } = entry;
+  const kind =
+    entry.jobName === INGEST_OAUTH_JOB_NAME
+      ? "OAUTH"
+      : entry.jobName === INGEST_RESYNC_JOB_NAME
+        ? "RESYNC"
+        : entry.jobName === INGEST_JOB_NAME
+          ? data.kind === "SMS"
+            ? "SMS"
+            : "EMAIL"
+          : "UNKNOWN";
+  return {
+    kind,
+    ...(typeof data.sourceId === "string" ? { sourceId: data.sourceId } : {}),
+    ...(typeof data.documentId === "string" ? { documentId: data.documentId } : {}),
+    jobId: entry.jobId,
+    error: entry.error.slice(0, MAX_ERROR_LENGTH),
+    attempts: entry.attemptsMade,
+    timestamp: entry.failedAt.toISOString(),
+  };
 }
 
-export function getDeadLetterCount(): number {
-  return inMemoryDLQ.length;
-}
-
-export function listDeadLetters(): DeadLetterEntry[] {
-  return [...inMemoryDLQ];
-}
-
-export function clearDeadLetters(): void {
-  inMemoryDLQ.length = 0;
-}
-
-// BullMQ DLQ enqueue helper — best-effort. Requires Redis URL.
-export async function enqueueDeadLetterJob(payload: DeadLetterEntry): Promise<void> {
-  const redisUrl = process.env.REDIS_URL ?? process.env.INGEST_REDIS_URL;
-  if (!redisUrl) return;
-  try {
-    const { Queue } = await import("bullmq");
-    const q = new Queue(INGEST_DEAD_LETTER_QUEUE, { connection: redisUrl as unknown as never });
-    await q.add("dead-letter", payload, { jobId: `dl:${Date.now()}:${Math.random().toString(36).slice(2, 8)}` });
-    await q.close();
-  } catch {
-    // best-effort
-  }
+/**
+ * Puts a dead letter on the ingest-dead-letter queue (the API runner copies it to
+ * job_dead_letters). One message per failed job: a rerun reuses the job id, which BullMQ ignores.
+ * Rejects when Redis can't take it, so the caller's alert says the copy is missing.
+ */
+export async function enqueueDeadLetterJob(
+  queue: { add(name: string, data: IngestDeadLetterJob, opts: { jobId: string }): Promise<unknown> },
+  entry: IngestDeadLetterJob,
+): Promise<void> {
+  await queue.add(INGEST_DEAD_LETTER_JOB_NAME, entry, {
+    jobId: jobIdFrom("ingest-dl", entry.jobId ?? entry.timestamp),
+  });
 }
 
 // Exponential backoff helpers — per ingestion_sources.id

@@ -6,6 +6,8 @@ export type CreditExpiryPayload = {
   userId: string;
   merchant: string;
   expiresAt: string;
+  /** Set on a snoozed reminder (apps/api expiry.ts); it gets its own push dedupe key. */
+  snoozedUntil?: string;
 };
 
 export const WARRANTY_EXPIRY_QUEUE = "warranty-expiry";
@@ -17,6 +19,7 @@ export type WarrantyExpiryPayload = {
   itemTitle: string;
   provider: string;
   coverageUntil: string;
+  snoozedUntil?: string;
 };
 
 /** WV02-BALANCE-CHECK — delayed nudge to re-check merchant balances. */

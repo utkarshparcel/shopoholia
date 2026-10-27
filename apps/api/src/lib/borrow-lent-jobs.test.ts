@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -27,6 +30,7 @@ import {
   processLentOverdueNudge,
   scheduleLentOverdueNudge,
 } from "./borrow-lent-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("computeLentOverdueDelayMs", () => {
   it("returns null for invalid dueOn", () => {
@@ -86,7 +90,7 @@ describe("scheduleLentOverdueNudge", () => {
   });
 
   it("publishes with stable jobId", async () => {
-    process.env.WARDROBE_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const wardrobeItemId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const dueOn = "2026-08-28";
     const result = await scheduleLentOverdueNudge(
@@ -104,24 +108,23 @@ describe("scheduleLentOverdueNudge", () => {
       LENT_OVERDUE_JOB,
       expect.objectContaining({ wardrobeItemId, lentTo: "Riya", dueOn }),
       expect.objectContaining({
-        jobId: lentOverdueJobId(wardrobeItemId, dueOn),
+        jobId: jobIdFrom(lentOverdueJobId(wardrobeItemId, dueOn)),
         delay: expect.any(Number),
       }),
     );
-    expect(queueMocks.close).toHaveBeenCalled();
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
-    expect(
-      await scheduleLentOverdueNudge({
+    await expect(
+      scheduleLentOverdueNudge({
         userId: "u1",
         wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         lentTo: "Riya",
         dueOn: "2026-08-28",
       }),
-    ).toBe("skipped");
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 });
 
@@ -156,7 +159,7 @@ describe("processLentOverdueNudge", () => {
       },
       {
         recordPushEvent,
-        findUserById: async () => ({ consentFlags: {}, pushToken: null }),
+        findUserById: async () => ({ prefs: {}, timeZone: "Asia/Kolkata", pushToken: null }),
         findWardrobeItem: async () => ({
           lentTo: "Riya",
           lentDueOn: "2026-08-20",
@@ -176,6 +179,27 @@ describe("processLentOverdueNudge", () => {
         ),
       }),
     );
+  });
+
+  it("waits instead of sending when run before the first overdue morning", async () => {
+    const recordPushEvent = vi.fn(async () => ({ id: "evt-1" }));
+    const result = await processLentOverdueNudge(
+      {
+        userId: "u1",
+        wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        lentTo: "Riya",
+        dueOn: "2026-08-20",
+      },
+      {
+        recordPushEvent,
+        findUserById: async () => ({ prefs: {}, timeZone: "Asia/Kolkata", pushToken: null }),
+        findWardrobeItem: async () => ({ lentTo: "Riya", lentDueOn: "2026-08-20" }),
+      },
+      // 18:30 IST on the due day; the nudge is for 10:00 IST the next day.
+      { now: new Date("2026-08-20T13:00:00.000Z") },
+    );
+    expect(result).toEqual({ status: "delayed", delayMs: 15.5 * 3_600_000 });
+    expect(recordPushEvent).not.toHaveBeenCalled();
   });
 
   it("exposes queue name constant", () => {

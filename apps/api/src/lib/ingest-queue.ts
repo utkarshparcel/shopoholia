@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 // Mirrors services/worker-ingest/src/queues.ts. Kept local to avoid a hard
 // build-time dependency on the worker package from the API.
@@ -9,17 +10,17 @@ export const INGEST_OAUTH_JOB_NAME = "email-oauth";
 export const INGEST_DEAD_LETTER_QUEUE = "ingest-dead-letter";
 
 function stableIngestJobId(payload: IngestJobPayload): string | undefined {
-  if (payload.documentId) return `ingest:${payload.documentId}`;
+  if (payload.documentId) return jobIdFrom(`ingest:${payload.documentId}`);
   if (payload.message && typeof payload.message === "object") {
     const m = payload.message as { messageId?: string };
-    if (m.messageId) return `ingest:msg:${m.messageId}`;
+    if (m.messageId) return jobIdFrom(`ingest:msg:${m.messageId}`);
   }
   return undefined;
 }
 
 function stableOauthJobId(payload: OauthCompletePayload): string {
   const hash = createHash("sha256").update(payload.code).digest("hex").slice(0, 16);
-  return `oauth:${payload.sourceId}:${hash}`;
+  return jobIdFrom(`oauth:${payload.sourceId}:${hash}`);
 }
 
 export type IngestJobPayload = {
@@ -37,77 +38,35 @@ export type OauthCompletePayload = {
 };
 
 /**
- * Best-effort publish to the ingest worker's BullMQ queue.
+ * Publish to the ingest worker's BullMQ queue (3 attempts, exponential backoff).
  *
- * Requires a Redis connection (INGEST_REDIS_URL / REDIS_URL). When Redis is
- * unavailable (e.g. local/test runs) this resolves to "skipped" and does NOT
- * throw - the ingestion_documents row is the durable source of truth and the
- * worker will catch up on reconnect.
+ * Throws QueueUnavailableError (503) when Redis can't take the job, so the
+ * caller fails visibly and the sender (a webhook, the app) retries; the job id
+ * is stable per document or message, so a retry is not a second job. Without
+ * REDIS_URL outside production it resolves to "skipped".
  */
 export async function publishIngestJob(
   payload: IngestJobPayload,
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.INGEST_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) {
-    console.warn("[audit] ingest.enqueue.skipped: INGEST_REDIS_URL not configured", {
-      job: randomUUID(),
-    });
-    return "skipped";
-  }
-
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(INGEST_QUEUE, { connection: redisUrl });
-    const jobId = stableIngestJobId(payload);
-    await queue.add(INGEST_JOB_NAME, payload, {
-      jobId,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 2000 },
-      removeOnComplete: 100,
-      removeOnFail: 100,
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[audit] ingest.enqueue.failed", { error: String(err) });
-    return "skipped";
-  }
+  const result = await enqueueJob(INGEST_QUEUE, INGEST_JOB_NAME, payload, {
+    jobId: stableIngestJobId(payload),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /**
  * Enqueue an OAuth-complete job for the ingest worker (B2). The worker performs
- * the token exchange and stores the tokens encrypted at rest. Best-effort: if
- * Redis is unavailable the job is "skipped" and the caller should surface that.
+ * the token exchange and stores the tokens encrypted at rest. Throws
+ * QueueUnavailableError when Redis can't take it; "skipped" only without
+ * REDIS_URL outside production, and the caller surfaces that.
  */
 export async function publishOauthCompleteJob(
   payload: OauthCompletePayload,
 ): Promise<"published" | "skipped"> {
-  const redisUrl = process.env.INGEST_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) {
-    console.warn("[audit] ingest.oauth.enqueue.skipped: INGEST_REDIS_URL not configured", {
-      sourceId: payload.sourceId,
-    });
-    return "skipped";
-  }
-
-  try {
-    const { Queue } = await import("bullmq");
-    // A bare string here is ignored by BullMQ (it falls back to 127.0.0.1:6379); `url` is honoured.
-    const queue = new Queue(INGEST_QUEUE, { connection: { url: redisUrl } });
-    const jobId = stableOauthJobId(payload);
-    await queue.add(INGEST_OAUTH_JOB_NAME, payload, {
-      jobId,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 2000 },
-      removeOnComplete: 100,
-      removeOnFail: 100,
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[audit] ingest.oauth.enqueue.failed", { error: String(err) });
-    return "skipped";
-  }
+  const result = await enqueueJob(INGEST_QUEUE, INGEST_OAUTH_JOB_NAME, payload, {
+    jobId: stableOauthJobId(payload),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 /** Test helper — expose stable jobId computation. */

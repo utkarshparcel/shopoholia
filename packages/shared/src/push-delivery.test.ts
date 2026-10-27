@@ -74,6 +74,32 @@ describe("quiet hours", () => {
     });
     expect(fallback).toMatch(/Next send at \d{2}:\d{2}/);
   });
+
+  it("evaluates quiet hours on the given zone's wall clock (C1)", () => {
+    // 17:00 UTC = 22:30 IST: quiet in Kolkata, not in UTC.
+    const now = new Date("2026-08-26T17:00:00.000Z");
+    expect(isInQuietHours(now, start, end, "Asia/Kolkata")).toBe(true);
+    expect(isInQuietHours(now, start, end, "UTC")).toBe(false);
+    // Window ends 07:00 IST = 01:30 UTC.
+    expect(msUntilQuietHoursEnd(now, start, end, "Asia/Kolkata")).toBe(8.5 * 3_600_000);
+    expect(nextEligibleSendAt(now, start, end, "Asia/Kolkata").toISOString()).toBe(
+      "2026-08-27T01:30:00.000Z",
+    );
+    expect(
+      formatQuietHoursNextSendPreview(now, start, end, { timeZone: "Asia/Kolkata", locale: "en-IN" }),
+    ).toBe("Next send at 07:00");
+    expect(formatQuietHoursNextSendPreview(now, start, end, { timeZone: "UTC" })).toMatch(
+      /quiet hours open/,
+    );
+  });
+
+  it("handles a DST zone: quiet hours end at local 07:00 on the spring-forward night", () => {
+    // New York jumps 02:00 → 03:00 on 2026-03-08. 23:00 EST on the 7th = 04:00 UTC on the 8th.
+    const now = new Date("2026-03-08T04:00:00.000Z");
+    const next = nextEligibleSendAt(now, start, end, "America/New_York");
+    // 07:00 EDT = 11:00 UTC.
+    expect(next.toISOString()).toBe("2026-03-08T11:00:00.000Z");
+  });
 });
 
 describe("category opt-out + gate", () => {
@@ -108,7 +134,7 @@ describe("category opt-out + gate", () => {
         DEFAULT_NOTIFICATION_PREFERENCES,
         "digest",
         new Date("2026-08-26T12:00:00.000Z"),
-        { recentCategoryCount: 1 },
+        { recentCategoryCount: 1, timeZone: "UTC" },
       ),
     ).toEqual({ action: "skip", reason: "frequency_cap" });
   });
@@ -122,7 +148,9 @@ describe("category opt-out + gate", () => {
       },
     };
     expect(
-      evaluateNotificationGate(prefs, "returns", new Date("2026-08-26T12:00:00.000Z")),
+      evaluateNotificationGate(prefs, "returns", new Date("2026-08-26T12:00:00.000Z"), {
+        timeZone: "UTC",
+      }),
     ).toEqual({ action: "skip", reason: "category_opt_out" });
   });
 
@@ -131,6 +159,7 @@ describe("category opt-out + gate", () => {
       DEFAULT_NOTIFICATION_PREFERENCES,
       "credits",
       new Date("2026-08-26T23:30:00.000Z"),
+      { timeZone: "UTC" },
     );
     expect(gate.action).toBe("delay");
     if (gate.action === "delay") {
@@ -144,11 +173,32 @@ describe("category opt-out + gate", () => {
         DEFAULT_NOTIFICATION_PREFERENCES,
         "outfits",
         new Date("2026-08-26T12:00:00.000Z"),
+        { timeZone: "UTC" },
+      ),
+    ).toEqual({ action: "send" });
+    // Same instant is 17:30 IST: still outside quiet hours there.
+    expect(
+      evaluateNotificationGate(
+        DEFAULT_NOTIFICATION_PREFERENCES,
+        "outfits",
+        new Date("2026-08-26T12:00:00.000Z"),
+        { timeZone: "Asia/Kolkata" },
       ),
     ).toEqual({ action: "send" });
   });
 
-  it("evaluateNotificationGateFromFlags respects consentFlags.notifications", () => {
+  it("maps the new reminder event types to a category and a real screen", () => {
+    expect(notificationCategoryForEvent("CAL_EVENT_OUTFIT")).toBe("outfits");
+    expect(notificationCategoryForEvent("INTERVIEW_KIT_REMINDER")).toBe("outfits");
+    expect(notificationCategoryForEvent("LENT_OVERDUE")).toBe("outfits");
+    expect(closetDeepLinkForEvent("CAL_EVENT_OUTFIT").deepLink).toBe("worn://today");
+    expect(closetDeepLinkForEvent("INTERVIEW_KIT_REMINDER").deepLink).toBe("worn://today");
+    expect(closetDeepLinkForEvent("LENT_OVERDUE", { wardrobeItemId: "w1" }).deepLink).toBe(
+      "worn://wardrobe?item=w1",
+    );
+  });
+
+  it("evaluateNotificationGateFromFlags reads user.prefs.notifications", () => {
     const gate = evaluateNotificationGateFromFlags(
       {
         notifications: {
@@ -166,6 +216,7 @@ describe("category opt-out + gate", () => {
       },
       "RETURN_DEADLINE",
       new Date("2026-08-26T12:00:00.000Z"),
+      { timeZone: "UTC" },
     );
     expect(gate).toEqual({ action: "skip", reason: "category_opt_out" });
   });

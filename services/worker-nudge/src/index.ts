@@ -1,11 +1,22 @@
-import { Worker } from "bullmq";
-import type { RedisOptions } from "ioredis";
+import { DelayedError, UnrecoverableError, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import {
-  attachBullmqFailureReporting,
-  initNodeSentry,
-} from "@worn/shared/node-sentry";
-import { processFoundMoneyWaiting, processMonthlyDigest, processWeeklyDigest } from "./handler.js";
+  JOB_REMOVE_ON_COMPLETE,
+  JOB_REMOVE_ON_FAIL,
+  attachStalledDeadLetters,
+  createJobProcessor,
+  deadLetterAlert,
+  settlePushResult,
+  type DeadLetter,
+  type ProcessPushResult,
+} from "@worn/shared";
+import { captureNodeException, initNodeSentry } from "@worn/shared/node-sentry";
+import {
+  processFoundMoneyWaiting,
+  processMonthlyDigest,
+  processWeeklyDigest,
+  type ClosetPushHandlerOpts,
+} from "./handler.js";
 import {
   FOUND_MONEY_WAITING_JOB,
   MONTHLY_DIGEST_JOB,
@@ -15,7 +26,7 @@ import {
   type MonthlyDigestPayload,
   type WeeklyDigestPayload,
 } from "./queues.js";
-import type { Db } from "@worn/db";
+import { recordJobDeadLetter, type Db } from "@worn/db";
 
 export interface NudgeWorkerConsumer {
   start(): Promise<void>;
@@ -27,51 +38,74 @@ export type NudgeJobPayload =
   | WeeklyDigestPayload
   | MonthlyDigestPayload;
 
+/** Runs one nudge job by its name; an unknown name can never succeed, so it is not retried. */
+export async function processNudgeJob(
+  name: string,
+  payload: NudgeJobPayload,
+  db: Db,
+  opts: ClosetPushHandlerOpts = {},
+): Promise<ProcessPushResult> {
+  switch (name) {
+    case FOUND_MONEY_WAITING_JOB:
+      return processFoundMoneyWaiting(payload as FoundMoneyWaitingPayload, db, opts);
+    case WEEKLY_DIGEST_JOB:
+      return processWeeklyDigest(payload as WeeklyDigestPayload, db, opts);
+    case MONTHLY_DIGEST_JOB:
+      return processMonthlyDigest(payload as MonthlyDigestPayload, db, opts);
+    default:
+      throw new UnrecoverableError(`unknown ${NUDGE_QUEUE} job "${name}"`);
+  }
+}
+
 export function createBullmqNudgeWorker(
   options: {
     redisUrl?: string;
     connection?: Redis;
     db?: Db | null;
+    handler?: (name: string, payload: NudgeJobPayload) => Promise<void>;
+    /** Where final failures go; defaults to job_dead_letters in `db`. */
+    recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
     concurrency?: number;
   } = {},
-): NudgeWorkerConsumer & { readonly worker: Worker } {
+): NudgeWorkerConsumer & { readonly worker: Worker<NudgeJobPayload> } {
   const redisUrl = options.redisUrl ?? process.env.REDIS_URL;
   if (!redisUrl && !options.connection) {
-    throw new Error("REDIS_URL required for nudge worker");
+    throw new Error("REDIS_URL or an explicit connection is required for the nudge worker");
   }
-  const own = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ??
-    new Redis(redisUrl as string, { maxRetriesPerRequest: null });
   const db = options.db ?? null;
+  // Without a Db every job would fail: refuse to start instead.
+  if (!db && !(options.handler && options.recordDeadLetter)) {
+    throw new Error("A Db is required for the nudge worker");
+  }
+  const recordDeadLetter =
+    options.recordDeadLetter ?? (async (entry: DeadLetter) => void (await recordJobDeadLetter(db!, entry)));
+  const own = !options.connection;
+  const connection = options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
 
-  const worker = new Worker(
+  initNodeSentry({ worker: "nudge" });
+  const onDeadLetter = deadLetterAlert((err, tags) => captureNodeException(err, { worker: "nudge", ...tags }));
+  const worker = new Worker<NudgeJobPayload>(
     NUDGE_QUEUE,
-    async (job, token) => {
-      if (!db) throw new Error("Db required");
-      let result;
-      if (job.name === WEEKLY_DIGEST_JOB) {
-        result = await processWeeklyDigest(job.data as WeeklyDigestPayload, db);
-      } else if (job.name === MONTHLY_DIGEST_JOB) {
-        result = await processMonthlyDigest(job.data as MonthlyDigestPayload, db);
-      } else {
-        result = await processFoundMoneyWaiting(
-          job.data as FoundMoneyWaitingPayload,
-          db,
-        );
-      }
-      if (result.status === "delayed" && token) {
-        await job.moveToDelayed(Date.now() + result.delayMs, token);
-      }
-    },
+    createJobProcessor<NudgeJobPayload>({
+      queue: NUDGE_QUEUE,
+      handle: async (payload, job) => {
+        if (options.handler) return options.handler(job.name, payload);
+        const createdAt = job.timestamp ? new Date(job.timestamp) : undefined;
+        settlePushResult(NUDGE_QUEUE, await processNudgeJob(job.name, payload, db!, { createdAt }));
+      },
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
     {
       connection,
       concurrency: options.concurrency ?? Number(process.env.NUDGE_CONCURRENCY ?? 4),
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
     },
   );
-
-  initNodeSentry({ worker: "nudge" });
-  attachBullmqFailureReporting(worker, "nudge");
+  worker.on("error", (err) => console.error("[worker-nudge] worker error:", err.message));
+  attachStalledDeadLetters(worker, { queue: NUDGE_QUEUE, recordDeadLetter, onDeadLetter });
 
   return {
     worker,
@@ -83,9 +117,7 @@ export function createBullmqNudgeWorker(
     },
     async stop() {
       await worker.close();
-      if (own && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
+      if (own) await connection.quit().catch(() => undefined);
     },
   };
 }

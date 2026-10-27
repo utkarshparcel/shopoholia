@@ -54,11 +54,16 @@ export function createMemoryOrderWorker(
   };
 }
 
-/** BullMQ scaffold — wire Redis URL in production. */
+/**
+ * There is no BullMQ consumer for order transitions yet: they run in the API process
+ * (apps/api/src/lib/jobs/queue.ts). Starting this fails rather than pretending to consume.
+ */
 export function createBullmqOrderWorker(_redisUrl?: string): OrderWorkerConsumer {
   return {
     async start() {
-      console.info("[worker-orders] BullMQ consumer scaffold — connect Redis to enable");
+      throw new Error(
+        "worker-orders has no BullMQ consumer: order transitions run in the API process (apps/api/src/lib/jobs/queue.ts)",
+      );
     },
     async stop() {},
   };

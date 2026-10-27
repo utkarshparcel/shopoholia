@@ -1,7 +1,7 @@
-import { Queue, Worker } from "bullmq";
-import type { RedisOptions } from "ioredis";
+import { createHash } from "node:crypto";
+import { DelayedError, Queue, UnrecoverableError, Worker } from "bullmq";
 import { Redis } from "ioredis";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "@worn/db";
 import {
   consentGrants,
@@ -9,9 +9,25 @@ import {
   ingestionSources,
 } from "@worn/db";
 import {
-  attachBullmqFailureReporting,
+  captureNodeException,
   initNodeSentry,
 } from "@worn/shared/node-sentry";
+import {
+  DEFAULT_JOB_ATTEMPTS,
+  DEFAULT_JOB_BACKOFF,
+  DeferJobError,
+  JOB_REMOVE_ON_COMPLETE,
+  JOB_REMOVE_ON_FAIL,
+  attachStalledDeadLetters,
+  createJobProcessor,
+  deadLetterAlert,
+  deferJob,
+  isFinalAttempt,
+  jobIdFrom,
+  type DeadLetter,
+  type IngestDeadLetterJob,
+  type ProcessableJob,
+} from "@worn/shared";
 import {
   INGEST_DEAD_LETTER_QUEUE,
   INGEST_JOB_NAME,
@@ -24,7 +40,7 @@ import {
   getBackoffDelay,
   recordFailure,
   recordSuccess,
-  sendToDeadLetter,
+  toIngestDeadLetter,
 } from "./dead-letter.js";
 import { ConsoleMetricsSink } from "./parsers/metrics.js";
 import { createDefaultRegistry } from "./parsers/index.js";
@@ -325,6 +341,13 @@ export async function processSmsJob(
     .where(eq(ingestionDocuments.id, documentId))
     .limit(1);
   if (!row) throw new Error(`ingestion document not found: ${documentId}`);
+  // A rerun of a job that already got this far: the document has its result, don't write it twice.
+  if (row.status === "PARSED" || row.status === "MATCHED" || row.status === "UNMATCHED") {
+    return {
+      matched: row.status === "MATCHED",
+      ...(row.matchedPurchaseId ? { purchaseId: row.matchedPurchaseId } : {}),
+    };
+  }
   return processSmsDocument(
     { id: row.id, parsedJson: (row.parsedJson ?? {}) as Record<string, unknown> },
     persister,
@@ -372,7 +395,9 @@ export async function processResync(
     provider: source.provider,
     encryptedToken: source.encryptedToken,
   });
-  if (!connector) return 0;
+  if (!connector) {
+    throw new UnrecoverableError(`no email connector for provider "${source.provider}"`);
+  }
 
   const consent = {
     id: source.consentGrantId,
@@ -423,24 +448,41 @@ export function createDbTokenStore(db: Db, sourceId: string): TokenStore {
 }
 
 /** Builds a GmailConnector bound to a stored source (reads/writes encrypted
- * tokens via {@link createDbTokenStore}). */
+ * tokens via {@link createDbTokenStore} unless `tokenStore` is given). */
 export function createGmailConnectorForSource(
   db: Db,
   source: { id: string },
+  tokenStore: TokenStore = createDbTokenStore(db, source.id),
 ): GmailConnector {
+  // NOTE(B2 resolved): API POST /ingestion/sources builds the OAuth URL with sourceId in state →
+  // callback publishes the oauth-complete job → the worker calls completeOAuth with these
+  // credentials and stores the tokens encrypted.
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    // No retry can fix configuration, so the job dead-letters at once with this reason.
+    throw new UnrecoverableError(
+      "Gmail is not configured on this worker: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required",
+    );
+  }
   return new GmailConnector({
-    clientId: process.env.GOOGLE_CLIENT_ID ?? "MISSING_GOOGLE_CLIENT_ID",
-    // NOTE(B2 resolved): GOOGLE_CLIENT_SECRET is read from env for the live
-    // token exchange in GmailConnector.completeOAuth. Full flow: API POST
-    // /ingestion/sources builds OAuth URL with sourceId in state → callback
-    // publishes oauth-complete job → worker calls completeOAuth which uses
-    // this clientSecret and encrypts tokens via createDbTokenStore. Falls
-    // back to "" (best-effort/mock) when no live creds are configured.
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+    clientId,
+    clientSecret,
     redirectUri: `${process.env.API_PUBLIC_URL ?? "https://api.shopoholia.app"}/ingestion/sources/oauth/callback`,
     sourceId: source.id,
-    tokenStore: createDbTokenStore(db, source.id),
+    tokenStore,
   });
+}
+
+/** The connector for a stored source. Gmail is the only email provider so far. */
+export function createDefaultConnectorFactory(db: Db): ResyncDeps["connectorFactory"] {
+  return (source) =>
+    source.provider.toLowerCase() === "gmail" ? createGmailConnectorForSource(db, source) : null;
+}
+
+/** Same short hash of the code as the API's oauth job id, so a rerun can tell it was used. */
+function oauthCodeHash(code: string): string {
+  return createHash("sha256").update(code).digest("hex").slice(0, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,15 +539,23 @@ export function createMemoryIngestWorker(
 }
 
 // ---------------------------------------------------------------------------
-// BullMQ consumer (production) — best-effort, requires Redis
+// BullMQ consumer (production) — requires Redis and a Db
 // ---------------------------------------------------------------------------
 
+/** Ingest jobs carry message text: finished ones are kept briefly (the dead letter keeps the ids). */
+const INGEST_REMOVE_ON_COMPLETE = { age: 86_400, count: 10_000 } as const;
+const INGEST_REMOVE_ON_FAIL = { age: 7 * 86_400 } as const;
+/** A resync lists and parses a whole page of mail, so it gets longer than the default. */
+const INGEST_JOB_TIMEOUT_MS = 5 * 60_000;
+
 export interface BullmqIngestOptions {
-  db?: Db;
+  db?: Db | null;
   redisUrl?: string;
   connection?: Redis;
   metrics?: MetricsSink;
   connectorFactory?: ResyncDeps["connectorFactory"];
+  /** Where final failures go; defaults to the ingest-dead-letter queue (ids only). */
+  recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
   concurrency?: number;
 }
 
@@ -516,13 +566,15 @@ export function createBullmqIngestWorker(
   if (!redisUrl && !options.connection) {
     throw new Error("REDIS_URL or an explicit connection is required for the BullMQ ingest worker");
   }
+  const db = options.db ?? null;
+  // Without a Db every job would complete having done nothing: refuse to start instead.
+  if (!db) throw new Error("A Db is required for worker-ingest");
   const ownConnection = !options.connection;
-  const connection: Redis | RedisOptions =
-    options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
+  const connection = options.connection ?? new Redis(redisUrl as string, { maxRetriesPerRequest: null });
 
-  const persister = options.db ? createDbPersister(options.db) : null;
+  const persister = createDbPersister(db);
   const metrics = options.metrics ?? new ConsoleMetricsSink();
-  const connectorFactory = options.connectorFactory ?? (() => null);
+  const connectorFactory = options.connectorFactory ?? createDefaultConnectorFactory(db);
 
   const httpSink = createHttpAnalyticsSink({
     webhookUrl: process.env.ANALYTICS_WEBHOOK_URL,
@@ -542,21 +594,18 @@ export function createBullmqIngestWorker(
       // best-effort
     }
   };
-  const creditRepos = options.db
-    ? createDbCreditAutofillRepos(options.db, trackIngest)
-    : undefined;
+  const creditRepos = createDbCreditAutofillRepos(db, trackIngest);
 
   const resolveUserIdForSource = async (
     sourceId: string,
   ): Promise<string | undefined> => {
-    if (!options.db) return undefined;
-    const [source] = await options.db
+    const [source] = await db
       .select()
       .from(ingestionSources)
       .where(eq(ingestionSources.id, sourceId))
       .limit(1);
     if (!source) return undefined;
-    const [grant] = await options.db
+    const [grant] = await db
       .select({ userId: consentGrants.userId })
       .from(consentGrants)
       .where(eq(consentGrants.id, source.consentGrantId))
@@ -567,8 +616,7 @@ export function createBullmqIngestWorker(
   const resolveMutedMerchantsForSource = async (
     sourceId: string,
   ): Promise<string[]> => {
-    if (!options.db) return [];
-    const [source] = await options.db
+    const [source] = await db
       .select({ meta: ingestionSources.meta })
       .from(ingestionSources)
       .where(eq(ingestionSources.id, sourceId))
@@ -578,185 +626,197 @@ export function createBullmqIngestWorker(
     );
   };
 
-  const resyncQueue = new Queue<IngestJobData>(INGEST_QUEUE, { connection });
+  const resyncQueue = new Queue<IngestJobData>(INGEST_QUEUE, {
+    connection,
+    defaultJobOptions: {
+      attempts: DEFAULT_JOB_ATTEMPTS,
+      backoff: DEFAULT_JOB_BACKOFF,
+      removeOnComplete: INGEST_REMOVE_ON_COMPLETE,
+      removeOnFail: INGEST_REMOVE_ON_FAIL,
+    },
+  });
+  const deadLetterQueue = new Queue<IngestDeadLetterJob>(INGEST_DEAD_LETTER_QUEUE, {
+    connection,
+    defaultJobOptions: {
+      attempts: DEFAULT_JOB_ATTEMPTS,
+      backoff: DEFAULT_JOB_BACKOFF,
+      removeOnComplete: JOB_REMOVE_ON_COMPLETE,
+      removeOnFail: JOB_REMOVE_ON_FAIL,
+    },
+  });
+  const recordDeadLetter =
+    options.recordDeadLetter ??
+    ((entry: DeadLetter) => enqueueDeadLetterJob(deadLetterQueue, toIngestDeadLetter(entry)));
+
+  initNodeSentry({ worker: "ingest" });
+  const onDeadLetter = deadLetterAlert((err, tags) => captureNodeException(err, { worker: "ingest", ...tags }));
+
+  const resync = async (sourceId: string) => {
+    // Wait out the source's backoff without spending an attempt.
+    const backoffDelay = getBackoffDelay(sourceId);
+    if (backoffDelay > 0) deferJob(backoffDelay);
+    await processResync(sourceId, { db, persister, metrics, creditRepos, connectorFactory });
+    recordSuccess(sourceId);
+  };
+
+  const completeOAuth = async (sourceId: string, code: string) => {
+    const [source] = await db
+      .select()
+      .from(ingestionSources)
+      .where(eq(ingestionSources.id, sourceId))
+      .limit(1);
+    if (!source) return; // disconnected since
+    const codeHash = oauthCodeHash(code);
+    // A rerun after the exchange worked: the code is spent, and trying it again would fail.
+    if ((source.meta as Record<string, unknown> | null)?.oauthCodeHash === codeHash) return;
+    const [grant] = await db
+      .select()
+      .from(consentGrants)
+      .where(eq(consentGrants.id, source.consentGrantId))
+      .limit(1);
+    const tokens = createDbTokenStore(db, source.id);
+    const connector = createGmailConnectorForSource(db, { id: source.id }, {
+      load: tokens.load,
+      // The tokens and the spent code's hash land in one write.
+      async save(encrypted: string) {
+        await db
+          .update(ingestionSources)
+          .set({
+            encryptedToken: { data: encrypted },
+            meta: sql`coalesce(${ingestionSources.meta}, '{}'::jsonb) || ${JSON.stringify({ oauthCodeHash: codeHash })}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(eq(ingestionSources.id, source.id));
+      },
+    });
+    await connector.completeOAuth(code, {
+      id: source.consentGrantId,
+      revokedAt: grant?.revokedAt ?? new Date(),
+    });
+    recordSuccess(sourceId);
+  };
+
+  const run = async (name: string, data: IngestJobData): Promise<void> => {
+    if (name === INGEST_OAUTH_JOB_NAME) {
+      if (!data.sourceId || !data.code) throw new UnrecoverableError("oauth job needs sourceId and code");
+      await completeOAuth(data.sourceId, data.code);
+      return;
+    }
+    if (name === INGEST_RESYNC_JOB_NAME) {
+      if (!data.sourceId) throw new UnrecoverableError("resync job has no sourceId");
+      await resync(data.sourceId);
+      return;
+    }
+    if (name !== INGEST_JOB_NAME) throw new UnrecoverableError(`unknown ${INGEST_QUEUE} job "${name}"`);
+
+    if (data.kind === "SMS") {
+      if (!data.documentId) throw new UnrecoverableError("SMS ingest job has no documentId");
+      await processSmsJob(db, data.documentId, persister, metrics, {
+        userId: data.userId,
+        creditRepos,
+      });
+      return;
+    }
+
+    // EMAIL
+    if (data.message) {
+      const userId =
+        data.userId ??
+        (data.sourceId ? await resolveUserIdForSource(data.sourceId) : undefined);
+      const mutedMerchants = data.sourceId
+        ? await resolveMutedMerchantsForSource(data.sourceId)
+        : [];
+      await processIngestJob(data.message, {
+        persister,
+        sourceKind: "EMAIL",
+        documentId: data.documentId,
+        sourceId: data.sourceId,
+        metrics,
+        userId,
+        creditRepos,
+        mutedMerchants,
+      });
+      if (data.sourceId) recordSuccess(data.sourceId);
+      return;
+    }
+    if (data.sourceId) {
+      await resync(data.sourceId);
+      return;
+    }
+    // e.g. the email webhook's raw provider body: nothing maps it to a message, user or source yet.
+    throw new UnrecoverableError("email ingest job has no message or source to process");
+  };
+
+  /** What a job that failed for good leaves behind for the Closet health UI. */
+  const onFinalFailure = async (data: IngestJobData, err: unknown) => {
+    if (data.documentId) {
+      await db
+        .update(ingestionDocuments)
+        .set({ status: "ERROR", updatedAt: new Date() })
+        .where(eq(ingestionDocuments.id, data.documentId))
+        .catch((e: unknown) => console.error("[worker-ingest] could not mark the document ERROR:", String(e)));
+    }
+    // N49: persist source health when auth/token errors exhaust retries
+    if (data.sourceId && isAuthOrTokenError(err)) {
+      await markSourceAuthError(db, data.sourceId, err).catch((e: unknown) =>
+        console.error("[worker-ingest] could not record the source's auth error:", String(e)),
+      );
+    }
+  };
+
+  const handle = async (data: IngestJobData, job: ProcessableJob) => {
+    try {
+      await run(job.name, data);
+    } catch (err) {
+      if (err instanceof DeferJobError) throw err;
+      if (data.sourceId) recordFailure(data.sourceId);
+      if (isFinalAttempt(job, err)) await onFinalFailure(data, err);
+      throw err;
+    }
+  };
 
   const worker = new Worker<IngestJobData>(
     INGEST_QUEUE,
-    async (job) => {
-      if (!options.db || !persister) return;
-      const maxAttempts = (job.opts.attempts as number | undefined) ?? 3;
-      const shouldDeadLetter = async (err: unknown) => {
-        const attemptsMade = (job.attemptsMade ?? 0) + 1;
-        if (attemptsMade < maxAttempts) return false;
-        const sourceId = (job.data as { sourceId?: string }).sourceId;
-        const documentId = (job.data as { documentId?: string }).documentId;
-        const kind =
-          job.name === INGEST_OAUTH_JOB_NAME
-            ? "OAUTH"
-            : job.name === INGEST_RESYNC_JOB_NAME
-              ? "RESYNC"
-              : (job.data as { kind?: string }).kind === "SMS"
-                ? "SMS"
-                : "EMAIL";
-        const entry = sendToDeadLetter({
-          kind: kind as never,
-          sourceId,
-          documentId,
-          error: String(err),
-          attempts: attemptsMade,
-          payload: job.data,
-        });
-        void enqueueDeadLetterJob(entry);
-        if (sourceId) recordFailure(sourceId);
-        // Also mark document as ERROR if applicable
-        if (documentId && options.db) {
-          await options.db
-            .update(ingestionDocuments)
-            .set({ status: "ERROR", updatedAt: new Date() })
-            .where(eq(ingestionDocuments.id, documentId))
-            .catch(() => undefined);
-        }
-        // N49: persist source health when auth/token errors exhaust retries
-        if (sourceId && options.db && isAuthOrTokenError(err)) {
-          await markSourceAuthError(options.db, sourceId, err).catch(() => undefined);
-        }
-        return true;
-      };
-
-      try {
-        if (job.name === INGEST_OAUTH_JOB_NAME) {
-          const { sourceId, code } = job.data as { sourceId: string; code: string };
-          const [source] = await options.db
-            .select()
-            .from(ingestionSources)
-            .where(eq(ingestionSources.id, sourceId))
-            .limit(1);
-          if (!source) return;
-          const [grant] = await options.db
-            .select()
-            .from(consentGrants)
-            .where(eq(consentGrants.id, source.consentGrantId))
-            .limit(1);
-          const connector = createGmailConnectorForSource(options.db, {
-            id: source.id,
-          });
-          await connector.completeOAuth(code, {
-            id: source.consentGrantId,
-            revokedAt: grant?.revokedAt ?? new Date(),
-          });
-          if (sourceId) recordSuccess(sourceId);
-          return;
-        }
-
-        if (job.name === INGEST_RESYNC_JOB_NAME) {
-          const { sourceId } = job.data as { sourceId: string };
-          // Respect per-source backoff — if still in backoff window, re-schedule with delay
-          const backoffDelay = sourceId ? getBackoffDelay(sourceId) : 0;
-          if (backoffDelay > 0) {
-            throw new Error(`Backoff active for source ${sourceId}: retry in ${backoffDelay}ms`);
-          }
-          await processResync(sourceId, {
-            db: options.db,
-            persister,
-            metrics,
-            creditRepos,
-            connectorFactory,
-          });
-          if (sourceId) recordSuccess(sourceId);
-          return;
-        }
-
-        const data = job.data;
-        if (data.kind === "SMS") {
-          if (data.documentId) {
-            await processSmsJob(options.db, data.documentId, persister, metrics, {
-              userId: data.userId,
-              creditRepos,
-            });
-            if (data.sourceId) recordSuccess(data.sourceId);
-          }
-          return;
-        }
-
-        // EMAIL
-        if (data.message) {
-          const userId =
-            data.userId ??
-            (data.sourceId ? await resolveUserIdForSource(data.sourceId) : undefined);
-          const mutedMerchants = data.sourceId
-            ? await resolveMutedMerchantsForSource(data.sourceId)
-            : [];
-          await processIngestJob(data.message, {
-            persister,
-            sourceKind: "EMAIL",
-            documentId: data.documentId,
-            sourceId: data.sourceId,
-            metrics,
-            userId,
-            creditRepos,
-            mutedMerchants,
-          });
-          if (data.sourceId) recordSuccess(data.sourceId);
-        } else if (data.sourceId) {
-          const backoffDelay = getBackoffDelay(data.sourceId);
-          if (backoffDelay > 0) {
-            throw new Error(`Backoff active for source ${data.sourceId}: retry in ${backoffDelay}ms`);
-          }
-          await processResync(data.sourceId, {
-            db: options.db,
-            persister,
-            metrics,
-            creditRepos,
-            connectorFactory,
-          });
-          recordSuccess(data.sourceId);
-        }
-      } catch (err) {
-        const dead = await shouldDeadLetter(err);
-        if (!dead) {
-          // Record failure but allow BullMQ retry with backoff
-          const sid = (job.data as { sourceId?: string }).sourceId;
-          if (sid) recordFailure(sid);
-        }
-        throw err;
-      }
-    },
+    createJobProcessor<IngestJobData>({
+      queue: INGEST_QUEUE,
+      handle,
+      timeoutMs: INGEST_JOB_TIMEOUT_MS,
+      recordDeadLetter,
+      onDeadLetter,
+      errors: { DelayedError, UnrecoverableError },
+    }),
     {
       connection,
       concurrency: options.concurrency ?? Number(process.env.INGEST_CONCURRENCY ?? 4),
+      removeOnComplete: INGEST_REMOVE_ON_COMPLETE,
+      removeOnFail: INGEST_REMOVE_ON_FAIL,
     },
   );
-
-  initNodeSentry({ worker: "ingest" });
-  attachBullmqFailureReporting(worker, "ingest");
+  worker.on("error", (err) => console.error(`[worker-ingest] ${INGEST_QUEUE} worker error:`, err.message));
+  attachStalledDeadLetters(worker, { queue: INGEST_QUEUE, recordDeadLetter, onDeadLetter });
 
   return {
     worker,
     async start() {
       await worker.waitUntilReady();
       console.info(
-        `[worker-ingest] BullMQ worker ready on queue "${INGEST_QUEUE}" (jobs "${INGEST_JOB_NAME}", "${INGEST_RESYNC_JOB_NAME}")`,
+        `[worker-ingest] BullMQ worker ready on queue "${INGEST_QUEUE}" (jobs "${INGEST_JOB_NAME}", "${INGEST_RESYNC_JOB_NAME}", "${INGEST_OAUTH_JOB_NAME}")`,
       );
     },
     async stop() {
       await worker.close();
-      await resyncQueue.close().catch(() => undefined);
-      if (ownConnection && connection instanceof Redis) {
-        await connection.quit().catch(() => undefined);
-      }
+      await resyncQueue.close();
+      await deadLetterQueue.close();
+      if (ownConnection) await connection.quit().catch(() => undefined);
     },
     async scheduleResync(sourceId: string, delayMs: number) {
-      const backoffExtra = getBackoffDelay(sourceId);
-      const effectiveDelay = delayMs + backoffExtra;
+      const effectiveDelay = delayMs + getBackoffDelay(sourceId);
+      // One resync per source per minute of run time, however often it is asked for.
+      const runMinute = Math.floor((Date.now() + effectiveDelay) / 60_000);
       await resyncQueue.add(
         INGEST_RESYNC_JOB_NAME,
         { sourceId },
-        {
-          delay: effectiveDelay,
-          jobId: `resync:${sourceId}:${Date.now()}`,
-          attempts: 3,
-          backoff: { type: "exponential", delay: 2000 },
-        },
+        { delay: effectiveDelay, jobId: jobIdFrom("resync", sourceId, runMinute) },
       );
     },
   };

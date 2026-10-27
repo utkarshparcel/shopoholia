@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -24,25 +27,33 @@ import {
   publishIngestJob,
   publishOauthCompleteJob,
 } from "./ingest-queue.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("ingest-queue idempotent jobId", () => {
   it("stable ingest jobId from documentId", () => {
-    expect(_stableIngestJobId({ kind: "SMS", documentId: "doc-123" })).toBe("ingest:doc-123");
-    expect(_stableIngestJobId({ kind: "EMAIL", documentId: "abc" })).toBe("ingest:abc");
+    expect(_stableIngestJobId({ kind: "SMS", documentId: "doc-123" })).toBe(
+      jobIdFrom("ingest:doc-123"),
+    );
+    expect(_stableIngestJobId({ kind: "EMAIL", documentId: "abc" })).toBe(jobIdFrom("ingest:abc"));
   });
   it("stable ingest jobId from messageId fallback", () => {
     expect(_stableIngestJobId({ kind: "EMAIL", message: { messageId: "mid-1" } as never })).toBe(
-      "ingest:msg:mid-1",
+      jobIdFrom("ingest:msg:mid-1"),
     );
   });
   it("stable ingest jobId undefined when no id", () => {
     expect(_stableIngestJobId({ kind: "EMAIL" })).toBeUndefined();
+  });
+  it("jobIds never contain ':' (BullMQ rejects them)", () => {
+    expect(_stableIngestJobId({ kind: "SMS", documentId: "doc-123" })).not.toContain(":");
+    expect(_stableOauthJobId({ sourceId: "s1", code: "c", userId: "u1" })).not.toContain(":");
   });
   it("stable oauth jobId hashes code", () => {
     const a = _stableOauthJobId({ sourceId: "s1", code: "code123", userId: "u1" });
     const b = _stableOauthJobId({ sourceId: "s1", code: "code123", userId: "u1" });
     expect(a).toBe(b);
     expect(a).toContain("s1");
+    expect(a).not.toContain("code123");
     const c = _stableOauthJobId({ sourceId: "s1", code: "different", userId: "u1" });
     expect(c).not.toBe(a);
   });
@@ -55,11 +66,9 @@ describe("ingest-queue idempotent jobId", () => {
 
 describe("publishIngestJob (Redis path)", () => {
   const originalRedis = process.env.REDIS_URL;
-  const originalIngestRedis = process.env.INGEST_REDIS_URL;
 
   beforeEach(() => {
     delete process.env.REDIS_URL;
-    delete process.env.INGEST_REDIS_URL;
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
     queueMocks.failAdd = false;
@@ -68,17 +77,15 @@ describe("publishIngestJob (Redis path)", () => {
   afterEach(() => {
     if (originalRedis) process.env.REDIS_URL = originalRedis;
     else delete process.env.REDIS_URL;
-    if (originalIngestRedis) process.env.INGEST_REDIS_URL = originalIngestRedis;
-    else delete process.env.INGEST_REDIS_URL;
   });
 
-  it("skips when Redis is not configured (best-effort)", async () => {
+  it("skips when Redis is not configured (outside production)", async () => {
     expect(await publishIngestJob({ kind: "EMAIL", documentId: "doc-1" })).toBe("skipped");
     expect(queueMocks.add).not.toHaveBeenCalled();
   });
 
-  it("publishes with stable document jobId when INGEST_REDIS_URL is set", async () => {
-    process.env.INGEST_REDIS_URL = "redis://localhost:6379";
+  it("publishes with stable document jobId", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await publishIngestJob({
       kind: "SMS",
       documentId: "doc-abc",
@@ -88,17 +95,12 @@ describe("publishIngestJob (Redis path)", () => {
     expect(queueMocks.add).toHaveBeenCalledWith(
       "email-received",
       expect.objectContaining({ kind: "SMS", documentId: "doc-abc" }),
-      expect.objectContaining({
-        jobId: "ingest:doc-abc",
-        attempts: 3,
-        backoff: { type: "exponential", delay: 2000 },
-      }),
+      expect.objectContaining({ jobId: jobIdFrom("ingest:doc-abc") }),
     );
-    expect(queueMocks.close).toHaveBeenCalled();
   });
 
-  it("falls back to REDIS_URL and messageId jobId", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("uses the messageId jobId when there is no document", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await publishIngestJob({
       kind: "EMAIL",
       message: { messageId: "gmail-mid-9" },
@@ -107,35 +109,32 @@ describe("publishIngestJob (Redis path)", () => {
     expect(queueMocks.add).toHaveBeenCalledWith(
       "email-received",
       expect.objectContaining({ kind: "EMAIL" }),
-      expect.objectContaining({ jobId: "ingest:msg:gmail-mid-9" }),
+      expect.objectContaining({ jobId: jobIdFrom("ingest:msg:gmail-mid-9") }),
     );
   });
 
   it("publishes without jobId when payload has no id", async () => {
-    process.env.INGEST_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const result = await publishIngestJob({ kind: "EMAIL" });
     expect(result).toBe("published");
-    expect(queueMocks.add).toHaveBeenCalledWith(
-      "email-received",
-      expect.objectContaining({ kind: "EMAIL" }),
-      expect.objectContaining({ jobId: undefined }),
-    );
+    const opts = queueMocks.add.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts).not.toHaveProperty("jobId");
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
-    expect(await publishIngestJob({ kind: "EMAIL", documentId: "doc-x" })).toBe("skipped");
+    await expect(publishIngestJob({ kind: "EMAIL", documentId: "doc-x" })).rejects.toBeInstanceOf(
+      QueueUnavailableError,
+    );
   });
 });
 
 describe("publishOauthCompleteJob (Redis path)", () => {
   const originalRedis = process.env.REDIS_URL;
-  const originalIngestRedis = process.env.INGEST_REDIS_URL;
 
   beforeEach(() => {
     delete process.env.REDIS_URL;
-    delete process.env.INGEST_REDIS_URL;
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
     queueMocks.failAdd = false;
@@ -144,8 +143,6 @@ describe("publishOauthCompleteJob (Redis path)", () => {
   afterEach(() => {
     if (originalRedis) process.env.REDIS_URL = originalRedis;
     else delete process.env.REDIS_URL;
-    if (originalIngestRedis) process.env.INGEST_REDIS_URL = originalIngestRedis;
-    else delete process.env.INGEST_REDIS_URL;
   });
 
   it("skips when Redis is not configured", async () => {
@@ -155,26 +152,22 @@ describe("publishOauthCompleteJob (Redis path)", () => {
   });
 
   it("publishes oauth-complete with hashed stable jobId", async () => {
-    process.env.INGEST_REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const payload = { sourceId: "src-1", code: "oauth-code-xyz", userId: "user-9" };
     const result = await publishOauthCompleteJob(payload);
     expect(result).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(
       "email-oauth",
       payload,
-      expect.objectContaining({
-        jobId: _stableOauthJobId(payload),
-        attempts: 3,
-      }),
+      expect.objectContaining({ jobId: _stableOauthJobId(payload) }),
     );
-    expect(queueMocks.close).toHaveBeenCalled();
   });
 
-  it("returns skipped when enqueue throws", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+  it("throws QueueUnavailableError when enqueue fails", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     queueMocks.failAdd = true;
-    expect(
-      await publishOauthCompleteJob({ sourceId: "s1", code: "c", userId: "u1" }),
-    ).toBe("skipped");
+    await expect(
+      publishOauthCompleteJob({ sourceId: "s1", code: "c", userId: "u1" }),
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 });

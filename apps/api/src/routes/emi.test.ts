@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmiPlan, EmiPlanListResponse, EmiScheduleResponse } from "@worn/shared";
 import { buildTestServer, login } from "../test-utils.js";
+import { jobIdFrom } from "../lib/queues/enqueue.js";
 
 const queueMocks = vi.hoisted(() => ({
   add: vi.fn(async () => ({ id: "job-1" })),
@@ -11,6 +12,9 @@ vi.mock("bullmq", () => ({
   Queue: class {
     add(...args: unknown[]) {
       return queueMocks.add(...args);
+    }
+    on() {
+      return this;
     }
     close() {
       return queueMocks.close();
@@ -24,7 +28,7 @@ describe("emi routes + schedule nudge", () => {
   beforeEach(() => {
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     // Due dates below are fixed; the nudge is only queued for a future one.
     vi.useFakeTimers({ now: new Date("2026-08-27T12:00:00.000Z"), toFake: ["Date"] });
   });
@@ -66,7 +70,7 @@ describe("emi routes + schedule nudge", () => {
     expect(plan.remainingMinor).toBe(30_000);
     expect(queueMocks.add).toHaveBeenCalled();
     const [, , opts] = queueMocks.add.mock.calls[0]!;
-    expect((opts as { jobId: string }).jobId).toBe(`emi-due:${plan.id}:2026-09-15`);
+    expect((opts as { jobId: string }).jobId).toBe(jobIdFrom(`emi-due:${plan.id}:2026-09-15`));
 
     const schedule = await app.inject({
       method: "GET",

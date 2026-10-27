@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -29,11 +32,12 @@ import {
   scheduleAccountantMonthlyDigest,
 } from "./accountant-jobs.js";
 import { processMonthlyDigest, type NudgeRepos } from "./nudge-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
 function mockRepos(opts: {
-  consentFlags?: Record<string, unknown>;
+  prefs?: Record<string, unknown>;
   pushToken?: string | null;
   recentCount?: number;
 } = {}): NudgeRepos & {
@@ -44,7 +48,8 @@ function mockRepos(opts: {
     recorded,
     async findUserById() {
       return {
-        consentFlags: opts.consentFlags ?? {},
+        prefs: opts.prefs ?? {},
+        timeZone: "Asia/Kolkata",
         pushToken: opts.pushToken ?? null,
       };
     },
@@ -103,7 +108,7 @@ describe("WV08-MONTHLY-DIGEST", () => {
   });
 
   it("scheduleAccountantMonthlyDigest publishes with month-keyed jobId", async () => {
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     const status = await scheduleAccountantMonthlyDigest(
       "u1",
       {
@@ -122,9 +127,27 @@ describe("WV08-MONTHLY-DIGEST", () => {
         avgCostPerWearMinor: 400,
         monthLabel: "2026-08",
       }),
-      expect.objectContaining({ jobId: "monthly-digest:u1:2026-08" }),
+      expect.objectContaining({ jobId: jobIdFrom("monthly-digest:u1:2026-08") }),
     );
-    expect(queueMocks.close).toHaveBeenCalled();
+  });
+
+  it("scheduleAccountantMonthlyDigest throws when Redis can't take the job", async () => {
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
+    queueMocks.failAdd = true;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      scheduleAccountantMonthlyDigest(
+        "u1",
+        { monthlySpendMinor: 1000, avgCostPerWearMinor: 100, monthLabel: "2026-08" },
+        { now: NOON },
+      ),
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
+    expect(error).toHaveBeenCalledWith(
+      "[accountant] monthly digest not enqueued",
+      expect.objectContaining({ userId: "u1" }),
+      expect.any(QueueUnavailableError),
+    );
+    error.mockRestore();
   });
 
   it("scheduleAccountantMonthlyDigest skips without Redis", async () => {

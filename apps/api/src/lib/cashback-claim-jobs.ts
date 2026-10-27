@@ -9,6 +9,7 @@ import {
 } from "@worn/shared";
 import { computeExpiryDelayMs } from "./expiry.js";
 import type { CashbackClaimRecord, Repositories } from "./repositories/types.js";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const CASHBACK_CLAIM_QUEUE = "cashback-claim-deadline";
 export const CASHBACK_CLAIM_JOB = "cashback-claim-deadline-reminder";
@@ -33,34 +34,26 @@ export async function scheduleCashbackClaimReminder(
   >,
 ): Promise<"published" | "skipped"> {
   if (claim.status !== "UNCLAIMED" || !claim.expiresAt) return "skipped";
-  const redisUrl = process.env.CASHBACK_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
 
   const delay = computeExpiryDelayMs(claim.expiresAt, CASHBACK_CLAIM_LEAD_MS);
   if (delay === null) return "skipped";
 
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(CASHBACK_CLAIM_QUEUE, { connection: redisUrl });
-    const payload: CashbackClaimDeadlinePayload = {
-      claimId: claim.id,
-      userId: claim.userId,
-      source: claim.source,
-      merchant: claim.merchant,
-      amountMinor: claim.amountMinor,
-      currency: claim.currency,
-      expiresAt: new Date(claim.expiresAt).toISOString(),
-    };
-    await queue.add(CASHBACK_CLAIM_JOB, payload, {
-      delay,
-      jobId: cashbackClaimReminderJobId(claim.id),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[cashback] claim deadline enqueue failed", String(err));
-    return "skipped";
-  }
+  const payload: CashbackClaimDeadlinePayload = {
+    claimId: claim.id,
+    userId: claim.userId,
+    source: claim.source,
+    merchant: claim.merchant,
+    amountMinor: claim.amountMinor,
+    currency: claim.currency,
+    expiresAt: new Date(claim.expiresAt).toISOString(),
+  };
+  // Keyed on the deadline too, so moving it schedules a new reminder.
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(CASHBACK_CLAIM_QUEUE, CASHBACK_CLAIM_JOB, payload, {
+    delay,
+    jobId: jobIdFrom(cashbackClaimReminderJobId(claim.id), payload.expiresAt),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 export async function processCashbackClaimDeadline(
@@ -69,17 +62,16 @@ export async function processCashbackClaimDeadline(
   opts: { now?: Date; sendExpo?: typeof sendExpoPush } = {},
 ) {
   const { runClosetPushDelivery } = await import("@worn/shared");
-  const user = (await repos.findUserById(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" as const };
   const amount = (payload.amountMinor / 100).toFixed(0);
   const label = payload.merchant
     ? `${payload.source} · ${payload.merchant}`
     : payload.source;
   return runClosetPushDelivery({
     eventType: CASHBACK_CLAIM_DEADLINE_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: "Cashback claim due soon",
     body: `${label}: ₹${amount} — claim before it lapses`,
@@ -98,7 +90,7 @@ export async function processCashbackClaimDeadline(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

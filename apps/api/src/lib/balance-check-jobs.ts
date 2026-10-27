@@ -8,6 +8,7 @@ import {
   type sendExpoPush,
 } from "@worn/shared";
 import type { MoneyAccountRecord, Repositories } from "./repositories/types.js";
+import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const BALANCE_RECHECK_QUEUE = "credit-balance-recheck";
 export const BALANCE_RECHECK_JOB = "credit-balance-recheck-reminder";
@@ -37,32 +38,22 @@ export async function scheduleBalanceRecheckReminder(
     return "skipped";
   }
 
-  const redisUrl =
-    process.env.BALANCE_RECHECK_REDIS_URL ?? process.env.REDIS_URL;
-  if (!redisUrl) return "skipped";
-
   const lastCheckedAt = account.updatedAt;
   const delay = computeBalanceRecheckDelayMs(lastCheckedAt, { now: opts.now });
 
-  try {
-    const { Queue } = await import("bullmq");
-    const queue = new Queue(BALANCE_RECHECK_QUEUE, { connection: redisUrl });
-    const payload: BalanceRecheckPayload = {
-      accountId: account.id,
-      userId: account.userId,
-      merchant: account.merchant,
-      lastCheckedAt: new Date(lastCheckedAt).toISOString(),
-    };
-    await queue.add(BALANCE_RECHECK_JOB, payload, {
-      delay,
-      jobId: balanceRecheckJobId(account.id),
-    });
-    await queue.close();
-    return "published";
-  } catch (err) {
-    console.warn("[balance-check] recheck enqueue failed", String(err));
-    return "skipped";
-  }
+  const payload: BalanceRecheckPayload = {
+    accountId: account.id,
+    userId: account.userId,
+    merchant: account.merchant,
+    lastCheckedAt: new Date(lastCheckedAt).toISOString(),
+  };
+  // One reminder per (account, check day), like the push dedupe key; a later check gets its own.
+  // Throws QueueUnavailableError when Redis can't take it; "skipped" only without Redis off-prod.
+  const result = await enqueueJob(BALANCE_RECHECK_QUEUE, BALANCE_RECHECK_JOB, payload, {
+    delay,
+    jobId: jobIdFrom(balanceRecheckJobId(account.id), payload.lastCheckedAt.slice(0, 10)),
+  });
+  return result.status === "queued" ? "published" : "skipped";
 }
 
 export async function processBalanceRecheckReminder(
@@ -79,15 +70,14 @@ export async function processBalanceRecheckReminder(
   }
 
   const { runClosetPushDelivery } = await import("@worn/shared");
-  const user = (await repos.findUserById?.(payload.userId)) ?? {
-    consentFlags: {},
-    pushToken: null,
-  };
+  const user = await repos.findUserById(payload.userId);
+  if (!user) return { status: "skipped" as const, reason: "user_gone" };
   const copy = balanceRecheckCopy(payload.merchant);
 
   return runClosetPushDelivery({
     eventType: BALANCE_RECHECK_EVENT,
-    consentFlags: user.consentFlags,
+    prefs: user.prefs,
+    timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: copy.title,
     body: copy.body,
@@ -110,7 +100,7 @@ export async function processBalanceRecheckReminder(
         payload: p,
         status: "QUEUED",
       });
-      return { id: event.id };
+      return { id: event.id, status: event.status };
     },
     markStatus: async (id, status, expoTicketId) => {
       await repos.updatePushEventStatus?.(id, status, expoTicketId);

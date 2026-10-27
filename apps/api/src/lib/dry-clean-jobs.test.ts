@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
       if (queueMocks.failAdd) return Promise.reject(new Error("enqueue failed"));
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -27,6 +30,7 @@ import {
   processDryCleanPickup,
   scheduleDryCleanPickup,
 } from "./dry-clean-jobs.js";
+import { QueueUnavailableError, jobIdFrom } from "./queues/enqueue.js";
 
 describe("computeDryCleanPickupDelayMs", () => {
   it("returns null for past pickup days", () => {
@@ -61,7 +65,7 @@ describe("scheduleDryCleanPickup", () => {
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
     queueMocks.failAdd = false;
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     process.env.NODE_ENV = "test";
   });
 
@@ -72,19 +76,24 @@ describe("scheduleDryCleanPickup", () => {
     else process.env.NODE_ENV = prevNodeEnv;
   });
 
+  const pickupMorning = { now: new Date("2026-08-28T11:00:00+05:30") };
+
   it("publishes with stable jobId", async () => {
-    const result = await scheduleDryCleanPickup({
-      userId: "u1",
-      wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      ticket: "DC-1",
-      pickupOn: "2026-08-28",
-    });
+    const result = await scheduleDryCleanPickup(
+      {
+        userId: "u1",
+        wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ticket: "DC-1",
+        pickupOn: "2026-08-28",
+      },
+      pickupMorning,
+    );
     expect(result).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(
       DRY_CLEAN_JOB,
       expect.objectContaining({ ticket: "DC-1", pickupOn: "2026-08-28" }),
       expect.objectContaining({
-        jobId: dryCleanPickupJobId("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "2026-08-28"),
+        jobId: jobIdFrom(dryCleanPickupJobId("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "2026-08-28")),
         delay: 100,
       }),
     );
@@ -103,16 +112,19 @@ describe("scheduleDryCleanPickup", () => {
     ).toBe("skipped");
   });
 
-  it("skips when enqueue throws", async () => {
+  it("throws QueueUnavailableError when enqueue fails", async () => {
     queueMocks.failAdd = true;
-    expect(
-      await scheduleDryCleanPickup({
-        userId: "u1",
-        wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-        ticket: "DC-1",
-        pickupOn: "2026-08-28",
-      }),
-    ).toBe("skipped");
+    await expect(
+      scheduleDryCleanPickup(
+        {
+          userId: "u1",
+          wardrobeItemId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          ticket: "DC-1",
+          pickupOn: "2026-08-28",
+        },
+        pickupMorning,
+      ),
+    ).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 });
 
@@ -129,7 +141,7 @@ describe("processDryCleanPickup", () => {
       },
       {
         recordPushEvent,
-        findUserById: async () => ({ consentFlags: {}, pushToken: null }),
+        findUserById: async () => ({ prefs: {}, timeZone: "Asia/Kolkata", pushToken: null }),
         findWardrobeItem: async () => ({
           dryCleanTicket: "DC-9",
           laundryStatus: "IN_LAUNDRY",

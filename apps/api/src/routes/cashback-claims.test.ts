@@ -12,6 +12,9 @@ vi.mock("bullmq", () => ({
     add(...args: unknown[]) {
       return queueMocks.add(...args);
     }
+    on() {
+      return this;
+    }
     close() {
       return queueMocks.close();
     }
@@ -24,7 +27,7 @@ describe("cashback-claims CRUD (U006)", () => {
   beforeEach(() => {
     queueMocks.add.mockClear();
     queueMocks.close.mockClear();
-    process.env.REDIS_URL = "redis://localhost:6379";
+    process.env.REDIS_URL = "redis://127.0.0.1:63807";
     // Deadlines below are fixed dates; reminders are only queued for future ones.
     vi.useFakeTimers({ now: new Date("2026-08-27T12:00:00.000Z"), toFake: ["Date"] });
   });

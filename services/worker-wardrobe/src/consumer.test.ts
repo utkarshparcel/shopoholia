@@ -9,193 +9,226 @@ import {
   processOutfit,
   processDryCleanPickupJob,
 } from "./index.js";
-import type { OutfitPayload } from "./index.js";
-import type { Db } from "@worn/db";
+import type { DryCleanPickupPayload, OutfitPayload } from "./index.js";
+import { outfits, pushEvents, users, wardrobeItems, type Db } from "@worn/db";
 
 const payload: OutfitPayload = {
   userId: "00000000-0000-4000-8000-0000000000a1",
-  trigger: "nightly",
+  trigger: "morning",
 };
 
 const NOON = new Date("2026-08-26T12:00:00.000Z");
 
-function mockSelectDb(opts: {
-  user?: {
-    id: string;
-    styleProfile: unknown;
-    consentFlags?: Record<string, unknown>;
-    pushToken?: string | null;
-  } | null;
-  items?: Array<{ id: string; userId: string; category: string; colors: string[] }>;
-  onInsert?: (values: Record<string, unknown>) => void;
-  onUpdate?: (values: Record<string, unknown>) => void;
-}): Db & { inserted: Array<Record<string, unknown>>; updated: Array<Record<string, unknown>> } {
-  let selectCall = 0;
-  const items = opts.items ?? [];
-  const userRows = opts.user ? [opts.user] : [];
+const TOP = { id: "00000000-0000-4000-8000-0000000000e1", category: "top", colors: ["blue"] };
+const BOTTOM = { id: "00000000-0000-4000-8000-0000000000e2", category: "bottom", colors: ["black"] };
+
+type MockUser = {
+  prefs?: Record<string, unknown>;
+  timeZone?: string;
+  pushToken?: string | null;
+  styleProfile?: unknown;
+} | null;
+
+/**
+ * A Db stand-in routed by table. Outfits keep one row per day (like the unique index on
+ * user + planned_for) and push_events one row per dedupe key, so reruns can be tested.
+ */
+function mockDb(
+  opts: {
+    user?: MockUser;
+    items?: Array<Record<string, unknown>>;
+    planned?: { id: string; itemIds: string[] };
+    /** Another run plans the day between this run's read and its insert. */
+    loseRace?: boolean;
+  } = {},
+) {
   const inserted: Array<Record<string, unknown>> = [];
   const updated: Array<Record<string, unknown>> = [];
+  const userRows =
+    opts.user === null
+      ? []
+      : [
+          {
+            prefs: opts.user?.prefs ?? {},
+            timeZone: opts.user?.timeZone ?? "Asia/Kolkata",
+            pushToken: opts.user?.pushToken ?? null,
+            styleProfile: opts.user?.styleProfile ?? null,
+          },
+        ];
+  let dayOutfit: { id: string; itemIds: string[] } | null = opts.planned ?? null;
+  const pushRows = new Map<string, { id: string; status: string }>();
+  let lastKey = "";
 
-  return {
+  const db = {
     select: () => ({
-      from: () => ({
-        where: () => {
-          selectCall += 1;
-          if (selectCall === 1) {
-            return Object.assign(Promise.resolve(userRows), {
-              limit: () => Promise.resolve(userRows),
-            });
-          }
-          return Promise.resolve(items);
-        },
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: () => {
+            if (table === users) return Promise.resolve(userRows);
+            if (table === outfits) return Promise.resolve(dayOutfit ? [dayOutfit] : []);
+            if (table === wardrobeItems) return Promise.resolve(opts.items ?? []);
+            if (table === pushEvents) return Promise.resolve(pushRows.has(lastKey) ? [pushRows.get(lastKey)] : []);
+            return Promise.resolve([]);
+          },
+        }),
       }),
     }),
-    insert: () => ({
-      values: (v: Record<string, unknown>) => {
-        inserted.push(v);
-        opts.onInsert?.(v);
-        return Object.assign(Promise.resolve(), {
-          returning: async () => [v],
-        });
-      },
+    insert: (table: unknown) => ({
+      values: (v: Record<string, unknown>) => ({
+        onConflictDoNothing: () => ({
+          returning: () => {
+            if (table === outfits) {
+              if (opts.loseRace && !dayOutfit) dayOutfit = { id: "outfit-winner", itemIds: [TOP.id] };
+              if (dayOutfit) return Promise.resolve([]);
+              inserted.push({ table: "outfits", ...v });
+              dayOutfit = { id: "outfit-1", itemIds: v.itemIds as string[] };
+              return Promise.resolve([{ id: dayOutfit.id }]);
+            }
+            lastKey = String(v.dedupeKey);
+            if (pushRows.has(lastKey)) return Promise.resolve([]);
+            inserted.push(v);
+            const row = { id: `pe-${pushRows.size + 1}`, status: "QUEUED" };
+            pushRows.set(lastKey, row);
+            return Promise.resolve([row]);
+          },
+        }),
+      }),
     }),
     update: () => ({
       set: (v: Record<string, unknown>) => ({
         where: () => {
           updated.push(v);
-          opts.onUpdate?.(v);
+          const row = pushRows.get(lastKey);
+          if (row && typeof v.status === "string") row.status = v.status;
           return Promise.resolve();
         },
       }),
     }),
     inserted,
     updated,
-  } as unknown as Db & {
+  };
+  return db as unknown as Db & {
     inserted: Array<Record<string, unknown>>;
     updated: Array<Record<string, unknown>>;
   };
 }
 
-describe("worker-wardrobe queue", () => {
+const outfitRows = (db: { inserted: Array<Record<string, unknown>> }) =>
+  db.inserted.filter((row) => row.table === "outfits");
+const pushRowsOf = (db: { inserted: Array<Record<string, unknown>> }) =>
+  db.inserted.filter((row) => row.table !== "outfits");
+
+describe("worker-wardrobe outfits", () => {
   it("registers the outfit-generation queue name", () => {
     expect(OUTFIT_QUEUE).toBe("outfit-generation");
   });
 
-  it("processOutfit inserts an outfit and OUTFIT_READY push event", async () => {
-    const inserted: Array<Record<string, unknown>> = [];
-    const db = mockSelectDb({
-      user: {
-        id: payload.userId,
-        styleProfile: { tags: ["top"] },
-        consentFlags: {},
-        pushToken: null,
-      },
-      items: [
-        {
-          id: "00000000-0000-4000-8000-0000000000i1",
-          userId: payload.userId,
-          category: "top",
-          colors: ["blue"],
-        },
-        {
-          id: "00000000-0000-4000-8000-0000000000i2",
-          userId: payload.userId,
-          category: "bottom",
-          colors: ["black"],
-        },
-      ],
-      onInsert: (v) => inserted.push(v),
-    });
-
+  it("plans today's outfit with no invented weather and queues an OUTFIT_READY push", async () => {
+    const db = mockDb({ user: { styleProfile: { tags: ["top"] } }, items: [TOP, BOTTOM] });
     const { outfitId, push } = await processOutfit(payload, db, { now: NOON });
 
-    expect(outfitId).toBeTruthy();
+    expect(outfitId).toBe("outfit-1");
     expect(push?.status).toBe("queued");
-    expect(inserted.length).toBeGreaterThanOrEqual(2);
-    const pushRow = inserted.find((row) => row.eventType === OUTFIT_EVENT);
-    expect(pushRow).toBeDefined();
-    expect(pushRow!.userId).toBe(payload.userId);
-    expect(pushRow!.status).toBe("QUEUED");
-    expect(String(pushRow!.dedupeKey)).toMatch(/^outfit:/);
-    expect(pushRow!.payload).toMatchObject({
-      deepLink: "worn://today?focus=outfit",
-      screen: "today",
+    expect(outfitRows(db)).toHaveLength(1);
+    expect(outfitRows(db)[0]).toMatchObject({ plannedFor: "2026-08-26", weatherCtx: null, itemIds: [TOP.id, BOTTOM.id] });
+    const [row] = pushRowsOf(db);
+    expect(row).toMatchObject({
+      eventType: OUTFIT_EVENT,
+      userId: payload.userId,
+      status: "QUEUED",
+      dedupeKey: "outfit:outfit-1",
+      body: "We picked top, bottom for today.",
     });
+    expect(String(row!.body)).not.toMatch(/weather/i);
+    expect(row!.payload).toMatchObject({ deepLink: "worn://today?focus=outfit", screen: "today" });
+  });
+
+  it("plans for the user's local day, not the server's", async () => {
+    // 19:00 UTC on the 26th is 00:30 IST on the 27th (quiet hours moved out of the way).
+    const db = mockDb({
+      user: { prefs: { notifications: { quietHoursStart: "03:00", quietHoursEnd: "04:00" } } },
+      items: [TOP],
+    });
+    await processOutfit(payload, db, { now: new Date("2026-08-26T19:00:00.000Z") });
+    expect(outfitRows(db)[0]!.plannedFor).toBe("2026-08-27");
+  });
+
+  it("is safe to run twice: one outfit and one push for the day", async () => {
+    const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-o1" }));
+    const db = mockDb({ user: { pushToken: "ExponentPushToken[o]" }, items: [TOP, BOTTOM] });
+    expect((await processOutfit(payload, db, { now: NOON, sendExpo })).push?.status).toBe("sent");
+    const rerun = await processOutfit(payload, db, { now: NOON, sendExpo });
+    expect(rerun).toEqual({ outfitId: "outfit-1", push: { status: "skipped" } });
+    expect(outfitRows(db)).toHaveLength(1);
+    expect(pushRowsOf(db)).toHaveLength(1);
+    expect(sendExpo).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an outfit the user already planned for today", async () => {
+    const db = mockDb({ items: [BOTTOM], planned: { id: "outfit-mine", itemIds: [BOTTOM.id] } });
+    const { outfitId } = await processOutfit(payload, db, { now: NOON });
+    expect(outfitId).toBe("outfit-mine");
+    expect(outfitRows(db)).toHaveLength(0);
+    expect(pushRowsOf(db)[0]).toMatchObject({ dedupeKey: "outfit:outfit-mine", body: "We picked bottom for today." });
+  });
+
+  it("uses the other run's outfit when it planned the day first", async () => {
+    const db = mockDb({ items: [TOP], loseRace: true });
+    const { outfitId } = await processOutfit(payload, db, { now: NOON });
+    expect(outfitId).toBe("outfit-winner");
+    expect(outfitRows(db)).toHaveLength(0);
+    expect(pushRowsOf(db)[0]!.dedupeKey).toBe("outfit:outfit-winner");
   });
 
   it("skips outfit push when outfits category is opted out", async () => {
-    const inserted: Array<Record<string, unknown>> = [];
-    const db = mockSelectDb({
+    const db = mockDb({
       user: {
-        id: payload.userId,
-        styleProfile: null,
-        consentFlags: {
+        prefs: {
           notifications: {
             quietHoursStart: "22:00",
             quietHoursEnd: "07:00",
-            categories: {
-              returns: true,
-              warranty: true,
-              credits: true,
-              outfits: false,
-            },
+            categories: { returns: true, warranty: true, credits: true, outfits: false },
           },
         },
-        pushToken: null,
       },
-      items: [
-        {
-          id: "00000000-0000-4000-8000-0000000000i1",
-          userId: payload.userId,
-          category: "top",
-          colors: ["blue"],
-        },
-      ],
-      onInsert: (v) => inserted.push(v),
+      items: [TOP],
     });
-
     const { outfitId, push } = await processOutfit(payload, db, { now: NOON });
-    expect(outfitId).toBeTruthy();
+    expect(outfitId).toBe("outfit-1");
     expect(push).toEqual({ status: "skipped" });
-    expect(inserted.find((r) => r.eventType === OUTFIT_EVENT)).toBeUndefined();
+    expect(pushRowsOf(db)).toHaveLength(0);
   });
 
-  it("delays outfit generation during quiet hours without inserting", async () => {
-    const inserted: Array<Record<string, unknown>> = [];
-    const db = mockSelectDb({
-      user: {
-        id: payload.userId,
-        styleProfile: null,
-        consentFlags: {},
-        pushToken: null,
-      },
-      items: [
-        {
-          id: "00000000-0000-4000-8000-0000000000i1",
-          userId: payload.userId,
-          category: "top",
-          colors: ["blue"],
-        },
-      ],
-      onInsert: (v) => inserted.push(v),
-    });
-
-    const result = await processOutfit(payload, db, {
-      now: new Date("2026-08-26T23:00:00.000Z"),
-    });
+  it("delays outfit generation during the user's quiet hours without inserting", async () => {
+    const db = mockDb({ items: [TOP] });
+    // 23:00 UTC is 04:30 IST.
+    const result = await processOutfit(payload, db, { now: new Date("2026-08-26T23:00:00.000Z") });
     expect(result.outfitId).toBeNull();
     expect(result.push?.status).toBe("delayed");
-    expect(inserted).toHaveLength(0);
+    expect(db.inserted).toHaveLength(0);
   });
 
-  it("processOutfit returns null outfit when the wardrobe is empty", async () => {
-    const db = mockSelectDb({
-      user: { id: payload.userId, styleProfile: null },
-      items: [],
-    });
-    await expect(processOutfit(payload, db, { now: NOON })).resolves.toEqual({
-      outfitId: null,
-    });
+  it("returns no outfit for an empty wardrobe or a deleted user", async () => {
+    for (const db of [mockDb({ items: [] }), mockDb({ user: null, items: [TOP] })]) {
+      await expect(processOutfit(payload, db, { now: NOON })).resolves.toEqual({ outfitId: null });
+      expect(db.inserted).toHaveLength(0);
+    }
+  });
+
+  it("delivers SENT via mock Expo sender when pushToken is set", async () => {
+    const db = mockDb({ user: { pushToken: "ExponentPushToken[test-token]" }, items: [TOP] });
+    const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-mock-1" }));
+    const { push } = await processOutfit(payload, db, { now: NOON, sendExpo });
+
+    expect(push?.status).toBe("sent");
+    expect(sendExpo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "ExponentPushToken[test-token]",
+        title: "Your outfit for today is ready",
+        data: expect.objectContaining({ deepLink: "worn://today?focus=outfit", screen: "today" }),
+      }),
+    );
+    expect(db.updated.some((u) => u.status === "SENT")).toBe(true);
   });
 
   it("runs in-memory jobs through the handler", async () => {
@@ -210,308 +243,99 @@ describe("worker-wardrobe queue", () => {
     await worker.stop();
   });
 
-  it("delivers SENT via mock Expo sender when pushToken is set", async () => {
-    const inserted: Array<Record<string, unknown>> = [];
-    const updated: Array<Record<string, unknown>> = [];
-    const db = mockSelectDb({
-      user: {
-        id: payload.userId,
-        styleProfile: null,
-        consentFlags: {},
-        pushToken: "ExponentPushToken[test-token]",
-      },
-      items: [
-        {
-          id: "00000000-0000-4000-8000-0000000000i1",
-          userId: payload.userId,
-          category: "top",
-          colors: ["blue"],
-        },
-      ],
-      onInsert: (v) => inserted.push(v),
-      onUpdate: (v) => updated.push(v),
-    });
-
-    const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-mock-1" }));
-    const { outfitId, push } = await processOutfit(payload, db, { now: NOON, sendExpo });
-
-    expect(outfitId).toBeTruthy();
-    expect(push?.status).toBe("sent");
-    expect(sendExpo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "ExponentPushToken[test-token]",
-        title: "Your outfit for today is ready",
-        data: expect.objectContaining({ deepLink: "worn://today?focus=outfit", screen: "today" }),
-      }),
-    );
-    expect(updated.some((u) => u.status === "SENT")).toBe(true);
+  it("refuses to build a BullMQ worker without Redis or without a Db", () => {
+    const prev = process.env.REDIS_URL;
+    delete process.env.REDIS_URL;
+    try {
+      expect(() => createBullmqWardrobeWorker()).toThrow(/REDIS_URL/);
+    } finally {
+      if (prev !== undefined) process.env.REDIS_URL = prev;
+    }
+    expect(() => createBullmqWardrobeWorker({ redisUrl: "redis://127.0.0.1:1" })).toThrow(/Db is required/);
   });
 
-  it("exposes a BullMQ scaffold that needs Redis to start", async () => {
-    expect(() => createBullmqWardrobeWorker()).toThrow(/REDIS_URL/);
-    const worker = createBullmqWardrobeWorker({
-      redisUrl: "redis://localhost:6379",
-    });
+  it.skipIf(!process.env.TEST_REDIS_URL)("builds both BullMQ workers on a real Redis", async () => {
+    const worker = createBullmqWardrobeWorker({ redisUrl: process.env.TEST_REDIS_URL, db: mockDb() });
     expect(worker.worker.name).toBe(OUTFIT_QUEUE);
     expect(worker.dryCleanWorker.name).toBe(DRY_CLEAN_QUEUE);
     await worker.stop();
   });
+});
+
+describe("worker-wardrobe dry-clean pickups", () => {
+  const itemId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const job: DryCleanPickupPayload = {
+    userId: payload.userId,
+    wardrobeItemId: itemId,
+    ticket: "DC-9",
+    pickupOn: "2026-08-28",
+    category: "blazer",
+  };
+  const atCleaner = {
+    category: "blazer",
+    dryCleanTicket: "DC-9",
+    dryCleanPickupOn: "2026-08-28",
+    laundryStatus: "IN_LAUNDRY",
+  };
 
   it("registers dry-clean-pickup queue name", () => {
     expect(DRY_CLEAN_QUEUE).toBe("dry-clean-pickup");
     expect(DRY_CLEAN_PICKUP_EVENT).toBe("DRY_CLEAN_PICKUP");
   });
 
-  it("processDryCleanPickupJob queues day-of push when item is at cleaner", async () => {
-    const userId = "00000000-0000-4000-8000-0000000000a1";
-    const itemId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-    const inserted: Array<Record<string, unknown>> = [];
-    let selectCall = 0;
-    const db = {
-      select: () => ({
-        from: () => ({
-          where: () => {
-            selectCall += 1;
-            if (selectCall === 1) {
-              return Object.assign(
-                Promise.resolve([
-                  {
-                    id: itemId,
-                    userId,
-                    category: "blazer",
-                    dryCleanTicket: "DC-9",
-                    laundryStatus: "IN_LAUNDRY",
-                  },
-                ]),
-                {
-                  limit: () =>
-                    Promise.resolve([
-                      {
-                        id: itemId,
-                        userId,
-                        category: "blazer",
-                        dryCleanTicket: "DC-9",
-                        laundryStatus: "IN_LAUNDRY",
-                      },
-                    ]),
-                },
-              );
-            }
-            return Object.assign(
-              Promise.resolve([
-                {
-                  id: userId,
-                  consentFlags: {},
-                  pushToken: null,
-                },
-              ]),
-              {
-                limit: () =>
-                  Promise.resolve([{ id: userId, consentFlags: {}, pushToken: null }]),
-              },
-            );
-          },
-        }),
-      }),
-      insert: () => ({
-        values: (v: Record<string, unknown>) => {
-          inserted.push(v);
-          return Promise.resolve();
-        },
-      }),
-      update: () => ({
-        set: () => ({
-          where: () => Promise.resolve(),
-        }),
-      }),
-    } as unknown as Db;
-
-    const result = await processDryCleanPickupJob(
-      {
-        userId,
-        wardrobeItemId: itemId,
-        ticket: "DC-9",
-        pickupOn: "2026-08-28",
-        category: "blazer",
-      },
-      db,
-      { now: NOON },
-    );
+  it("queues the day-of push when the item is still at the cleaner", async () => {
+    const db = mockDb({ items: [atCleaner] });
+    const result = await processDryCleanPickupJob(job, db, { now: NOON });
     expect(result.status).toBe("queued");
-    expect(inserted[0]?.eventType).toBe(DRY_CLEAN_PICKUP_EVENT);
-    expect(String(inserted[0]?.dedupeKey)).toBe(`dryclean:${itemId}:2026-08-28`);
+    expect(db.inserted[0]).toMatchObject({
+      eventType: DRY_CLEAN_PICKUP_EVENT,
+      dedupeKey: `dryclean:${itemId}:2026-08-28`,
+      body: "Ticket DC-9 · blazer ready for pickup",
+    });
   });
 
-  it("processDryCleanPickupJob skips when item missing or not at cleaner", async () => {
-    const userId = payload.userId;
-    const itemId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-    const dbMissing = {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: async () => [],
-          }),
-        }),
-      }),
-    } as unknown as Db;
-    expect(
-      await processDryCleanPickupJob(
-        { userId, wardrobeItemId: itemId, ticket: "T1", pickupOn: "2026-08-28" },
-        dbMissing,
-        { now: NOON },
-      ),
-    ).toEqual({ status: "skipped", reason: "not_found" });
-
-    const dbClean = {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: async () => [
-              {
-                id: itemId,
-                userId,
-                category: "coat",
-                dryCleanTicket: null,
-                laundryStatus: "CLEAN",
-              },
-            ],
-          }),
-        }),
-      }),
-    } as unknown as Db;
-    expect(
-      await processDryCleanPickupJob(
-        { userId, wardrobeItemId: itemId, ticket: "T1", pickupOn: "2026-08-28" },
-        dbClean,
-        { now: NOON },
-      ),
-    ).toEqual({ status: "skipped", reason: "not_at_cleaner" });
-  });
-
-  it("processDryCleanPickupJob delays during quiet hours and skips category opt-out", async () => {
-    const userId = payload.userId;
-    const itemId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
-    const item = {
-      id: itemId,
-      userId,
-      category: "blazer",
-      dryCleanTicket: "DC-1",
-      laundryStatus: "IN_LAUNDRY",
-    };
-
-    function dbWithUser(user: Record<string, unknown>) {
-      let selectCall = 0;
-      return {
-        select: () => ({
-          from: () => ({
-            where: () => {
-              selectCall += 1;
-              if (selectCall === 1) {
-                return Object.assign(Promise.resolve([item]), {
-                  limit: async () => [item],
-                });
-              }
-              return Object.assign(Promise.resolve([user]), {
-                limit: async () => [user],
-              });
-            },
-          }),
-        }),
-        insert: () => ({ values: async () => undefined }),
-        update: () => ({ set: () => ({ where: async () => undefined }) }),
-      } as unknown as Db;
+  it("skips an item that is gone, collected, moved to another day, or whose owner is gone", async () => {
+    const cases: Array<[ReturnType<typeof mockDb>, string]> = [
+      [mockDb({ items: [] }), "not_found"],
+      [mockDb({ items: [{ ...atCleaner, laundryStatus: "CLEAN" }] }), "not_at_cleaner"],
+      [mockDb({ items: [{ ...atCleaner, dryCleanTicket: " " }] }), "not_at_cleaner"],
+      [mockDb({ items: [{ ...atCleaner, dryCleanPickupOn: "2026-08-30" }] }), "rescheduled"],
+      [mockDb({ items: [atCleaner], user: null }), "user_gone"],
+    ];
+    for (const [db, reason] of cases) {
+      expect(await processDryCleanPickupJob(job, db, { now: NOON })).toEqual({ status: "skipped", reason });
+      expect(db.inserted).toHaveLength(0);
     }
+  });
 
-    const delayed = await processDryCleanPickupJob(
-      { userId, wardrobeItemId: itemId, ticket: "DC-1", pickupOn: "2026-08-28" },
-      dbWithUser({ id: userId, consentFlags: {}, pushToken: null }),
-      { now: new Date("2026-08-26T23:00:00.000Z") },
-    );
+  it("delays during quiet hours and skips a category opt-out", async () => {
+    const delayed = await processDryCleanPickupJob(job, mockDb({ items: [atCleaner] }), {
+      now: new Date("2026-08-26T23:00:00.000Z"),
+    });
     expect(delayed.status).toBe("delayed");
 
-    const skipped = await processDryCleanPickupJob(
-      { userId, wardrobeItemId: itemId, ticket: "DC-1", pickupOn: "2026-08-28" },
-      dbWithUser({
-        id: userId,
-        consentFlags: {
+    const optedOut = mockDb({
+      items: [atCleaner],
+      user: {
+        prefs: {
           notifications: {
             quietHoursStart: "22:00",
             quietHoursEnd: "07:00",
             categories: { outfits: false, returns: true, warranty: true, credits: true },
           },
         },
-        pushToken: null,
-      }),
-      { now: NOON },
-    );
+      },
+    });
     // DRY_CLEAN_PICKUP maps to outfits category in shared gate
-    expect(skipped.status).toBe("skipped");
+    expect((await processDryCleanPickupJob(job, optedOut, { now: NOON })).status).toBe("skipped");
   });
 
-  it("processDryCleanPickupJob marks SENT when Expo delivers", async () => {
-    const userId = payload.userId;
-    const itemId = "cccccccc-dddd-eeee-ffff-000000000001";
-    const item = {
-      id: itemId,
-      userId,
-      category: "coat",
-      dryCleanTicket: "DC-SENT",
-      laundryStatus: "IN_LAUNDRY",
-    };
-    const updated: Array<Record<string, unknown>> = [];
-    let selectCall = 0;
-    const db = {
-      select: () => ({
-        from: () => ({
-          where: () => {
-            selectCall += 1;
-            if (selectCall === 1) {
-              return Object.assign(Promise.resolve([item]), {
-                limit: async () => [item],
-              });
-            }
-            return Object.assign(
-              Promise.resolve([
-                {
-                  id: userId,
-                  consentFlags: {},
-                  pushToken: "ExponentPushToken[dc]",
-                },
-              ]),
-              {
-                limit: async () => [
-                  { id: userId, consentFlags: {}, pushToken: "ExponentPushToken[dc]" },
-                ],
-              },
-            );
-          },
-        }),
-      }),
-      insert: () => ({
-        values: async () => undefined,
-      }),
-      update: () => ({
-        set: (v: Record<string, unknown>) => ({
-          where: async () => {
-            updated.push(v);
-          },
-        }),
-      }),
-    } as unknown as Db;
-
+  it("marks SENT when Expo delivers, and a rerun sends nothing", async () => {
+    const db = mockDb({ items: [atCleaner], user: { pushToken: "ExponentPushToken[dc]" } });
     const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-dc" }));
-    const result = await processDryCleanPickupJob(
-      {
-        userId,
-        wardrobeItemId: itemId,
-        ticket: "DC-SENT",
-        pickupOn: "2026-08-29",
-        category: "coat",
-      },
-      db,
-      { now: NOON, sendExpo },
-    );
-    expect(result.status).toBe("sent");
-    expect(updated[0]).toMatchObject({ status: "SENT", expoTicketId: "ticket-dc" });
+    expect((await processDryCleanPickupJob(job, db, { now: NOON, sendExpo })).status).toBe("sent");
+    expect(db.updated[0]).toMatchObject({ status: "SENT", expoTicketId: "ticket-dc" });
+    expect((await processDryCleanPickupJob(job, db, { now: NOON, sendExpo })).status).toBe("skipped");
+    expect(sendExpo).toHaveBeenCalledTimes(1);
   });
 });
