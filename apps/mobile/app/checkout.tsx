@@ -1,12 +1,25 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery } from '@tanstack/react-query';
+
+import { playDupRebuyBanner } from '@worn/shared';
 
 import type { OrderSummary } from '@/src/api/client';
+import { fetchCredits, fetchPrebuyFit } from '@/src/api/client';
 import { Button, CoinIcon, CoinWallet, SectionHeader } from '@/src/components/ui';
 import { useCart } from '@/src/hooks/catalog';
 import { useCheckout, useCoinBalance } from '@/src/hooks/orders';
+import {
+  BUDGET_NUDGE_SOFT_FOOTER,
+  closetBudgetSoftGateCopy,
+  matchStoreCreditHint,
+  prebuyFitPanelSections,
+  TRACK_BUY_VAULT_HREF,
+} from '@/src/lib/bridgeWow';
+import { FEATURE_CLOSET } from '@/src/lib/features';
+import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
   border,
@@ -44,6 +57,12 @@ export default function CheckoutScreen() {
   const { data: balanceData } = useCoinBalance();
   const checkout = useCheckout();
   const [tier, setTier] = useState<OrderSummary['tier']>('EXPRESS');
+  const [closetOpen, setClosetOpen] = useState(false);
+  const [coolingHold, setCoolingHold] = useState<{
+    message: string;
+    releaseAt?: string;
+  } | null>(null);
+  const accessToken = useSessionStore((s) => s.accessToken);
 
   const items = cartQuery.data?.items ?? [];
   const coinTotal = cartQuery.data?.coinTotal ?? 0;
@@ -51,6 +70,58 @@ export default function CheckoutScreen() {
   const balance = balanceData?.balance ?? 0;
   const canPay = coinTotal > 0 && balance >= coinTotal && !checkout.isPending;
   const deficit = Math.max(0, coinTotal - balance);
+  const cartCooling = cartQuery.data?.coolingOff?.active ? cartQuery.data.coolingOff : null;
+  const showCooling = coolingHold ?? (cartCooling
+    ? { message: cartCooling.message, releaseAt: cartCooling.releaseAt }
+    : null);
+
+  const prebuyQuery = useQuery({
+    queryKey: ['prebuy', 'fit', accessToken, itemCount, coinTotal],
+    queryFn: () => {
+      if (!accessToken) throw new Error('Sign in');
+      return fetchPrebuyFit(accessToken, true);
+    },
+    enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
+  });
+
+  const creditsQuery = useQuery({
+    queryKey: ['credits', 'checkout-hint', accessToken],
+    queryFn: () => {
+      if (!accessToken) throw new Error('Sign in');
+      return fetchCredits(accessToken);
+    },
+    enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
+  });
+
+  const prebuy = prebuyQuery.data;
+  const budgetNudge = prebuy?.primaryBudgetNudge;
+  const fitPanel = prebuy
+    ? prebuyFitPanelSections({
+        score: prebuy.score,
+        summary: prebuy.summary,
+        overlaps: prebuy.overlaps,
+        gaps: prebuy.gaps,
+        budgetNudges: prebuy.budgetNudges,
+      })
+    : null;
+
+  /** W040 — soft dup/rebuy banner on Play only; never gates canPay. */
+  const dupBanner = useMemo(
+    () =>
+      FEATURE_CLOSET
+        ? playDupRebuyBanner({ overlaps: prebuy?.overlaps ?? [] })
+        : null,
+    [prebuy?.overlaps],
+  );
+
+  const creditHint = useMemo(
+    () =>
+      matchStoreCreditHint(
+        creditsQuery.data?.accounts ?? [],
+        items.map((i) => i.title),
+      ),
+    [creditsQuery.data?.accounts, items],
+  );
 
   return (
     <ScrollView
@@ -121,6 +192,122 @@ export default function CheckoutScreen() {
             ) : null}
           </View>
 
+          {FEATURE_CLOSET && budgetNudge?.exceeded ? (
+            <View style={styles.nudgeCard} testID="budget-nudge-banner">
+              <Text style={styles.nudgeKicker}>
+                {closetBudgetSoftGateCopy({
+                  exceeded: true,
+                  category: budgetNudge.category,
+                  message: budgetNudge.message,
+                })?.title ?? 'Spend awareness'}
+              </Text>
+              <Text style={styles.nudgeBody}>{budgetNudge.message}</Text>
+              <Text style={styles.nudgeSoft}>{BUDGET_NUDGE_SOFT_FOOTER}</Text>
+              <View style={styles.budgetGateRow}>
+                <Button
+                  label={
+                    closetBudgetSoftGateCopy({ exceeded: true })?.continueLabel ?? 'Continue'
+                  }
+                  onPress={() => {
+                    /* soft only — pay CTA below stays enabled */
+                  }}
+                  variant="secondary"
+                  testID="budget-gate-continue"
+                />
+                <Button
+                  label={
+                    closetBudgetSoftGateCopy({ exceeded: true })?.cutSpendLabel ?? 'Cut spend'
+                  }
+                  onPress={() => router.push('/(closet)/accountant' as never)}
+                  variant="secondary"
+                  testID="budget-gate-cut-spend"
+                />
+              </View>
+            </View>
+          ) : null}
+
+          {FEATURE_CLOSET && dupBanner ? (
+            <View style={styles.nudgeCard} testID="dup-rebuy-banner">
+              <Text style={styles.nudgeKicker}>{dupBanner.kicker}</Text>
+              <Text style={styles.nudgeBody}>{dupBanner.message}</Text>
+              {dupBanner.detail ? (
+                <Text style={styles.nudgeSoft}>{dupBanner.detail}</Text>
+              ) : null}
+              <Text style={styles.nudgeSoft}>{dupBanner.softNote}</Text>
+              <Button
+                label={dupBanner.closetLabel}
+                size="sm"
+                variant="secondary"
+                onPress={() => router.push(dupBanner.closetHref as never)}
+              />
+            </View>
+          ) : null}
+
+          {FEATURE_CLOSET && creditHint ? (
+            <View style={styles.nudgeCard} testID="pay-with-credit-hint">
+              <Text style={styles.nudgeKicker}>Vault credit</Text>
+              <Text style={styles.nudgeBody}>{creditHint.message}</Text>
+              <Text style={styles.nudgeSoft}>{creditHint.softNote}</Text>
+              <Button
+                label="Open Vault"
+                size="sm"
+                variant="secondary"
+                onPress={() => router.push(TRACK_BUY_VAULT_HREF as never)}
+              />
+            </View>
+          ) : null}
+
+          {FEATURE_CLOSET && showCooling ? (
+            <View style={styles.nudgeCard}>
+              <Text style={styles.nudgeKicker}>Cooling-off</Text>
+              <Text style={styles.nudgeBody}>{showCooling.message}</Text>
+              <Text style={styles.nudgeSoft}>
+                Soft lock for impulse buys — wait it out or confirm override below.
+              </Text>
+            </View>
+          ) : null}
+
+          {FEATURE_CLOSET && itemCount > 0 ? (
+            <View style={styles.closetBlock}>
+              <Button
+                block
+                label={closetOpen ? 'Hide closet check' : 'Check my closet'}
+                onPress={() => setClosetOpen((v) => !v)}
+                variant="secondary"
+              />
+              {closetOpen ? (
+                <View style={styles.closetPanel} testID="prebuy-fit-panel">
+                  {prebuyQuery.isLoading ? (
+                    <ActivityIndicator color={wornInk} />
+                  ) : fitPanel ? (
+                    <>
+                      <Text style={styles.closetScore}>{fitPanel.scoreLabel}</Text>
+                      <Text style={styles.closetSummary}>{fitPanel.summary}</Text>
+                      <Text style={styles.nudgeSoft}>{fitPanel.softNote}</Text>
+                      {fitPanel.overlapLines.map((line) => (
+                        <Text key={line} style={styles.closetLine}>
+                          {line}
+                        </Text>
+                      ))}
+                      {fitPanel.gapLines.map((line) => (
+                        <Text key={line} style={styles.closetLine}>
+                          {line}
+                        </Text>
+                      ))}
+                      {fitPanel.budgetLines.map((line) => (
+                        <Text key={line} style={styles.warn}>
+                          {line}
+                        </Text>
+                      ))}
+                    </>
+                  ) : (
+                    <Text style={styles.closetSummary}>Couldn’t load closet fit.</Text>
+                  )}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
           <View style={styles.tierBlock}>
             <Text style={styles.sectionLabel}>Delivery tier</Text>
             <Text style={styles.tierHint}>
@@ -153,11 +340,39 @@ export default function CheckoutScreen() {
               disabled={!canPay}
               label={checkout.isPending ? 'Placing order…' : 'Pay with coins'}
               onPress={() => {
-                void checkout.mutateAsync(tier).then((order) => {
-                  router.replace(`/order/${order.id}`);
-                });
+                void checkout
+                  .mutateAsync(tier)
+                  .then((order) => {
+                    setCoolingHold(null);
+                    router.replace(`/order/${order.id}`);
+                  })
+                  .catch((err: Error & { code?: string; coolingOff?: { releaseAt: string } | null }) => {
+                    if (err.code === 'COOLING_OFF') {
+                      setCoolingHold({
+                        message: err.message,
+                        releaseAt: err.coolingOff?.releaseAt,
+                      });
+                      void cartQuery.refetch();
+                    }
+                  });
               }}
             />
+            {FEATURE_CLOSET && showCooling ? (
+              <Button
+                block
+                disabled={!canPay}
+                label={checkout.isPending ? 'Placing order…' : 'Confirm override & pay'}
+                onPress={() => {
+                  void checkout
+                    .mutateAsync({ tier, coolingOffOverride: true })
+                    .then((order) => {
+                      setCoolingHold(null);
+                      router.replace(`/order/${order.id}`);
+                    });
+                }}
+                variant="secondary"
+              />
+            ) : null}
           </View>
         </>
       )}
@@ -167,6 +382,7 @@ export default function CheckoutScreen() {
 
 const styles = StyleSheet.create({
   actions: {
+    gap: 10,
     marginHorizontal: space4,
     marginTop: space6,
   },
@@ -204,6 +420,36 @@ const styles = StyleSheet.create({
     fontSize: fsMicro,
     letterSpacing: 1.5,
     textTransform: 'uppercase',
+  },
+  closetBlock: {
+    gap: 10,
+    marginHorizontal: space4,
+    marginTop: space4,
+  },
+  closetLine: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 18,
+  },
+  closetPanel: {
+    backgroundColor: surface,
+    borderColor: border,
+    borderRadius: radiusCard,
+    borderWidth: 1,
+    gap: 8,
+    padding: space4,
+  },
+  closetScore: {
+    color: text,
+    fontFamily: fontSansSemiBold,
+    fontSize: fsBody,
+  },
+  closetSummary: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 18,
   },
   deficitBlock: {
     gap: 10,
@@ -259,6 +505,40 @@ const styles = StyleSheet.create({
   loader: {
     marginTop: space6,
   },
+  nudgeBody: {
+    color: text,
+    fontFamily: fontSansMedium,
+    fontSize: fsCaption,
+    lineHeight: 18,
+  },
+  nudgeCard: {
+    backgroundColor: '#fdf7ee',
+    borderColor: '#806440',
+    borderRadius: radiusCard,
+    borderWidth: 1,
+    gap: 6,
+    marginHorizontal: space4,
+    marginTop: space4,
+    padding: space4,
+  },
+  nudgeKicker: {
+    color: textMuted,
+    fontFamily: fontMono,
+    fontSize: fsMicro,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  nudgeSoft: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: 11,
+  },
+  budgetGateRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
   priceRow: {
     alignItems: 'center',
     borderTopColor: border,
@@ -293,7 +573,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   tierCardActive: {
-    borderColor: '#9c7a4e',
+    borderColor: '#806440',
     backgroundColor: '#fdf7ee',
   },
   tierDetail: {
@@ -323,7 +603,7 @@ const styles = StyleSheet.create({
     fontSize: fsBody,
   },
   tierLabelActive: {
-    color: '#9c7a4e',
+    color: '#806440',
   },
   total: {
     color: text,

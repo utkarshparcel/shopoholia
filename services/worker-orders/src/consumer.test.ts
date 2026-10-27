@@ -12,9 +12,9 @@ describe("worker-orders", () => {
     await worker.stop();
   });
 
-  it("exposes BullMQ scaffold", async () => {
+  it("refuses to start a BullMQ consumer it does not have", async () => {
     const worker = createBullmqOrderWorker();
-    await expect(worker.start()).resolves.toBeUndefined();
+    await expect(worker.start()).rejects.toThrow(/no BullMQ consumer/);
     await worker.stop();
   });
 });

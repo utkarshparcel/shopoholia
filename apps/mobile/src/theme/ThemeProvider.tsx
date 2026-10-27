@@ -1,20 +1,12 @@
-import {
-  DMSans_300Light,
-  DMSans_400Regular,
-  DMSans_500Medium,
-  DMSans_600SemiBold,
-  useFonts as useDMSans,
-} from '@expo-google-fonts/dm-sans';
-import {
-  DMMono_400Regular,
-  DMMono_500Medium,
-  useFonts as useDMMono,
-} from '@expo-google-fonts/dm-mono';
-import {
-  DMSerifDisplay_400Regular,
-  DMSerifDisplay_400Regular_Italic,
-  useFonts as useDMSerif,
-} from '@expo-google-fonts/dm-serif-display';
+// Per-weight imports: each package's index requires every weight, which bundles them all.
+import { DMSans_400Regular } from '@expo-google-fonts/dm-sans/400Regular';
+import { DMSans_500Medium } from '@expo-google-fonts/dm-sans/500Medium';
+import { DMSans_600SemiBold } from '@expo-google-fonts/dm-sans/600SemiBold';
+import { useFonts as useDMSans } from '@expo-google-fonts/dm-sans/useFonts';
+import { DMMono_400Regular } from '@expo-google-fonts/dm-mono/400Regular';
+import { useFonts as useDMMono } from '@expo-google-fonts/dm-mono/useFonts';
+import { DMSerifDisplay_400Regular } from '@expo-google-fonts/dm-serif-display/400Regular';
+import { useFonts as useDMSerif } from '@expo-google-fonts/dm-serif-display/useFonts';
 import * as SplashScreen from 'expo-splash-screen';
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { View } from 'react-native';
@@ -36,17 +28,14 @@ type ThemeProviderProps = {
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [serifLoaded] = useDMSerif({
     DMSerifDisplay_400Regular,
-    DMSerifDisplay_400Regular_Italic,
   });
   const [sansLoaded] = useDMSans({
-    DMSans_300Light,
     DMSans_400Regular,
     DMSans_500Medium,
     DMSans_600SemiBold,
   });
   const [monoLoaded] = useDMMono({
     DMMono_400Regular,
-    DMMono_500Medium,
   });
 
   const fontsLoaded = serifLoaded && sansLoaded && monoLoaded;

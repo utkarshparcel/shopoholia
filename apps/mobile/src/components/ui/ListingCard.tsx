@@ -1,6 +1,15 @@
+import React, { memo, useState } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View, type ViewProps } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  withSpring,
+  withDelay,
+  interpolate,
+  Extrapolate,
+} from 'react-native-reanimated';
 
 import {
   accentSoft,
@@ -13,6 +22,7 @@ import {
   fsMicro,
   price,
   radiusCard,
+  radiusMd,
   sale,
   shadowSm,
   surface,
@@ -20,9 +30,11 @@ import {
   textMuted,
   wornInk,
   wornPaper,
+  springPresets,
 } from '@/src/theme/tokens';
+import { useReducedMotion } from '@/src/hooks/useReducedMotion';
 
-export type ListingCardVariant = 'grid' | 'feed';
+export type ListingCardVariant = 'grid' | 'feed' | 'compact';
 export type PlaceholderTone = 'rose' | 'sand' | 'olive' | 'dusk' | 'warm';
 
 export type ListingCardProps = ViewProps & {
@@ -38,6 +50,7 @@ export type ListingCardProps = ViewProps & {
   onPress?: () => void;
   onQuickAdd?: () => void;
   onFavorite?: () => void;
+  index?: number; // For stagger animations
 };
 
 const gradients: Record<PlaceholderTone, [string, string, string]> = {
@@ -48,7 +61,13 @@ const gradients: Record<PlaceholderTone, [string, string, string]> = {
   dusk: ['#d8cfc4', '#b9a894', '#9c8b78'],
 };
 
-export function ListingCard({
+const AnimatedView = Animated.createAnimatedComponent(View);
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+const AnimatedText = Animated.createAnimatedComponent(Text);
+const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
+
+export const ListingCard = memo(function ListingCard({
   brand: brandName,
   title,
   coinPrice,
@@ -62,29 +81,101 @@ export function ListingCard({
   onQuickAdd,
   onFavorite,
   style,
+  index = 0,
   ...props
 }: ListingCardProps) {
   const isFeed = variant === 'feed';
+  const isCompact = variant === 'compact';
+  const reducedMotion = useReducedMotion();
   const [imageFailed, setImageFailed] = useState(false);
   const showImage = Boolean(imageUrl) && !imageFailed;
 
+  // Entrance animation
+  const entrance = useSharedValue(0);
+  const imageScale = useSharedValue(1);
+  const favoriteScale = useSharedValue(favorited ? 1.2 : 1);
+
+  // Staggered entrance
+  React.useEffect(() => {
+    if (reducedMotion) {
+      entrance.value = withTiming(1, { duration: 0 });
+      return;
+    }
+    entrance.value = withDelay(index * 60, withSpring(1, springPresets.gentle));
+    imageScale.value = withDelay(index * 60 + 100, withSpring(1, springPresets.gentle));
+  }, [index, reducedMotion]);
+
+  // Favorite animation
+  React.useEffect(() => {
+    if (reducedMotion) {
+      favoriteScale.value = withTiming(favorited ? 1.2 : 1, { duration: 0 });
+      return;
+    }
+    favoriteScale.value = withSpring(favorited ? 1.2 : 1, springPresets.playful);
+  }, [favorited, reducedMotion]);
+
+  // Quick add hover/press animation (feed variant)
+  const animatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(entrance.value, [0, 1], [0, 1], Extrapolate.CLAMP);
+    const translateY = interpolate(entrance.value, [0, 1], [20, 0], Extrapolate.CLAMP);
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
+  });
+
+  const imageAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: imageScale.value }],
+  }));
+
+  const favoriteAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: favoriteScale.value }],
+  }));
+
+  const handleQuickAddPressIn = () => {
+    if (reducedMotion) return;
+    quickAddScale.value = withSpring(0.9, springPresets.snappy);
+  };
+
+  const handleQuickAddPressOut = () => {
+    if (reducedMotion) return;
+    quickAddScale.value = withSpring(1.0, springPresets.standard);
+  };
+
+  const quickAddScale = useSharedValue(1);
+  const quickAddAnimatedScale = useAnimatedStyle(() => ({
+    transform: [{ scale: quickAddScale.value }],
+  }));
+
   return (
-    <View style={[styles.card, isFeed && styles.feedCard, shadowSm, style]} {...props}>
-      <Pressable
+    <AnimatedView style={[styles.card, isFeed && styles.feedCard, isCompact && styles.compactCard, shadowSm, animatedStyle, style]} {...props}>
+      <AnimatedPressable
         accessibilityRole={onPress ? 'button' : undefined}
         disabled={!onPress}
         onPress={onPress}
-        style={[styles.media, isFeed && styles.feedMedia]}
+        onPressIn={() => {
+          if (!reducedMotion) imageScale.value = withSpring(0.98, springPresets.snappy);
+        }}
+        onPressOut={() => {
+          if (!reducedMotion) imageScale.value = withSpring(1.0, springPresets.standard);
+        }}
+        style={[
+          styles.media,
+          isFeed && styles.feedMedia,
+          isCompact && styles.compactMedia,
+          imageAnimatedStyle,
+        ]}
       >
         {showImage ? (
-          <Image
+          <AnimatedImage
             accessibilityIgnoresInvertColors
             onError={() => setImageFailed(true)}
             source={{ uri: imageUrl }}
             style={StyleSheet.absoluteFill}
+            resizeMode="cover"
           />
         ) : (
-          <LinearGradient
+          <AnimatedLinearGradient
             colors={gradients[tone]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
@@ -101,60 +192,71 @@ export function ListingCard({
         {isFeed ? (
           <View style={styles.feedOverlay} pointerEvents="none">
             <View style={styles.metaPill}>
-              <Text style={styles.brand}>{brandName}</Text>
-              <Text style={styles.feedTitle}>{title}</Text>
+              <AnimatedText style={styles.brand}>{brandName}</AnimatedText>
+              <AnimatedText style={styles.feedTitle}>{title}</AnimatedText>
             </View>
           </View>
         ) : null}
-      </Pressable>
+      </AnimatedPressable>
       {onFavorite ? (
-        <Pressable
+        <AnimatedPressable
           accessibilityLabel={favorited ? 'Remove from lookbook' : 'Save to lookbook'}
           accessibilityRole="button"
           onPress={onFavorite}
           style={styles.heart}
         >
-          <Text style={[styles.heartIcon, favorited && styles.heartIconActive]}>
-            {favorited ? '♥' : '♡'}
-          </Text>
-        </Pressable>
+          <AnimatedView style={favoriteAnimatedStyle}>
+            <AnimatedText style={[styles.heartIcon, favorited && styles.heartIconActive]}>
+              {favorited ? '♥' : '♡'}
+            </AnimatedText>
+          </AnimatedView>
+        </AnimatedPressable>
       ) : null}
-      {!isFeed ? (
+      {!isFeed && !isCompact ? (
         <View style={styles.body}>
-          <Pressable disabled={!onPress} onPress={onPress}>
-            <Text style={styles.brand}>{brandName}</Text>
-            <Text style={styles.title}>{title}</Text>
-          </Pressable>
+          <AnimatedPressable disabled={!onPress} onPress={onPress}>
+            <AnimatedText style={styles.brand}>{brandName}</AnimatedText>
+            <AnimatedText style={styles.title} numberOfLines={1}>{title}</AnimatedText>
+          </AnimatedPressable>
           <View style={styles.priceRow}>
-            <Pressable disabled={!onPress} onPress={onPress} style={styles.priceGroup}>
-              <Text style={styles.price}>
-                <Text style={styles.coin}>◎</Text> {coinPrice}{' '}
-                <Text style={styles.coinUnit}>coins</Text>
-              </Text>
-              {realPrice ? <Text style={styles.realLabel}>{realPrice}</Text> : null}
-            </Pressable>
+            <AnimatedPressable disabled={!onPress} onPress={onPress} style={styles.priceGroup}>
+              <AnimatedText style={styles.price}>
+                <AnimatedText style={styles.coin}>◎</AnimatedText> {coinPrice}{' '}
+                <AnimatedText style={styles.coinUnit}>coins</AnimatedText>
+              </AnimatedText>
+              {realPrice ? <AnimatedText style={styles.realLabel}>{realPrice}</AnimatedText> : null}
+            </AnimatedPressable>
             {onQuickAdd ? (
-              <Pressable
+              <AnimatedPressable
                 accessibilityLabel="Add to haul"
                 accessibilityRole="button"
                 onPress={onQuickAdd}
+                onPressIn={handleQuickAddPressIn}
+                onPressOut={handleQuickAddPressOut}
                 style={styles.quickAdd}
               >
-                <Text style={styles.quickAddIcon}>+</Text>
-              </Pressable>
+                <AnimatedView style={quickAddAnimatedScale}>
+                  <AnimatedText style={styles.quickAddIcon}>+</AnimatedText>
+                </AnimatedView>
+              </AnimatedPressable>
             ) : null}
           </View>
         </View>
       ) : null}
-    </View>
+    </AnimatedView>
   );
-}
+});
+
+// ──────────────────────────────────────────────────────────────
+// Styles
+// ──────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   badges: {
     left: 10,
     position: 'absolute',
     top: 10,
+    zIndex: 2,
   },
   body: {
     paddingBottom: 14,
@@ -184,6 +286,12 @@ const styles = StyleSheet.create({
     fontFamily: fontSansMedium,
     fontSize: fsMicro,
   },
+  compactCard: {
+    borderRadius: radiusMd,
+  },
+  compactMedia: {
+    aspectRatio: 1,
+  },
   feedCard: {
     borderRadius: 16,
     maxWidth: 360,
@@ -193,7 +301,7 @@ const styles = StyleSheet.create({
   },
   feedOverlay: {
     bottom: 12,
-    flexDirection: 'row',
+    flexDirection: 'column',
     left: 12,
     position: 'absolute',
     right: 12,

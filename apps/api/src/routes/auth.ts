@@ -8,9 +8,9 @@ import {
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { verifyGoogleIdToken } from "../lib/auth/google.js";
+import { GoogleVerifyUnavailableError, verifyGoogleIdToken } from "../lib/auth/google.js";
+import { OtpRateLimitError, OtpUnavailableError } from "../lib/auth/otp.js";
 import { loginWithGoogleProfile, refreshAccessToken, verifyAndLogin } from "../lib/auth/tokens.js";
-import { checkOtpRateLimit } from "../lib/rate-limit.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -21,19 +21,26 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["auth"],
         body: OtpRequestSchema,
-        response: { 200: OtpResponseSchema, 400: ErrorSchema, 429: ErrorSchema },
+        response: { 200: OtpResponseSchema, 400: ErrorSchema, 429: ErrorSchema, 503: ErrorSchema },
       },
     },
     async (request, reply) => {
       const { phone } = request.body;
-      const rate = checkOtpRateLimit(phone);
-      if (!rate.allowed) {
-        return reply.code(429).send({
-          error: "Too Many Requests",
-          message: `Try again after ${new Date(rate.resetAt).toISOString()}`,
-        });
+      try {
+        return await app.deps.otp.sendOtp(phone);
+      } catch (error) {
+        if (error instanceof OtpRateLimitError) {
+          const retryAfterSeconds = Math.max(1, Math.ceil((error.retryAt.getTime() - Date.now()) / 1000));
+          return reply
+            .code(429)
+            .header("retry-after", String(retryAfterSeconds))
+            .send({ error: "Too Many Requests", message: error.message });
+        }
+        if (error instanceof OtpUnavailableError) {
+          return reply.code(503).send({ error: "Service Unavailable", message: error.message });
+        }
+        throw error;
       }
-      return app.deps.otp.sendOtp(phone);
     },
   );
 
@@ -80,7 +87,17 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const profile = await verifyGoogleIdToken(request.body.idToken);
+      let profile: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
+      try {
+        profile = await verifyGoogleIdToken(request.body.idToken);
+      } catch (error) {
+        if (!(error instanceof GoogleVerifyUnavailableError)) throw error;
+        request.log.warn({ err: error }, "google tokeninfo unavailable");
+        return reply.code(503).send({
+          error: "Service Unavailable",
+          message: "Google Sign-In is unavailable right now. Try again in a moment.",
+        });
+      }
       if (!profile) {
         return reply.code(401).send({
           error: "Unauthorized",

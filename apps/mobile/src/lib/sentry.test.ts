@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as Sentry from '@sentry/react-native';
+
+import {
+  captureClosetException,
+  captureSmokeEvent,
+  initSentry,
+  resetSentryForTests,
+} from './sentry';
 
 /** A fresh copy of the module (and of the @sentry/react-native mock), so each test starts uninitialized. */
 async function loadSentry() {
@@ -38,5 +46,49 @@ describe('sentry', () => {
       expect.objectContaining({ dsn: 'https://key@o0.ingest.sentry.io/1' }),
     );
     expect(Sentry.captureException).toHaveBeenCalledExactlyOnceWith(error);
+  });
+});
+
+describe('mobile sentry', () => {
+  // The suite above shares these spies; start each test with no recorded calls.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    resetSentryForTests();
+    delete process.env.EXPO_PUBLIC_SENTRY_DSN;
+    delete process.env.EXPO_PUBLIC_SENTRY_SMOKE;
+    vi.mocked(Sentry.init).mockClear();
+    vi.mocked(Sentry.captureException).mockClear();
+    vi.mocked(Sentry.captureMessage).mockClear();
+  });
+
+  it('no-ops without DSN', () => {
+    initSentry();
+    expect(Sentry.init).not.toHaveBeenCalled();
+    captureClosetException(new Error('x'), { screen: 'Vault' });
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('inits with closet surface tag and reports screen errors', () => {
+    process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
+    initSentry();
+    expect(Sentry.init).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialScope: { tags: { worn_surface: 'closet' } },
+      }),
+    );
+    captureClosetException(new Error('load failed'), { screen: 'Vault' });
+    expect(Sentry.withScope).toHaveBeenCalled();
+    expect(Sentry.captureException).toHaveBeenCalled();
+  });
+
+  it('captures preview smoke when DSN present', () => {
+    process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
+    process.env.EXPO_PUBLIC_SENTRY_SMOKE = '1';
+    initSentry();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith('worn.smoke.closet', 'info');
+    expect(captureSmokeEvent()).toBe(true);
   });
 });

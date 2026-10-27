@@ -1,0 +1,21 @@
+{
+  "id": "msg-amazon-fixture-1",
+  "threadId": "thread-amazon-1",
+  "historyId": "9001",
+  "snippet": "Your Amazon.in order #AMZ-4029-1188 has shipped — Total ₹1,299.00",
+  "payload": {
+    "headers": [
+      { "name": "From", "value": "no-reply@amazon.in" },
+      { "name": "To", "value": "fixture-buyer@example.com" },
+      {
+        "name": "Subject",
+        "value": "Your Amazon.in order #AMZ-4029-1188 has shipped"
+      },
+      { "name": "Date", "value": "Tue, 12 Aug 2025 09:14:00 +0530" },
+      { "name": "Message-ID", "value": "amazon-fixture-1" }
+    ],
+    "body": {
+      "data": "SGVsbG8sCgpUaGFuayB5b3UgZm9yIHlvdXIgb3JkZXIuCgpPcmRlciBJRDogQU1aLTQwMjktMTE4OApQbGFjZWQgb246IDEyIEF1Z3VzdCAyMDI1ClRvdGFsOiDigrkxLDI5OS4wMAoKSXRlbXMgd2lsbCBiZSBkZWxpdmVyZWQgYnkgMTQgQXVndXN0IDIwMjUuCgpSZWdhcmRzLApBbWF6b24uaW4"
+    }
+  }
+}

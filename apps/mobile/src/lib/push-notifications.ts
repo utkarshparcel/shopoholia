@@ -4,6 +4,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { clearPushToken, registerPushToken } from '@/src/api/client';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { trackEvent } from '@/src/lib/analytics';
 
 /** Where a tapped push leads: the order tracker, or the reveal once the haul is here. */
@@ -92,6 +93,12 @@ export function syncPushRegistration(accessToken: string | null): Promise<void> 
   queue = queue
     .then(async () => {
       if (accessToken) {
+        // A renewed token for the same user skips re-registering; sign-out clears with the newest.
+        const userId = userIdFromAccessToken(accessToken);
+        if (registered && userId && userId === userIdFromAccessToken(registered.accessToken)) {
+          registered = { accessToken, token: registered.token };
+          return;
+        }
         const token = await registerForPushNotifications(accessToken);
         if (token) registered = { accessToken, token };
       } else if (registered) {

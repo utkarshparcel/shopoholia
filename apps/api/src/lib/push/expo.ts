@@ -1,5 +1,11 @@
+import { closetDeepLinkForEvent, type ClosetPushDeepLink } from "@worn/shared";
 import type { Repositories } from "../repositories/types.js";
-import { deepLinkForPushEvent, pushDedupeKey, type PushService } from "./stub.js";
+import {
+  deepLinkForPushEvent,
+  pushDedupeKey,
+  type PushDeepLinkPayload,
+  type PushService,
+} from "./stub.js";
 
 export const EXPO_PUSH_SEND_URL = "https://exp.host/--/api/v2/push/send";
 
@@ -91,20 +97,29 @@ export function createExpoPushService(options: ExpoPushServiceOptions): PushServ
 
   return {
     async send(payload) {
+      const orderId = payload.orderId ?? null;
       try {
-        const link = deepLinkForPushEvent(payload.eventType, payload.orderId);
+        // Order pushes link to their order or reveal; Closet pushes bring a link or get one by type.
+        const link: PushDeepLinkPayload =
+          payload.link ??
+          (orderId
+            ? deepLinkForPushEvent(payload.eventType, orderId)
+            : (closetDeepLinkForEvent(payload.eventType) as ClosetPushDeepLink));
         const { event, created } = await repos.recordPushEventIfNew({
           userId: payload.userId,
-          orderId: payload.orderId,
+          orderId,
           eventType: payload.eventType,
           title: payload.title,
           body: payload.body,
-          dedupeKey: pushDedupeKey(payload.orderId, payload.eventType),
+          dedupeKey: orderId
+            ? pushDedupeKey(orderId, payload.eventType)
+            : `${payload.userId}:${payload.eventType}:${link.deepLink}`,
           payload: link,
           status: "QUEUED",
         });
-        // A repeated order step: whoever recorded the event first sent it.
-        if (!created) return;
+        // A repeated order step: whoever recorded the event first sent it. A repeated Closet
+        // nudge is sent again on the same row, as the Closet push path always did.
+        if (!created && orderId) return;
 
         // No registered device: the QUEUED row is the only record of the update.
         const token = (await repos.findUserById(payload.userId))?.pushToken;

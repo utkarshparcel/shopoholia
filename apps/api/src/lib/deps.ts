@@ -3,8 +3,11 @@ import type { Repositories } from "./repositories/types.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
 import { createPostgresRepositoriesFromUrl } from "./repositories/postgres.js";
 import { createStorageFromEnv, type StorageClient } from "./storage/r2.js";
+import { createOcrClientFromEnv, type OcrClient } from "./ocr/index.js";
 import { createRenderProvider } from "./render/provider.js";
 import { createDevOtpService, type OtpService } from "./auth/otp.js";
+import { createPurchaseVerifier, type PurchaseVerifier } from "./coin-purchases.js";
+import { storeConnectionsFromEnv, type StoreConnections } from "./iap/stores.js";
 import { reportJobError } from "./error-reporting.js";
 import {
   createAvatarProcessingHandler,
@@ -25,10 +28,14 @@ import { isRealProductImageUrl } from "./seed/scraped.js";
 export type AppDeps = {
   repos: Repositories;
   storage: StorageClient;
+  ocr: OcrClient;
   renderProvider: RenderProvider;
   jobQueue: JobQueue;
   otp: OtpService;
   push: PushService;
+  purchaseVerifier: PurchaseVerifier;
+  /** App Store / Google Play configuration (null for a store that isn't set up). */
+  storeConnections: StoreConnections;
 };
 
 function createRepositories(): Repositories {
@@ -65,6 +72,7 @@ async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
 export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promise<AppDeps> {
   const repos = overrides.repos ?? createRepositories();
   const storage = overrides.storage ?? createStorageFromEnv();
+  const ocr = overrides.ocr ?? createOcrClientFromEnv();
   const renderProvider =
     overrides.renderProvider ??
     createRenderProvider({
@@ -77,6 +85,8 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
   const avatarHandler = createAvatarProcessingHandler({ repos, storage, renderProvider });
   const tryonHandler = createTryonProcessingHandler({ repos, storage, renderProvider });
   const renderHandler = createRenderProcessingHandler({ repos, storage, renderProvider, push });
+  const storeConnections = overrides.storeConnections ?? storeConnectionsFromEnv();
+  const purchaseVerifier = overrides.purchaseVerifier ?? createPurchaseVerifier(storeConnections);
 
   if (overrides.jobQueue) {
     const otp = overrides.otp ?? createDevOtpService(repos);
@@ -86,10 +96,13 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
     return {
       repos,
       storage,
+      ocr,
       renderProvider,
       jobQueue: overrides.jobQueue,
       otp,
       push,
+      purchaseVerifier,
+      storeConnections,
     };
   }
 
@@ -119,7 +132,7 @@ export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promi
     await maybeSeedCatalog(repos, storage);
   }
 
-  return { repos, storage, renderProvider, jobQueue, otp, push };
+  return { repos, storage, ocr, renderProvider, jobQueue, otp, push, purchaseVerifier, storeConnections };
 }
 
 export { newJobId };

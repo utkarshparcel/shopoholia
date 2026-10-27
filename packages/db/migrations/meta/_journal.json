@@ -57,6 +57,62 @@
       "when": 1781775134900,
       "tag": "0007_lookbook_items",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792990064853,
+      "tag": "0008_closet_core",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792990065901,
+      "tag": "0009_closet_ingestion",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792990066996,
+      "tag": "0010_closet_money",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792990068105,
+      "tag": "0011_closet_trust",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792990069211,
+      "tag": "0012_closet_old_table_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793110178991,
+      "tag": "0013_closet_dedupe_before_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793110180077,
+      "tag": "0014_closet_integration",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793110293169,
+      "tag": "0015_closet_backfill_consent_guard",
+      "breakpoints": true
     }
   ]
 }

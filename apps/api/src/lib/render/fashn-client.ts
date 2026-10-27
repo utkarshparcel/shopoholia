@@ -23,6 +23,10 @@ export type TryOnMaxResult = {
 };
 
 export const FASHN_BASE_URL = "https://api.fashn.ai/v1";
+/** Per-request limits, so a stalled FASHN call can't hold a job forever. */
+export const FASHN_RUN_TIMEOUT_MS = 15_000;
+export const FASHN_STATUS_TIMEOUT_MS = 10_000;
+export const FASHN_DOWNLOAD_TIMEOUT_MS = 20_000;
 export const FASHN_CREDIT_MICROS = 25_000;
 
 export function creditsToMicros(credits: number): number {
@@ -64,6 +68,7 @@ export function createFashnClient(options: FashnClientOptions) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${options.apiKey}`,
       },
+      signal: AbortSignal.timeout(FASHN_RUN_TIMEOUT_MS),
       body: JSON.stringify({
         model_name: "tryon-max",
         inputs: {
@@ -98,6 +103,7 @@ export function createFashnClient(options: FashnClientOptions) {
         headers: {
           Authorization: `Bearer ${options.apiKey}`,
         },
+        signal: AbortSignal.timeout(FASHN_STATUS_TIMEOUT_MS),
       });
 
       const body = (await response.json()) as StatusResponse;
@@ -146,7 +152,7 @@ export function createFashnClient(options: FashnClientOptions) {
     },
 
     async downloadFromUrl(url: string): Promise<Uint8Array> {
-      const response = await fetch(url);
+      const response = await fetchImpl(url, { signal: AbortSignal.timeout(FASHN_DOWNLOAD_TIMEOUT_MS) });
       if (!response.ok) {
         throw new Error(`Failed to download image from ${url}: ${response.status} ${response.statusText}`);
       }

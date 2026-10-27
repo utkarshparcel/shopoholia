@@ -1,8 +1,6 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,10 +9,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { validateIap } from '@/src/api/client';
-import { useSessionStore } from '@/src/stores/session';
 import { useCoinBalance } from '@/src/hooks/orders';
-import { trackEvent } from '@/src/lib/analytics';
+import { useCoinShop, type ShopNotice, type ShopPack } from '@/src/lib/purchases/useCoinShop';
 import {
   bg,
   border,
@@ -30,8 +26,10 @@ import {
   fsMicro,
   radiusCard,
   radiusLg,
+  sale,
   space4,
   space6,
+  success,
   surface,
   text,
   textBody,
@@ -44,41 +42,122 @@ import {
   wornPaper,
 } from '@/src/theme/tokens';
 
-const PACKS = [
-  { id: 'coins_small', label: 'Starter Pack', price: '₹99', coins: 100 },
-  { id: 'coins_medium', label: 'Style Pack', price: '₹299', coins: 350 },
-  { id: 'coins_large', label: 'Premium Pack', price: '₹499', coins: 650, popular: true },
-  { id: 'coins_xl', label: 'Ultimate Pack', price: '₹999', coins: 1500, bestValue: true },
-];
+type NoticeCopy = { title: string; body: string; tone: 'good' | 'info' | 'bad'; action?: 'done' | 'check' };
+
+function noticeCopy(notice: ShopNotice): NoticeCopy {
+  switch (notice.kind) {
+    case 'added':
+      return {
+        title: `${notice.coins.toLocaleString()} coins added`,
+        body: `Your balance is now ${notice.balanceAfter.toLocaleString()} coins.`,
+        tone: 'good',
+        action: 'done',
+      };
+    case 'pending':
+      return {
+        title: 'Waiting for approval',
+        body: 'Your coins will be added as soon as the purchase is approved.',
+        tone: 'info',
+      };
+    case 'confirming':
+      return {
+        title: "We couldn't confirm your purchase yet",
+        body: "We'll add your coins as soon as we can.",
+        tone: 'info',
+        action: 'check',
+      };
+    case 'conflict':
+      return {
+        title: 'This purchase was already added to another Worn account',
+        body: 'Sign in with the account that made it to use its coins.',
+        tone: 'bad',
+      };
+    case 'refunded':
+      return {
+        title: 'This purchase was refunded',
+        body: 'No coins were added.',
+        tone: 'bad',
+      };
+    case 'rejected':
+      return {
+        title: "We couldn't confirm this purchase",
+        body: 'If you were charged, contact Worn support.',
+        tone: 'bad',
+      };
+    case 'failed':
+      return {
+        title: "The purchase didn't go through",
+        body: 'Please try again.',
+        tone: 'bad',
+      };
+  }
+}
+
+function StateMessage({ title, body, onRetry }: { title: string; body?: string; onRetry?: () => void }) {
+  return (
+    <View accessibilityRole="summary" style={styles.stateCard}>
+      <Text style={styles.stateTitle}>{title}</Text>
+      {body ? <Text style={styles.stateBody}>{body}</Text> : null}
+      {onRetry ? (
+        <Pressable accessibilityRole="button" onPress={onRetry} style={styles.noticeButton}>
+          <Text style={styles.noticeButtonText}>Try again</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
 
 export default function BuyCoinsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const accessToken = useSessionStore((s) => s.accessToken);
-  const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const { data: balanceData } = useCoinBalance();
-  const [purchasing, setPurchasing] = useState<string | null>(null);
+  const { view, notice, purchasingId, confirmingProductIds, buy, checkAgain, reload } = useCoinShop();
+  const copy = notice ? noticeCopy(notice) : null;
 
-  const handlePurchase = async (pack: typeof PACKS[number]) => {
-    if (!accessToken) {
-      Alert.alert('Sign in', 'Please sign in to purchase coins.');
-      return;
-    }
-    setPurchasing(pack.id);
-    try {
-      const result = await validateIap(accessToken, pack.id, `simulated-receipt-${pack.id}-${Date.now()}`);
-      setCoinBalance(result.balanceAfter);
-      trackEvent('iap_purchase', { productId: pack.id, coins: pack.coins });
-      Alert.alert(
-        'Coins added!',
-        `You got ${pack.coins} WORN coins.`,
-        [{ text: 'Great!', onPress: () => router.back() }],
-      );
-    } catch (error) {
-      Alert.alert('Purchase failed', error instanceof Error ? error.message : 'Try again');
-    } finally {
-      setPurchasing(null);
-    }
+  const renderPack = (pack: ShopPack) => {
+    const loading = purchasingId === pack.id;
+    const confirming = confirmingProductIds.includes(pack.storeProductId);
+    const disabled = purchasingId !== null || confirming;
+    const price = pack.sample ? `Sample ${pack.priceString}` : pack.priceString;
+
+    return (
+      <Pressable
+        key={pack.id}
+        accessibilityLabel={`Buy ${pack.coins} coins for ${price}`}
+        accessibilityRole="button"
+        accessibilityState={{ busy: loading, disabled }}
+        disabled={disabled}
+        onPress={() => void buy(pack)}
+        style={({ pressed }) => [
+          styles.packCard,
+          pack.popular && styles.packCardPopular,
+          disabled && !loading && styles.packCardDisabled,
+          pressed && { opacity: 0.85 },
+        ]}
+      >
+        {pack.popular ? (
+          <View style={styles.popularBadge}>
+            <Text style={styles.popularText}>Most popular</Text>
+          </View>
+        ) : null}
+        {pack.bestValue ? (
+          <View style={[styles.popularBadge, styles.bestValueBadge]}>
+            <Text style={styles.popularText}>Best value</Text>
+          </View>
+        ) : null}
+
+        <Text style={styles.packCoins}>{pack.coins.toLocaleString()}</Text>
+        <Text style={styles.packLabel}>{pack.label}</Text>
+
+        {loading ? (
+          <ActivityIndicator color={wornInk} style={styles.packLoader} />
+        ) : (
+          <View style={styles.packPriceRow}>
+            <Text style={styles.packPrice}>{confirming ? 'Confirming…' : price}</Text>
+          </View>
+        )}
+      </Pressable>
+    );
   };
 
   return (
@@ -104,54 +183,58 @@ export default function BuyCoinsScreen() {
         {balanceData ? (
           <View style={styles.currentBalance}>
             <Text style={styles.balanceLabel}>Your balance</Text>
-            <Text style={styles.balanceValue}>{balanceData.balance} coins</Text>
+            <Text style={styles.balanceValue} testID="coin-balance">
+              {balanceData.balance.toLocaleString()} coins
+            </Text>
           </View>
         ) : null}
       </View>
 
-      <View style={styles.packGrid}>
-        {PACKS.map((pack) => {
-          const isPopular = 'popular' in pack && pack.popular;
-          const isBestValue = 'bestValue' in pack && pack.bestValue;
-          const loading = purchasing === pack.id;
-
-          return (
-            <Pressable
-              key={pack.id}
-              accessibilityRole="button"
-              disabled={loading}
-              onPress={() => void handlePurchase(pack)}
-              style={({ pressed }) => [
-                styles.packCard,
-                isPopular && styles.packCardPopular,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              {isPopular ? (
-                <View style={styles.popularBadge}>
-                  <Text style={styles.popularText}>Most popular</Text>
-                </View>
-              ) : null}
-              {isBestValue ? (
-                <View style={[styles.popularBadge, styles.bestValueBadge]}>
-                  <Text style={styles.popularText}>Best value</Text>
-                </View>
-              ) : null}
-
-              <Text style={styles.packCoins}>{pack.coins.toLocaleString()}</Text>
-              <Text style={styles.packLabel}>{pack.label}</Text>
-
-              {loading ? (
-                <ActivityIndicator color={wornInk} style={styles.packLoader} />
-              ) : (
-                <View style={styles.packPriceRow}>
-                  <Text style={styles.packPrice}>{pack.price}</Text>
-                </View>
-              )}
+      {copy ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole="alert"
+          style={[
+            styles.notice,
+            copy.tone === 'good' && styles.noticeGood,
+            copy.tone === 'bad' && styles.noticeBad,
+          ]}
+          testID="purchase-notice"
+        >
+          <Text style={styles.noticeTitle}>{copy.title}</Text>
+          <Text style={styles.noticeBody}>{copy.body}</Text>
+          {copy.action === 'done' ? (
+            <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.noticeButton}>
+              <Text style={styles.noticeButtonText}>Done</Text>
             </Pressable>
-          );
-        })}
-      </View>
+          ) : null}
+          {copy.action === 'check' ? (
+            <Pressable accessibilityRole="button" onPress={checkAgain} style={styles.noticeButton}>
+              <Text style={styles.noticeButtonText}>Check again</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      {view.status === 'signed_out' ? <StateMessage title="Sign in to buy coins." /> : null}
+      {view.status === 'no_store' ? (
+        <StateMessage
+          title="Coin packs aren't available on this device yet."
+          body="Coins are sold through the App Store and Google Play in the Worn app."
+        />
+      ) : null}
+      {view.status === 'unavailable' ? (
+        <StateMessage
+          title="Coin purchases aren't available right now."
+          body="Please try again later."
+          onRetry={reload}
+        />
+      ) : null}
+      {view.status === 'error' ? (
+        <StateMessage title="Couldn't load coin packs." onRetry={reload} />
+      ) : null}
+      {view.status === 'loading' ? <ActivityIndicator color={wornInk} style={styles.packLoader} /> : null}
+      {view.status === 'ready' ? <View style={styles.packGrid}>{view.packs.map(renderPack)}</View> : null}
 
       <View style={styles.perksCard}>
         <Text style={styles.perksTitle}>What you can do with coins</Text>
@@ -244,16 +327,60 @@ const styles = StyleSheet.create({
     fontSize: fsDisplayM,
     letterSpacing: fsDisplayM * trackingTight,
   },
+  notice: {
+    backgroundColor: surface,
+    borderColor: border,
+    borderRadius: radiusCard,
+    borderWidth: 1,
+    gap: 6,
+    marginBottom: space4,
+    marginHorizontal: space4,
+    padding: space4,
+  },
+  noticeBad: {
+    borderColor: sale,
+  },
+  noticeBody: {
+    color: textBody,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 20,
+  },
+  noticeButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: wornInk,
+    borderRadius: 999,
+    marginTop: 6,
+    paddingHorizontal: space4,
+    paddingVertical: 8,
+  },
+  noticeButtonText: {
+    color: wornPaper,
+    fontFamily: fontSansSemiBold,
+    fontSize: fsCaption,
+  },
+  noticeGood: {
+    borderColor: success,
+  },
+  noticeTitle: {
+    color: text,
+    fontFamily: fontSansSemiBold,
+    fontSize: fsBody,
+  },
   packCard: {
     backgroundColor: surface,
     borderColor: border,
     borderRadius: radiusLg,
     borderWidth: 1,
     flex: 1,
+    flexBasis: '40%',
     gap: 8,
     minHeight: 140,
     padding: space4,
     position: 'relative',
+  },
+  packCardDisabled: {
+    opacity: 0.55,
   },
   packCardPopular: {
     borderColor: wornGold,
@@ -343,5 +470,25 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: bg,
     flex: 1,
+  },
+  stateBody: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 20,
+  },
+  stateCard: {
+    backgroundColor: surface,
+    borderColor: border,
+    borderRadius: radiusCard,
+    borderWidth: 1,
+    gap: 6,
+    marginHorizontal: space4,
+    padding: space4,
+  },
+  stateTitle: {
+    color: text,
+    fontFamily: fontSansSemiBold,
+    fontSize: fsBody,
   },
 });

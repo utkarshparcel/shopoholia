@@ -120,7 +120,8 @@ export default function LoginScreen() {
 
   useEffect(() => {
     if (accessToken) {
-      router.replace('/(tabs)/feed');
+      // The entry route picks Play or the persisted Closet surface.
+      router.replace('/');
     }
   }, [accessToken, router]);
 
@@ -136,7 +137,7 @@ export default function LoginScreen() {
       refreshToken: tokens.refreshToken,
       coinBalance: tokens.coinBalance ?? 0,
     });
-    router.replace(tokens.isNewUser ? '/(onboarding)/avatar' : '/(tabs)/feed');
+    router.replace(tokens.isNewUser ? '/(onboarding)/avatar' : '/');
   };
 
   const continueDev = async () => {
@@ -178,7 +179,9 @@ export default function LoginScreen() {
           ) : (
             <>
               <Text style={styles.configHint}>
-                Google Sign-In needs EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in your env.
+                {__DEV__
+                  ? 'Google Sign-In needs EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in your env.'
+                  : 'Sign-in is not available in this version of WORN yet.'}
               </Text>
               {__DEV__ ? (
                 <Button

@@ -56,11 +56,16 @@ export function createMemoryRenderWorker(
   };
 }
 
-/** BullMQ scaffold — wire Redis URL in production. */
+/**
+ * There is no BullMQ consumer for renders yet: they run in the API process
+ * (apps/api/src/lib/jobs/queue.ts). Starting this fails rather than pretending to consume.
+ */
 export function createBullmqRenderWorker(_redisUrl?: string): RenderWorkerConsumer {
   return {
     async start() {
-      console.info("[worker-render] BullMQ consumer scaffold — connect Redis to enable");
+      throw new Error(
+        "worker-render has no BullMQ consumer: renders run in the API process (apps/api/src/lib/jobs/queue.ts)",
+      );
     },
     async stop() {},
   };

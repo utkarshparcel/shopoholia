@@ -6,7 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, CoinWallet } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
-import { useCoinBalance } from '@/src/hooks/orders';
+import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -62,7 +63,8 @@ function confirmDestructive(
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const signedIn = useSessionStore((s) => Boolean(s.accessToken));
   const { data: balanceData } = useCoinBalance();
   // Refetched on focus, so a new upload shows up after the avatar screen closes.
   const isFocused = useIsFocused();
@@ -79,9 +81,9 @@ export default function ProfileScreen() {
     );
 
   const { data: ordersData } = useQuery({
-    queryKey: ['orders', accessToken],
-    queryFn: () => fetchOrders(accessToken ?? ''),
-    enabled: Boolean(accessToken),
+    queryKey: orderKeys.list(userId),
+    queryFn: () => fetchOrders(useSessionStore.getState().accessToken ?? ''),
+    enabled: signedIn,
   });
 
   const orders = ordersData?.orders ?? [];
@@ -228,10 +230,8 @@ export default function ProfileScreen() {
           ) : null}
           <Pressable
             accessibilityRole="button"
-            onPress={() => {
-              useSessionStore.getState().clear();
-              router.replace('/(auth)/login' as never);
-            }}
+            // Clearing the session is enough: the root layout's auth gate goes to the login screen.
+            onPress={() => useSessionStore.getState().clear()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>
@@ -451,7 +451,7 @@ const styles = StyleSheet.create({
     color: '#3a7d5c',
   },
   stateText: {
-    color: '#9c7a4e',
+    color: '#806440',
     fontFamily: fontMono,
     fontSize: 9,
     letterSpacing: 1,

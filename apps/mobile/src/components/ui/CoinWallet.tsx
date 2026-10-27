@@ -104,7 +104,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   hint: {
-    color: '#888078',
+    color: '#6e6861',
     fontFamily: fontMono,
     fontSize: 10,
     letterSpacing: 1,

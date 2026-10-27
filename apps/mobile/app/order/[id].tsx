@@ -1,17 +1,28 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { RushToExpress } from '@/src/components/order/RushToExpress';
+import { trackPlayBuyInCloset } from '@/src/api/client';
+import { TrackBuySuccessSheet } from '@/src/components/TrackBuySuccessSheet';
 import { Button, OrderTracker, SectionHeader } from '@/src/components/ui';
 import { useOrder } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
+import {
+  TRACK_BUY_VAULT_HREF,
+  TRACK_BUY_WARDROBE_HREF,
+} from '@/src/lib/bridgeWow';
+import { FEATURE_CLOSET } from '@/src/lib/features';
 import { buildTrackerSteps, nextEtaLabel } from '@/src/lib/order-tracking';
+import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
+  fontSans,
   fontSansMedium,
   fsBody,
+  fsCaption,
   space4,
   space6,
   textMuted,
@@ -24,6 +35,38 @@ export default function OrderTrackingScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const orderQuery = useOrder(id ?? '');
   const waitTracked = useRef(false);
+  const accessToken = useSessionStore((s) => s.accessToken);
+  const queryClient = useQueryClient();
+  const [trackNote, setTrackNote] = useState<string | null>(null);
+  const [successSheet, setSuccessSheet] = useState<{
+    created: boolean;
+    wardrobeCount: number;
+  } | null>(null);
+
+  const trackMutation = useMutation({
+    mutationFn: async () => {
+      if (!accessToken || !id) throw new Error('Sign in to track this buy');
+      return trackPlayBuyInCloset(accessToken, id, true);
+    },
+    onSuccess: (result) => {
+      trackEvent('play_buy_tracked', {
+        orderId: id,
+        created: result.created,
+        wardrobeCount: result.wardrobeItemIds.length,
+      });
+      setTrackNote(
+        result.created
+          ? 'Saved to Closet — purchase + wardrobe seeded.'
+          : 'Already tracked in Closet.',
+      );
+      setSuccessSheet({
+        created: result.created,
+        wardrobeCount: result.wardrobeItemIds.length,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['order', id, accessToken] });
+    },
+    onError: (e) => setTrackNote((e as Error).message),
+  });
 
   useEffect(() => {
     if (!orderQuery.data || orderQuery.data.state !== 'REVEAL_READY' || waitTracked.current) {
@@ -32,6 +75,8 @@ export default function OrderTrackingScreen() {
     waitTracked.current = true;
     trackEvent('wait_complete', { orderId: orderQuery.data.id });
   }, [orderQuery.data]);
+
+  const tracked = orderQuery.data?.trackedInCloset === true || trackMutation.data != null;
 
   return (
     <ScrollView
@@ -59,6 +104,33 @@ export default function OrderTrackingScreen() {
           />
 
           {orderQuery.data.rushAvailable ? <RushToExpress order={orderQuery.data} /> : null}
+          {FEATURE_CLOSET ? (
+            <View style={styles.trackBlock}>
+              <Button
+                block
+                disabled={tracked || trackMutation.isPending}
+                label={
+                  trackMutation.isPending
+                    ? 'Saving to Closet…'
+                    : tracked
+                      ? 'Tracked in Closet'
+                      : 'Track this buy in Closet'
+                }
+                onPress={() => trackMutation.mutate()}
+                variant="secondary"
+              />
+              {trackNote ? <Text style={styles.trackNote}>{trackNote}</Text> : null}
+              {tracked ? (
+                <Button
+                  block
+                  label="Open Closet wardrobe"
+                  onPress={() => router.push(TRACK_BUY_WARDROBE_HREF as never)}
+                  style={styles.revealCta}
+                  variant="primary"
+                />
+              ) : null}
+            </View>
+          ) : null}
 
           {orderQuery.data.state === 'REVEAL_READY' ? (
             <Button
@@ -73,6 +145,23 @@ export default function OrderTrackingScreen() {
           )}
         </>
       )}
+
+      {FEATURE_CLOSET && successSheet ? (
+        <TrackBuySuccessSheet
+          visible
+          created={successSheet.created}
+          wardrobeCount={successSheet.wardrobeCount}
+          onClose={() => setSuccessSheet(null)}
+          onOpenVault={() => {
+            setSuccessSheet(null);
+            router.push(TRACK_BUY_VAULT_HREF as never);
+          }}
+          onOpenWardrobe={() => {
+            setSuccessSheet(null);
+            router.push(TRACK_BUY_WARDROBE_HREF as never);
+          }}
+        />
+      ) : null}
     </ScrollView>
   );
 }
@@ -102,5 +191,15 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: bg,
     flex: 1,
+  },
+  trackBlock: {
+    gap: 8,
+    marginTop: space6,
+  },
+  trackNote: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 18,
   },
 });

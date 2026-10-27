@@ -7,19 +7,26 @@ import {
   unlockRenders,
   type RenderCard,
 } from '@/src/api/client';
+import { orderKeys } from '@/src/hooks/orders';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 
+/** Keyed on the shopper, not their token, so a token renewal keeps the cached reveal. */
+const revealKey = (orderId: string, userId: string | null) => ['reveal', orderId, userId] as const;
+
 export function useReveal(orderId: string) {
-  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const signedIn = useSessionStore((s) => Boolean(s.accessToken));
 
   return useQuery({
-    queryKey: ['reveal', orderId, accessToken],
+    queryKey: revealKey(orderId, userId),
     queryFn: () => {
+      const accessToken = useSessionStore.getState().accessToken;
       if (!accessToken) throw new Error('Sign in to view your reveal');
       return fetchReveal(accessToken, orderId);
     },
-    enabled: Boolean(accessToken && orderId),
+    enabled: signedIn && Boolean(orderId),
     refetchInterval: (query) =>
       hasRendersInProgress(query.state.data?.renders ?? []) ? 2500 : false,
   });
@@ -27,6 +34,7 @@ export function useReveal(orderId: string) {
 
 export function useUnlockRenders(orderId: string) {
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
 
@@ -39,8 +47,8 @@ export function useUnlockRenders(orderId: string) {
       if (!accessToken) return;
       const balance = await fetchCoinBalance(accessToken);
       setCoinBalance(balance.balance);
-      queryClient.setQueryData(['coins', 'balance', accessToken], balance);
-      queryClient.setQueryData(['reveal', orderId, accessToken], (prev: { renders: RenderCard[] } | undefined) => {
+      queryClient.setQueryData(orderKeys.balance(userId), balance);
+      queryClient.setQueryData(revealKey(orderId, userId), (prev: { renders: RenderCard[] } | undefined) => {
         if (!prev) return prev;
         const byId = new Map(result.renders.map((r) => [r.id, r]));
         return {
@@ -54,6 +62,7 @@ export function useUnlockRenders(orderId: string) {
 
 export function useGenerateRenders(orderId: string) {
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
 
@@ -66,8 +75,8 @@ export function useGenerateRenders(orderId: string) {
       if (!accessToken) return;
       const balance = await fetchCoinBalance(accessToken);
       setCoinBalance(balance.balance);
-      queryClient.setQueryData(['coins', 'balance', accessToken], balance);
-      queryClient.setQueryData(['reveal', orderId, accessToken], (prev: { renders: RenderCard[] } | undefined) => {
+      queryClient.setQueryData(orderKeys.balance(userId), balance);
+      queryClient.setQueryData(revealKey(orderId, userId), (prev: { renders: RenderCard[] } | undefined) => {
         if (!prev) return prev;
         const byId = new Map(result.renders.map((r) => [r.id, r]));
         const merged = prev.renders.map((r) => byId.get(r.id) ?? r);

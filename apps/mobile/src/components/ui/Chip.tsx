@@ -59,6 +59,6 @@ const styles = StyleSheet.create({
     fontSize: fsCaption,
   },
   pressed: {
-    borderColor: '#888078',
+    borderColor: '#6e6861',
   },
 });

@@ -37,6 +37,13 @@ function permission(status: 'granted' | 'undetermined' | 'denied', iosStatus?: n
   };
 }
 
+/** An unsigned JWT with the given claims, shaped like the API's access tokens. */
+function accessToken(claims: object) {
+  const encode = (value: object) =>
+    btoa(JSON.stringify(value)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode(claims)}.signature`;
+}
+
 // Fresh module state (the registered token and call queue) for every test.
 async function loadPush() {
   vi.resetModules();
@@ -257,6 +264,60 @@ describe('syncPushRegistration', () => {
 
     await syncPushRegistration('next-access-token');
     expect(api.registerPushToken).toHaveBeenLastCalledWith('next-access-token', EXPO_TOKEN);
+    warn.mockRestore();
+  });
+
+  it("doesn't re-register when the access token is renewed for the same user", async () => {
+    const { syncPushRegistration } = await loadPush();
+
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 1 }));
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 2 }));
+
+    expect(notifications.getPermissionsAsync).toHaveBeenCalledTimes(1);
+    expect(notifications.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
+    expect(api.registerPushToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers again when a different user signs in', async () => {
+    const { syncPushRegistration } = await loadPush();
+
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 1 }));
+    await syncPushRegistration(accessToken({ sub: 'user-2', iat: 1 }));
+
+    expect(api.registerPushToken).toHaveBeenCalledTimes(2);
+    expect(api.registerPushToken).toHaveBeenLastCalledWith(
+      accessToken({ sub: 'user-2', iat: 1 }),
+      EXPO_TOKEN,
+    );
+  });
+
+  it('clears with the latest renewed access token on sign-out', async () => {
+    const { syncPushRegistration } = await loadPush();
+
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 1 }));
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 2 }));
+    await syncPushRegistration(null);
+
+    expect(api.clearPushToken).toHaveBeenCalledTimes(1);
+    expect(api.clearPushToken).toHaveBeenCalledWith(
+      accessToken({ sub: 'user-1', iat: 2 }),
+      EXPO_TOKEN,
+    );
+  });
+
+  it('registers on a renewal for the same user when the last registration failed', async () => {
+    api.registerPushToken.mockRejectedValueOnce(new Error('offline'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { syncPushRegistration } = await loadPush();
+
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 1 }));
+    await syncPushRegistration(accessToken({ sub: 'user-1', iat: 2 }));
+
+    expect(api.registerPushToken).toHaveBeenCalledTimes(2);
+    expect(api.registerPushToken).toHaveBeenLastCalledWith(
+      accessToken({ sub: 'user-1', iat: 2 }),
+      EXPO_TOKEN,
+    );
     warn.mockRestore();
   });
 });

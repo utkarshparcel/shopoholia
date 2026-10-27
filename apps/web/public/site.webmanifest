@@ -1,0 +1,16 @@
+{
+  "name": "Worn",
+  "short_name": "Worn",
+  "description": "The shopping app where nothing ships. Browse, try on, haul with coins, wait, unbox AI renders of you wearing it.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf8f5",
+  "theme_color": "#0f0e0c",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/apple-icon", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ],
+  "categories": ["lifestyle", "shopping"]
+}

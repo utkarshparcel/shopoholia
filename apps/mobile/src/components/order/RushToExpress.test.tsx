@@ -52,7 +52,8 @@ const ORDER: OrderSummary = {
   rushAvailable: true,
   rushCostCoins: 25,
 };
-const ORDER_KEY = ['order', ORDER.id, 'token'];
+const TOKEN = `h.${btoa(JSON.stringify({ sub: 'user-1' })).replace(/=+$/, '')}.sig`;
+const ORDER_KEY = ['order', ORDER.id, 'user-1'];
 
 function renderRush() {
   const client = new QueryClient({
@@ -78,7 +79,7 @@ const pressRush = () => fireEvent.click(screen.getByText('Rush to Express · 25 
 
 describe('RushToExpress', () => {
   beforeEach(() => {
-    useSessionStore.setState({ accessToken: 'token', coinBalance: 100 });
+    useSessionStore.setState({ accessToken: TOKEN, coinBalance: 100 });
   });
 
   afterEach(() => {
@@ -108,9 +109,9 @@ describe('RushToExpress', () => {
     pressRush();
 
     await waitFor(() => expect(useSessionStore.getState().coinBalance).toBe(75));
-    expect(rushOrder).toHaveBeenCalledWith('token', ORDER.id);
+    expect(rushOrder).toHaveBeenCalledWith(TOKEN, ORDER.id);
     expect(client.getQueryData(ORDER_KEY)).toEqual(rushed);
-    expect(client.getQueryData(['coins', 'balance', 'token'])).toEqual({ balance: 75 });
+    expect(client.getQueryData(['coins', 'balance', 'user-1'])).toEqual({ balance: 75 });
     expect(trackEvent).toHaveBeenCalledWith('rush_to_express', {
       orderId: ORDER.id,
       state: 'PACKED',

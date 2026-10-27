@@ -69,6 +69,8 @@ vi.mock('react-native-reanimated', () => ({
     View: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => (
       <div {...props}>{children}</div>
     ),
+    // Button.tsx wraps Pressable at import time.
+    createAnimatedComponent: <T,>(component: T) => component,
   },
   useSharedValue: (initial: number) => ({ value: initial }),
   useAnimatedStyle: (fn: () => object) => fn(),

@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { randomInt } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import {
   FREE_RENDER_SCENARIOS,
   PAYWALLED_RENDER_SCENARIOS,
 } from "@worn/shared";
+import { createMemoryJobQueue } from "../jobs/queue.js";
+import { createDeliveredRenderHandler } from "../jobs/render-processing.js";
 import { createMemoryRepositories } from "../repositories/memory.js";
+import { createPostgresRepositoriesFromUrl } from "../repositories/postgres.js";
+import type { Repositories } from "../repositories/types.js";
 import { createMockRenderProvider } from "./provider.js";
 import { createMockStorage } from "../storage/r2.js";
 import { createStubPushService } from "../push/stub.js";
@@ -179,3 +184,54 @@ describe("render pipeline", () => {
     expect(updated?.state).toBe("DELIVERED");
   });
 });
+
+const databaseUrl = process.env.DATABASE_URL;
+const describePostgres = databaseUrl ? describe : describe.skip;
+
+describe("delivered-render job with nothing to seed (memory)", () => {
+  const repos = createMemoryRepositories();
+  nothingToSeedCases(() => repos);
+});
+
+describePostgres("delivered-render job with nothing to seed (Postgres)", () => {
+  const repos = databaseUrl ? createPostgresRepositoriesFromUrl(databaseUrl) : null!;
+  nothingToSeedCases(() => repos);
+});
+
+function nothingToSeedCases(getRepos: () => Repositories) {
+  it("completes a resumed job for a delivered order with no items, without an insert", async () => {
+    const repos = getRepos();
+    const { user } = await repos.createUser(`9${randomInt(10 ** 10, 10 ** 11)}`);
+    const { order } = await repos.createOrder({
+      userId: user.id,
+      tier: "EXPRESS",
+      coinTotal: 0,
+      stateEta: {},
+      items: [],
+    });
+    await repos.updateOrderState(order.id, "DELIVERED");
+    const createRenders = vi.spyOn(repos, "createRenders");
+    const enqueueRender = vi.fn();
+    const jobQueue = createMemoryJobQueue(
+      {
+        avatar: vi.fn(),
+        tryon: vi.fn(),
+        orderTransition: vi.fn(),
+        deliveredRender: createDeliveredRenderHandler({ repos, enqueueRender }),
+        render: vi.fn(),
+      },
+      { repos, autoProcess: false },
+    );
+    try {
+      // What resumeInFlightWork queues for a delivered order that has no renders yet.
+      await expect(jobQueue.enqueueDeliveredRender({ orderId: order.id })).resolves.toBeUndefined();
+      expect(createRenders).not.toHaveBeenCalled();
+      expect(enqueueRender).not.toHaveBeenCalled();
+      expect(await repos.findRendersByOrderId(order.id)).toEqual([]);
+      // Resuming again is still a no-op.
+      await expect(jobQueue.enqueueDeliveredRender({ orderId: order.id })).resolves.toBeUndefined();
+    } finally {
+      createRenders.mockRestore();
+    }
+  });
+}

@@ -1,0 +1,439 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-display: 'DM Serif Display', Georgia, serif;
+    --font-sans: 'DM Sans', system-ui, sans-serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+
+  * {
+    @apply border-worn-rule;
+  }
+
+  html {
+    @apply scroll-smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-worn-paper text-worn-ink font-sans text-body leading-[1.55] antialiased;
+  }
+
+  ::selection {
+    @apply bg-worn-gold-tint text-worn-ink;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-worn-gold-deep ring-offset-2 ring-offset-worn-paper;
+  }
+}
+
+@layer components {
+  /* Button variants matching mobile design system */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-sans font-semibold tracking-wide rounded-md border transition-all duration-fast ease-out;
+  }
+
+  .btn-primary {
+    @apply btn bg-worn-ink text-worn-paper border-transparent hover:bg-worn-ink-soft active:scale-[0.97] active:bg-[#221f1a] disabled:opacity-40;
+  }
+
+  .btn-secondary {
+    @apply btn bg-worn-surface text-worn-ink border-worn-rule hover:border-worn-muted active:scale-[0.97] active:border-worn-muted disabled:opacity-40;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent text-worn-gold-deep border-transparent hover:bg-worn-gold-tint active:scale-[0.97] active:bg-worn-gold-tint disabled:opacity-40;
+  }
+
+  .btn-lg {
+    @apply px-7 py-4 text-body-l min-h-[52px];
+  }
+
+  .btn-md {
+    @apply px-5 py-3 text-body min-h-[44px];
+  }
+
+  .btn-sm {
+    @apply px-3.5 py-2 text-caption min-h-[34px];
+  }
+
+  /* Card variants */
+  .card {
+    @apply bg-worn-surface border border-worn-rule rounded-card shadow-card overflow-hidden transition-shadow duration-fast;
+  }
+
+  .card-hover {
+    @apply card hover:shadow-pop;
+  }
+
+  /* Listing card (matches mobile) */
+  .listing-card {
+    @apply card group relative overflow-hidden;
+  }
+
+  .listing-card-media {
+    @apply relative aspect-[3/4] overflow-hidden;
+  }
+
+  .listing-card-image {
+    @apply absolute inset-0 w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-105;
+  }
+
+  .listing-card-badge {
+    @apply absolute top-2.5 left-2.5 bg-worn-ink/35 text-white text-micro font-mono uppercase tracking-widest px-2 py-0.5 rounded-pill;
+  }
+
+  .listing-card-heart {
+    @apply absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-white/90 flex items-center justify-center text-worn-ink transition-all duration-fast group-hover:scale-105;
+  }
+
+  .listing-card-body {
+    @apply p-3.5;
+  }
+
+  .listing-card-brand {
+    @apply text-micro font-mono uppercase tracking-widest text-worn-muted;
+  }
+
+  .listing-card-title {
+    @apply text-body font-medium text-worn-ink mt-1 line-clamp-1;
+  }
+
+  .listing-card-price {
+    @apply flex items-baseline gap-2 mt-3;
+  }
+
+  .listing-card-coin {
+    @apply text-worn-gold-soft text-sm;
+  }
+
+  .listing-card-price-main {
+    @apply text-body font-semibold text-worn-ink;
+  }
+
+  .listing-card-price-unit {
+    @apply text-caption font-medium text-worn-muted;
+  }
+
+  .listing-card-real-price {
+    @apply text-caption font-medium text-worn-muted;
+  }
+
+  .listing-card-quick-add {
+    @apply absolute bottom-3.5 right-3.5 w-9 h-9 rounded-full bg-worn-ink text-worn-paper flex items-center justify-center text-2xl font-semibold opacity-0 translate-y-2 transition-all duration-fast group-hover:opacity-100 group-hover:translate-y-0;
+  }
+
+  /* Section container */
+  .section {
+    @apply px-4 sm:px-6 lg:px-8 xl:max-w-[1200px] mx-auto;
+  }
+
+  .section-py {
+    @apply py-16 sm:py-24 lg:py-32;
+  }
+
+  /* A step track's sticky block (useScrollSteps): centred in the window under the header, by the height it sets as --sh */
+  .step-stick {
+    top: max(84px, calc(42px + 50svh - var(--sh, 100svh) / 2));
+  }
+
+  @media (min-width: 640px) {
+    .step-stick {
+      top: max(88px, calc(44px + 50svh - var(--sh, 100svh) / 2));
+    }
+  }
+
+  /* Typography utilities — plain declarations (no @apply cycles) */
+  .text-display-xl {
+    font-family: var(--font-display), Georgia, serif;
+    font-weight: 400;
+    font-size: 48px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .text-display-l {
+    font-family: var(--font-display), Georgia, serif;
+    font-weight: 400;
+    font-size: 34px;
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+  }
+
+  .text-display-m {
+    font-family: var(--font-display), Georgia, serif;
+    font-weight: 400;
+    font-size: 24px;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+  }
+
+  .text-title {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 500;
+    font-size: 18px;
+    line-height: 1.3;
+    letter-spacing: 0;
+  }
+
+  .text-body-l {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: 0;
+  }
+
+  .text-body {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 400;
+    font-size: 14px;
+    line-height: 1.55;
+    letter-spacing: 0;
+  }
+
+  .text-caption {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 400;
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 0;
+  }
+
+  .text-micro {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 400;
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0;
+  }
+
+  /* Animation utilities */
+  .animate-on-scroll {
+    @apply opacity-0;
+  }
+
+  .animate-on-scroll.visible {
+    @apply animate-slide-up;
+  }
+
+  .stagger-children > * {
+    @apply opacity-0;
+  }
+
+  .stagger-children.visible > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children.visible > *:nth-child(2) { animation-delay: 60ms; }
+  .stagger-children.visible > *:nth-child(3) { animation-delay: 120ms; }
+  .stagger-children.visible > *:nth-child(4) { animation-delay: 180ms; }
+  .stagger-children.visible > *:nth-child(5) { animation-delay: 240ms; }
+  .stagger-children.visible > *:nth-child(6) { animation-delay: 300ms; }
+  .stagger-children.visible > * {
+    @apply animate-stagger;
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-on-scroll,
+    .stagger-children > *,
+    .btn,
+    .card,
+    .listing-card-image,
+    .listing-card-heart,
+    .listing-card-quick-add {
+      @apply transition-none animate-none;
+    }
+
+    .animate-on-scroll {
+      @apply opacity-100;
+    }
+
+    .stagger-children > * {
+      @apply opacity-100;
+    }
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .container-narrow {
+    @apply max-w-[640px] mx-auto;
+  }
+
+  .container-wide {
+    @apply max-w-[1200px] mx-auto;
+  }
+
+  /* ── Luxury kit ──────────────────────────────────────── */
+
+  /* Gold gradient display text */
+  .grad-text {
+    background: linear-gradient(105deg, #8a6a42 0%, #c8a87a 38%, #ecd6ac 55%, #9c7a4e 78%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Glass card */
+  .glass {
+    background: rgba(255, 255, 255, 0.62);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    backdrop-filter: blur(18px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 12px 40px rgba(15, 14, 12, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  .glass-dark {
+    background: rgba(15, 14, 12, 0.55);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    backdrop-filter: blur(18px) saturate(1.2);
+    border: 1px solid rgba(200, 168, 122, 0.22);
+  }
+
+  /* Outlined display text */
+  .text-stroke-ink {
+    -webkit-text-stroke: 1.5px rgba(15, 14, 12, 0.22);
+    color: transparent;
+  }
+
+  .text-stroke-paper {
+    -webkit-text-stroke: 1.5px rgba(250, 248, 245, 0.28);
+    color: transparent;
+  }
+
+  /* Hairline ornamental rule with diamond */
+  .ornament {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .ornament::before,
+  .ornament::after {
+    content: '';
+    height: 1px;
+    width: 48px;
+    background: linear-gradient(90deg, transparent, rgba(200, 168, 122, 0.6), transparent);
+  }
+
+  /* ── Marquees ────────────────────────────────────────── */
+  @keyframes marquee-x {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+  @keyframes marquee-y {
+    from { transform: translateY(0); }
+    to { transform: translateY(-50%); }
+  }
+  @keyframes float-soft {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+  @keyframes glow-pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.9; }
+  }
+
+  .marquee-track {
+    display: flex;
+    width: max-content;
+    animation: marquee-x 38s linear infinite;
+  }
+  .marquee-track-fast {
+    display: flex;
+    width: max-content;
+    animation: marquee-x 24s linear infinite;
+  }
+  .marquee-paused:hover .marquee-track,
+  .marquee-paused:hover .marquee-track-fast {
+    animation-play-state: paused;
+  }
+  [dir='rtl'] .marquee-track { animation-direction: reverse; }
+
+  .ticker-col {
+    display: flex;
+    flex-direction: column;
+    width: max-content;
+    animation: marquee-y var(--ticker-duration, 46s) linear infinite;
+  }
+  .ticker-wrapper:hover .ticker-col {
+    animation-play-state: paused;
+  }
+
+  /* Edge fade mask for marquees */
+  .fade-x {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  }
+  .fade-y {
+    -webkit-mask-image: linear-gradient(180deg, transparent, #000 10%, #000 90%, transparent);
+    mask-image: linear-gradient(180deg, transparent, #000 10%, #000 90%, transparent);
+  }
+
+  .animate-float {
+    animation: float-soft 6s ease-in-out infinite;
+  }
+  .animate-glow-pulse {
+    animation: glow-pulse 5s ease-in-out infinite;
+  }
+
+  /* ── Dress rack: wind & sway ─────────────────────────── */
+  @keyframes sway {
+    0%, 100% { transform: rotate(-2deg); }
+    50% { transform: rotate(2deg); }
+  }
+  .rack-card {
+    transform-origin: 50% 0%;
+    animation: sway 5.4s ease-in-out infinite;
+  }
+  @keyframes hem-wave {
+    0%, 100% { transform: skewX(-3deg) rotate(0.5deg); }
+    50% { transform: skewX(3deg) rotate(-0.5deg); }
+  }
+  .hem {
+    transform-origin: 50% 0%;
+    animation: hem-wave 3.4s ease-in-out infinite;
+  }
+  @keyframes breeze {
+    0% { transform: translateX(-100%); opacity: 0; }
+    35% { opacity: 0.5; }
+    100% { transform: translateX(220%); opacity: 0; }
+  }
+  .breeze {
+    animation: breeze 6.5s ease-in-out infinite;
+  }
+
+  /* ── Hero entrance: plain CSS, so the headline paints before the scripts load ── */
+  @keyframes hero-rise {
+    from { opacity: 0; transform: translateY(28px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes hero-word {
+    from { transform: translateY(110%); }
+    to { transform: none; }
+  }
+  .hero-rise {
+    animation: hero-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0s) both;
+  }
+  .hero-word {
+    animation: hero-word 1s cubic-bezier(0.22, 1, 0.36, 1) var(--d, 0s) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .marquee-track, .marquee-track-fast, .ticker-col,
+    .animate-float, .animate-glow-pulse, .rack-card, .hem, .breeze,
+    .hero-rise, .hero-word {
+      animation: none;
+    }
+  }
+
+  html, body {
+    overflow-x: clip;
+  }
+}

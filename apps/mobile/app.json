@@ -8,9 +8,19 @@
     "scheme": "worn",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.shopoholia.worn"
     },
     "android": {
+      "package": "com.shopoholia.worn",
+      "permissions": [
+        "android.permission.READ_CALENDAR"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.WRITE_CALENDAR"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -34,13 +44,32 @@
           "backgroundColor": "#faf8f5"
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "WORN uses the photos you pick to add clothes, read care labels, receipts and gift cards, log what you wore, and make your try-on avatar.",
+          "cameraPermission": "WORN uses the camera to photograph your clothes, care labels, receipts and gift cards, log what you wore, and make your try-on avatar.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "WORN reads event titles (interview, wedding, office) to plan outfits. You can skip this anytime.",
+          "remindersPermission": false
+        }
+      ],
+      "./plugins/withPodDeploymentTarget"
     ],
     "experiments": {
       "typedRoutes": true
     },
-    "extra": {
-      "apiUrl": "http://localhost:3000"
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
     }
   }
 }

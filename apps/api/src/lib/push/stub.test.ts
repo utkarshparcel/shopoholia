@@ -75,4 +75,32 @@ describe("push stub", () => {
     expect(info).toHaveBeenCalled();
     info.mockRestore();
   });
+
+  it("delivers via Expo mock and marks SENT when user has pushToken", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919999900001");
+    await repos.updateUser(user.id, { pushToken: "ExponentPushToken[play]" });
+
+    const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "ticket-play" }));
+    const push = createStubPushService(repos, { sendExpo });
+    const orderId = "55555555-5555-4555-8555-555555555555";
+
+    await push.send({
+      userId: user.id,
+      orderId,
+      eventType: "ORDER_DELIVERED",
+      title: "Delivered",
+      body: "Arrived.",
+    });
+
+    const events = await push.listEvents(user.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.status).toBe("SENT");
+    expect(sendExpo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "ExponentPushToken[play]",
+        data: expect.objectContaining({ deepLink: `worn://order/${orderId}` }),
+      }),
+    );
+  });
 });

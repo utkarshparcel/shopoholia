@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["WornIapModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.worniap.WornIapModule"]
+  }
+}

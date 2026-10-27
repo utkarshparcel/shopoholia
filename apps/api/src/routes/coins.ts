@@ -1,26 +1,18 @@
 import {
+  COIN_PACKS,
   CoinBalanceResponseSchema,
   CoinLedgerType,
+  CoinPacksResponseSchema,
   CoinTransactionsResponseSchema,
   IapValidateBodySchema,
   IapValidateResponseSchema,
-  coinPackById,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
+import { validateCoinPurchase } from "../lib/coin-purchases.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
-
-function isSimulatedReceipt(receipt: string): boolean {
-  return receipt.startsWith("simulated-receipt") || receipt.includes("simulated");
-}
-
-function iapEventId(receipt: string, revenuecatEventId?: string): string {
-  if (revenuecatEventId) return revenuecatEventId;
-  return createHash("sha256").update(receipt).digest("hex");
-}
 
 export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get(
@@ -38,6 +30,32 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const balance = await app.deps.repos.getCoinBalance(request.user.sub);
       return { balance };
+    },
+  );
+
+  app.get(
+    "/coins/packs",
+    {
+      schema: {
+        tags: ["coins"],
+        response: { 200: CoinPacksResponseSchema },
+      },
+    },
+    async (_request, reply) => {
+      reply.header("cache-control", "public, max-age=300");
+      const stores = app.deps.purchaseVerifier.stores;
+      return {
+        purchasesAvailable: stores.app_store || stores.play_store,
+        stores: { app_store: stores.app_store, play_store: stores.play_store },
+        packs: COIN_PACKS.map((pack) => ({
+          id: pack.id,
+          storeProductId: pack.storeProductId,
+          label: pack.label,
+          coins: pack.coins,
+          ...("popular" in pack ? { popular: pack.popular } : {}),
+          ...("bestValue" in pack ? { bestValue: pack.bestValue } : {}),
+        })),
+      };
     },
   );
 
@@ -77,6 +95,8 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
+  // Credits a store purchase only after the purchase verifier confirms it, with the coins COIN_PACKS
+  // defines. Contract: FIX/platform/iap-contract.md.
   app.post(
     "/coins/iap/validate",
     {
@@ -87,61 +107,41 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
           200: IapValidateResponseSchema,
           400: ErrorSchema,
           401: ErrorSchema,
-          403: ErrorSchema,
+          402: ErrorSchema,
           409: ErrorSchema,
+          503: ErrorSchema,
         },
       },
       preHandler: requireAuth,
     },
     async (request, reply) => {
-      if (process.env.NODE_ENV === "production" && isSimulatedReceipt(request.body.receipt)) {
-        return reply.code(403).send({
-          error: "Forbidden",
-          message: "Simulated receipts are not accepted in production",
-        });
-      }
-
-      const pack = coinPackById(request.body.productId);
-      if (!pack) {
-        return reply.code(400).send({
-          error: "Bad Request",
-          message: `Unknown product: ${request.body.productId}`,
-        });
-      }
-
-      const eventId = iapEventId(request.body.receipt, request.body.revenuecatEventId);
-      const existing = await app.deps.repos.findIapReceipt(eventId);
-      if (existing) {
-        if (existing.userId !== request.user.sub) {
-          return reply.code(409).send({
-            error: "Conflict",
-            message: "Receipt already redeemed",
-          });
+      const outcome = await validateCoinPurchase(
+        app.deps.repos,
+        app.deps.purchaseVerifier,
+        request.user.sub,
+        request.body,
+      );
+      if (!outcome.ok) {
+        if (outcome.status === 503) {
+          request.log.warn({ reason: outcome.reason, store: request.body.store }, "coin purchase unverifiable");
+        } else {
+          request.log.info(
+            { status: outcome.status, error: outcome.error, reason: outcome.message, store: request.body.store },
+            "coin purchase rejected",
+          );
         }
-        const balanceAfter = await app.deps.repos.getCoinBalance(request.user.sub);
-        return {
-          success: true as const,
-          coinsGranted: existing.coinsGranted,
-          balanceAfter,
-        };
+        return reply.code(outcome.status).send({ error: outcome.error, message: outcome.message });
       }
-
-      const { balanceAfter } = await app.deps.repos.grantCoins({
-        userId: request.user.sub,
-        delta: pack.coins,
-        type: "IAP_PURCHASE",
-        refType: "iap",
-      });
-
-      await app.deps.repos.recordIapReceipt({
-        eventId,
-        userId: request.user.sub,
-        productId: request.body.productId,
-        coinsGranted: pack.coins,
-        rawPayload: { receipt: request.body.receipt },
-      });
-
-      return { success: true as const, coinsGranted: pack.coins, balanceAfter };
+      return {
+        success: true as const,
+        coinsGranted: outcome.purchase.coinsGranted,
+        balanceAfter: outcome.balanceAfter,
+        packId: outcome.pack.id,
+        transactionId: outcome.purchase.transactionId,
+        alreadyGranted: outcome.alreadyGranted,
+        refunded: outcome.purchase.refundedAt !== null,
+        ...(outcome.needsConsume !== undefined ? { needsConsume: outcome.needsConsume } : {}),
+      };
     },
   );
 };

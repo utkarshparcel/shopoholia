@@ -46,9 +46,14 @@ export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
         category,
         styleKeywords: await viewerStyleKeywords(request),
       });
+      const sellerIds = [
+        ...new Set(page.items.flatMap((listing) => (listing.sellerId ? [listing.sellerId] : []))),
+      ];
+      const sellers = await app.deps.repos.findSellersByIds(sellerIds);
+      const sellerMap = new Map(sellers.map((seller) => [seller.id, seller]));
       const items = await Promise.all(
         page.items.map((listing) =>
-          listingCardDto(listing, app.deps.storage, app.deps.repos),
+          listingCardDto(listing, app.deps.storage, app.deps.repos, sellerMap),
         ),
       );
       return { items, nextCursor: page.nextCursor };

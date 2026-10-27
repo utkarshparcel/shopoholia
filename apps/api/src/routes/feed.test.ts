@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../index.js";
 import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import type { ListingRecord } from "../lib/repositories/types.js";
@@ -232,5 +232,51 @@ describe("feed categories and style ranking", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect((rest.json() as FeedBody).items.map((item) => item.title)).toEqual(ACTIVE_TITLES.slice(3));
+  });
+});
+
+describe("feed seller names", () => {
+  let app: App;
+
+  beforeEach(async () => {
+    app = await buildApp();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it("names each card's seller, looking up the page's sellers in one query", async () => {
+    const repos = app.deps.repos;
+    const shopNameByListing = new Map<string, string>();
+    for (const [i, shopName] of ["Studio Nine", "Loom House"].entries()) {
+      const { user } = await repos.createUser(`91980000010${i}`);
+      const seller = await repos.registerSeller(user.id, shopName);
+      for (const title of ["Linen Shirt", "Denim Skirt"]) {
+        const { listing } = await repos.createSellerListing({
+          sellerId: seller.id,
+          title,
+          category: "tops",
+          tags: [],
+          coinPrice: 40,
+          productImageKeys: [],
+          houseModelRenderKey: "https://cdn.example.com/look.jpg",
+          affiliateUrl: null,
+          variant: { size: "M", color: "White", garmentImageKey: "https://cdn.example.com/g.jpg" },
+        });
+        shopNameByListing.set(listing.id, shopName);
+      }
+    }
+    const findSellers = vi.spyOn(repos, "findSellersByIds");
+
+    const res = await app.inject({ method: "GET", url: "/feed?limit=50" });
+    expect(res.statusCode).toBe(200);
+    const { items } = res.json() as { items: Array<{ id: string; sellerName: string | null }> };
+    expect(items).toHaveLength(ACTIVE_TITLES.length + shopNameByListing.size);
+    for (const item of items) {
+      expect(item.sellerName).toBe(shopNameByListing.get(item.id) ?? null);
+    }
+    expect(findSellers).toHaveBeenCalledTimes(1);
+    expect(findSellers.mock.calls[0]![0]).toHaveLength(2);
   });
 });
