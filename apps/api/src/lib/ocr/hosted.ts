@@ -10,6 +10,9 @@ export type HostedOcrConfig = {
   fetchImpl?: typeof fetch;
 };
 
+/** A provider call (request and body) that takes longer than this fails. */
+export const OCR_TIMEOUT_MS = 10_000;
+
 type GenericProviderBody = {
   merchant?: string;
   totalMinor?: number;
@@ -60,6 +63,7 @@ export class HostedOcrClient implements OcrClient {
 
     const res = await fetchFn(url, {
       method: "POST",
+      signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
       headers: {
         "content-type": "application/json",
         ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),

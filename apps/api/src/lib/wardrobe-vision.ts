@@ -4,6 +4,7 @@
 import {
   autoTagWithDuplicateCheck,
   inferWardrobeAutoTag,
+  mapLimit,
   type AutoTagWithDupes,
   type OwnedItemLike,
   type VisionAutoTag,
@@ -14,8 +15,17 @@ export type VisionTagClient = {
     imageKey: string;
     labels?: string[];
     text?: string | null;
+    /** Aborts the provider call (a batch deadline); the label heuristics answer instead. */
+    signal?: AbortSignal;
   }): Promise<VisionAutoTag>;
 };
+
+/** One hosted vision call may take this long. */
+export const VISION_TAG_TIMEOUT_MS = 10_000;
+/** A whole batch (autotag, bulk, photo dump) waits on the provider this long at most. */
+export const VISION_BATCH_BUDGET_MS = 30_000;
+/** Provider calls in flight per batch. */
+export const VISION_TAG_CONCURRENCY = 4;
 
 /** Deterministic mock — parses imageKey / labels (no network). */
 export class MockVisionTagClient implements VisionTagClient {
@@ -46,13 +56,16 @@ export class HostedVisionTagClient implements VisionTagClient {
     imageKey: string;
     labels?: string[];
     text?: string | null;
+    signal?: AbortSignal;
   }): Promise<VisionAutoTag> {
     const url = this.config.url;
     if (!url) return inferWardrobeAutoTag(input);
     const fetchFn = this.config.fetchImpl ?? fetch;
+    const timeout = AbortSignal.timeout(VISION_TAG_TIMEOUT_MS);
     try {
       const res = await fetchFn(url, {
         method: "POST",
+        signal: input.signal ? AbortSignal.any([timeout, input.signal]) : timeout,
         headers: {
           "content-type": "application/json",
           ...(this.config.apiKey
@@ -128,6 +141,7 @@ export async function tagImageWithDupes(
     labels?: string[];
     text?: string | null;
     titleHint?: string | null;
+    signal?: AbortSignal;
   },
   owned: OwnedItemLike[],
 ): Promise<AutoTagWithDupes> {
@@ -135,14 +149,63 @@ export async function tagImageWithDupes(
     imageKey: input.imageKey,
     labels: input.labels,
     text: input.text,
+    signal: input.signal,
   });
-  return autoTagWithDuplicateCheck(
+  return withDuplicateCheck(vision, input, owned);
+}
+
+/**
+ * The provider calls for a batch, VISION_TAG_CONCURRENCY at a time, all under one
+ * VISION_BATCH_BUDGET_MS deadline: a call still waiting then gets the label heuristics.
+ * A null input stays null.
+ */
+export function tagBatch(
+  client: VisionTagClient,
+  inputs: Array<{ imageKey: string; labels?: string[]; text?: string | null } | null>,
+): Promise<Array<VisionAutoTag | null>> {
+  const deadline = AbortSignal.timeout(VISION_BATCH_BUDGET_MS);
+  return mapLimit(inputs, VISION_TAG_CONCURRENCY, async (input) =>
+    input ? client.tag({ ...input, signal: deadline }) : null,
+  );
+}
+
+/**
+ * Batch rows are checked against the rows before them under a placeholder id each (the item
+ * doesn't exist yet); swap those for the created items' ids.
+ */
+export function resolvePlaceholderIds<W extends { matches: Array<{ wardrobeItemId: string }> }>(
+  warnings: W[],
+  ids: Map<string, string>,
+): W[] {
+  return warnings.map((w) => ({
+    ...w,
+    matches: w.matches.map((m) => ({ ...m, wardrobeItemId: ids.get(m.wardrobeItemId) ?? m.wardrobeItemId })),
+  }));
+}
+
+/** The duplicate check for a tag the client already returned. Pure. */
+export function withDuplicateCheck(
+  vision: VisionAutoTag,
+  input: { imageKey: string; text?: string | null; titleHint?: string | null },
+  owned: OwnedItemLike[],
+): AutoTagWithDupes {
+  const checked = autoTagWithDuplicateCheck(
     {
       imageKey: input.imageKey,
       labels: vision.sourceLabels,
       text: input.text,
-      titleHint: input.titleHint,
+      titleHint:
+        input.titleHint?.trim() || [vision.brand, vision.colors[0], vision.category].filter(Boolean).join(" "),
     },
     owned,
   );
+  // The client's answer is the tag; the re-inference above is only for the duplicate check.
+  return {
+    ...checked,
+    category: vision.category,
+    colors: vision.colors,
+    brand: vision.brand,
+    confidence: vision.confidence,
+    sourceLabels: vision.sourceLabels,
+  };
 }

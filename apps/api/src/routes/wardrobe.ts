@@ -7,6 +7,13 @@ import {
   CreateWearBodySchema,
   BulkCreateWardrobeBodySchema,
   BulkCreateWardrobeResponseSchema,
+  BulkUpdateWardrobeItemsBodySchema,
+  BulkUpdateWardrobeItemsResponseSchema,
+  PageQuerySchema,
+  PHOTO_DUMP_TRIAGE_UNDO_WINDOW_MS,
+  localDateKey,
+  mapLimit,
+  resolveTimeZone,
   PhotoDumpBodySchema,
   PhotoDumpResponseSchema,
   AutotagWardrobeBodySchema,
@@ -38,8 +45,6 @@ import {
   careRulesOrNull,
   detectMissingLayers,
   extractOcrPlainText,
-  filterByClosetProfile,
-  filterLentDue,
   isLentOverdue,
   isRewearStreakMilestone,
   laundryBasketItemIds,
@@ -72,7 +77,6 @@ import {
   DEFAULT_CAPSULE_MAX,
   normalizeCapsuleItemIds,
   readCapsuleItemIds,
-  withCapsuleInConsent,
 } from "../lib/capsule.js";
 import { createAccessoryCategory, isAccessoryCategory } from "../lib/outfit-accessories.js";
 import { categorySlot, rankGoesWith } from "../lib/outfit-goes-with.js";
@@ -97,15 +101,59 @@ import {
 } from "../lib/dry-clean.js";
 import { scheduleDryCleanPickup } from "../lib/dry-clean-jobs.js";
 import { scheduleLentOverdueNudge } from "../lib/borrow-lent-jobs.js";
-import { resolveUserTimeZone, localDayKey, DEFAULT_OUTFIT_TZ } from "../lib/wardrobe-jobs.js";
+import { decodeCursor, InvalidCursorError } from "../lib/paging.js";
+import { enqueueJob, jobIdFrom } from "../lib/queues/enqueue.js";
+import { renderProviderAvailable } from "../lib/render/provider.js";
+import type { CreateWardrobeItemInput, WardrobeItemRecord } from "../lib/repositories/types.js";
+import { isUserObjectKey, userObjectKey } from "../lib/storage/r2.js";
+import {
+  handleWardrobeTryon,
+  RENDER_CLAIM_STALE_MS,
+  WARDROBE_TRYON_QUEUE,
+} from "../jobs/wardrobe-tryon.js";
+import {
+  WARDROBE_DISCARD_PURGE_DELAY_MS,
+  WARDROBE_DISCARD_PURGE_QUEUE,
+} from "../jobs/wardrobe-discard-purge.js";
 import {
   createVisionTagClientFromEnv,
   needsAutoTag,
-  tagImageWithDupes,
+  resolvePlaceholderIds,
+  tagBatch,
+  withDuplicateCheck,
 } from "../lib/wardrobe-vision.js";
 import { runPhotoDump } from "../lib/photo-dump.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+/** POST /wardrobe/upload form fields. */
+const UploadFieldsSchema = z.object({
+  category: z.string().trim().min(1).max(100),
+  colors: z.array(z.string().max(50)).max(20),
+  brand: z.string().max(100).nullable(),
+  costMinor: z.number().int().nonnegative().max(1_000_000_000),
+});
+
+const OCR_UNAVAILABLE = { error: "ocr_unavailable", message: "Couldn't read the tag right now. Try again later." };
+
+/** A key this user's uploads made: `u/{userId}/…`, or the older `{area}/{userId}/…` keys. */
+function ownsStorageKey(key: string, userId: string): boolean {
+  if (isUserObjectKey(key, userId)) return true;
+  const parts = key.split("/");
+  return parts.length === 3 && ["wardrobe", "care-tags", "wear"].includes(parts[0]!) && parts[1] === userId;
+}
+
+/** 404 body when a client-sent storage key isn't one of the caller's uploads (checked before any storage call). */
+function foreignKeyError(userId: string, keys: Array<string | null | undefined>) {
+  return keys.some((k) => k != null && !ownsStorageKey(k, userId))
+    ? { error: "Not Found", message: "Image not found" }
+    : null;
+}
+
+const itemKeys = (b: { imageKeys?: string[] | null; garmentImageKey?: string | null }) => [
+  ...(b.imageKeys ?? []),
+  b.garmentImageKey,
+];
 
 function toWardrobeJson(r: any, imageUrls: string[], garmentImageUrl: string | null) {
   return {
@@ -136,35 +184,71 @@ function toWardrobeJson(r: any, imageUrls: string[], garmentImageUrl: string | n
 }
 
 export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
+  async function signedWardrobeJson(r: WardrobeItemRecord) {
+    const imageUrls = await mapLimit(r.imageKeys ?? [], 4, (k) => app.deps.storage.getSignedUrl(k));
+    const garmentImageUrl = r.garmentImageKey ? await app.deps.storage.getSignedUrl(r.garmentImageKey) : null;
+    return toWardrobeJson(r, imageUrls, garmentImageUrl);
+  }
+
+  /** The 404 body when a purchase item or closet profile named isn't the caller's, else null. */
+  async function foreignRefError(
+    userId: string,
+    purchaseItemIds: Array<string | null | undefined>,
+    profileIds: Array<string | null | undefined>,
+  ): Promise<{ error: string; message: string } | null> {
+    const profiles = [...new Set(profileIds.filter((v): v is string => Boolean(v)))];
+    if (profiles.length > 0) {
+      const owned = new Set((await app.deps.repos.listClosetProfiles(userId)).map((p) => p.id));
+      if (profiles.some((id) => !owned.has(id))) {
+        return { error: "Not Found", message: "Closet profile not found" };
+      }
+    }
+    const items = [...new Set(purchaseItemIds.filter((v): v is string => Boolean(v)))];
+    const ownerByPurchase = new Map<string, Promise<string | null>>();
+    const owned = await mapLimit(items, 8, async (id) => {
+      const pi = await app.deps.repos.findMerchantPurchaseItemById(id);
+      if (!pi) return false;
+      let owner = ownerByPurchase.get(pi.purchaseId);
+      if (!owner) {
+        owner = app.deps.repos.findMerchantPurchaseById(pi.purchaseId).then((p) => p?.userId ?? null);
+        ownerByPurchase.set(pi.purchaseId, owner);
+      }
+      return (await owner) === userId;
+    });
+    return owned.every(Boolean) ? null : { error: "Not Found", message: "Purchase item not found" };
+  }
+
   app.get(
     "/wardrobe",
     {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        querystring: z.object({
+        querystring: PageQuerySchema.extend({
           /** N27 — scope to closet profile. */
           profileId: z.string().uuid().optional(),
         }),
-        response: { 200: WardrobeListResponseSchema, 401: ErrorSchema },
+        response: { 200: WardrobeListResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
-      const profileId = (request.query as { profileId?: string }).profileId;
-      let items = await app.deps.repos.listWardrobeItems(userId);
-      if (profileId) {
-        items = filterByClosetProfile(items, profileId);
+      const q = request.query as { limit: number; cursor?: string; profileId?: string };
+      let after;
+      try {
+        after = decodeCursor(q.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
       }
-      const withUrls = await Promise.all(
-        items.map(async (r) => {
-          const imageUrls = await Promise.all((r.imageKeys ?? []).map((k) => app.deps.storage.getSignedUrl(k)));
-          const garmentImageUrl = r.garmentImageKey ? await app.deps.storage.getSignedUrl(r.garmentImageKey) : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
-      trackServerEvent("wardrobe_item_viewed", { userId, profileId: profileId ?? null });
-      return { items: withUrls };
+      const page = await app.deps.repos.listWardrobeItemsPage(userId, {
+        limit: q.limit,
+        after,
+        profileId: q.profileId,
+      });
+      const items = await mapLimit(page.items, 8, signedWardrobeJson);
+      trackServerEvent("wardrobe_item_viewed", { userId, profileId: q.profileId ?? null });
+      return { items, nextCursor: page.nextCursor };
     },
   );
 
@@ -175,37 +259,78 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        querystring: z.object({
+        querystring: PageQuerySchema.extend({
           due: z.enum(["all", "due", "overdue"]).optional().default("all"),
           asOf: z
             .string()
             .regex(/^\d{4}-\d{2}-\d{2}$/)
             .optional(),
         }),
-        response: { 200: LentListResponseSchema, 401: ErrorSchema },
+        response: {
+          200: LentListResponseSchema.extend({ nextCursor: z.string().nullable().optional() }),
+          400: ErrorSchema,
+          401: ErrorSchema,
+        },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
-      const q = request.query as { due?: "all" | "due" | "overdue"; asOf?: string };
+      const q = request.query as {
+        limit: number;
+        cursor?: string;
+        due?: "all" | "due" | "overdue";
+        asOf?: string;
+      };
+      let after;
+      try {
+        after = decodeCursor(q.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
+      }
       const user = await app.deps.repos.findUserById(userId);
-      const tz = resolveUserTimeZone(user?.consentFlags ?? null) || DEFAULT_OUTFIT_TZ;
-      const asOf = q.asOf ?? localDayKey(new Date(), tz);
+      const asOf = q.asOf ?? localDateKey(new Date(), resolveTimeZone(user?.timeZone));
       const filter = q.due ?? "all";
-      const items = await app.deps.repos.listWardrobeItems(userId);
-      const matched = sortLentByDueAsc(filterLentDue(items, { asOf, filter }));
-      const withUrls = await Promise.all(
-        matched.map(async (r) => {
-          const imageUrls = await Promise.all(
-            (r.imageKeys ?? []).map((k) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = r.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-            : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
-      return { asOf, filter, items: withUrls };
+      const page = await app.deps.repos.listWardrobeItemsPage(userId, {
+        limit: q.limit,
+        after,
+        lent: { filter, asOf },
+      });
+      // Pages follow the keyset order; within a page the soonest due come first.
+      const items = await mapLimit(sortLentByDueAsc(page.items), 8, signedWardrobeJson);
+      return { asOf, filter, items, nextCursor: page.nextCursor };
+    },
+  );
+
+  /** C4 — one patch on many of the caller's items, all or nothing. */
+  app.patch(
+    "/wardrobe/items",
+    {
+      preHandler: requireAuth,
+      schema: {
+        tags: ["wardrobe"],
+        body: BulkUpdateWardrobeItemsBodySchema,
+        response: {
+          200: BulkUpdateWardrobeItemsResponseSchema,
+          400: ErrorSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const userId = request.user!.sub;
+      const { ids, patch } = request.body as { ids: string[]; patch: any };
+      const keyError = foreignKeyError(userId, itemKeys(patch));
+      if (keyError) return reply.code(404).send(keyError);
+      const refError = await foreignRefError(userId, [], [patch.profileId]);
+      if (refError) return reply.code(404).send(refError);
+      const updated = await app.deps.repos.updateWardrobeItems(userId, ids, patch);
+      if (!updated) {
+        return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+      }
+      audit(app.log, "wardrobe.item.updated", { userId, count: updated.length, patch: Object.keys(patch) });
+      return { items: await mapLimit(updated, 8, signedWardrobeJson) };
     },
   );
 
@@ -216,12 +341,16 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: CreateWardrobeItemBodySchema,
-        response: { 201: WardrobeItemSchema, 401: ErrorSchema },
+        response: { 201: WardrobeItemSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as any;
+      const keyError = foreignKeyError(userId, itemKeys(body));
+      if (keyError) return reply.code(404).send(keyError);
+      const refError = await foreignRefError(userId, [body.purchaseItemId], [body.profileId]);
+      if (refError) return reply.code(404).send(refError);
       const category = isAccessoryCategory(body.category)
         ? createAccessoryCategory(body.category)
         : body.category;
@@ -256,50 +385,49 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: SeasonalSwapBodySchema,
-        response: { 200: SeasonalSwapResponseSchema, 401: ErrorSchema },
+        response: { 200: SeasonalSwapResponseSchema, 401: ErrorSchema, 409: ErrorSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as { season: "summer" | "winter" | "monsoon"; tagItemIds?: string[] };
       let items = await app.deps.repos.listWardrobeItems(userId);
 
       if (body.tagItemIds?.length) {
         const tagSet = new Set(body.tagItemIds);
-        for (const it of items) {
-          if (!tagSet.has(it.id)) continue;
-          const tags = withSeasonTag(it.tags ?? [], body.season);
-          await app.deps.repos.updateWardrobeItem(it.id, userId, { tags });
-        }
-        items = await app.deps.repos.listWardrobeItems(userId);
+        // Each item gets its own tag list, so these stay single updates, four at a time.
+        const tagged = await mapLimit(
+          items.filter((it) => tagSet.has(it.id)),
+          4,
+          (it) => app.deps.repos.updateWardrobeItem(it.id, userId, { tags: withSeasonTag(it.tags ?? [], body.season) }),
+        );
+        const taggedById = new Map(tagged.filter((t) => t !== null).map((t) => [t.id, t]));
+        items = items.map((it) => taggedById.get(it.id) ?? it);
       }
 
       const patches = planSeasonalSwap(items, body.season);
-      const updatedItems = [];
+      const byId = new Map(items.map((i) => [i.id, i]));
+      const updatedItems: WardrobeItemRecord[] = [];
+      const idsByStatus = new Map<WardrobeItemRecord["closetStatus"], string[]>();
       for (const patch of patches) {
-        const cur = items.find((i: any) => i.id === patch.id);
+        const cur = byId.get(patch.id);
         if (!cur) continue;
         if ((cur.closetStatus ?? "ACTIVE") === patch.closetStatus) {
           updatedItems.push(cur);
           continue;
         }
-        const next = await app.deps.repos.updateWardrobeItem(patch.id, userId, {
-          closetStatus: patch.closetStatus,
-        });
-        if (next) updatedItems.push(next);
+        idsByStatus.set(patch.closetStatus, [...(idsByStatus.get(patch.closetStatus) ?? []), patch.id]);
+      }
+      // One update per target status.
+      for (const [closetStatus, ids] of idsByStatus) {
+        const rows = await app.deps.repos.updateWardrobeItems(userId, ids, { closetStatus });
+        if (!rows) {
+          return reply.code(409).send({ error: "Conflict", message: "Your closet changed; try the swap again" });
+        }
+        updatedItems.push(...rows);
       }
 
-      const withUrls = await Promise.all(
-        updatedItems.map(async (r: any) => {
-          const imageUrls = await Promise.all(
-            (r.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = r.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-            : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
+      const withUrls = await mapLimit(updatedItems, 8, signedWardrobeJson);
       const active = patches.filter((p) => p.closetStatus === "ACTIVE").length;
       const stored = patches.filter((p) => p.closetStatus === "STORED").length;
       trackServerEvent("wardrobe_seasonal_swap", { userId, season: body.season, active, stored });
@@ -331,8 +459,12 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const q = request.query as { kind?: "shoes" | "bag" | "all"; limit?: number };
       const items = await app.deps.repos.listWardrobeItems(userId);
-      const wearLogs = (await app.deps.repos.listWearLogs?.(userId)) ?? [];
-      const outfits = (await app.deps.repos.listOutfits?.(userId)) ?? [];
+      // Rotation looks at the recent past only: the last 90 days, bounded.
+      const wearLogs = await app.deps.repos.listWearLogs(userId, {
+        since: new Date(Date.now() - 90 * 86_400_000),
+        limit: 2_000,
+      });
+      const outfits = await app.deps.repos.listOutfits(userId, { limit: 500 });
       const suggestions = suggestShoeBagRotation(
         items.map((it) => ({
           id: it.id,
@@ -409,22 +541,13 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const user = await app.deps.repos.findUserById(userId);
-      const itemIds = readCapsuleItemIds(user?.consentFlags as Record<string, unknown> | null);
-      const all = await app.deps.repos.listWardrobeItems(userId);
-      const byId = new Map(all.map((it: any) => [it.id, it]));
-      const items = await Promise.all(
-        itemIds
-          .map((id) => byId.get(id))
-          .filter(Boolean)
-          .map(async (r: any) => {
-            const imageUrls = await Promise.all(
-              (r.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-            );
-            const garmentImageUrl = r.garmentImageKey
-              ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-              : null;
-            return toWardrobeJson(r, imageUrls, garmentImageUrl);
-          }),
+      const itemIds = readCapsuleItemIds(user?.prefs);
+      const found = itemIds.length > 0 ? await app.deps.repos.findWardrobeItemsByIds(userId, itemIds) : [];
+      const byId = new Map(found.map((it) => [it.id, it]));
+      const items = await mapLimit(
+        itemIds.map((id) => byId.get(id)).filter((r) => r !== undefined),
+        8,
+        signedWardrobeJson,
       );
       return {
         itemIds: items.map((i: { id: string }) => i.id),
@@ -449,37 +572,20 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const body = request.body as { itemIds: string[]; maxN?: number };
       const maxN = body.maxN ?? DEFAULT_CAPSULE_MAX;
       const normalized = normalizeCapsuleItemIds(body.itemIds, maxN);
-      const owned = await app.deps.repos.listWardrobeItems(userId);
-      const ownedIds = new Set(owned.map((it: { id: string }) => it.id));
-      const invalid = normalized.filter((id) => !ownedIds.has(id));
+      const owned = normalized.length > 0 ? await app.deps.repos.findWardrobeItemsByIds(userId, normalized) : [];
+      const byId = new Map(owned.map((it) => [it.id, it]));
+      const invalid = normalized.filter((id) => !byId.has(id));
       if (invalid.length > 0) {
         return reply.code(400).send({
           error: "Bad Request",
           message: `Unknown wardrobe item(s): ${invalid.slice(0, 3).join(", ")}`,
         });
       }
-      const user = await app.deps.repos.findUserById(userId);
-      const consentFlags = withCapsuleInConsent(
-        (user?.consentFlags as Record<string, unknown> | null) ?? {},
-        normalized,
-        maxN,
-      );
-      await app.deps.repos.updateUser(userId, { consentFlags });
+      // C2: only this key changes; other prefs are left alone.
+      await app.deps.repos.patchUserPrefs(userId, { capsuleItemIds: normalized });
       audit(app.log, "wardrobe.capsule.updated", { userId, count: normalized.length });
       trackServerEvent("wardrobe_capsule_updated", { userId, count: normalized.length });
-      const byId = new Map(owned.map((it: any) => [it.id, it]));
-      const items = await Promise.all(
-        normalized.map(async (id) => {
-          const r = byId.get(id)!;
-          const imageUrls = await Promise.all(
-            (r.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = r.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-            : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
+      const items = await mapLimit(normalized, 8, (id) => signedWardrobeJson(byId.get(id)!));
       return { itemIds: normalized, maxN, items };
     },
   );
@@ -511,27 +617,22 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
             }),
           )) as Array<readonly [string, Awaited<ReturnType<typeof app.deps.repos.listMerchantPurchaseItems>>]>,
         );
-      const items: any[] = [];
-      for (const p of purchases) {
-        const rows = (byPurchase.get(p.id) ?? []) as any[];
-        for (const pi of rows) {
-          const imageUrl = pi.imageKey
-            ? await app.deps.storage.getSignedUrl(pi.imageKey)
-            : null;
-          items.push({
-            purchaseItemId: pi.id,
-            purchaseId: p.id,
-            merchant: p.merchant,
-            title: pi.title,
-            category: pi.category ?? null,
-            brand: pi.brand ?? p.merchant ?? null,
-            priceMinor: pi.priceMinor ?? 0,
-            imageKey: pi.imageKey ?? null,
-            imageUrl,
-            alreadyInWardrobe: linked.has(pi.id),
-          });
-        }
-      }
+      const pairs = purchases.flatMap((p) => ((byPurchase.get(p.id) ?? []) as any[]).map((pi) => ({ p, pi })));
+      const imageUrls = await mapLimit(pairs, 8, ({ pi }) =>
+        pi.imageKey ? app.deps.storage.getSignedUrl(pi.imageKey) : Promise.resolve(null),
+      );
+      const items = pairs.map(({ p, pi }, i) => ({
+        purchaseItemId: pi.id,
+        purchaseId: p.id,
+        merchant: p.merchant,
+        title: pi.title,
+        category: pi.category ?? null,
+        brand: pi.brand ?? p.merchant ?? null,
+        priceMinor: pi.priceMinor ?? 0,
+        imageKey: pi.imageKey ?? null,
+        imageUrl: imageUrls[i],
+        alreadyInWardrobe: linked.has(pi.id),
+      }));
       return { items };
     },
   );
@@ -543,10 +644,10 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: AutotagWardrobeBodySchema,
-        response: { 200: AutotagWardrobeResponseSchema, 401: ErrorSchema },
+        response: { 200: AutotagWardrobeResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as {
         images: Array<{
@@ -556,6 +657,8 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
           titleHint?: string | null;
         }>;
       };
+      const keyError = foreignKeyError(userId, body.images.map((img) => img.imageKey));
+      if (keyError) return reply.code(404).send(keyError);
       const existing = await app.deps.repos.listWardrobeItems(userId);
       const owned = existing.map((i: any) => ({
         id: i.id as string,
@@ -564,18 +667,13 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         category: i.category ?? null,
       }));
       const client = createVisionTagClientFromEnv();
+      const visions = await tagBatch(
+        client,
+        body.images.map((img) => ({ imageKey: img.imageKey, labels: img.labels, text: img.text })),
+      );
       const suggestions = [];
-      for (const img of body.images) {
-        const tagged = await tagImageWithDupes(
-          client,
-          {
-            imageKey: img.imageKey,
-            labels: img.labels,
-            text: img.text,
-            titleHint: img.titleHint,
-          },
-          owned,
-        );
+      for (const [i, img] of body.images.entries()) {
+        const tagged = withDuplicateCheck(visions[i]!, img, owned);
         suggestions.push({
           imageKey: img.imageKey,
           category: tagged.category,
@@ -599,12 +697,20 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: BulkCreateWardrobeBodySchema,
-        response: { 201: BulkCreateWardrobeResponseSchema, 401: ErrorSchema },
+        response: { 201: BulkCreateWardrobeResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as { items: any[]; autoTag?: boolean };
+      const keyError = foreignKeyError(userId, body.items.flatMap(itemKeys));
+      if (keyError) return reply.code(404).send(keyError);
+      const refError = await foreignRefError(
+        userId,
+        body.items.map((entry) => entry.purchaseItemId),
+        body.items.map((entry) => entry.profileId),
+      );
+      if (refError) return reply.code(404).send(refError);
       const existing = await app.deps.repos.listWardrobeItems(userId);
       const owned = existing.map((i: any) => ({
         id: i.id as string,
@@ -613,22 +719,32 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         category: i.category ?? null,
       }));
       const client = body.autoTag ? createVisionTagClientFromEnv() : null;
-      const created: any[] = [];
       const duplicateWarnings: DuplicateWarning[] = [];
-      for (const entry of body.items) {
+      const imageKeyOf = (entry: any): string | null =>
+        (entry.garmentImageKey as string | null | undefined) ??
+        (Array.isArray(entry.imageKeys) ? entry.imageKeys[0] : null) ??
+        null;
+      const visions = client
+        ? await tagBatch(
+            client,
+            body.items.map((entry) => {
+              const imageKey = imageKeyOf(entry);
+              return imageKey &&
+                needsAutoTag({ category: entry.category, colors: entry.colors ?? [], brand: entry.brand ?? null })
+                ? { imageKey }
+                : null;
+            }),
+          )
+        : [];
+      const inputs: CreateWardrobeItemInput[] = [];
+      const placeholders: string[] = [];
+      for (const [i, entry] of body.items.entries()) {
         let category = entry.category;
         let colors = entry.colors ?? [];
         let brand = entry.brand ?? null;
-        const imageKey =
-          (entry.garmentImageKey as string | null | undefined) ??
-          (Array.isArray(entry.imageKeys) ? entry.imageKeys[0] : null) ??
-          null;
-        if (client && imageKey && needsAutoTag({ category, colors, brand })) {
-          const tagged = await tagImageWithDupes(
-            client,
-            { imageKey },
-            owned,
-          );
+        const vision = visions[i];
+        if (vision) {
+          const tagged = withDuplicateCheck(vision, { imageKey: imageKeyOf(entry)! }, owned);
           if (needsAutoTag({ category, colors: [], brand: null })) {
             category = tagged.category;
           }
@@ -638,7 +754,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
             duplicateWarnings.push(w as DuplicateWarning);
           }
         }
-        const item = await app.deps.repos.createWardrobeItem({
+        inputs.push({
           userId,
           source: entry.source ?? "MANUAL",
           category,
@@ -649,19 +765,24 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
           garmentImageKey: entry.garmentImageKey ?? null,
           purchaseItemId: entry.purchaseItemId ?? null,
           laundryStatus: entry.laundryStatus ?? "CLEAN",
+          closetStatus: entry.closetStatus ?? "ACTIVE",
+          tags: entry.tags ?? [],
+          profileId: entry.profileId ?? null,
         });
+        // Later rows are checked against this one too, under a placeholder id until it exists.
+        const placeholder = randomUUID();
+        placeholders.push(placeholder);
         owned.push({
-          id: item.id,
+          id: placeholder,
           title: [brand, colors[0], category].filter(Boolean).join(" "),
           brand,
           category,
         });
-        const imageUrls = await Promise.all((item.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)));
-        const garmentImageUrl = item.garmentImageKey
-          ? await app.deps.storage.getSignedUrl(item.garmentImageKey)
-          : null;
-        created.push(toWardrobeJson(item, imageUrls, garmentImageUrl));
       }
+      // All rows in one transaction; a purchase item already imported comes back as it is.
+      const rows = await app.deps.repos.createWardrobeItems(inputs);
+      const ids = new Map(placeholders.map((p, i) => [p, rows[i]!.item.id]));
+      const created = await mapLimit(rows, 8, (r) => signedWardrobeJson(r.item));
       audit(app.log, "wardrobe.bulk.created", { userId, count: created.length });
       trackServerEvent("wardrobe_bulk_imported", { userId, count: created.length });
       if (body.autoTag) {
@@ -670,7 +791,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       return reply.code(201).send({
         items: created,
         created: created.length,
-        duplicateWarnings,
+        duplicateWarnings: resolvePlaceholderIds(duplicateWarnings, ids),
       });
     },
   );
@@ -683,28 +804,22 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: PhotoDumpBodySchema,
-        response: { 201: PhotoDumpResponseSchema, 401: ErrorSchema },
+        response: { 201: PhotoDumpResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as PhotoDumpBody;
+      const keyError = foreignKeyError(userId, body.photos.map((p) => p.imageKey));
+      if (keyError) return reply.code(404).send(keyError);
+      const refError = await foreignRefError(userId, [], [body.profileId]);
+      if (refError) return reply.code(404).send(refError);
       const { records, tagged, duplicateWarnings } = await runPhotoDump(app.deps.repos, {
         userId,
         photos: body.photos,
         profileId: body.profileId,
       });
-      const items = await Promise.all(
-        records.map(async (item) => {
-          const imageUrls = await Promise.all(
-            (item.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = item.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(item.garmentImageKey)
-            : null;
-          return toWardrobeJson(item, imageUrls, garmentImageUrl);
-        }),
-      );
+      const items = await mapLimit(records, 8, signedWardrobeJson);
       audit(app.log, "wardrobe.photo_dump", {
         userId,
         count: items.length,
@@ -727,56 +842,58 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: FromPurchasesBodySchema,
-        response: { 201: BulkCreateWardrobeResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
+        response: {
+          201: BulkCreateWardrobeResponseSchema,
+          400: ErrorSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as { purchaseItemIds: string[] };
-      const existing = await app.deps.repos.listWardrobeItems(userId);
-      const alreadyLinked = new Set(
-        existing.filter((i: any) => i.purchaseItemId).map((i: any) => i.purchaseItemId as string),
-      );
-      const created: any[] = [];
-      for (const purchaseItemId of body.purchaseItemIds) {
-        if (alreadyLinked.has(purchaseItemId)) continue;
+      const purchaseItemIds = [...new Set(body.purchaseItemIds)];
+      const purchases = new Map<string, ReturnType<typeof app.deps.repos.findMerchantPurchaseById>>();
+      const found = await mapLimit(purchaseItemIds, 8, async (purchaseItemId) => {
         const pi = await app.deps.repos.findMerchantPurchaseItemById(purchaseItemId);
-        if (!pi) {
-          return reply.code(400).send({
-            error: "Bad Request",
-            message: `Purchase item not found: ${purchaseItemId}`,
-          });
+        if (!pi) return null;
+        let purchase = purchases.get(pi.purchaseId);
+        if (!purchase) {
+          purchase = app.deps.repos.findMerchantPurchaseById(pi.purchaseId);
+          purchases.set(pi.purchaseId, purchase);
         }
-        const purchase = await app.deps.repos.findMerchantPurchaseById(pi.purchaseId);
-        if (purchase && purchase.userId && purchase.userId !== userId) {
-          return reply.code(400).send({
-            error: "Bad Request",
-            message: `Purchase item not found: ${purchaseItemId}`,
-          });
-        }
-        const imageKeys = pi.imageKey ? [pi.imageKey] : [];
-        const item = await app.deps.repos.createWardrobeItem({
-          userId,
-          source: "EMAIL",
-          category: pi.category ?? pi.title ?? "other",
-          colors: [],
-          brand: purchase?.merchant ?? null,
-          costMinor: pi.priceMinor ?? 0,
-          imageKeys,
-          garmentImageKey: pi.imageKey ?? null,
-          purchaseItemId,
-          laundryStatus: "CLEAN",
-        });
-        alreadyLinked.add(purchaseItemId);
-        const imageUrls = await Promise.all((item.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)));
-        const garmentImageUrl = item.garmentImageKey
-          ? await app.deps.storage.getSignedUrl(item.garmentImageKey)
-          : null;
-        created.push(toWardrobeJson(item, imageUrls, garmentImageUrl));
+        const p = await purchase;
+        // Only the caller's own purchases; one with no owner is nobody's to import.
+        return p?.userId === userId ? { pi, purchase: p } : null;
+      });
+      const missing = purchaseItemIds.find((_, i) => !found[i]);
+      if (missing) {
+        return reply.code(404).send({ error: "Not Found", message: `Purchase item not found: ${missing}` });
       }
-      audit(app.log, "wardrobe.from_purchases", { userId, count: created.length });
-      trackServerEvent("wardrobe_from_purchases", { userId, count: created.length });
-      return reply.code(201).send({ items: created, created: created.length });
+      // One transaction; an item already imported (also by a concurrent request) comes back as it is.
+      const rows = await app.deps.repos.createWardrobeItems(
+        found.map((f) => {
+          const { pi, purchase } = f!;
+          return {
+            userId,
+            source: "EMAIL" as const,
+            category: pi.category ?? pi.title ?? "other",
+            colors: [],
+            brand: purchase.merchant ?? null,
+            costMinor: pi.priceMinor ?? 0,
+            imageKeys: pi.imageKey ? [pi.imageKey] : [],
+            garmentImageKey: pi.imageKey ?? null,
+            purchaseItemId: pi.id,
+            laundryStatus: "CLEAN" as const,
+          };
+        }),
+      );
+      const createdCount = rows.filter((r) => r.created).length;
+      const items = await mapLimit(rows, 8, (r) => signedWardrobeJson(r.item));
+      audit(app.log, "wardrobe.from_purchases", { userId, count: createdCount });
+      trackServerEvent("wardrobe_from_purchases", { userId, count: createdCount });
+      return reply.code(201).send({ items, created: createdCount });
     },
   );
 
@@ -795,6 +912,10 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { id } = request.params;
       const body = request.body as any;
+      const keyError = foreignKeyError(userId, itemKeys(body));
+      if (keyError) return reply.code(404).send(keyError);
+      const refError = await foreignRefError(userId, [], [body.profileId]);
+      if (refError) return reply.code(404).send(refError);
       const updated = await app.deps.repos.updateWardrobeItem(id, userId, body);
       if (!updated) {
         return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
@@ -816,11 +937,20 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
   ) {
     const existing = await app.deps.repos.findWardrobeItem(id, userId);
     if (!existing) return { error: "not_found" as const };
+    // Only a photo the caller uploaded can be attached (and signed back to them).
+    if (opts.imageKey && !ownsStorageKey(opts.imageKey, userId)) return { error: "not_found" as const };
 
     let rawText = (opts.ocrText ?? "").trim();
     let confidence = 0.5;
     if (!rawText && opts.imageKey) {
-      const parsed = await app.deps.ocr.recognize(opts.imageKey);
+      let parsed;
+      try {
+        parsed = await app.deps.ocr.recognize(opts.imageKey);
+      } catch (err) {
+        // No provider (production), a timeout or a provider error: say so, never a guess.
+        app.log.warn({ err, userId, itemId: id }, "care-label OCR unavailable");
+        return { error: "ocr_unavailable" as const };
+      }
       confidence = parsed.confidence;
       rawText = extractOcrPlainText(parsed.raw, parsed.items);
     }
@@ -870,6 +1000,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
           400: ErrorSchema,
           401: ErrorSchema,
           404: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
@@ -881,6 +1012,9 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       if ("error" in result) {
         if (result.error === "not_found") {
           return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+        }
+        if (result.error === "ocr_unavailable") {
+          return reply.code(503).send(OCR_UNAVAILABLE);
         }
         return reply
           .code(400)
@@ -904,6 +1038,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
           400: ErrorSchema,
           401: ErrorSchema,
           404: ErrorSchema,
+          503: ErrorSchema,
         },
       },
     },
@@ -921,9 +1056,8 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         if (part.type === "file") {
           const buffer = await part.toBuffer();
           if (buffer.length === 0) continue;
-          const key = `care-tags/${userId}/${randomUUID()}.jpg`;
-          await app.deps.storage.put({
-            key,
+          const { key } = await app.deps.storage.put({
+            key: userObjectKey(userId, "care-tags", `${randomUUID()}.jpg`),
             body: buffer,
             contentType: (part as { mimetype?: string }).mimetype || "image/jpeg",
           });
@@ -938,6 +1072,9 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       if ("error" in result) {
         if (result.error === "not_found") {
           return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+        }
+        if (result.error === "ocr_unavailable") {
+          return reply.code(503).send(OCR_UNAVAILABLE);
         }
         return reply
           .code(400)
@@ -982,7 +1119,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const user = await app.deps.repos.findUserById(userId);
-      const tz = resolveUserTimeZone(user?.consentFlags ?? null);
+      const tz = resolveTimeZone(user?.timeZone);
       const pushScheduled =
         (await scheduleDryCleanPickup({
           userId,
@@ -1262,7 +1399,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const user = await app.deps.repos.findUserById(userId);
-      const tz = resolveUserTimeZone(user?.consentFlags ?? null);
+      const tz = resolveTimeZone(user?.timeZone);
       const pushScheduled =
         (await scheduleLentOverdueNudge({
           userId,
@@ -1273,7 +1410,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
           timeZone: tz,
         })) === "published";
 
-      const asOf = localDayKey(new Date(), tz || DEFAULT_OUTFIT_TZ);
+      const asOf = localDateKey(new Date(), tz);
       audit(app.log, "wardrobe.lend", {
         userId,
         itemId: id,
@@ -1440,27 +1577,42 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       // parts() yields both files and fields; files() drops field metadata.
       const parts = request.parts();
-      let imageKey: string | null = null;
+      let file: { body: Buffer; contentType: string } | null = null;
       const fields: Record<string, string> = {};
       for await (const part of parts) {
         if (part.type === "file") {
           const buffer = await part.toBuffer();
           if (buffer.length === 0) continue;
-          const key = `wardrobe/${userId}/${randomUUID()}.jpg`;
-          await app.deps.storage.put({ key, body: buffer, contentType: (part as any).mimetype || "image/jpeg" });
-          imageKey = key;
+          file = { body: buffer, contentType: (part as any).mimetype || "image/jpeg" };
         } else {
           fields[part.fieldname] = String(part.value);
         }
       }
-      // also check body fields if not multipart? fallback
-      const category = fields.category ?? "other";
-      const colors = fields.colors ? JSON.parse(fields.colors) : [];
-      const brand = fields.brand ?? null;
-      const costMinor = fields.costMinor ? Number(fields.costMinor) : 0;
-      if (!imageKey) {
+      if (!file) {
         return reply.code(400).send({ error: "Bad Request", message: "Image file is required" });
       }
+      // Check the fields before anything is stored.
+      let colorsJson: unknown = [];
+      try {
+        colorsJson = fields.colors ? JSON.parse(fields.colors) : [];
+      } catch {
+        colorsJson = null;
+      }
+      const parsed = UploadFieldsSchema.safeParse({
+        category: fields.category ?? "other",
+        colors: colorsJson,
+        brand: fields.brand ?? null,
+        costMinor: fields.costMinor ? Number(fields.costMinor) : 0,
+      });
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "Bad Request", message: "Invalid item fields" });
+      }
+      const { category, colors, brand, costMinor } = parsed.data;
+      const { key: imageKey } = await app.deps.storage.put({
+        key: userObjectKey(userId, "wardrobe", `${randomUUID()}.jpg`),
+        body: file.body,
+        contentType: file.contentType,
+      });
       const item = await app.deps.repos.createWardrobeItem({
         userId,
         source: "MANUAL",
@@ -1486,7 +1638,14 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         params: z.object({ id: z.string().uuid() }),
-        response: { 200: WardrobeTryonResponseSchema, 404: ErrorSchema, 401: ErrorSchema },
+        response: {
+          200: WardrobeTryonResponseSchema,
+          202: WardrobeTryonResponseSchema,
+          400: ErrorSchema,
+          404: ErrorSchema,
+          401: ErrorSchema,
+          503: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
@@ -1494,11 +1653,6 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const { id } = request.params;
       const item = await app.deps.repos.findWardrobeItem(id, userId);
       if (!item) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
-
-      const garmentKey = item.garmentImageKey ?? item.imageKeys[0] ?? null;
-      if (!garmentKey) {
-        return reply.code(200).send({ status: "PROCESSING" as const, previewUrl: null, imageKey: null });
-      }
 
       // Cache hit: reuse tryon_previews for user+wardrobe item before paying for render
       const cached = await app.deps.repos.findWardrobeTryonPreview(userId, id);
@@ -1508,45 +1662,63 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(200).send({ status: "READY" as const, previewUrl, imageKey: cached.imageKey });
       }
 
+      if (!(item.garmentImageKey ?? item.imageKeys[0])) {
+        return reply.code(400).send({ error: "Bad Request", message: "Add a photo of this item to try it on" });
+      }
       const avatar = await app.deps.repos.findAvatarByUserId(userId);
-      const modelImageKey = avatar?.referenceImageKey ?? null;
-
-      let imageKey: string | null = null;
-      let previewUrl: string | null = null;
-      let costMicros = 0;
-      try {
-        if (modelImageKey) {
-          const result = await app.deps.renderProvider.tryOn({ modelImageKey, garmentImageKey: garmentKey });
-          imageKey = result.imageKey;
-          costMicros = result.costMicros;
-          if (result.imageBytes) {
-            await app.deps.storage.put({ key: imageKey, body: Buffer.from(result.imageBytes), contentType: "image/jpeg" });
-          }
-          previewUrl = await app.deps.storage.getSignedUrl(imageKey);
-        } else {
-          // No avatar — mock preview using garment itself
-          imageKey = `wardrobe-tryon/${userId}/${id}.jpg`;
-          previewUrl = await app.deps.storage.getSignedUrl(garmentKey);
-        }
-      } catch {
-        previewUrl = await app.deps.storage.getSignedUrl(garmentKey);
-        imageKey = garmentKey;
+      if (!avatar?.referenceImageKey || avatar.status !== "READY") {
+        return reply.code(200).send({ status: "NO_AVATAR" as const, previewUrl: null, imageKey: null });
+      }
+      if (!renderProviderAvailable(app.deps.renderProvider)) {
+        return reply.code(503).send({ error: "tryon_unavailable", message: "Try-on is not available right now" });
       }
 
-      if (imageKey) {
-        await app.deps.repos.upsertTryonPreview({
-          userId,
-          listingVariantId: null,
-          wardrobeItemId: id,
-          imageKey,
-          status: "READY",
-          provider: app.deps.renderProvider.name,
-          costMicros,
-        });
+      // The render runs as a job (C6). One row per (user, item): a READY, a fresh PROCESSING and a
+      // FAILED before its retryAfter are not claimed again, so retries and double taps render once.
+      const { claimed, preview } = await app.deps.repos.claimWardrobeTryon({
+        userId,
+        wardrobeItemId: id,
+        provider: app.deps.renderProvider.name,
+        staleBefore: new Date(Date.now() - RENDER_CLAIM_STALE_MS),
+      });
+      if (claimed) {
+        const payload = { userId, wardrobeItemId: id };
+        let queued;
+        try {
+          queued = await enqueueJob(WARDROBE_TRYON_QUEUE, "render", payload, {
+            jobId: jobIdFrom(WARDROBE_TRYON_QUEUE, preview.id, preview.updatedAt.getTime()),
+          });
+        } catch (err) {
+          // Not queued: release the claim so the next ask can try again in a minute.
+          await app.deps.repos.finishWardrobeTryon(userId, id, {
+            status: "FAILED",
+            error: "Could not queue the render",
+            retryAfter: new Date(Date.now() + 60_000),
+          });
+          throw err;
+        }
+        if (queued.status === "skipped") {
+          // Only outside production (enqueueJob throws there without Redis): render in-process.
+          void handleWardrobeTryon(payload, app.deps).catch((err) =>
+            request.log.error({ err, wardrobeItemId: id }, "in-process wardrobe try-on failed"),
+          );
+        }
       }
 
       trackServerEvent("wardrobe_tryon_requested", { userId, itemId: id, cached: false });
-      return reply.code(200).send({ status: "READY" as const, previewUrl, imageKey });
+      if (preview.status === "READY" && preview.imageKey) {
+        const previewUrl = await app.deps.storage.getSignedUrl(preview.imageKey);
+        return reply.code(200).send({ status: "READY" as const, previewUrl, imageKey: preview.imageKey });
+      }
+      if (preview.status === "FAILED") {
+        return reply.code(200).send({
+          status: "FAILED" as const,
+          previewUrl: null,
+          imageKey: null,
+          retryAfter: preview.retryAfter?.toISOString() ?? null,
+        });
+      }
+      return reply.code(202).send({ status: "PROCESSING" as const, previewUrl: null, imageKey: null });
     },
   );
 
@@ -1569,9 +1741,8 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         if (part.type !== "file") continue;
         const buffer = await part.toBuffer();
         if (buffer.length === 0) continue;
-        const key = `wear/${userId}/${randomUUID()}.jpg`;
-        await app.deps.storage.put({
-          key,
+        const { key } = await app.deps.storage.put({
+          key: userObjectKey(userId, "wear", `${randomUUID()}.jpg`),
           body: buffer,
           contentType: (part as any).mimetype || "image/jpeg",
         });
@@ -1593,7 +1764,13 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: CreateWearBodySchema,
-        response: { 201: WearResponseSchema, 401: ErrorSchema, 400: ErrorSchema },
+        response: {
+          200: WearResponseSchema,
+          201: WearResponseSchema,
+          401: ErrorSchema,
+          400: ErrorSchema,
+          404: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
@@ -1602,24 +1779,44 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!body.wardrobeItemId && !body.outfitId) {
         return reply.code(400).send({ error: "Bad Request", message: "wardrobeItemId or outfitId required" });
       }
+      if (body.imageKey && !ownsStorageKey(body.imageKey, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Wear photo not found" });
+      }
       if (body.wardrobeItemId) {
         const item = await app.deps.repos.findWardrobeItem(body.wardrobeItemId, userId);
-        if (!item) return reply.code(400).send({ error: "Bad Request", message: "Wardrobe item not found" });
+        if (!item) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       }
-      if (body.outfitId) {
-        const outfit = await app.deps.repos.findOutfitById(body.outfitId, userId);
-        if (!outfit) return reply.code(400).send({ error: "Bad Request", message: "Outfit not found" });
+      const outfit = body.outfitId ? await app.deps.repos.findOutfitById(body.outfitId, userId) : null;
+      if (body.outfitId && !outfit) {
+        return reply.code(404).send({ error: "Not Found", message: "Outfit not found" });
       }
       const prevMetric = body.wardrobeItemId
         ? await app.deps.repos.findItemMetric(userId, body.wardrobeItemId)
         : null;
-      const log = await app.deps.repos.createWearLog({
+      const { log, created } = await app.deps.repos.createWearLog({
         userId,
         wardrobeItemId: body.wardrobeItemId ?? null,
         outfitId: body.outfitId ?? null,
         wornOn: body.wornOn ? new Date(body.wornOn) : new Date(),
         imageKey: body.imageKey ?? null,
+        idempotencyKey: body.idempotencyKey ?? null,
       });
+      const toWearJson = (imageUrl: string | null) => ({
+        id: log.id,
+        userId: log.userId,
+        wardrobeItemId: log.wardrobeItemId,
+        outfitId: log.outfitId,
+        wornOn: log.wornOn.toISOString(),
+        imageKey: log.imageKey,
+        imageUrl,
+        createdAt: log.createdAt.toISOString(),
+        undoUntil: new Date(log.createdAt.getTime() + WEAR_LOG_UNDO_WINDOW_MS).toISOString(),
+      });
+      if (!created) {
+        // A retry with the same idempotencyKey: the first log, and nothing counted twice.
+        const imageUrl = log.imageKey ? await app.deps.storage.getSignedUrl(log.imageKey) : null;
+        return reply.code(200).send(toWearJson(imageUrl));
+      }
       trackServerEvent("wear_logged", {
         userId,
         wardrobeItemId: body.wardrobeItemId ?? null,
@@ -1662,44 +1859,32 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       }
       const imageUrl = log.imageKey ? await app.deps.storage.getSignedUrl(log.imageKey) : null;
 
-      // U032 — auto-dirty after wear per laundry rules
+      // U032 — auto-dirty after wear per laundry rules: one read of the items, one update per status.
       try {
         const rules = await getLaundryRules(app.deps.repos, userId);
-        const itemIds: string[] = [];
-        if (body.wardrobeItemId) itemIds.push(body.wardrobeItemId);
-        if (body.outfitId) {
-          const outfit = await app.deps.repos.findOutfitById(body.outfitId, userId);
-          if (outfit) itemIds.push(...outfit.itemIds);
-        }
-        for (const wid of [...new Set(itemIds)]) {
-          const item = await app.deps.repos.findWardrobeItem(wid, userId);
-          if (!item) continue;
-          const metric = await app.deps.repos.findItemMetric(userId, wid);
+        const itemIds = [...new Set([...(body.wardrobeItemId ? [body.wardrobeItemId] : []), ...(outfit?.itemIds ?? [])])];
+        const items = itemIds.length > 0 ? await app.deps.repos.findWardrobeItemsByIds(userId, itemIds) : [];
+        const metrics = await mapLimit(items, 4, (item) => app.deps.repos.findItemMetric(userId, item.id));
+        const idsByStatus = new Map<"CLEAN" | "DIRTY" | "IN_LAUNDRY", string[]>();
+        for (const [i, item] of items.entries()) {
+          const current = (item.laundryStatus ?? "CLEAN") as "CLEAN" | "DIRTY" | "IN_LAUNDRY";
           const nextStatus = applyLaundryRuleAfterWear({
-            current: (item.laundryStatus ?? "CLEAN") as "CLEAN" | "DIRTY" | "IN_LAUNDRY",
-            wearCountAfter: metric?.wearCount ?? 1,
+            current,
+            wearCountAfter: metrics[i]?.wearCount ?? 1,
             tags: item.tags,
             rules,
           });
-          if (nextStatus !== (item.laundryStatus ?? "CLEAN")) {
-            await app.deps.repos.updateWardrobeItem(wid, userId, { laundryStatus: nextStatus });
-          }
+          if (nextStatus !== current) idsByStatus.set(nextStatus, [...(idsByStatus.get(nextStatus) ?? []), item.id]);
         }
-      } catch {
-        // laundry rules are best-effort
+        for (const [laundryStatus, ids] of idsByStatus) {
+          await app.deps.repos.updateWardrobeItems(userId, ids, { laundryStatus });
+        }
+      } catch (err) {
+        // The wear is logged; a laundry-status miss is reported, not fatal.
+        request.log.warn({ err, userId, logId: log.id }, "laundry rule after wear failed");
       }
 
-      return reply.code(201).send({
-        id: log.id,
-        userId: log.userId,
-        wardrobeItemId: log.wardrobeItemId,
-        outfitId: log.outfitId,
-        wornOn: log.wornOn.toISOString(),
-        imageKey: log.imageKey,
-        imageUrl,
-        createdAt: log.createdAt.toISOString(),
-        undoUntil: new Date(log.createdAt.getTime() + WEAR_LOG_UNDO_WINDOW_MS).toISOString(),
-      });
+      return reply.code(201).send(toWearJson(imageUrl));
     },
   );
 
@@ -1812,16 +1997,13 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const body = request.body as { itemIds?: string[] };
       const all = await app.deps.repos.listWardrobeItems(userId);
-      const targets = body.itemIds?.length
-        ? body.itemIds
-        : laundryBasketItemIds(all);
-      const cleaned: string[] = [];
-      for (const id of targets) {
-        const item = await app.deps.repos.findWardrobeItem(id, userId);
-        if (!item) continue;
-        if (item.laundryStatus !== "DIRTY" && item.laundryStatus !== "IN_LAUNDRY") continue;
-        await app.deps.repos.updateWardrobeItem(id, userId, { laundryStatus: "CLEAN" });
-        cleaned.push(id);
+      const targets = new Set(body.itemIds?.length ? body.itemIds : laundryBasketItemIds(all));
+      const cleaned = all
+        .filter((item) => targets.has(item.id))
+        .filter((item) => item.laundryStatus === "DIRTY" || item.laundryStatus === "IN_LAUNDRY")
+        .map((item) => item.id);
+      if (cleaned.length > 0) {
+        await app.deps.repos.updateWardrobeItems(userId, cleaned, { laundryStatus: "CLEAN" });
       }
       audit(app.log, "wardrobe.laundry_batch_clean", { userId, count: cleaned.length });
       trackServerEvent("laundry_batch_cleaned", { userId, count: cleaned.length });
@@ -2021,28 +2203,33 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       audit(app.log, "wardrobe.photo_dump.triage", { userId, itemId: id, decision });
       trackServerEvent("photo_dump_triaged", { userId, itemId: id, decision });
 
+      const undoUntil = new Date(decidedAt.getTime() + PHOTO_DUMP_TRIAGE_UNDO_WINDOW_MS).toISOString();
       if (decision === "discard") {
-        await app.deps.repos.deleteWardrobeItem(id, userId);
-        return {
-          decision,
-          item: null,
-          deleted: true,
-          undoUntil: new Date(decidedAt.getTime() + 10 * 60_000).toISOString(),
-        };
+        // Hidden now, deleted by a delayed job once the undo window has passed. The job goes first so a
+        // discarded item never lacks one; on 503 nothing is hidden and the client can retry.
+        const queued = await enqueueJob(
+          WARDROBE_DISCARD_PURGE_QUEUE,
+          "purge",
+          { userId, wardrobeItemId: id },
+          {
+            delay: WARDROBE_DISCARD_PURGE_DELAY_MS,
+            jobId: jobIdFrom(WARDROBE_DISCARD_PURGE_QUEUE, id, decidedAt.getTime()),
+          },
+        );
+        if (queued.status === "skipped") {
+          request.log.warn({ userId, itemId: id }, "no job queue: discarded item stays hidden until purged");
+        }
+        await app.deps.repos.discardWardrobeItem(id, userId);
+        return { decision, item: null, deleted: true, undoUntil };
       }
       const tags = applyPhotoDumpTriageTags(existing.tags, decision);
       const updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags });
-      const imageUrls = await Promise.all(
-        (updated!.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-      );
-      const garmentImageUrl = updated!.garmentImageKey
-        ? await app.deps.storage.getSignedUrl(updated!.garmentImageKey)
-        : null;
+      if (!updated) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       return {
         decision,
-        item: toWardrobeJson(updated, imageUrls, garmentImageUrl),
+        item: await signedWardrobeJson(updated),
         deleted: false,
-        undoUntil: new Date(decidedAt.getTime() + 10 * 60_000).toISOString(),
+        undoUntil,
       };
     },
   );
@@ -2065,26 +2252,31 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const { id } = request.params as { id: string };
-      const at = getPhotoDumpTriageAt(id);
-      if (!at || !canUndoPhotoDumpTriage(at)) {
-        return reply.code(400).send({ error: "Bad Request", message: "Triage undo window expired" });
+      // A discard is undone from the row itself, so it works on any instance and after a restart.
+      const restored = await app.deps.repos.restoreWardrobeItem(
+        id,
+        userId,
+        new Date(Date.now() - PHOTO_DUMP_TRIAGE_UNDO_WINDOW_MS),
+      );
+      let updated = restored;
+      if (!restored) {
+        const at = getPhotoDumpTriageAt(id);
+        if (!at || !canUndoPhotoDumpTriage(at)) {
+          return reply.code(400).send({ error: "Bad Request", message: "Triage undo window expired" });
+        }
+        const existing = await app.deps.repos.findWardrobeItem(id, userId);
+        if (!existing) {
+          return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+        }
+        updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags: undoPhotoDumpTriageTags(existing.tags) });
+      } else {
+        updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags: undoPhotoDumpTriageTags(restored.tags) });
       }
-      const existing = await app.deps.repos.findWardrobeItem(id, userId);
-      if (!existing) {
-        return reply.code(404).send({ error: "Not Found", message: "Item not found (discard undo requires restore)" });
-      }
-      const tags = undoPhotoDumpTriageTags(existing.tags);
-      const updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags });
+      if (!updated) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       clearPhotoDumpTriageAt(id);
       audit(app.log, "wardrobe.photo_dump.triage_undo", { userId, itemId: id });
       trackServerEvent("photo_dump_triage_undone", { userId, itemId: id });
-      const imageUrls = await Promise.all(
-        (updated!.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)),
-      );
-      const garmentImageUrl = updated!.garmentImageKey
-        ? await app.deps.storage.getSignedUrl(updated!.garmentImageKey)
-        : null;
-      return { ok: true as const, item: toWardrobeJson(updated, imageUrls, garmentImageUrl) };
+      return { ok: true as const, item: await signedWardrobeJson(updated) };
     },
   );
 };

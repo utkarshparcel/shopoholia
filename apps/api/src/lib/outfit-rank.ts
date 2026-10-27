@@ -31,7 +31,8 @@ export function isItemClean(it: RankableWardrobeItem): boolean {
   return s === "CLEAN" || s === "READY" || s === "WASHED";
 }
 
-export function weatherOccasion(weather: WeatherCtx): "CASUAL" | "WORK" | "SPORT" | "TRAVEL" {
+export function weatherOccasion(weather: WeatherCtx | null): "CASUAL" | "WORK" | "SPORT" | "TRAVEL" {
+  if (!weather) return "CASUAL";
   if (weather.condition === "rain") return "TRAVEL";
   if (weather.tempC >= 32) return "CASUAL";
   if (weather.tempC <= 20) return "WORK";
@@ -46,7 +47,8 @@ export function rankWardrobeItems(input: {
   items: RankableWardrobeItem[];
   styleProfile?: StyleProfileLike;
   wearCount?: Map<string, number>;
-  weather: WeatherCtx;
+  /** Null when no weather provider answered: weather then plays no part. */
+  weather: WeatherCtx | null;
   /** Item ids blocked (e.g. worn recently) — scored but can be filtered after. */
   blockedIds?: Set<string>;
 }): { scored: ScoredOutfitItem[]; pool: RankableWardrobeItem[]; whyHints: string[] } {
@@ -72,18 +74,20 @@ export function rankWardrobeItems(input: {
     }
     score += Math.min(wearCount.get(it.id) ?? 0, 5);
     if (
+      weather &&
       weather.tempC >= 30 &&
       (it.category.toLowerCase().includes("short") || it.category.toLowerCase().includes("linen"))
     ) {
       score += 2;
     }
     if (
+      weather &&
       weather.tempC <= 22 &&
       (it.category.toLowerCase().includes("jacket") || it.category.toLowerCase().includes("layer"))
     ) {
       score += 2;
     }
-    if (weather.condition === "rain" && it.category.toLowerCase().includes("rain")) score += 3;
+    if (weather?.condition === "rain" && it.category.toLowerCase().includes("rain")) score += 3;
     if (blocked.has(it.id)) score -= 100; // heavily demote worn-blocked
     return { item: it, score };
   });
@@ -125,7 +129,7 @@ export function buildWhyThis(input: {
   selected: RankableWardrobeItem[];
   styleProfile?: StyleProfileLike;
   wearCount?: Map<string, number>;
-  weather: WeatherCtx;
+  weather: WeatherCtx | null;
   altIndex?: number;
 }): string[] {
   const whyThis = [...input.whyHints];
@@ -140,9 +144,9 @@ export function buildWhyThis(input: {
   if (favorites.length) {
     whyThis.push(`Included ${favorites.length} piece(s) you wear often`);
   }
-  whyThis.push(
-    `Weather ${weather.tempC}°C, ${weather.condition.replace(/_/g, " ")}${weather.source === "mock" ? " (mock)" : ""}`,
-  );
+  if (weather) {
+    whyThis.push(`Weather ${weather.tempC}°C, ${weather.condition.replace(/_/g, " ")}`);
+  }
   if ((input.altIndex ?? 0) > 0) {
     whyThis.push(`Alternative look #${(input.altIndex ?? 0) + 1}`);
   }

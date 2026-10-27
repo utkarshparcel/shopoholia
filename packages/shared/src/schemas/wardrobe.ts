@@ -175,7 +175,7 @@ export type RepairLogsResponse = z.infer<typeof RepairLogsResponseSchema>;
 export const SeasonalSwapBodySchema = z.object({
   season: SeasonSchema,
   /** Optional: also stamp these item ids with season:* tag before swap. */
-  tagItemIds: z.array(z.string().uuid()).optional(),
+  tagItemIds: z.array(z.string().uuid()).max(200).optional(),
 });
 export type SeasonalSwapBody = z.infer<typeof SeasonalSwapBodySchema>;
 
@@ -247,11 +247,30 @@ export const WardrobeListResponseSchema = z.object({
 export type WardrobeListResponse = z.infer<typeof WardrobeListResponseSchema>;
 
 export const WardrobeTryonResponseSchema = z.object({
-  status: z.enum(["READY", "PROCESSING"]),
+  /**
+   * PROCESSING: a render is queued or running; ask again. FAILED: the last render failed; ask
+   * again after `retryAfter`. NO_AVATAR: the user has no ready avatar photo yet.
+   */
+  status: z.enum(["READY", "PROCESSING", "FAILED", "NO_AVATAR"]),
   previewUrl: z.string().nullable(),
   imageKey: z.string().nullable().optional(),
+  retryAfter: z.string().datetime().nullable().optional(),
 });
 export type WardrobeTryonResponse = z.infer<typeof WardrobeTryonResponseSchema>;
+
+/** Queue `wardrobe-tryon`: render one wardrobe try-on (apps/api/src/jobs/wardrobe-tryon.ts). */
+export const WardrobeTryonJobSchema = z.object({
+  userId: z.string().uuid(),
+  wardrobeItemId: z.string().uuid(),
+});
+export type WardrobeTryonJob = z.infer<typeof WardrobeTryonJobSchema>;
+
+/** Queue `wardrobe-discard-purge`: delete a discarded item once its undo window has passed. */
+export const WardrobeDiscardPurgeJobSchema = z.object({
+  userId: z.string().uuid(),
+  wardrobeItemId: z.string().uuid(),
+});
+export type WardrobeDiscardPurgeJob = z.infer<typeof WardrobeDiscardPurgeJobSchema>;
 
 export const OutfitOccasionSchema = z.enum(["CASUAL", "WORK", "FORMAL", "PARTY", "SPORT", "TRAVEL"]);
 export type OutfitOccasion = z.infer<typeof OutfitOccasionSchema>;
@@ -426,7 +445,7 @@ export type GenerateWeekDayBody = z.infer<typeof GenerateWeekDayBodySchema>;
 
 export const PatchWeekDayBodySchema = z
   .object({
-    itemIds: z.array(z.string().uuid()).min(1).optional(),
+    itemIds: z.array(z.string().uuid()).min(1).max(20).optional(),
     occasion: OutfitOccasionSchema.nullable().optional(),
     /** U033 — pin/unpin outfit for this calendar day. */
     pinned: z.boolean().optional(),
@@ -480,6 +499,9 @@ export type FromCalendarResponse = z.infer<typeof FromCalendarResponseSchema>;
 export const WeddingFestivalKindSchema = z.enum(["wedding", "festival"]);
 export type WeddingFestivalKind = z.infer<typeof WeddingFestivalKindSchema>;
 
+/** Longest wedding / festival plan, in days (inclusive). */
+export const WEDDING_FESTIVAL_MAX_DAYS = 21;
+
 export const WeddingFestivalBodySchema = z
   .object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -493,7 +515,13 @@ export const WeddingFestivalBodySchema = z
     /** Persist day outfits onto the week calendar (default true). */
     commit: z.boolean().optional().default(true),
   })
-  .refine((b) => b.endDate >= b.startDate, { message: "endDate must be on or after startDate" });
+  .refine((b) => b.endDate >= b.startDate, { message: "endDate must be on or after startDate" })
+  .refine(
+    (b) =>
+      Date.parse(`${b.endDate}T00:00:00Z`) - Date.parse(`${b.startDate}T00:00:00Z`) <
+      WEDDING_FESTIVAL_MAX_DAYS * 86_400_000,
+    { message: `A wedding or festival plan covers at most ${WEDDING_FESTIVAL_MAX_DAYS} days` },
+  );
 export type WeddingFestivalBody = z.infer<typeof WeddingFestivalBodySchema>;
 
 export const WeddingFestivalDaySchema = z.object({
@@ -617,6 +645,8 @@ export const CreateWearBodySchema = z.object({
   wornOn: z.string().datetime().optional(),
   /** R2 object key from prior upload (e.g. wear/{userId}/{uuid}.jpg). */
   imageKey: z.string().min(1).optional().nullable(),
+  /** A retried request with the same key returns the first wear log instead of logging again. */
+  idempotencyKey: z.string().uuid().optional(),
 });
 export type CreateWearBody = z.infer<typeof CreateWearBodySchema>;
 

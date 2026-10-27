@@ -4,21 +4,28 @@ import {
   ClosetProfileSchema,
   ClosetProfileWardrobeResponseSchema,
   CreateClosetProfileBodySchema,
+  PageQuerySchema,
   UpdateClosetProfileBodySchema,
   careRulesOrNull,
   defaultSelfProfileName,
   denyUnlessOwnsProfile,
-  filterByClosetProfile,
+  mapLimit,
   type CreateClosetProfileBody,
+  type PageQuery,
   type UpdateClosetProfileBody,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
+import { decodeCursor, InvalidCursorError } from "../lib/paging.js";
 import type { ClosetProfileRecord, OutfitRecord, WardrobeItemRecord } from "../lib/repositories/types.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+const PROFILE_NOT_FOUND = { error: "Not Found", message: "Profile not found" };
+/** Kid closets need a guardian-consent flow that doesn't exist yet, so they can't be created. */
+const KID_PROFILE_BLOCKED = { error: "Bad Request", message: "Kid profiles aren't available yet" };
 
 function toProfileJson(p: ClosetProfileRecord) {
   return {
@@ -92,11 +99,7 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       let profiles = await app.deps.repos.listClosetProfiles(userId);
       if (!profiles.some((p) => p.kind === "SELF")) {
-        await app.deps.repos.createClosetProfile({
-          ownerUserId: userId,
-          name: defaultSelfProfileName(),
-          kind: "SELF",
-        });
+        await app.deps.repos.ensureSelfClosetProfile(userId, defaultSelfProfileName());
         profiles = await app.deps.repos.listClosetProfiles(userId);
       }
       const self = profiles.find((p) => p.kind === "SELF");
@@ -114,12 +117,22 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["closet-profiles"],
         body: CreateClosetProfileBodySchema,
-        response: { 201: ClosetProfileSchema, 400: ErrorSchema, 401: ErrorSchema },
+        response: { 201: ClosetProfileSchema, 400: ErrorSchema, 401: ErrorSchema, 409: ErrorSchema },
       },
     },
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as CreateClosetProfileBody;
+      const kind = body.kind ?? "SELF";
+      if (kind === "KID") return reply.code(400).send(KID_PROFILE_BLOCKED);
+      if (kind === "SELF") {
+        const existing = await app.deps.repos.listClosetProfiles(userId);
+        if (existing.some((p) => p.kind === "SELF")) {
+          return reply
+            .code(409)
+            .send({ error: "Conflict", message: "You already have your own profile" });
+        }
+      }
       if (body.householdId) {
         const member = await app.deps.repos.findHouseholdMember(body.householdId, userId);
         if (!member) {
@@ -128,12 +141,24 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
             .send({ error: "Bad Request", message: "Not a member of that household" });
         }
       }
-      const profile = await app.deps.repos.createClosetProfile({
-        ownerUserId: userId,
-        name: body.name.trim(),
-        kind: body.kind ?? "KID",
-        householdId: body.householdId ?? null,
-      });
+      let profile: ClosetProfileRecord;
+      if (kind === "SELF") {
+        // Same lock as the GET's lazy SELF, so a racing pair still ends with one SELF row.
+        profile = await app.deps.repos.ensureSelfClosetProfile(userId, body.name.trim());
+        if (body.householdId) {
+          profile =
+            (await app.deps.repos.updateClosetProfile(profile.id, userId, {
+              householdId: body.householdId,
+            })) ?? profile;
+        }
+      } else {
+        profile = await app.deps.repos.createClosetProfile({
+          ownerUserId: userId,
+          name: body.name.trim(),
+          kind,
+          householdId: body.householdId ?? null,
+        });
+      }
       trackServerEvent("closet_profile_created", {
         userId,
         profileId: profile.id,
@@ -153,8 +178,8 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
         body: UpdateClosetProfileBodySchema,
         response: {
           200: ClosetProfileSchema,
+          400: ErrorSchema,
           401: ErrorSchema,
-          403: ErrorSchema,
           404: ErrorSchema,
         },
       },
@@ -164,20 +189,21 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       const { id } = request.params;
       const body = request.body as UpdateClosetProfileBody;
       const existing = await app.deps.repos.findClosetProfile(id);
-      const denial = denyUnlessOwnsProfile(existing, userId);
-      if (denial === "NOT_FOUND") {
-        return reply.code(404).send({ error: "Not Found", message: "Profile not found" });
+      // Someone else's profile is reported exactly like a missing one.
+      if (denyUnlessOwnsProfile(existing, userId)) return reply.code(404).send(PROFILE_NOT_FOUND);
+      if (body.kind === "KID" && existing!.kind !== "KID") {
+        return reply.code(400).send(KID_PROFILE_BLOCKED);
       }
-      if (denial === "FORBIDDEN") {
-        return reply.code(403).send({ error: "Forbidden", message: "Not your profile" });
+      if (body.kind && body.kind !== existing!.kind && (body.kind === "SELF" || existing!.kind === "SELF")) {
+        return reply
+          .code(400)
+          .send({ error: "Bad Request", message: "Your own profile's kind can't change" });
       }
       const updated = await app.deps.repos.updateClosetProfile(id, userId, {
         name: body.name?.trim(),
         kind: body.kind,
       });
-      if (!updated) {
-        return reply.code(404).send({ error: "Not Found", message: "Profile not found" });
-      }
+      if (!updated) return reply.code(404).send(PROFILE_NOT_FOUND);
       return toProfileJson(updated);
     },
   );
@@ -193,7 +219,6 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
           204: z.null(),
           400: ErrorSchema,
           401: ErrorSchema,
-          403: ErrorSchema,
           404: ErrorSchema,
         },
       },
@@ -202,19 +227,15 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { id } = request.params;
       const existing = await app.deps.repos.findClosetProfile(id);
-      const denial = denyUnlessOwnsProfile(existing, userId);
-      if (denial === "NOT_FOUND") {
-        return reply.code(404).send({ error: "Not Found", message: "Profile not found" });
-      }
-      if (denial === "FORBIDDEN") {
-        return reply.code(403).send({ error: "Forbidden", message: "Not your profile" });
-      }
+      if (denyUnlessOwnsProfile(existing, userId)) return reply.code(404).send(PROFILE_NOT_FOUND);
       if (existing!.kind === "SELF") {
         return reply
           .code(400)
           .send({ error: "Bad Request", message: "Cannot delete SELF profile" });
       }
-      await app.deps.repos.deleteClosetProfile(id, userId);
+      if (!(await app.deps.repos.deleteClosetProfile(id, userId))) {
+        return reply.code(404).send(PROFILE_NOT_FOUND);
+      }
       return reply.code(204).send(null);
     },
   );
@@ -227,10 +248,11 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["closet-profiles"],
         params: z.object({ id: z.string().uuid() }),
+        querystring: PageQuerySchema,
         response: {
           200: ClosetProfileWardrobeResponseSchema,
+          400: ErrorSchema,
           401: ErrorSchema,
-          403: ErrorSchema,
           404: ErrorSchema,
         },
       },
@@ -238,29 +260,26 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const { id } = request.params;
+      const q = request.query as PageQuery;
+      let after;
+      try {
+        after = decodeCursor(q.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
+      }
       const profile = await app.deps.repos.findClosetProfile(id);
-      const denial = denyUnlessOwnsProfile(profile, userId);
-      if (denial === "NOT_FOUND") {
-        return reply.code(404).send({ error: "Not Found", message: "Profile not found" });
-      }
-      if (denial === "FORBIDDEN") {
-        return reply.code(403).send({ error: "Forbidden", message: "Not your profile" });
-      }
-      const all = await app.deps.repos.listWardrobeItems(userId);
-      const scoped = filterByClosetProfile(all, id);
-      const withUrls = await Promise.all(
-        scoped.map(async (r) => {
-          const imageUrls = await Promise.all(
-            (r.imageKeys ?? []).map((k) => app.deps.storage.getSignedUrl(k)),
-          );
-          const garmentImageUrl = r.garmentImageKey
-            ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
-            : null;
-          return toWardrobeJson(r, imageUrls, garmentImageUrl);
-        }),
-      );
+      if (denyUnlessOwnsProfile(profile, userId)) return reply.code(404).send(PROFILE_NOT_FOUND);
+      const page = await app.deps.repos.listWardrobeItemsPage(userId, { limit: q.limit, after, profileId: id });
+      const items = await mapLimit(page.items, 8, async (r) => {
+        const imageUrls = await mapLimit(r.imageKeys ?? [], 4, (k) => app.deps.storage.getSignedUrl(k));
+        const garmentImageUrl = r.garmentImageKey
+          ? await app.deps.storage.getSignedUrl(r.garmentImageKey)
+          : null;
+        return toWardrobeJson(r, imageUrls, garmentImageUrl);
+      });
       trackServerEvent("closet_profile_wardrobe_viewed", { userId, profileId: id });
-      return { profileId: id, items: withUrls };
+      return { profileId: id, items, nextCursor: page.nextCursor };
     },
   );
 
@@ -272,10 +291,11 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["closet-profiles"],
         params: z.object({ id: z.string().uuid() }),
+        querystring: PageQuerySchema,
         response: {
           200: ClosetProfileOutfitsResponseSchema,
+          400: ErrorSchema,
           401: ErrorSchema,
-          403: ErrorSchema,
           404: ErrorSchema,
         },
       },
@@ -283,24 +303,23 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const { id } = request.params;
+      const q = request.query as PageQuery;
+      let after;
+      try {
+        after = decodeCursor(q.cursor);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return reply.code(400).send(err.body);
+        throw err;
+      }
       const profile = await app.deps.repos.findClosetProfile(id);
-      const denial = denyUnlessOwnsProfile(profile, userId);
-      if (denial === "NOT_FOUND") {
-        return reply.code(404).send({ error: "Not Found", message: "Profile not found" });
-      }
-      if (denial === "FORBIDDEN") {
-        return reply.code(403).send({ error: "Forbidden", message: "Not your profile" });
-      }
-      const allItems = await app.deps.repos.listWardrobeItems(userId);
-      const scopedIds = new Set(filterByClosetProfile(allItems, id).map((i) => i.id));
-      const outfits = await app.deps.repos.listOutfits(userId);
-      const scopedOutfits = outfits.filter(
-        (o) => o.itemIds.length > 0 && o.itemIds.every((iid) => scopedIds.has(iid)),
-      );
+      if (denyUnlessOwnsProfile(profile, userId)) return reply.code(404).send(PROFILE_NOT_FOUND);
+      // The repo keeps only outfits made entirely of this profile's (non-discarded) items.
+      const page = await app.deps.repos.listOutfitsPage(userId, { limit: q.limit, after, profileId: id });
       trackServerEvent("closet_profile_outfits_viewed", { userId, profileId: id });
       return {
         profileId: id,
-        outfits: scopedOutfits.map(toOutfitJson),
+        outfits: page.items.map(toOutfitJson),
+        nextCursor: page.nextCursor,
       };
     },
   );

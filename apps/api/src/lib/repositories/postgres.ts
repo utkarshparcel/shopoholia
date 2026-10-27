@@ -21,6 +21,7 @@ import {
   privacyRequests,
   createDb,
   customizationTemplates,
+  fitPreviews,
   dispositionListings,
   giftOrders,
   groupGiftContributions,
@@ -91,6 +92,7 @@ import {
   assertMergePlan,
   sumItemsMinor,
 } from "../purchase-merge-split.js";
+import { itemMetricStatusAt } from "../item-metric-status.js";
 import {
   LISTING_WORD_SEPARATOR,
   decodeListingCursor,
@@ -127,6 +129,8 @@ import type {
   SellerStatus,
   TryonPreviewRecord,
   TryonPreviewStatus,
+  FitPreviewRecord,
+  PreviewResult,
   UserRecord,
 
   ConsentGrantRecord,
@@ -153,6 +157,7 @@ import type {
   HouseholdRecord,
   HouseholdVaultSettingsRecord,
   ClosetProfileRecord,
+  UpdateWardrobeItemInput,
   WardrobeItemRecord,
   WarrantyRecord,
   WearLogRecord,
@@ -170,6 +175,7 @@ type ListingRow = typeof listings.$inferSelect;
 type ListingVariantRow = typeof listingVariants.$inferSelect;
 type SellerRow = typeof sellers.$inferSelect;
 type TryonPreviewRow = typeof tryonPreviews.$inferSelect;
+type FitPreviewRow = typeof fitPreviews.$inferSelect;
 type CartRow = typeof carts.$inferSelect;
 type CartItemRow = typeof cartItems.$inferSelect;
 type OrderRow = typeof orders.$inferSelect;
@@ -566,12 +572,59 @@ function mapTryonPreview(row: TryonPreviewRow): TryonPreviewRecord {
     listingVariantId: row.listingVariantId ?? null,
     wardrobeItemId: row.wardrobeItemId ?? null,
     imageKey: row.imageKey,
-    status: deriveTryonStatus(row.imageKey),
+    status: row.status ?? deriveTryonStatus(row.imageKey),
+    error: row.error ?? null,
+    retryAfter: row.retryAfter ?? null,
     provider: row.provider,
     costMicros: row.costMicros,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function mapFitPreview(row: FitPreviewRow): FitPreviewRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    templateId: row.templateId,
+    selectionsKey: row.selectionsKey,
+    garmentKey: row.garmentKey,
+    status: row.status,
+    imageKey: row.imageKey ?? null,
+    error: row.error ?? null,
+    retryAfter: row.retryAfter ?? null,
+    provider: row.provider,
+    costMicros: row.costMicros,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Columns a render's outcome sets on tryon_previews / fit_previews. */
+function previewResultSet(result: PreviewResult) {
+  return result.status === "READY"
+    ? {
+        status: "READY" as const,
+        imageKey: result.imageKey,
+        provider: result.provider,
+        costMicros: result.costMicros,
+        error: null,
+        retryAfter: null,
+        updatedAt: now(),
+      }
+    : { status: "FAILED" as const, error: result.error, retryAfter: result.retryAfter, updatedAt: now() };
+}
+
+/**
+ * Whether a render claim may restart the existing preview row: never over READY, not while another
+ * claim is still fresh (PROCESSING and updated at or after `staleBefore`), and not before a FAILED
+ * row's retryAfter. A legacy row without status counts as READY when it has an image.
+ */
+function previewClaimable(table: typeof tryonPreviews | typeof fitPreviews, staleBefore: Date, at: Date) {
+  const effective = sql`coalesce(${table.status}, CASE WHEN ${table.imageKey} IS NOT NULL THEN 'READY' ELSE 'PROCESSING' END)`;
+  return sql`${effective} <> 'READY'
+    AND NOT (${effective} = 'PROCESSING' AND ${table.updatedAt} >= ${staleBefore.toISOString()}::timestamptz)
+    AND NOT (${effective} = 'FAILED' AND ${table.retryAfter} IS NOT NULL AND ${table.retryAfter} > ${at.toISOString()}::timestamptz)`;
 }
 
 function mapCart(row: CartRow): CartRecord {
@@ -1026,9 +1079,57 @@ function mapWardrobeItem(row: WardrobeItemRow): WardrobeItemRecord {
     lentTo: ((row as { lentTo?: string | null }).lentTo ?? null) as string | null,
     lentDueOn: ((row as { lentDueOn?: string | null }).lentDueOn ?? null) as string | null,
     profileId: ((row as { profileId?: string | null }).profileId ?? null) as string | null,
+    discardedAt: row.discardedAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** Columns an item patch sets (undefined fields are left alone). */
+function wardrobeItemUpdates(patch: UpdateWardrobeItemInput): Record<string, unknown> {
+  const updates: Record<string, unknown> = { updatedAt: now() };
+  if (patch.category !== undefined) updates.category = patch.category;
+  if (patch.colors !== undefined) updates.colors = patch.colors;
+  if (patch.brand !== undefined) updates.brand = patch.brand;
+  if (patch.costMinor !== undefined) updates.costMinor = patch.costMinor;
+  if (patch.imageKeys !== undefined) updates.imageKeys = patch.imageKeys;
+  if (patch.garmentImageKey !== undefined) updates.garmentImageKey = patch.garmentImageKey;
+  if (patch.laundryStatus !== undefined) updates.laundryStatus = patch.laundryStatus;
+  if (patch.closetStatus !== undefined) updates.closetStatus = patch.closetStatus;
+  if (patch.tags !== undefined) updates.tags = patch.tags;
+  if (patch.careRules !== undefined) updates.careRules = patch.careRules;
+  if (patch.dryCleanTicket !== undefined) updates.dryCleanTicket = patch.dryCleanTicket;
+  if (patch.dryCleanPickupOn !== undefined) updates.dryCleanPickupOn = patch.dryCleanPickupOn;
+  if (patch.lentTo !== undefined) updates.lentTo = patch.lentTo;
+  if (patch.lentDueOn !== undefined) updates.lentDueOn = patch.lentDueOn;
+  if (patch.profileId !== undefined) updates.profileId = patch.profileId;
+  return updates;
+}
+
+/** Item ids a wear log counts (its item and its outfit's items), sorted so row locks keep one order. */
+async function wornItemIds(tx: Tx, userId: string, log: WearLogRow): Promise<string[]> {
+  const ids = new Set<string>();
+  if (log.wardrobeItemId) ids.add(log.wardrobeItemId);
+  if (log.outfitId) {
+    const [outfit] = await tx
+      .select({ itemIds: outfits.itemIds })
+      .from(outfits)
+      .where(and(eq(outfits.id, log.outfitId), eq(outfits.userId, userId)))
+      .limit(1);
+    for (const id of outfit?.itemIds ?? []) ids.add(id);
+  }
+  return [...ids].sort();
+}
+
+/** The caller's item, or an error: metrics are never written for another user's item. */
+async function requireOwnedWardrobeItem(db: Db, userId: string, wardrobeItemId: string): Promise<WardrobeItemRow> {
+  const [item] = await db
+    .select()
+    .from(wardrobeItems)
+    .where(and(eq(wardrobeItems.id, wardrobeItemId), eq(wardrobeItems.userId, userId)))
+    .limit(1);
+  if (!item) throw new Error(`wardrobe item ${wardrobeItemId} not found for this user`);
+  return item;
 }
 
 function mapOutfit(row: OutfitRow): OutfitRecord {
@@ -2251,6 +2352,9 @@ export function createPostgresRepositories(db: Db): Repositories {
             listingVariantId: data.listingVariantId ?? null,
             wardrobeItemId: data.wardrobeItemId,
             imageKey: data.imageKey,
+            status: data.status,
+            error: data.error ?? null,
+            retryAfter: data.retryAfter ?? null,
             provider: data.provider,
             costMicros: data.costMicros,
             createdAt: timestamp,
@@ -2260,6 +2364,9 @@ export function createPostgresRepositories(db: Db): Repositories {
             target: [tryonPreviews.userId, tryonPreviews.wardrobeItemId],
             set: {
               imageKey: data.imageKey,
+              status: data.status,
+              error: data.error ?? null,
+              retryAfter: data.retryAfter ?? null,
               provider: data.provider,
               costMicros: data.costMicros,
               updatedAt: timestamp,
@@ -2277,6 +2384,9 @@ export function createPostgresRepositories(db: Db): Repositories {
           listingVariantId: data.listingVariantId!,
           wardrobeItemId: null,
           imageKey: data.imageKey,
+          status: data.status,
+          error: data.error ?? null,
+          retryAfter: data.retryAfter ?? null,
           provider: data.provider,
           costMicros: data.costMicros,
           createdAt: timestamp,
@@ -2286,6 +2396,9 @@ export function createPostgresRepositories(db: Db): Repositories {
           target: [tryonPreviews.userId, tryonPreviews.listingVariantId],
           set: {
             imageKey: data.imageKey,
+            status: data.status,
+            error: data.error ?? null,
+            retryAfter: data.retryAfter ?? null,
             provider: data.provider,
             costMicros: data.costMicros,
             updatedAt: timestamp,
@@ -2294,6 +2407,102 @@ export function createPostgresRepositories(db: Db): Repositories {
         .returning();
 
       return mapTryonPreview(row!);
+    },
+
+    async claimWardrobeTryon({ userId, wardrobeItemId, provider, staleBefore }) {
+      const timestamp = now();
+      const [claimed] = await db
+        .insert(tryonPreviews)
+        .values({
+          userId,
+          listingVariantId: null,
+          wardrobeItemId,
+          imageKey: null,
+          status: "PROCESSING",
+          provider,
+          costMicros: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: [tryonPreviews.userId, tryonPreviews.wardrobeItemId],
+          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          setWhere: previewClaimable(tryonPreviews, staleBefore, timestamp),
+        })
+        .returning();
+      if (claimed) return { claimed: true, preview: mapTryonPreview(claimed) };
+      const current = await repos.findWardrobeTryonPreview(userId, wardrobeItemId);
+      if (!current) throw new Error(`try-on preview vanished during claim: ${wardrobeItemId}`);
+      return { claimed: false, preview: current };
+    },
+
+    async finishWardrobeTryon(userId, wardrobeItemId, result) {
+      const [row] = await db
+        .update(tryonPreviews)
+        .set(previewResultSet(result))
+        .where(
+          and(
+            eq(tryonPreviews.userId, userId),
+            eq(tryonPreviews.wardrobeItemId, wardrobeItemId),
+            eq(tryonPreviews.status, "PROCESSING"),
+          ),
+        )
+        .returning();
+      return row ? mapTryonPreview(row) : null;
+    },
+
+    async findFitPreview(id, userId) {
+      const [row] = await db
+        .select()
+        .from(fitPreviews)
+        .where(and(eq(fitPreviews.id, id), eq(fitPreviews.userId, userId)))
+        .limit(1);
+      return row ? mapFitPreview(row) : null;
+    },
+
+    async claimFitPreview({ userId, templateId, selectionsKey, garmentKey, provider, staleBefore }) {
+      const timestamp = now();
+      const [claimed] = await db
+        .insert(fitPreviews)
+        .values({
+          userId,
+          templateId,
+          selectionsKey,
+          garmentKey,
+          status: "PROCESSING",
+          provider,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: [fitPreviews.userId, fitPreviews.templateId, fitPreviews.selectionsKey],
+          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          setWhere: previewClaimable(fitPreviews, staleBefore, timestamp),
+        })
+        .returning();
+      if (claimed) return { claimed: true, preview: mapFitPreview(claimed) };
+      const [current] = await db
+        .select()
+        .from(fitPreviews)
+        .where(
+          and(
+            eq(fitPreviews.userId, userId),
+            eq(fitPreviews.templateId, templateId),
+            eq(fitPreviews.selectionsKey, selectionsKey),
+          ),
+        )
+        .limit(1);
+      if (!current) throw new Error(`fit preview vanished during claim: ${templateId}`);
+      return { claimed: false, preview: mapFitPreview(current) };
+    },
+
+    async finishFitPreview(id, userId, result) {
+      const [row] = await db
+        .update(fitPreviews)
+        .set(previewResultSet(result))
+        .where(and(eq(fitPreviews.id, id), eq(fitPreviews.userId, userId), eq(fitPreviews.status, "PROCESSING")))
+        .returning();
+      return row ? mapFitPreview(row) : null;
     },
 
     async getOrCreateCart(userId) {
@@ -3948,75 +4157,188 @@ export function createPostgresRepositories(db: Db): Repositories {
         return rows.map(mapMerchantPurchaseItem);
     },
     async listWardrobeItems(userId) {
-        const rows = await db.select().from(wardrobeItems).where(eq(wardrobeItems.userId, userId)).orderBy(desc(wardrobeItems.createdAt));
+        const rows = await db
+            .select()
+            .from(wardrobeItems)
+            .where(and(eq(wardrobeItems.userId, userId), isNull(wardrobeItems.discardedAt)))
+            .orderBy(desc(wardrobeItems.createdAt));
+        return rows.map(mapWardrobeItem);
+    },
+    async listWardrobeItemsPage(userId, query) {
+        const lent = query.lent;
+        const rows = await db
+            .select({ row: wardrobeItems, createdAtText: keysetCreatedAtText(wardrobeItems.createdAt) })
+            .from(wardrobeItems)
+            .where(
+                and(
+                    eq(wardrobeItems.userId, userId),
+                    isNull(wardrobeItems.discardedAt),
+                    query.profileId ? eq(wardrobeItems.profileId, query.profileId) : undefined,
+                    lent ? sql`${wardrobeItems.lentTo} IS NOT NULL AND btrim(${wardrobeItems.lentTo}) <> ''` : undefined,
+                    lent?.filter === "due" ? lte(wardrobeItems.lentDueOn, lent.asOf) : undefined,
+                    lent?.filter === "overdue" ? lt(wardrobeItems.lentDueOn, lent.asOf) : undefined,
+                    keysetAfter(wardrobeItems.createdAt, wardrobeItems.id, query.after),
+                ),
+            )
+            .orderBy(...keysetOrderBy(wardrobeItems.createdAt, wardrobeItems.id))
+            .limit(query.limit + 1);
+        return toPage(rows, query.limit, (r) => ({ createdAt: r.createdAtText, id: r.row.id }), (r) => mapWardrobeItem(r.row));
+    },
+    async findWardrobeItemsByIds(userId, ids) {
+        const unique = [...new Set(ids)];
+        if (unique.length === 0) return [];
+        const rows = await db
+            .select()
+            .from(wardrobeItems)
+            .where(and(eq(wardrobeItems.userId, userId), inArray(wardrobeItems.id, unique), isNull(wardrobeItems.discardedAt)));
         return rows.map(mapWardrobeItem);
     },
     async findWardrobeItem(id, userId) {
-        const [row] = await db.select().from(wardrobeItems).where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId))).limit(1);
+        const [row] = await db
+            .select()
+            .from(wardrobeItems)
+            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId), isNull(wardrobeItems.discardedAt)))
+            .limit(1);
         return row ? mapWardrobeItem(row) : null;
     },
     async createWardrobeItem(input) {
-        const [row] = await db.insert(wardrobeItems).values({
-            id: randomUUID(),
-            userId: input.userId,
-            source: input.source ?? "MANUAL",
-            category: input.category,
-            colors: input.colors ?? [],
-            brand: input.brand ?? null,
-            costMinor: input.costMinor ?? 0,
-            imageKeys: input.imageKeys ?? [],
-            garmentImageKey: input.garmentImageKey ?? null,
-            purchaseItemId: input.purchaseItemId ?? null,
-            laundryStatus: input.laundryStatus ?? "CLEAN",
-            closetStatus: input.closetStatus ?? "ACTIVE",
-            tags: input.tags ?? [],
-            careRules: input.careRules ?? null,
-            dryCleanTicket: input.dryCleanTicket ?? null,
-            dryCleanPickupOn: input.dryCleanPickupOn ?? null,
-            lentTo: input.lentTo ?? null,
-            lentDueOn: input.lentDueOn ?? null,
-            profileId: input.profileId ?? null,
-        }).returning();
-        // ensure metrics row exists
-        await db.insert(itemMetrics).values({
-            id: randomUUID(),
-            userId: input.userId,
-            wardrobeItemId: row.id,
-            wearCount: 0,
-            lastWornAt: null,
-            costPerWearMinor: input.costMinor && input.costMinor > 0 ? input.costMinor : null,
-            status: "ACTIVE",
-        }).onConflictDoNothing();
-        return mapWardrobeItem(row);
+        const [result] = await repos.createWardrobeItems([input]);
+        return result!.item;
+    },
+    async createWardrobeItems(inputs) {
+        if (inputs.length === 0) return [];
+        return db.transaction(async (tx) => {
+            const values = inputs.map((input) => ({
+                id: randomUUID(),
+                userId: input.userId,
+                source: input.source ?? "MANUAL",
+                category: input.category,
+                colors: input.colors ?? [],
+                brand: input.brand ?? null,
+                costMinor: input.costMinor ?? 0,
+                imageKeys: input.imageKeys ?? [],
+                garmentImageKey: input.garmentImageKey ?? null,
+                purchaseItemId: input.purchaseItemId ?? null,
+                laundryStatus: input.laundryStatus ?? "CLEAN",
+                closetStatus: input.closetStatus ?? "ACTIVE",
+                tags: input.tags ?? [],
+                careRules: input.careRules ?? null,
+                dryCleanTicket: input.dryCleanTicket ?? null,
+                dryCleanPickupOn: input.dryCleanPickupOn ?? null,
+                lentTo: input.lentTo ?? null,
+                lentDueOn: input.lentDueOn ?? null,
+                profileId: input.profileId ?? null,
+            }));
+            // A (user, purchaseItemId) already imported (or repeated in this batch) is skipped here
+            // and returned below as the existing item.
+            const inserted = await tx
+                .insert(wardrobeItems)
+                .values(values)
+                .onConflictDoNothing({
+                    target: [wardrobeItems.userId, wardrobeItems.purchaseItemId],
+                    where: sql`${wardrobeItems.purchaseItemId} IS NOT NULL`,
+                })
+                .returning();
+            if (inserted.length > 0) {
+                await tx
+                    .insert(itemMetrics)
+                    .values(
+                        inserted.map((row) => ({
+                            id: randomUUID(),
+                            userId: row.userId,
+                            wardrobeItemId: row.id,
+                            wearCount: 0,
+                            lastWornAt: null,
+                            costPerWearMinor: row.costMinor > 0 ? row.costMinor : null,
+                            status: "ACTIVE" as const,
+                        })),
+                    )
+                    .onConflictDoNothing();
+            }
+            const byId = new Map(inserted.map((row) => [row.id, row]));
+            const skipped = values.filter((v) => !byId.has(v.id));
+            const existing = new Map<string, WardrobeItemRow>();
+            if (skipped.length > 0) {
+                const rows = await tx
+                    .select()
+                    .from(wardrobeItems)
+                    .where(
+                        and(
+                            inArray(wardrobeItems.userId, [...new Set(skipped.map((v) => v.userId))]),
+                            inArray(wardrobeItems.purchaseItemId, [...new Set(skipped.map((v) => v.purchaseItemId!))]),
+                        ),
+                    );
+                for (const row of rows) existing.set(`${row.userId}|${row.purchaseItemId}`, row);
+            }
+            return values.map((v) => {
+                const row = byId.get(v.id);
+                if (row) return { item: mapWardrobeItem(row), created: true };
+                const found = existing.get(`${v.userId}|${v.purchaseItemId}`);
+                if (!found) throw new Error(`wardrobe item for purchase item ${v.purchaseItemId} vanished during import`);
+                return { item: mapWardrobeItem(found), created: false };
+            });
+        });
     },
     async updateWardrobeItem(id, userId, patch) {
-        const updates: Record<string, unknown> = { updatedAt: now() };
-        if (patch.category !== undefined) updates.category = patch.category;
-        if (patch.colors !== undefined) updates.colors = patch.colors;
-        if (patch.brand !== undefined) updates.brand = patch.brand;
-        if (patch.costMinor !== undefined) updates.costMinor = patch.costMinor;
-        if (patch.imageKeys !== undefined) updates.imageKeys = patch.imageKeys;
-        if (patch.garmentImageKey !== undefined) updates.garmentImageKey = patch.garmentImageKey;
-        if (patch.laundryStatus !== undefined) updates.laundryStatus = patch.laundryStatus;
-        if (patch.closetStatus !== undefined) updates.closetStatus = patch.closetStatus;
-        if (patch.tags !== undefined) updates.tags = patch.tags;
-        if (patch.careRules !== undefined) updates.careRules = patch.careRules;
-        if (patch.dryCleanTicket !== undefined) updates.dryCleanTicket = patch.dryCleanTicket;
-        if (patch.dryCleanPickupOn !== undefined) updates.dryCleanPickupOn = patch.dryCleanPickupOn;
-        if (patch.lentTo !== undefined) updates.lentTo = patch.lentTo;
-        if (patch.lentDueOn !== undefined) updates.lentDueOn = patch.lentDueOn;
-        if (patch.profileId !== undefined) updates.profileId = patch.profileId;
         const [row] = await db
             .update(wardrobeItems)
-            .set(updates)
-            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId)))
+            .set(wardrobeItemUpdates(patch))
+            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId), isNull(wardrobeItems.discardedAt)))
             .returning();
         return row ? mapWardrobeItem(row) : null;
+    },
+    async updateWardrobeItems(userId, ids, patch) {
+        const unique = [...new Set(ids)];
+        if (unique.length === 0) return [];
+        return db.transaction(async (tx) => {
+            const owned = await tx
+                .select({ id: wardrobeItems.id })
+                .from(wardrobeItems)
+                .where(and(eq(wardrobeItems.userId, userId), inArray(wardrobeItems.id, unique), isNull(wardrobeItems.discardedAt)))
+                .orderBy(wardrobeItems.id)
+                .for("update");
+            if (owned.length !== unique.length) return null;
+            const rows = await tx
+                .update(wardrobeItems)
+                .set(wardrobeItemUpdates(patch))
+                .where(and(eq(wardrobeItems.userId, userId), inArray(wardrobeItems.id, unique)))
+                .returning();
+            const byId = new Map(rows.map((row) => [row.id, mapWardrobeItem(row)]));
+            return unique.map((id) => byId.get(id)!);
+        });
     },
     async deleteWardrobeItem(id, userId) {
         const deleted = await db
             .delete(wardrobeItems)
             .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId)))
+            .returning({ id: wardrobeItems.id });
+        return deleted.length > 0;
+    },
+    async discardWardrobeItem(id, userId) {
+        // Milliseconds only (no now()): the purge job compares discarded_at with this exact value.
+        const timestamp = now();
+        const [row] = await db
+            .update(wardrobeItems)
+            .set({
+                discardedAt: sql`coalesce(${wardrobeItems.discardedAt}, ${timestamp.toISOString()}::timestamptz)`,
+                updatedAt: timestamp,
+            })
+            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId)))
+            .returning();
+        return row ? mapWardrobeItem(row) : null;
+    },
+    async restoreWardrobeItem(id, userId, discardedSince) {
+        const [row] = await db
+            .update(wardrobeItems)
+            .set({ discardedAt: null, updatedAt: now() })
+            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId), gte(wardrobeItems.discardedAt, discardedSince)))
+            .returning();
+        return row ? mapWardrobeItem(row) : null;
+    },
+    async purgeDiscardedWardrobeItem(id, userId, discardedBefore) {
+        const deleted = await db
+            .delete(wardrobeItems)
+            .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId), lte(wardrobeItems.discardedAt, discardedBefore)))
             .returning({ id: wardrobeItems.id });
         return deleted.length > 0;
     },
@@ -4037,12 +4359,11 @@ export function createPostgresRepositories(db: Db): Repositories {
         const [row] = await db.select().from(outfits).where(and(eq(outfits.id, id), eq(outfits.userId, userId))).limit(1);
         return row ? mapOutfit(row) : null;
     },
-    async getTodayOutfit(userId) {
-        const today = new Date().toISOString().slice(0, 10);
+    async getTodayOutfit(userId, todayKey) {
         const [planned] = await db
             .select()
             .from(outfits)
-            .where(and(eq(outfits.userId, userId), eq(outfits.plannedFor, today)))
+            .where(and(eq(outfits.userId, userId), eq(outfits.plannedFor, todayKey)))
             .limit(1);
         if (planned) return mapOutfit(planned);
         const [row] = await db.select().from(outfits).where(eq(outfits.userId, userId)).orderBy(desc(outfits.generatedAt)).limit(1);
@@ -4057,23 +4378,33 @@ export function createPostgresRepositories(db: Db): Repositories {
         return row ? mapOutfit(row) : null;
     },
     async upsertOutfitForDate(input) {
-        const existing = await repos.getOutfitForDate(input.userId, input.plannedFor);
-        if (existing) {
-            const [row] = await db
-                .update(outfits)
-                .set({
+        const generatedAt = new Date();
+        const [row] = await db
+            .insert(outfits)
+            .values({
+                id: randomUUID(),
+                userId: input.userId,
+                itemIds: input.itemIds,
+                occasion: input.occasion ?? null,
+                weatherCtx: input.weatherCtx ?? null,
+                plannedFor: input.plannedFor,
+                generatedAt,
+                styleProfileSnapshot: input.styleProfileSnapshot ?? null,
+            })
+            .onConflictDoUpdate({
+                target: [outfits.userId, outfits.plannedFor],
+                targetWhere: sql`${outfits.plannedFor} IS NOT NULL`,
+                set: {
                     itemIds: input.itemIds,
                     occasion: input.occasion ?? null,
                     weatherCtx: input.weatherCtx ?? null,
                     styleProfileSnapshot: input.styleProfileSnapshot ?? null,
-                    generatedAt: new Date(),
+                    generatedAt,
                     updatedAt: now(),
-                })
-                .where(eq(outfits.id, existing.id))
-                .returning();
-            return mapOutfit(row);
-        }
-        return repos.createOutfit({ ...input, plannedFor: input.plannedFor });
+                },
+            })
+            .returning();
+        return mapOutfit(row!);
     },
     async updateOutfit(id, userId, patch) {
         const updates: Record<string, unknown> = { updatedAt: now() };
@@ -4087,9 +4418,27 @@ export function createPostgresRepositories(db: Db): Repositories {
             .returning();
         return row ? mapOutfit(row) : null;
     },
-    async listOutfits(userId) {
-        const rows = await db.select().from(outfits).where(eq(outfits.userId, userId)).orderBy(desc(outfits.generatedAt));
+    async listOutfits(userId, opts) {
+        const query = db.select().from(outfits).where(eq(outfits.userId, userId)).orderBy(desc(outfits.generatedAt));
+        const rows = opts?.limit !== undefined ? await query.limit(opts.limit) : await query;
         return rows.map(mapOutfit);
+    },
+    async listOutfitsPage(userId, query) {
+        const rows = await db
+            .select({ row: outfits, createdAtText: keysetCreatedAtText(outfits.createdAt) })
+            .from(outfits)
+            .where(
+                and(
+                    eq(outfits.userId, userId),
+                    query.profileId
+                        ? sql`cardinality(${outfits.itemIds}) > 0 AND ${outfits.itemIds} <@ ARRAY(SELECT ${wardrobeItems.id} FROM ${wardrobeItems} WHERE ${wardrobeItems.userId} = ${userId} AND ${wardrobeItems.profileId} = ${query.profileId} AND ${wardrobeItems.discardedAt} IS NULL)`
+                        : undefined,
+                    keysetAfter(outfits.createdAt, outfits.id, query.after),
+                ),
+            )
+            .orderBy(...keysetOrderBy(outfits.createdAt, outfits.id))
+            .limit(query.limit + 1);
+        return toPage(rows, query.limit, (r) => ({ createdAt: r.createdAtText, id: r.row.id }), (r) => mapOutfit(r.row));
     },
     async listOutfitsInRange(userId, fromDate, toDate) {
         const rows = await db
@@ -4106,52 +4455,65 @@ export function createPostgresRepositories(db: Db): Repositories {
         return rows.map(mapOutfit);
     },
     async createWearLog(input) {
-        const [row] = await db.insert(wearLog).values({
-            id: randomUUID(),
-            userId: input.userId,
-            wardrobeItemId: input.wardrobeItemId ?? null,
-            outfitId: input.outfitId ?? null,
-            wornOn: input.wornOn ?? new Date(),
-            imageKey: input.imageKey ?? null,
-        }).returning();
-        // Update metrics for involved items
-        const itemIds = [];
-        if (input.wardrobeItemId)
-            itemIds.push(input.wardrobeItemId);
-        if (input.outfitId) {
-            const outfit = await repos.findOutfitById(input.outfitId, input.userId);
-            if (outfit)
-                itemIds.push(...outfit.itemIds);
-        }
-        for (const wid of [...new Set(itemIds)]) {
-            const [existingMetric] = await db.select().from(itemMetrics).where(and(eq(itemMetrics.userId, input.userId), eq(itemMetrics.wardrobeItemId, wid))).limit(1);
-            const [item] = await db.select().from(wardrobeItems).where(eq(wardrobeItems.id, wid)).limit(1);
-            if (!item)
-                continue;
-            const prevCount = existingMetric?.wearCount ?? 0;
-            const newCount = prevCount + 1;
-            const costPerWear = item.costMinor > 0 ? Math.round(item.costMinor / newCount) : null;
-            // status logic: DEAD if not worn in 90d prior? here freshly worn so ACTIVE, dormant/dead assessed elsewhere
-            const status: ItemMetricRecord["status"] = "ACTIVE";
-            if (existingMetric) {
-                await db.update(itemMetrics).set({ wearCount: newCount, lastWornAt: row.wornOn, costPerWearMinor: costPerWear, status, updatedAt: now() }).where(eq(itemMetrics.id, existingMetric.id));
+        return db.transaction(async (tx) => {
+            const values = {
+                id: randomUUID(),
+                userId: input.userId,
+                wardrobeItemId: input.wardrobeItemId ?? null,
+                outfitId: input.outfitId ?? null,
+                wornOn: input.wornOn ?? new Date(),
+                imageKey: input.imageKey ?? null,
+                idempotencyKey: input.idempotencyKey ?? null,
+            };
+            const [row] = input.idempotencyKey
+                ? await tx
+                    .insert(wearLog)
+                    .values(values)
+                    .onConflictDoNothing({
+                        target: [wearLog.userId, wearLog.idempotencyKey],
+                        where: sql`${wearLog.idempotencyKey} IS NOT NULL`,
+                    })
+                    .returning()
+                : await tx.insert(wearLog).values(values).returning();
+            if (!row) {
+                const [first] = await tx
+                    .select()
+                    .from(wearLog)
+                    .where(and(eq(wearLog.userId, input.userId), eq(wearLog.idempotencyKey, input.idempotencyKey!)))
+                    .limit(1);
+                if (!first) throw new Error("wear log vanished during an idempotent insert");
+                return { log: mapWearLog(first), created: false };
             }
-            else {
-                await db.insert(itemMetrics).values({
-                    id: randomUUID(),
-                    userId: input.userId,
-                    wardrobeItemId: wid,
-                    wearCount: newCount,
-                    lastWornAt: row.wornOn,
-                    costPerWearMinor: costPerWear,
-                    status,
-                });
+            const itemIds = await wornItemIds(tx, input.userId, row);
+            if (itemIds.length > 0) {
+                // One more wear per item the caller owns: atomic, last-worn never moves backwards,
+                // CPW from the new count (EXCLUDED.cost_per_wear_minor holds the item cost).
+                await tx.execute(sql`
+                    INSERT INTO item_metrics (id, user_id, wardrobe_item_id, wear_count, last_worn_at, cost_per_wear_minor, status)
+                    SELECT gen_random_uuid(), w.user_id, w.id, 1, ${row.wornOn.toISOString()}::timestamptz,
+                        CASE WHEN w.cost_minor > 0 THEN w.cost_minor ELSE NULL END, 'ACTIVE'
+                    FROM wardrobe_items w
+                    WHERE w.user_id = ${input.userId} AND w.id IN ${itemIds}
+                    ORDER BY w.id
+                    ON CONFLICT (wardrobe_item_id) DO UPDATE SET
+                        wear_count = item_metrics.wear_count + 1,
+                        last_worn_at = GREATEST(item_metrics.last_worn_at, EXCLUDED.last_worn_at),
+                        cost_per_wear_minor = round(EXCLUDED.cost_per_wear_minor::numeric / (item_metrics.wear_count + 1))::integer,
+                        status = 'ACTIVE',
+                        updated_at = now()
+                    WHERE item_metrics.user_id = EXCLUDED.user_id
+                `);
             }
-        }
-        return mapWearLog(row);
+            return { log: mapWearLog(row), created: true };
+        });
     },
-    async listWearLogs(userId) {
-        const rows = await db.select().from(wearLog).where(eq(wearLog.userId, userId)).orderBy(desc(wearLog.wornOn));
+    async listWearLogs(userId, opts) {
+        const query = db
+            .select()
+            .from(wearLog)
+            .where(and(eq(wearLog.userId, userId), opts?.since ? gte(wearLog.wornOn, opts.since) : undefined))
+            .orderBy(desc(wearLog.wornOn));
+        const rows = opts?.limit !== undefined ? await query.limit(opts.limit) : await query;
         return rows.map(mapWearLog);
     },
     async findWearLog(id, userId) {
@@ -4163,122 +4525,96 @@ export function createPostgresRepositories(db: Db): Repositories {
         return row ? mapWearLog(row) : null;
     },
     async deleteWearLog(id, userId) {
-        const existing = await repos.findWearLog(id, userId);
-        if (!existing) return null;
-        const itemIds: string[] = [];
-        if (existing.wardrobeItemId) itemIds.push(existing.wardrobeItemId);
-        if (existing.outfitId) {
-            const outfit = await repos.findOutfitById(existing.outfitId, userId);
-            if (outfit) itemIds.push(...outfit.itemIds);
-        }
-        await db.delete(wearLog).where(and(eq(wearLog.id, id), eq(wearLog.userId, userId)));
-        for (const wid of [...new Set(itemIds)]) {
-            const [metric] = await db
-              .select()
-              .from(itemMetrics)
-              .where(and(eq(itemMetrics.userId, userId), eq(itemMetrics.wardrobeItemId, wid)))
-              .limit(1);
-            if (!metric) continue;
-            const [item] = await db.select().from(wardrobeItems).where(eq(wardrobeItems.id, wid)).limit(1);
-            const newCount = Math.max(0, (metric.wearCount ?? 0) - 1);
-            const costPerWear =
-              item && item.costMinor > 0 && newCount > 0
-                ? Math.round(item.costMinor / newCount)
-                : null;
-            await db
-              .update(itemMetrics)
-              .set({
-                wearCount: newCount,
-                costPerWearMinor: costPerWear,
-                lastWornAt: newCount === 0 ? null : metric.lastWornAt,
-                updatedAt: now(),
-              })
-              .where(eq(itemMetrics.id, metric.id));
-        }
-        return existing;
+        return db.transaction(async (tx) => {
+            const [row] = await tx
+                .delete(wearLog)
+                .where(and(eq(wearLog.id, id), eq(wearLog.userId, userId)))
+                .returning();
+            if (!row) return null;
+            const itemIds = await wornItemIds(tx, userId, row);
+            if (itemIds.length > 0) {
+                // One wear fewer, atomically; last-worn becomes the latest remaining wear of the item.
+                await tx.execute(sql`
+                    UPDATE item_metrics m SET
+                        wear_count = GREATEST(0, m.wear_count - 1),
+                        last_worn_at = (
+                            SELECT max(l.worn_on) FROM wear_log l
+                            LEFT JOIN outfits o ON o.id = l.outfit_id
+                            WHERE l.user_id = m.user_id
+                                AND (l.wardrobe_item_id = m.wardrobe_item_id OR m.wardrobe_item_id = ANY(o.item_ids))
+                        ),
+                        cost_per_wear_minor = CASE WHEN w.cost_minor > 0 AND m.wear_count - 1 > 0
+                            THEN round(w.cost_minor::numeric / (m.wear_count - 1))::integer ELSE NULL END,
+                        updated_at = now()
+                    FROM wardrobe_items w
+                    WHERE w.id = m.wardrobe_item_id AND w.user_id = ${userId} AND m.user_id = ${userId}
+                        AND m.wardrobe_item_id IN ${itemIds}
+                `);
+            }
+            return mapWearLog(row);
+        });
     },
     async getItemMetrics(userId) {
-        // Refresh statuses based on lastWornAt before returning
-        const rows = await db.select().from(itemMetrics).where(eq(itemMetrics.userId, userId));
-        const nowDate = new Date();
-        for (const r of rows) {
-            let computed = r.status;
-            if (!r.lastWornAt) {
-                const ageDays = (nowDate.getTime() - r.createdAt.getTime()) / 86_400_000;
-                if (ageDays > 90)
-                    computed = "DEAD";
-                else if (ageDays > 30)
-                    computed = "DORMANT";
-                else
-                    computed = "ACTIVE";
-            }
-            else {
-                const daysSince = (nowDate.getTime() - r.lastWornAt.getTime()) / 86_400_000;
-                if (daysSince > 90)
-                    computed = "DEAD";
-                else if (daysSince > 60)
-                    computed = "DORMANT";
-                else
-                    computed = "ACTIVE";
-            }
-            if (computed !== r.status) {
-                await db.update(itemMetrics).set({ status: computed, updatedAt: now() }).where(eq(itemMetrics.id, r.id));
-                r.status = computed;
-            }
-        }
-        const refreshed = await db.select().from(itemMetrics).where(eq(itemMetrics.userId, userId)).orderBy(desc(itemMetrics.updatedAt));
-        return refreshed.map(mapItemMetric);
+        // Read-only: the status is computed for now; the nightly job persists it.
+        const rows = await db.select().from(itemMetrics).where(eq(itemMetrics.userId, userId)).orderBy(desc(itemMetrics.updatedAt));
+        const at = new Date();
+        return rows.map((row) => ({ ...mapItemMetric(row), status: itemMetricStatusAt(row, at) }));
     },
     async findItemMetric(userId, wardrobeItemId) {
         const [row] = await db.select().from(itemMetrics).where(and(eq(itemMetrics.userId, userId), eq(itemMetrics.wardrobeItemId, wardrobeItemId))).limit(1);
-        return row ? mapItemMetric(row) : null;
+        return row ? { ...mapItemMetric(row), status: itemMetricStatusAt(row, new Date()) } : null;
     },
     async upsertItemMetric(input) {
-        const [existing] = await db.select().from(itemMetrics).where(and(eq(itemMetrics.userId, input.userId), eq(itemMetrics.wardrobeItemId, input.wardrobeItemId))).limit(1);
-        if (existing) {
-            const [row] = await db.update(itemMetrics).set({
+        await requireOwnedWardrobeItem(db, input.userId, input.wardrobeItemId);
+        const [row] = await db
+            .insert(itemMetrics)
+            .values({
+                id: randomUUID(),
+                userId: input.userId,
+                wardrobeItemId: input.wardrobeItemId,
                 wearCount: input.wearCount,
                 lastWornAt: input.lastWornAt,
                 costPerWearMinor: input.costPerWearMinor,
+                targetCpwMinor: input.targetCpwMinor ?? null,
                 status: input.status,
-                ...(input.targetCpwMinor !== undefined ? { targetCpwMinor: input.targetCpwMinor } : {}),
-                updatedAt: now(),
-            }).where(eq(itemMetrics.id, existing.id)).returning();
-            return mapItemMetric(row);
-        }
-        const [row] = await db.insert(itemMetrics).values({
-            id: randomUUID(),
-            userId: input.userId,
-            wardrobeItemId: input.wardrobeItemId,
-            wearCount: input.wearCount,
-            lastWornAt: input.lastWornAt,
-            costPerWearMinor: input.costPerWearMinor,
-            targetCpwMinor: input.targetCpwMinor ?? null,
-            status: input.status,
-        }).returning();
+            })
+            .onConflictDoUpdate({
+                target: itemMetrics.wardrobeItemId,
+                set: {
+                    wearCount: input.wearCount,
+                    lastWornAt: input.lastWornAt,
+                    costPerWearMinor: input.costPerWearMinor,
+                    status: input.status,
+                    ...(input.targetCpwMinor !== undefined ? { targetCpwMinor: input.targetCpwMinor } : {}),
+                    updatedAt: now(),
+                },
+                setWhere: eq(itemMetrics.userId, input.userId),
+            })
+            .returning();
+        if (!row) throw new Error(`item metric for ${input.wardrobeItemId} belongs to another user`);
         return mapItemMetric(row);
     },
     async setItemCpwGoal(input) {
-        const [existing] = await db.select().from(itemMetrics).where(and(eq(itemMetrics.userId, input.userId), eq(itemMetrics.wardrobeItemId, input.wardrobeItemId))).limit(1);
-        if (existing) {
-            const [row] = await db.update(itemMetrics).set({
+        const item = await requireOwnedWardrobeItem(db, input.userId, input.wardrobeItemId);
+        const [row] = await db
+            .insert(itemMetrics)
+            .values({
+                id: randomUUID(),
+                userId: input.userId,
+                wardrobeItemId: input.wardrobeItemId,
+                wearCount: 0,
+                lastWornAt: null,
+                costPerWearMinor: item.costMinor > 0 ? item.costMinor : null,
                 targetCpwMinor: input.targetCpwMinor,
-                updatedAt: now(),
-            }).where(eq(itemMetrics.id, existing.id)).returning();
-            return mapItemMetric(row);
-        }
-        const [item] = await db.select().from(wardrobeItems).where(eq(wardrobeItems.id, input.wardrobeItemId)).limit(1);
-        const costMinor = item?.costMinor ?? 0;
-        const [row] = await db.insert(itemMetrics).values({
-            id: randomUUID(),
-            userId: input.userId,
-            wardrobeItemId: input.wardrobeItemId,
-            wearCount: 0,
-            lastWornAt: null,
-            costPerWearMinor: costMinor > 0 ? costMinor : null,
-            targetCpwMinor: input.targetCpwMinor,
-            status: "ACTIVE",
-        }).returning();
+                status: "ACTIVE",
+            })
+            .onConflictDoUpdate({
+                target: itemMetrics.wardrobeItemId,
+                set: { targetCpwMinor: input.targetCpwMinor, updatedAt: now() },
+                setWhere: eq(itemMetrics.userId, input.userId),
+            })
+            .returning();
+        if (!row) throw new Error(`item metric for ${input.wardrobeItemId} belongs to another user`);
         return mapItemMetric(row);
     },
     async createDispositionListing(input) {
@@ -5441,7 +5777,11 @@ export function createPostgresRepositories(db: Db): Repositories {
       return updated.length > 0;
     },
     async findWardrobeItemById(id) {
-      const [row] = await db.select().from(wardrobeItems).where(eq(wardrobeItems.id, id)).limit(1);
+      const [row] = await db
+        .select()
+        .from(wardrobeItems)
+        .where(and(eq(wardrobeItems.id, id), isNull(wardrobeItems.discardedAt)))
+        .limit(1);
       return row ? mapWardrobeItem(row) : null;
     },
     async updateWardrobeItemById(id, patch) {
@@ -5464,7 +5804,7 @@ export function createPostgresRepositories(db: Db): Repositories {
       const [row] = await db
         .update(wardrobeItems)
         .set(updates)
-        .where(eq(wardrobeItems.id, id))
+        .where(and(eq(wardrobeItems.id, id), isNull(wardrobeItems.discardedAt)))
         .returning();
       return row ? mapWardrobeItem(row) : null;
     },
@@ -5480,6 +5820,33 @@ export function createPostgresRepositories(db: Db): Repositories {
           kind: input.kind,
         })
         .returning();
+      return {
+        id: row.id,
+        ownerUserId: row.ownerUserId,
+        householdId: row.householdId ?? null,
+        name: row.name,
+        kind: row.kind as ClosetProfileRecord["kind"],
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      } satisfies ClosetProfileRecord;
+    },
+    async ensureSelfClosetProfile(ownerUserId, name) {
+      // A per-owner transaction lock: two first-time GETs can't both insert a SELF row.
+      const row = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${"closet_profiles:self:" + ownerUserId}, 0))`);
+        const [existing] = await tx
+          .select()
+          .from(closetProfiles)
+          .where(and(eq(closetProfiles.ownerUserId, ownerUserId), eq(closetProfiles.kind, "SELF")))
+          .orderBy(asc(closetProfiles.createdAt))
+          .limit(1);
+        if (existing) return existing;
+        const [created] = await tx
+          .insert(closetProfiles)
+          .values({ id: randomUUID(), ownerUserId, householdId: null, name, kind: "SELF" })
+          .returning();
+        return created!;
+      });
       return {
         id: row.id,
         ownerUserId: row.ownerUserId,
@@ -5544,15 +5911,21 @@ export function createPostgresRepositories(db: Db): Repositories {
       } satisfies ClosetProfileRecord;
     },
     async deleteClosetProfile(id, ownerUserId) {
-      await db
-        .update(wardrobeItems)
-        .set({ profileId: null, updatedAt: now() })
-        .where(eq(wardrobeItems.profileId, id));
-      const deleted = await db
-        .delete(closetProfiles)
-        .where(and(eq(closetProfiles.id, id), eq(closetProfiles.ownerUserId, ownerUserId)))
-        .returning({ id: closetProfiles.id });
-      return deleted.length > 0;
+      // Owner check first, then unscope the items and delete, all in one transaction.
+      return db.transaction(async (tx) => {
+        const [owned] = await tx
+          .select({ id: closetProfiles.id })
+          .from(closetProfiles)
+          .where(and(eq(closetProfiles.id, id), eq(closetProfiles.ownerUserId, ownerUserId)))
+          .for("update");
+        if (!owned) return false;
+        await tx
+          .update(wardrobeItems)
+          .set({ profileId: null, updatedAt: now() })
+          .where(eq(wardrobeItems.profileId, id));
+        await tx.delete(closetProfiles).where(eq(closetProfiles.id, id));
+        return true;
+      });
     },
 
     async createBrandPriceWatch(input) {

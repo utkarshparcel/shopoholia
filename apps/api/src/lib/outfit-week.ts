@@ -1,12 +1,16 @@
 /**
  * Week outfit calendar helpers (Mon–Sun).
  */
+import { localDateKey } from "@worn/shared";
 
 const DAY_MS = 86_400_000;
 
-/** Format a Date as UTC calendar YYYY-MM-DD. */
-export function toDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/**
+ * Calendar YYYY-MM-DD of `d`: in `timeZone` when given (a user's day, C1), else UTC (only right
+ * for dates that are already UTC midnights, such as `parseDateKey` results).
+ */
+export function toDateKey(d: Date, timeZone?: string): string {
+  return timeZone ? localDateKey(d, timeZone) : d.toISOString().slice(0, 10);
 }
 
 /** Parse YYYY-MM-DD as UTC midnight. */
@@ -35,17 +39,20 @@ export type WeekDayKey = {
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
-/** Seven Mon–Sun day descriptors for the week of `weekStart` (or current week). */
-export function weekDayKeys(opts?: { weekStart?: string | Date; now?: Date }): WeekDayKey[] {
+/**
+ * Seven Mon–Sun day descriptors for the week of `weekStart` (or the current week). With
+ * `timeZone`, "today" and the current week are the user's (C1); without it, UTC.
+ */
+export function weekDayKeys(opts?: { weekStart?: string | Date; now?: Date; timeZone?: string }): WeekDayKey[] {
   const now = opts?.now ?? new Date();
-  const todayKey = toDateKey(now);
+  const todayKey = toDateKey(now, opts?.timeZone);
   let monday: Date;
   if (opts?.weekStart instanceof Date) {
     monday = mondayOfWeek(opts.weekStart);
   } else if (typeof opts?.weekStart === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.weekStart)) {
     monday = mondayOfWeek(parseDateKey(opts.weekStart));
   } else {
-    monday = mondayOfWeek(now);
+    monday = mondayOfWeek(parseDateKey(todayKey));
   }
   return WEEKDAYS.map((weekday, i) => {
     const d = new Date(monday.getTime() + i * DAY_MS);

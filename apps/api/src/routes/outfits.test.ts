@@ -1,23 +1,34 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { TodayOutfitResponse, WeekOutfitsResponse } from "@worn/shared";
 import { buildTestServer, login } from "../test-utils.js";
-import { mockWeatherFromDateLat, resolveWeather } from "../lib/weather.js";
+import { resolveWeather } from "../lib/weather.js";
 import * as weatherReroll from "../lib/weather-reroll.js";
 
-describe("weather helper", () => {
-  const prev = process.env.WEATHER_API;
-  afterEach(() => {
-    if (prev === undefined) delete process.env.WEATHER_API;
-    else process.env.WEATHER_API = prev;
-  });
+const prevWeatherApi = process.env.WEATHER_API;
+function restoreWeatherApi() {
+  if (prevWeatherApi === undefined) delete process.env.WEATHER_API;
+  else process.env.WEATHER_API = prevWeatherApi;
+}
 
-  it("returns deterministic mock from date+lat", () => {
-    const a = mockWeatherFromDateLat(new Date("2026-08-26T10:00:00.000Z"), 12.97);
-    const b = mockWeatherFromDateLat(new Date("2026-08-26T18:00:00.000Z"), 12.97);
-    expect(a.tempC).toBe(b.tempC);
-    expect(a.condition).toBe(b.condition);
-    expect(a.source).toBe("mock");
-    expect(typeof a.fetchedAt).toBe("string");
+/** A weather provider for the routes: WEATHER_API plus a fetch that answers it. */
+function stubWeather(reading: { tempC: number; condition: string }) {
+  process.env.WEATHER_API = "https://weather.test/{lat}/{lon}";
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.startsWith("https://weather.test/")) {
+      return new Response(JSON.stringify(reading), { status: 200 });
+    }
+    return realFetch(input, init);
+  });
+}
+
+describe("weather helper", () => {
+  afterEach(restoreWeatherApi);
+
+  it("is null without WEATHER_API: no invented weather (C5)", async () => {
+    delete process.env.WEATHER_API;
+    expect(await resolveWeather({ lat: 12.97, lon: 77.59 })).toBeNull();
   });
 
   it("fetches from WEATHER_API when set", async () => {
@@ -28,18 +39,42 @@ describe("weather helper", () => {
       fetchImpl: async () =>
         new Response(JSON.stringify({ tempC: 29, condition: "humid" }), { status: 200 }),
     });
-    expect(weather.source).toBe("api");
-    expect(weather.tempC).toBe(29);
-    expect(weather.condition).toBe("humid");
+    expect(weather?.source).toBe("api");
+    expect(weather?.tempC).toBe(29);
+    expect(weather?.condition).toBe("humid");
   });
 });
 
 describe("outfits", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    restoreWeatherApi();
+  });
+
+  it("without a weather provider the outfit has no weather and no weather reason", async () => {
+    delete process.env.WEATHER_API;
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "shirt", colors: ["white"], imageKeys: [`u/${userId}/w/s.jpg`] },
+    });
+    const today = await app.inject({
+      method: "GET",
+      url: "/outfits/today",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(today.statusCode).toBe(200);
+    const body = today.json() as TodayOutfitResponse;
+    expect(body.outfit!.weatherCtx).toBeNull();
+    expect(body.outfit!.whyThis!.some((s) => /weather|mock/i.test(s))).toBe(false);
   });
 
   it("generates outfit with weatherCtx structure and whyThis", async () => {
+    stubWeather({ tempC: 31, condition: "sunny" });
     const { app, repos } = await buildTestServer();
     const { accessToken, userId } = await login(app);
 
@@ -48,13 +83,13 @@ describe("outfits", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "jeans", colors: ["blue"], imageKeys: ["w/j.jpg"], garmentImageKey: "w/j.jpg" },
+      payload: { category: "jeans", colors: ["blue"], imageKeys: [`u/${userId}/w/j.jpg`], garmentImageKey: `u/${userId}/w/j.jpg` },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", colors: ["white"], imageKeys: ["w/s.jpg"], garmentImageKey: "w/s.jpg" },
+      payload: { category: "shirt", colors: ["white"], imageKeys: [`u/${userId}/w/s.jpg`], garmentImageKey: `u/${userId}/w/s.jpg` },
     });
 
     const today = await app.inject({
@@ -65,11 +100,7 @@ describe("outfits", () => {
     expect(today.statusCode).toBe(200);
     const body = today.json() as TodayOutfitResponse;
     expect(body.outfit).not.toBeNull();
-    expect(body.outfit!.weatherCtx).toMatchObject({
-      tempC: expect.any(Number),
-      condition: expect.any(String),
-      source: expect.stringMatching(/^(api|mock)$/),
-    });
+    expect(body.outfit!.weatherCtx).toMatchObject({ tempC: 31, condition: "sunny", source: "api" });
     expect(body.outfit!.whyThis).toBeDefined();
     expect(body.outfit!.whyThis!.length).toBeGreaterThan(0);
     expect(body.outfit!.whyThis!.some((s) => /taste|weather|wear|clean|laundry|staples|skipped/i.test(s))).toBe(
@@ -80,12 +111,12 @@ describe("outfits", () => {
 
   it("POST /outfits/generate returns whyThis", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "kurta", imageKeys: ["w/k.jpg"], garmentImageKey: "w/k.jpg" },
+      payload: { category: "kurta", imageKeys: [`u/${userId}/w/k.jpg`], garmentImageKey: `u/${userId}/w/k.jpg` },
     });
     const res = await app.inject({
       method: "POST",
@@ -99,31 +130,31 @@ describe("outfits", () => {
 
   it("outfit generator skips DIRTY and IN_LAUNDRY items", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const cleanA = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "clean-tee", laundryStatus: "CLEAN", imageKeys: ["w/c1.jpg"] },
+      payload: { category: "clean-tee", laundryStatus: "CLEAN", imageKeys: [`u/${userId}/w/c1.jpg`] },
     });
     const cleanB = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "clean-jeans", laundryStatus: "CLEAN", imageKeys: ["w/c2.jpg"] },
+      payload: { category: "clean-jeans", laundryStatus: "CLEAN", imageKeys: [`u/${userId}/w/c2.jpg`] },
     });
     const dirty = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "dirty-shirt", laundryStatus: "DIRTY", imageKeys: ["w/d.jpg"] },
+      payload: { category: "dirty-shirt", laundryStatus: "DIRTY", imageKeys: [`u/${userId}/w/d.jpg`] },
     });
     const inLaundry = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "washing-kurta", laundryStatus: "IN_LAUNDRY", imageKeys: ["w/l.jpg"] },
+      payload: { category: "washing-kurta", laundryStatus: "IN_LAUNDRY", imageKeys: [`u/${userId}/w/l.jpg`] },
     });
     const cleanIds = new Set([
       (cleanA.json() as { id: string }).id,
@@ -151,7 +182,7 @@ describe("outfits", () => {
 
   it("excludes pieces worn in the last N days (avoid-repeat)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const ids: string[] = [];
     for (const cat of ["tee-a", "jeans-b", "shirt-c", "kurta-d"]) {
@@ -159,7 +190,7 @@ describe("outfits", () => {
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category: cat, laundryStatus: "CLEAN", imageKeys: [`w/${cat}.jpg`] },
+        payload: { category: cat, laundryStatus: "CLEAN", imageKeys: [`u/${userId}/w/${cat}.jpg`] },
       });
       ids.push((created.json() as { id: string }).id);
     }
@@ -189,14 +220,14 @@ describe("outfits", () => {
 
   it("week calendar CRUD: fill Mon–Sun, patch day, regenerate", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     for (const cat of ["shirt", "jeans", "sneakers", "jacket", "kurta", "shorts", "tee"]) {
       await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category: cat, laundryStatus: "CLEAN", imageKeys: [`w/${cat}.jpg`] },
+        payload: { category: cat, laundryStatus: "CLEAN", imageKeys: [`u/${userId}/w/${cat}.jpg`] },
       });
     }
 
@@ -258,19 +289,20 @@ describe("outfits", () => {
   });
 
   it("weather re-roll regenerates before noon when forecast shifts", async () => {
+    stubWeather({ tempC: 30, condition: "sunny" });
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", imageKeys: ["w/s.jpg"] },
+      payload: { category: "shirt", imageKeys: [`u/${userId}/w/s.jpg`] },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "jeans", imageKeys: ["w/j.jpg"] },
+      payload: { category: "jeans", imageKeys: [`u/${userId}/w/j.jpg`] },
     });
 
     const first = await app.inject({
@@ -299,14 +331,14 @@ describe("outfits", () => {
   });
 
   it("GET /outfits/today?alt= returns ranked alternative; select commits it", async () => {
-    const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
     for (const cat of ["a", "b", "c", "d", "e", "f"]) {
       await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category: cat, imageKeys: [`w/${cat}.jpg`] },
+        payload: { category: cat, imageKeys: [`u/${userId}/w/${cat}.jpg`] },
       });
     }
     const primary = await app.inject({
@@ -332,6 +364,9 @@ describe("outfits", () => {
     for (const id of aBody.outfit!.itemIds) {
       expect(primaryIds.has(id)).toBe(false);
     }
+    // Browsing alternatives (a GET) writes nothing: still just today's one outfit row.
+    await app.inject({ method: "GET", url: "/outfits/today?alt=2", headers: { authorization: `Bearer ${accessToken}` } });
+    expect(await repos.listOutfits(userId)).toHaveLength(1);
 
     const select = await app.inject({
       method: "POST",
@@ -355,13 +390,13 @@ describe("outfits", () => {
 
   it("POST /outfits/travel-pack builds capsule checklist within maxItems", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     for (const cat of ["shirt", "tee", "jeans", "chinos", "sneakers", "rain jacket"]) {
       await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category: cat, imageKeys: [`w/${cat}.jpg`] },
+        payload: { category: cat, imageKeys: [`u/${userId}/w/${cat}.jpg`] },
       });
     }
     const res = await app.inject({
@@ -385,7 +420,7 @@ describe("outfits", () => {
 
   it("POST /outfits/week/workwear plans unique weekday WORK outfits", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const pieces = [
       "dress shirt",
       "oxford shirt",
@@ -408,7 +443,7 @@ describe("outfits", () => {
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category, tags: ["workwear"], imageKeys: [`w/${category}.jpg`] },
+        payload: { category, tags: ["workwear"], imageKeys: [`u/${userId}/w/${category}.jpg`] },
       });
     }
     const res = await app.inject({
@@ -434,18 +469,18 @@ describe("outfits", () => {
     // The event below is a fixed date; reminders are only set for future events.
     vi.useFakeTimers({ now: new Date("2026-08-27T12:00:00.000Z"), toFake: ["Date"] });
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "blazer", imageKeys: ["w/b.jpg"], garmentImageKey: "w/b.jpg" },
+      payload: { category: "blazer", imageKeys: [`u/${userId}/w/b.jpg`], garmentImageKey: `u/${userId}/w/b.jpg` },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "trousers", imageKeys: ["w/t.jpg"], garmentImageKey: "w/t.jpg" },
+      payload: { category: "trousers", imageKeys: [`u/${userId}/w/t.jpg`], garmentImageKey: `u/${userId}/w/t.jpg` },
     });
 
     const res = await app.inject({
@@ -484,13 +519,13 @@ describe("outfits", () => {
 
   it("POST /outfits/wedding-festival plans N day outfits + envelope (N39)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     for (const category of ["lehenga", "saree", "kurta", "heels", "mojari", "sherwani", "gown", "churidar"]) {
       await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category, tags: ["wedding", "festive"], imageKeys: [`w/${category}.jpg`] },
+        payload: { category, tags: ["wedding", "festive"], imageKeys: [`u/${userId}/w/${category}.jpg`] },
       });
     }
     const res = await app.inject({
@@ -525,14 +560,14 @@ describe("outfits", () => {
     // The interview below is a fixed date; reminders are only set for future ones.
     vi.useFakeTimers({ now: new Date("2026-08-27T12:00:00.000Z"), toFake: ["Date"] });
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const createdIds: string[] = [];
     for (const category of ["blazer", "dress shirt", "trousers", "loafers"]) {
       const w = await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category, tags: ["formal"], imageKeys: [`w/${category}.jpg`] },
+        payload: { category, tags: ["formal"], imageKeys: [`u/${userId}/w/${category}.jpg`] },
       });
       createdIds.push((w.json() as { id: string }).id);
     }
@@ -586,5 +621,69 @@ describe("outfits", () => {
     const canceled = cancel.json() as { kit: { remindAt: string | null; reminderScheduled: boolean } };
     expect(canceled.kit.remindAt).toBeNull();
     expect(canceled.kit.reminderScheduled).toBe(false);
+  });
+
+  it("today and the week are the user's local days, not UTC's", async () => {
+    // 2026-08-30T19:30Z is Sun 30 Aug in UTC but Mon 31 Aug in Kolkata.
+    vi.useFakeTimers({ now: new Date("2026-08-30T19:30:00.000Z"), toFake: ["Date"] });
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    await repos.setUserTimeZone(userId, "Asia/Kolkata");
+    await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "shirt", imageKeys: [] },
+    });
+    const today = await app.inject({ method: "GET", url: "/outfits/today", headers: { authorization: `Bearer ${accessToken}` } });
+    expect((today.json() as TodayOutfitResponse).outfit!.plannedFor).toBe("2026-08-31");
+    const week = await app.inject({ method: "GET", url: "/outfits/week", headers: { authorization: `Bearer ${accessToken}` } });
+    const days = (week.json() as WeekOutfitsResponse).days;
+    expect(days[0]!.date).toBe("2026-08-31");
+    expect(days.find((d) => d.isToday)?.date).toBe("2026-08-31");
+
+    // Asking again the same local day reuses the row (no second generation).
+    const again = await app.inject({ method: "GET", url: "/outfits/today", headers: { authorization: `Bearer ${accessToken}` } });
+    expect((again.json() as TodayOutfitResponse).outfit!.id).toBe((today.json() as TodayOutfitResponse).outfit!.id);
+    expect(await repos.listOutfits(userId)).toHaveLength(1);
+  });
+
+  it("week PATCH and interview-kit refuse another user's items with 404", async () => {
+    const { app } = await buildTestServer();
+    const me = await login(app);
+    const other = await login(app, "919876543288");
+    const theirs = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+      payload: { category: "blazer", imageKeys: [] },
+    });
+    const theirId = (theirs.json() as { id: string }).id;
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/outfits/week/2026-12-01",
+      headers: { authorization: `Bearer ${me.accessToken}` },
+      payload: { itemIds: [theirId] },
+    });
+    expect(patch.statusCode).toBe(404);
+    const kit = await app.inject({
+      method: "POST",
+      url: "/outfits/interview-kit",
+      headers: { authorization: `Bearer ${me.accessToken}` },
+      payload: { name: "Panel", kind: "interview", itemIds: [theirId], eventAt: "2026-12-02T09:00:00.000Z", commit: true },
+    });
+    expect(kit.statusCode).toBe(404);
+  });
+
+  it("wedding-festival spans are capped", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken } = await login(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/outfits/wedding-festival",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { startDate: "2026-01-01", endDate: "2027-12-31", kind: "festival" },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

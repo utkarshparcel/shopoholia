@@ -1,5 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  localDateKey,
+  resolveTimeZone,
   CreateMeasurementBodySchema,
   UpdateMeasurementBodySchema,
   MeasurementHistoryResponseSchema,
@@ -38,6 +40,11 @@ import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
 import { scheduleTailoringTransitions } from "../lib/tailoring-jobs.js";
+import { enqueueJob, jobIdFrom } from "../lib/queues/enqueue.js";
+import { renderProviderAvailable } from "../lib/render/provider.js";
+import { isUserObjectKey, userObjectKey } from "../lib/storage/r2.js";
+import { FIT_PREVIEW_QUEUE, handleFitPreview } from "../jobs/fit-preview.js";
+import { RENDER_CLAIM_STALE_MS } from "../jobs/wardrobe-tryon.js";
 import { assignTailorSeller, listTailorMarketplace, tailorRatingAvg } from "../lib/tailor-marketplace.js";
 import {
   getRegionPackDefaults,
@@ -58,6 +65,15 @@ import type {
 } from "../lib/repositories/types.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+/** A fabric photo this user uploaded: `u/{userId}/…`, or the older `fit/fabric/{userId}/…` keys. */
+function ownsFabricKey(key: string, userId: string): boolean {
+  if (isUserObjectKey(key, userId)) return true;
+  const parts = key.split("/");
+  return parts.length === 4 && parts[0] === "fit" && parts[1] === "fabric" && parts[2] === userId;
+}
+
+const FABRIC_NOT_FOUND = { error: "Not Found", message: "Fabric photo not found" };
 
 function toMeasurementJson(r: MeasurementProfileRecord) {
   const meta = getMeasureMeta(r.id);
@@ -354,7 +370,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
         if (part.type !== "file") continue;
         const buffer = await part.toBuffer();
         if (buffer.length === 0) continue;
-        key = `fit/fabric/${userId}/${randomUUID()}.jpg`;
+        key = userObjectKey(userId, "fit-fabric", `${randomUUID()}.jpg`);
         await app.deps.storage.put({
           key,
           body: buffer,
@@ -379,7 +395,13 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["fit"],
         body: FitPreviewBodySchema,
-        response: { 200: FitPreviewResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
+        response: {
+          200: FitPreviewResponseSchema,
+          202: FitPreviewResponseSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+          503: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
@@ -400,7 +422,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       const garmentKey = garmentKeyForSelections(schema, selections) ?? `fit/preview/${template.id}.jpg`;
       const avatar = await app.deps.repos.findAvatarByUserId(userId);
 
-      if (!avatar?.referenceImageKey) {
+      if (!avatar?.referenceImageKey || avatar.status !== "READY") {
         trackServerEvent("tailoring_previewed", { userId, templateId: template.id, status: "NO_AVATAR" });
         return {
           status: "NO_AVATAR" as const,
@@ -410,36 +432,60 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
           summary: summary || template.name,
         };
       }
-
-      let imageKey = `fit/avatar-preview/${userId}/${template.id}/${randomUUID()}.jpg`;
-      let previewUrl: string | null = null;
-      try {
-        const result = await app.deps.renderProvider.tryOn({
-          modelImageKey: avatar.referenceImageKey,
-          garmentImageKey: garmentKey,
-        });
-        imageKey = result.imageKey;
-        if (result.imageBytes) {
-          await app.deps.storage.put({
-            key: imageKey,
-            body: Buffer.from(result.imageBytes),
-            contentType: "image/jpeg",
-          });
-        }
-        previewUrl = await app.deps.storage.getSignedUrl(imageKey);
-      } catch {
-        previewUrl = await app.deps.storage.getSignedUrl(avatar.referenceImageKey);
-        imageKey = avatar.referenceImageKey;
+      if (!renderProviderAvailable(app.deps.renderProvider)) {
+        return reply.code(503).send({ error: "tryon_unavailable", message: "Previews are not available right now" });
       }
 
-      trackServerEvent("tailoring_previewed", { userId, templateId: template.id, status: "READY" });
-      return {
-        status: "READY" as const,
-        previewUrl,
-        imageKey,
-        selections,
-        summary: summary || template.name,
-      };
+      // The render runs as a job (C6); the same template and selections share one preview row.
+      const selectionsKey = createHash("sha256")
+        .update(JSON.stringify([garmentKey, Object.entries(selections).sort(([a], [b]) => a.localeCompare(b))]))
+        .digest("hex");
+      const { claimed, preview } = await app.deps.repos.claimFitPreview({
+        userId,
+        templateId: template.id,
+        selectionsKey,
+        garmentKey,
+        provider: app.deps.renderProvider.name,
+        staleBefore: new Date(Date.now() - RENDER_CLAIM_STALE_MS),
+      });
+      if (claimed) {
+        const payload = { userId, previewId: preview.id };
+        let queued;
+        try {
+          queued = await enqueueJob(FIT_PREVIEW_QUEUE, "render", payload, {
+            jobId: jobIdFrom(FIT_PREVIEW_QUEUE, preview.id, preview.updatedAt.getTime()),
+          });
+        } catch (err) {
+          // Not queued: release the claim so the next ask can try again in a minute.
+          await app.deps.repos.finishFitPreview(preview.id, userId, {
+            status: "FAILED",
+            error: "Could not queue the preview",
+            retryAfter: new Date(Date.now() + 60_000),
+          });
+          throw err;
+        }
+        if (queued.status === "skipped") {
+          // Only outside production (enqueueJob throws there without Redis): render in-process.
+          void handleFitPreview(payload, app.deps).catch((err) =>
+            request.log.error({ err, previewId: preview.id }, "in-process fit preview failed"),
+          );
+        }
+      }
+
+      trackServerEvent("tailoring_previewed", { userId, templateId: template.id, status: preview.status });
+      const base = { imageKey: preview.imageKey, selections, summary: summary || template.name };
+      if (preview.status === "READY" && preview.imageKey) {
+        return { ...base, status: "READY" as const, previewUrl: await app.deps.storage.getSignedUrl(preview.imageKey) };
+      }
+      if (preview.status === "FAILED") {
+        return {
+          ...base,
+          status: "FAILED" as const,
+          previewUrl: null,
+          retryAfter: preview.retryAfter?.toISOString() ?? null,
+        };
+      }
+      return reply.code(202).send({ ...base, status: "PROCESSING" as const, previewUrl: null });
     },
   );
 
@@ -457,6 +503,9 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const body = request.body as CreateTailoringOrderBody;
+      if ((body.fabricPhotoKeys ?? []).some((k) => !ownsFabricKey(k, userId))) {
+        return reply.code(404).send(FABRIC_NOT_FOUND);
+      }
       const template = await app.deps.repos.findCustomizationTemplate(body.templateId);
       if (!template) return reply.code(404).send({ error: "Not Found", message: "Template not found" });
       if (body.measurementProfileId) {
@@ -550,6 +599,9 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { id } = request.params;
       const body = request.body as { fabricRef?: string | null; fabricPhotoKeys: string[] };
+      if (body.fabricPhotoKeys.some((k) => !ownsFabricKey(k, userId))) {
+        return reply.code(404).send(FABRIC_NOT_FOUND);
+      }
       const existing = await app.deps.repos.findTailoringOrder(id, userId);
       if (!existing) {
         return reply.code(404).send({ error: "Not Found", message: "Tailoring order not found" });
@@ -700,7 +752,9 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
           order: toTailoringJson(order),
         };
       }
-      const asOf = body.asOf ?? new Date().toISOString().slice(0, 10);
+      const asOf =
+        body.asOf ??
+        localDateKey(new Date(), resolveTimeZone((await app.deps.repos.findUserById(userId))?.timeZone));
       const should = shouldSendTailorPickupNudge({
         expectedPickupOn: expected,
         asOf,

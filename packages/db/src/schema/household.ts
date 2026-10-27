@@ -53,7 +53,7 @@ export const closetProfiles = pgTable(
       onDelete: "set null",
     }),
     name: text("name").notNull(),
-    kind: closetProfileKindEnum("kind").notNull().default("KID"),
+    kind: closetProfileKindEnum("kind").notNull().default("SELF"),
     ...timestamps,
   },
   (t) => [

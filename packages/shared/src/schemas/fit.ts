@@ -152,13 +152,22 @@ export const FitPreviewBodySchema = z.object({
 export type FitPreviewBody = z.infer<typeof FitPreviewBodySchema>;
 
 export const FitPreviewResponseSchema = z.object({
-  status: z.enum(["READY", "PROCESSING", "NO_AVATAR"]),
+  /** FAILED: the last render failed; ask again after `retryAfter`. */
+  status: z.enum(["READY", "PROCESSING", "NO_AVATAR", "FAILED"]),
   previewUrl: z.string().nullable(),
   imageKey: z.string().nullable(),
   selections: z.record(z.string()),
   summary: z.string(),
+  retryAfter: z.string().datetime().nullable().optional(),
 });
 export type FitPreviewResponse = z.infer<typeof FitPreviewResponseSchema>;
+
+/** Queue `fit-preview`: render one stored fit preview (apps/api/src/jobs/fit-preview.ts). */
+export const FitPreviewJobSchema = z.object({
+  userId: z.string().uuid(),
+  previewId: z.string().uuid(),
+});
+export type FitPreviewJob = z.infer<typeof FitPreviewJobSchema>;
 
 export const FabricUploadResponseSchema = z.object({
   key: z.string(),

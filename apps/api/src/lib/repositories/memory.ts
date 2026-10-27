@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline, checkHouseholdVaultSpendCap } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
+import { itemMetricStatusAt } from "../item-metric-status.js";
+import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
-import { pageInMemory } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -11,7 +12,6 @@ import {
   assertMergePlan,
   sumItemsMinor,
 } from "../purchase-merge-split.js";
->>>>>>> fix-money
 import {
   compareText,
   decodeListingCursor,
@@ -48,6 +48,9 @@ import type {
   BrandPriceWatchRecord,
   EmiPlanRecord,
   CashbackClaimRecord,
+  FitPreviewRecord,
+  PreviewResult,
+  UpdateWardrobeItemInput,
 } from "./types.js";
 import type {
   AvatarRecord,
@@ -97,6 +100,32 @@ import type {
 
 function now() {
   return new Date();
+}
+
+/** Mirrors postgres.ts previewClaimable: never over READY, a fresh claim, or a FAILED row before retryAfter. */
+function previewClaimable(
+  p: Pick<TryonPreviewRecord, "status" | "updatedAt" | "retryAfter">,
+  staleBefore: Date,
+  at: Date,
+): boolean {
+  if (p.status === "READY") return false;
+  if (p.status === "PROCESSING" && p.updatedAt.getTime() >= staleBefore.getTime()) return false;
+  if (p.status === "FAILED" && p.retryAfter && p.retryAfter.getTime() > at.getTime()) return false;
+  return true;
+}
+
+function memoryPreviewResult(result: PreviewResult) {
+  return result.status === "READY"
+    ? {
+        status: "READY" as const,
+        imageKey: result.imageKey,
+        provider: result.provider,
+        costMicros: result.costMicros,
+        error: null,
+        retryAfter: null,
+        updatedAt: now(),
+      }
+    : { status: "FAILED" as const, error: result.error, retryAfter: result.retryAfter, updatedAt: now() };
 }
 
 function generateReferralCode(userId: string): string {
@@ -171,6 +200,9 @@ export function createMemoryRepositories(): Repositories {
   const tryonPreviewKey = (userId: string, variantId: string) => `${userId}:v:${variantId}`;
   const wardrobeTryonPreviewKey = (userId: string, wardrobeItemId: string) =>
     `${userId}:w:${wardrobeItemId}`;
+  const fitPreviewsStore = new Map<string, FitPreviewRecord>();
+  const fitPreviewKey = (userId: string, templateId: string, selectionsKey: string) =>
+    `${userId}:${templateId}:${selectionsKey}`;
   const cartsByUser = new Map<string, string>();
   const carts = new Map<string, CartRecord>();
   const cartItems = new Map<string, CartItemRecord>();
@@ -266,7 +298,45 @@ export function createMemoryRepositories(): Repositories {
   const wardrobeItemsStore = new Map<string, WardrobeItemRecord>();
   const outfitsStore = new Map<string, OutfitRecord>();
   const wearLogsStore = new Map<string, WearLogRecord>();
+  const wearLogIdempotency = new Map<string, string>();
   const itemMetricsStore = new Map<string, ItemMetricRecord>();
+  function applyWardrobePatch(existing: WardrobeItemRecord, patch: UpdateWardrobeItemInput): WardrobeItemRecord {
+    return {
+      ...existing,
+      ...(patch.category !== undefined ? { category: patch.category } : {}),
+      ...(patch.colors !== undefined ? { colors: patch.colors } : {}),
+      ...(patch.brand !== undefined ? { brand: patch.brand } : {}),
+      ...(patch.costMinor !== undefined ? { costMinor: patch.costMinor } : {}),
+      ...(patch.imageKeys !== undefined ? { imageKeys: patch.imageKeys } : {}),
+      ...(patch.garmentImageKey !== undefined ? { garmentImageKey: patch.garmentImageKey } : {}),
+      ...(patch.laundryStatus !== undefined ? { laundryStatus: patch.laundryStatus } : {}),
+      ...(patch.closetStatus !== undefined ? { closetStatus: patch.closetStatus } : {}),
+      ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
+      ...(patch.careRules !== undefined ? { careRules: patch.careRules } : {}),
+      ...(patch.dryCleanTicket !== undefined ? { dryCleanTicket: patch.dryCleanTicket } : {}),
+      ...(patch.dryCleanPickupOn !== undefined ? { dryCleanPickupOn: patch.dryCleanPickupOn } : {}),
+      ...(patch.lentTo !== undefined ? { lentTo: patch.lentTo } : {}),
+      ...(patch.lentDueOn !== undefined ? { lentDueOn: patch.lentDueOn } : {}),
+      ...(patch.profileId !== undefined ? { profileId: patch.profileId } : {}),
+      updatedAt: now(),
+    };
+  }
+  /** Item ids a wear log counts: its item and its outfit's items. */
+  function memoryWornItemIds(log: WearLogRecord): string[] {
+    const ids = new Set<string>();
+    if (log.wardrobeItemId) ids.add(log.wardrobeItemId);
+    const outfit = log.outfitId ? outfitsStore.get(log.outfitId) : undefined;
+    if (outfit && outfit.userId === log.userId) for (const id of outfit.itemIds) ids.add(id);
+    return [...ids];
+  }
+  /** The caller's item, or an error: metrics are never written for another user's item. */
+  function requireMemoryOwnedItem(userId: string, wardrobeItemId: string): WardrobeItemRecord {
+    const item = wardrobeItemsStore.get(wardrobeItemId);
+    if (!item || item.userId !== userId) {
+      throw new Error(`wardrobe item ${wardrobeItemId} not found for this user`);
+    }
+    return item;
+  }
   const dispositionStore = new Map<string, DispositionListingRecord>();
   const swapCirclesStore = new Map<string, SwapCircleRecord>();
   const swapMembersStore = new Map<string, SwapCircleMemberRecord>();
@@ -1221,6 +1291,8 @@ export function createMemoryRepositories(): Repositories {
         wardrobeItemId: data.wardrobeItemId ?? null,
         imageKey: data.imageKey,
         status: data.status,
+        error: data.error ?? null,
+        retryAfter: data.retryAfter ?? null,
         provider: data.provider,
         costMicros: data.costMicros,
         createdAt: existing?.createdAt ?? timestamp,
@@ -1228,6 +1300,78 @@ export function createMemoryRepositories(): Repositories {
       };
       tryonPreviews.set(key, record);
       return record;
+    },
+
+    async claimWardrobeTryon({ userId, wardrobeItemId, provider, staleBefore }) {
+      const key = wardrobeTryonPreviewKey(userId, wardrobeItemId);
+      const existing = tryonPreviews.get(key);
+      const timestamp = now();
+      if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
+        return { claimed: false, preview: existing };
+      }
+      const preview: TryonPreviewRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId,
+        listingVariantId: null,
+        wardrobeItemId,
+        imageKey: null,
+        status: "PROCESSING",
+        error: null,
+        retryAfter: null,
+        provider,
+        costMicros: existing?.costMicros ?? 0,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      tryonPreviews.set(key, preview);
+      return { claimed: true, preview };
+    },
+
+    async finishWardrobeTryon(userId, wardrobeItemId, result) {
+      const key = wardrobeTryonPreviewKey(userId, wardrobeItemId);
+      const existing = tryonPreviews.get(key);
+      if (!existing || existing.status !== "PROCESSING") return null;
+      const updated: TryonPreviewRecord = { ...existing, ...memoryPreviewResult(result) };
+      tryonPreviews.set(key, updated);
+      return updated;
+    },
+
+    async findFitPreview(id, userId) {
+      return [...fitPreviewsStore.values()].find((p) => p.id === id && p.userId === userId) ?? null;
+    },
+
+    async claimFitPreview({ userId, templateId, selectionsKey, garmentKey, provider, staleBefore }) {
+      const key = fitPreviewKey(userId, templateId, selectionsKey);
+      const existing = fitPreviewsStore.get(key);
+      const timestamp = now();
+      if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
+        return { claimed: false, preview: existing };
+      }
+      const preview: FitPreviewRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId,
+        templateId,
+        selectionsKey,
+        garmentKey: existing?.garmentKey ?? garmentKey,
+        status: "PROCESSING",
+        imageKey: null,
+        error: null,
+        retryAfter: null,
+        provider,
+        costMicros: existing?.costMicros ?? 0,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      fitPreviewsStore.set(key, preview);
+      return { claimed: true, preview };
+    },
+
+    async finishFitPreview(id, userId, result) {
+      const existing = await repos.findFitPreview(id, userId);
+      if (!existing || existing.status !== "PROCESSING") return null;
+      const updated: FitPreviewRecord = { ...existing, ...memoryPreviewResult(result) };
+      fitPreviewsStore.set(fitPreviewKey(userId, existing.templateId, existing.selectionsKey), updated);
+      return updated;
     },
 
     async getOrCreateCart(userId) {
@@ -3174,80 +3318,103 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listWardrobeItems(userId) {
-      return [...wardrobeItemsStore.values()].filter(r => r.userId === userId).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime());
+      return [...wardrobeItemsStore.values()].filter(r => r.userId === userId && !r.discardedAt).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime());
+    },
+    async listWardrobeItemsPage(userId, query) {
+      const lent = query.lent;
+      const rows = [...wardrobeItemsStore.values()].filter(
+        (r) =>
+          r.userId === userId &&
+          !r.discardedAt &&
+          (!query.profileId || r.profileId === query.profileId) &&
+          (!lent || (r.lentTo ?? "").trim() !== "") &&
+          (lent?.filter !== "due" || (r.lentDueOn != null && r.lentDueOn <= lent.asOf)) &&
+          (lent?.filter !== "overdue" || (r.lentDueOn != null && r.lentDueOn < lent.asOf)),
+      );
+      return pageInMemory(rows, query.limit, query.after, (r) => r.createdAt, (r) => r.id);
+    },
+    async findWardrobeItemsByIds(userId, ids) {
+      return [...new Set(ids)]
+        .map((id) => wardrobeItemsStore.get(id))
+        .filter((r): r is WardrobeItemRecord => !!r && r.userId === userId && !r.discardedAt);
     },
     async findWardrobeItem(id, userId) {
       const r = wardrobeItemsStore.get(id);
-      if (!r || r.userId !== userId) return null;
+      if (!r || r.userId !== userId || r.discardedAt) return null;
       return r;
     },
     async createWardrobeItem(input) {
-      const rec: WardrobeItemRecord = {
-        id: randomUUID(),
-        userId: input.userId,
-        source: input.source ?? "MANUAL",
-        category: input.category,
-        colors: input.colors ?? [],
-        brand: input.brand ?? null,
-        costMinor: input.costMinor ?? 0,
-        imageKeys: input.imageKeys ?? [],
-        garmentImageKey: input.garmentImageKey ?? null,
-        purchaseItemId: input.purchaseItemId ?? null,
-        laundryStatus: input.laundryStatus ?? "CLEAN",
-        closetStatus: input.closetStatus ?? "ACTIVE",
-        tags: input.tags ?? [],
-        careRules: input.careRules ?? null,
-        dryCleanTicket: input.dryCleanTicket ?? null,
-        dryCleanPickupOn: input.dryCleanPickupOn ?? null,
-        lentTo: input.lentTo ?? null,
-        lentDueOn: input.lentDueOn ?? null,
-        profileId: input.profileId ?? null,
-        createdAt: now(),
-        updatedAt: now(),
-      };
-      wardrobeItemsStore.set(rec.id, rec);
-      const metricKey = `${input.userId}:${rec.id}`;
-      if (!itemMetricsStore.has(metricKey)) {
-        const m: ItemMetricRecord = {
+      const [result] = await repos.createWardrobeItems([input]);
+      return result!.item;
+    },
+    async createWardrobeItems(inputs) {
+      return inputs.map((input) => {
+        if (input.purchaseItemId) {
+          const existing = [...wardrobeItemsStore.values()].find(
+            (r) => r.userId === input.userId && r.purchaseItemId === input.purchaseItemId,
+          );
+          if (existing) return { item: existing, created: false };
+        }
+        const rec: WardrobeItemRecord = {
           id: randomUUID(),
           userId: input.userId,
-          wardrobeItemId: rec.id,
-          wearCount: 0,
-          lastWornAt: null,
-          costPerWearMinor: rec.costMinor > 0 ? rec.costMinor : null,
-          targetCpwMinor: null,
-          status: "ACTIVE",
+          source: input.source ?? "MANUAL",
+          category: input.category,
+          colors: input.colors ?? [],
+          brand: input.brand ?? null,
+          costMinor: input.costMinor ?? 0,
+          imageKeys: input.imageKeys ?? [],
+          garmentImageKey: input.garmentImageKey ?? null,
+          purchaseItemId: input.purchaseItemId ?? null,
+          laundryStatus: input.laundryStatus ?? "CLEAN",
+          closetStatus: input.closetStatus ?? "ACTIVE",
+          tags: input.tags ?? [],
+          careRules: input.careRules ?? null,
+          dryCleanTicket: input.dryCleanTicket ?? null,
+          dryCleanPickupOn: input.dryCleanPickupOn ?? null,
+          lentTo: input.lentTo ?? null,
+          lentDueOn: input.lentDueOn ?? null,
+          profileId: input.profileId ?? null,
+          discardedAt: null,
           createdAt: now(),
           updatedAt: now(),
         };
-        itemMetricsStore.set(metricKey, m);
-      }
-      return rec;
+        wardrobeItemsStore.set(rec.id, rec);
+        const metricKey = `${input.userId}:${rec.id}`;
+        if (!itemMetricsStore.has(metricKey)) {
+          const m: ItemMetricRecord = {
+            id: randomUUID(),
+            userId: input.userId,
+            wardrobeItemId: rec.id,
+            wearCount: 0,
+            lastWornAt: null,
+            costPerWearMinor: rec.costMinor > 0 ? rec.costMinor : null,
+            targetCpwMinor: null,
+            status: "ACTIVE",
+            createdAt: now(),
+            updatedAt: now(),
+          };
+          itemMetricsStore.set(metricKey, m);
+        }
+        return { item: rec, created: true };
+      });
     },
     async updateWardrobeItem(id, userId, patch) {
       const existing = wardrobeItemsStore.get(id);
-      if (!existing || existing.userId !== userId) return null;
-      const updated: WardrobeItemRecord = {
-        ...existing,
-        ...(patch.category !== undefined ? { category: patch.category } : {}),
-        ...(patch.colors !== undefined ? { colors: patch.colors } : {}),
-        ...(patch.brand !== undefined ? { brand: patch.brand } : {}),
-        ...(patch.costMinor !== undefined ? { costMinor: patch.costMinor } : {}),
-        ...(patch.imageKeys !== undefined ? { imageKeys: patch.imageKeys } : {}),
-        ...(patch.garmentImageKey !== undefined ? { garmentImageKey: patch.garmentImageKey } : {}),
-        ...(patch.laundryStatus !== undefined ? { laundryStatus: patch.laundryStatus } : {}),
-        ...(patch.closetStatus !== undefined ? { closetStatus: patch.closetStatus } : {}),
-        ...(patch.tags !== undefined ? { tags: patch.tags } : {}),
-        ...(patch.careRules !== undefined ? { careRules: patch.careRules } : {}),
-        ...(patch.dryCleanTicket !== undefined ? { dryCleanTicket: patch.dryCleanTicket } : {}),
-        ...(patch.dryCleanPickupOn !== undefined ? { dryCleanPickupOn: patch.dryCleanPickupOn } : {}),
-        ...(patch.lentTo !== undefined ? { lentTo: patch.lentTo } : {}),
-        ...(patch.lentDueOn !== undefined ? { lentDueOn: patch.lentDueOn } : {}),
-        ...(patch.profileId !== undefined ? { profileId: patch.profileId } : {}),
-        updatedAt: now(),
-      };
+      if (!existing || existing.userId !== userId || existing.discardedAt) return null;
+      const updated = applyWardrobePatch(existing, patch);
       wardrobeItemsStore.set(id, updated);
       return updated;
+    },
+    async updateWardrobeItems(userId, ids, patch) {
+      const unique = [...new Set(ids)];
+      const owned = unique.map((id) => wardrobeItemsStore.get(id));
+      if (owned.some((r) => !r || r.userId !== userId || r.discardedAt)) return null;
+      return owned.map((r) => {
+        const updated = applyWardrobePatch(r!, patch);
+        wardrobeItemsStore.set(updated.id, updated);
+        return updated;
+      });
     },
     async deleteWardrobeItem(id, userId) {
       const existing = wardrobeItemsStore.get(id);
@@ -3258,6 +3425,28 @@ export function createMemoryRepositories(): Repositories {
         if (w.wardrobeItemId === id) wearLogsStore.delete(wid);
       }
       return true;
+    },
+    async discardWardrobeItem(id, userId) {
+      const existing = wardrobeItemsStore.get(id);
+      if (!existing || existing.userId !== userId) return null;
+      if (existing.discardedAt) return existing;
+      const updated: WardrobeItemRecord = { ...existing, discardedAt: now(), updatedAt: now() };
+      wardrobeItemsStore.set(id, updated);
+      return updated;
+    },
+    async restoreWardrobeItem(id, userId, discardedSince) {
+      const existing = wardrobeItemsStore.get(id);
+      if (!existing || existing.userId !== userId || !existing.discardedAt) return null;
+      if (existing.discardedAt.getTime() < discardedSince.getTime()) return null;
+      const updated: WardrobeItemRecord = { ...existing, discardedAt: null, updatedAt: now() };
+      wardrobeItemsStore.set(id, updated);
+      return updated;
+    },
+    async purgeDiscardedWardrobeItem(id, userId, discardedBefore) {
+      const existing = wardrobeItemsStore.get(id);
+      if (!existing || existing.userId !== userId || !existing.discardedAt) return false;
+      if (existing.discardedAt.getTime() > discardedBefore.getTime()) return false;
+      return repos.deleteWardrobeItem(id, userId);
     },
     async createOutfit(input) {
       const rec: OutfitRecord = {
@@ -3280,10 +3469,9 @@ export function createMemoryRepositories(): Repositories {
       if (!r || r.userId !== userId) return null;
       return r;
     },
-    async getTodayOutfit(userId) {
-      const today = new Date().toISOString().slice(0, 10);
+    async getTodayOutfit(userId, todayKey) {
       const planned = [...outfitsStore.values()].find(
-        (r) => r.userId === userId && r.plannedFor === today,
+        (r) => r.userId === userId && r.plannedFor === todayKey,
       );
       if (planned) return planned;
       const all = [...outfitsStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.generatedAt.getTime()-a.generatedAt.getTime());
@@ -3327,8 +3515,24 @@ export function createMemoryRepositories(): Repositories {
       outfitsStore.set(id, updated);
       return updated;
     },
-    async listOutfits(userId) {
-      return [...outfitsStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.generatedAt.getTime()-a.generatedAt.getTime());
+    async listOutfits(userId, opts) {
+      const rows = [...outfitsStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.generatedAt.getTime()-a.generatedAt.getTime());
+      return opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
+    },
+    async listOutfitsPage(userId, query) {
+      const profileItems = query.profileId
+        ? new Set(
+            [...wardrobeItemsStore.values()]
+              .filter((r) => r.userId === userId && r.profileId === query.profileId && !r.discardedAt)
+              .map((r) => r.id),
+          )
+        : null;
+      const rows = [...outfitsStore.values()].filter(
+        (r) =>
+          r.userId === userId &&
+          (!profileItems || (r.itemIds.length > 0 && r.itemIds.every((id) => profileItems.has(id)))),
+      );
+      return pageInMemory(rows, query.limit, query.after, (r) => r.createdAt, (r) => r.id);
     },
     async listOutfitsInRange(userId, fromDate, toDate) {
       return [...outfitsStore.values()]
@@ -3342,6 +3546,11 @@ export function createMemoryRepositories(): Repositories {
         .sort((a, b) => (a.plannedFor ?? "").localeCompare(b.plannedFor ?? ""));
     },
     async createWearLog(input) {
+      const idemKey = input.idempotencyKey ? `${input.userId}:${input.idempotencyKey}` : null;
+      if (idemKey) {
+        const first = wearLogsStore.get(wearLogIdempotency.get(idemKey) ?? "");
+        if (first) return { log: first, created: false };
+      }
       const rec: WearLogRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -3353,26 +3562,25 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
       wearLogsStore.set(rec.id, rec);
-      const itemIds: string[] = [];
-      if (input.wardrobeItemId) itemIds.push(input.wardrobeItemId);
-      if (input.outfitId) {
-        const outfit = outfitsStore.get(input.outfitId);
-        if (outfit && outfit.userId === input.userId) itemIds.push(...outfit.itemIds);
-      }
-      for (const wid of [...new Set(itemIds)]) {
+      if (idemKey) wearLogIdempotency.set(idemKey, rec.id);
+      for (const wid of memoryWornItemIds(rec)) {
         const item = wardrobeItemsStore.get(wid);
-        if (!item) continue;
+        if (!item || item.userId !== input.userId) continue;
         const key = `${input.userId}:${wid}`;
         const existing = itemMetricsStore.get(key);
         const prevCount = existing?.wearCount ?? 0;
         const newCount = prevCount + 1;
         const costPerWear = item.costMinor > 0 ? Math.round(item.costMinor / newCount) : null;
+        const lastWornAt =
+          existing?.lastWornAt && existing.lastWornAt.getTime() > rec.wornOn.getTime()
+            ? existing.lastWornAt
+            : rec.wornOn;
         const m: ItemMetricRecord = {
           id: existing?.id ?? randomUUID(),
           userId: input.userId,
           wardrobeItemId: wid,
           wearCount: newCount,
-          lastWornAt: rec.wornOn,
+          lastWornAt,
           costPerWearMinor: costPerWear,
           targetCpwMinor: existing?.targetCpwMinor ?? null,
           status: "ACTIVE",
@@ -3381,10 +3589,14 @@ export function createMemoryRepositories(): Repositories {
         };
         itemMetricsStore.set(key, m);
       }
-      return rec;
+      return { log: rec, created: true };
     },
-    async listWearLogs(userId) {
-      return [...wearLogsStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.wornOn.getTime()-a.wornOn.getTime());
+    async listWearLogs(userId, opts) {
+      const since = opts?.since?.getTime();
+      const rows = [...wearLogsStore.values()]
+        .filter((r) => r.userId === userId && (since === undefined || r.wornOn.getTime() >= since))
+        .sort((a,b)=>b.wornOn.getTime()-a.wornOn.getTime());
+      return opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
     },
     async findWearLog(id, userId) {
       const rec = wearLogsStore.get(id);
@@ -3395,60 +3607,44 @@ export function createMemoryRepositories(): Repositories {
       const rec = wearLogsStore.get(id);
       if (!rec || rec.userId !== userId) return null;
       wearLogsStore.delete(id);
-      const itemIds: string[] = [];
-      if (rec.wardrobeItemId) itemIds.push(rec.wardrobeItemId);
-      if (rec.outfitId) {
-        const outfit = outfitsStore.get(rec.outfitId);
-        if (outfit && outfit.userId === userId) itemIds.push(...outfit.itemIds);
-      }
-      for (const wid of [...new Set(itemIds)]) {
+      for (const wid of memoryWornItemIds(rec)) {
         const key = `${userId}:${wid}`;
         const existing = itemMetricsStore.get(key);
         if (!existing) continue;
         const item = wardrobeItemsStore.get(wid);
+        if (!item || item.userId !== userId) continue;
         const newCount = Math.max(0, existing.wearCount - 1);
-        const costPerWear =
-          item && item.costMinor > 0 && newCount > 0
-            ? Math.round(item.costMinor / newCount)
-            : newCount === 0
-              ? null
-              : existing.costPerWearMinor;
+        const costPerWear = item.costMinor > 0 && newCount > 0 ? Math.round(item.costMinor / newCount) : null;
+        // Last-worn becomes the latest remaining wear of the item.
+        let lastWornAt: Date | null = null;
+        for (const w of wearLogsStore.values()) {
+          if (w.userId !== userId || !memoryWornItemIds(w).includes(wid)) continue;
+          if (!lastWornAt || w.wornOn.getTime() > lastWornAt.getTime()) lastWornAt = w.wornOn;
+        }
         itemMetricsStore.set(key, {
           ...existing,
           wearCount: newCount,
           costPerWearMinor: costPerWear,
-          lastWornAt: newCount === 0 ? null : existing.lastWornAt,
+          lastWornAt,
           updatedAt: now(),
         });
       }
       return rec;
     },
     async getItemMetrics(userId) {
-      const nowDate = new Date();
-      for (const [, m] of itemMetricsStore) {
-        if (m.userId !== userId) continue;
-        let computed: "ACTIVE"|"DORMANT"|"DEAD" = m.status;
-        if (!m.lastWornAt) {
-          const ageDays = (nowDate.getTime() - m.createdAt.getTime())/86_400_000;
-          if (ageDays > 90) computed = "DEAD";
-          else if (ageDays > 30) computed = "DORMANT";
-          else computed = "ACTIVE";
-        } else {
-          const daysSince = (nowDate.getTime() - m.lastWornAt.getTime())/86_400_000;
-          if (daysSince > 90) computed = "DEAD";
-          else if (daysSince > 60) computed = "DORMANT";
-          else computed = "ACTIVE";
-        }
-        if (computed !== m.status) {
-          itemMetricsStore.set(`${m.userId}:${m.wardrobeItemId}`, { ...m, status: computed, updatedAt: now() });
-        }
-      }
-      return [...itemMetricsStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.updatedAt.getTime()-a.updatedAt.getTime());
+      // Read-only: the status is computed for now; the nightly job persists it.
+      const at = new Date();
+      return [...itemMetricsStore.values()]
+        .filter((r) => r.userId === userId)
+        .sort((a,b)=>b.updatedAt.getTime()-a.updatedAt.getTime())
+        .map((m) => ({ ...m, status: itemMetricStatusAt(m, at) }));
     },
     async findItemMetric(userId, wardrobeItemId) {
-      return itemMetricsStore.get(`${userId}:${wardrobeItemId}`) ?? null;
+      const m = itemMetricsStore.get(`${userId}:${wardrobeItemId}`);
+      return m ? { ...m, status: itemMetricStatusAt(m, new Date()) } : null;
     },
     async upsertItemMetric(input) {
+      requireMemoryOwnedItem(input.userId, input.wardrobeItemId);
       const key = `${input.userId}:${input.wardrobeItemId}`;
       const existing = itemMetricsStore.get(key);
       const rec: ItemMetricRecord = {
@@ -3470,10 +3666,10 @@ export function createMemoryRepositories(): Repositories {
       return rec;
     },
     async setItemCpwGoal(input) {
+      const item = requireMemoryOwnedItem(input.userId, input.wardrobeItemId);
       const key = `${input.userId}:${input.wardrobeItemId}`;
       const existing = itemMetricsStore.get(key);
-      const item = wardrobeItemsStore.get(input.wardrobeItemId);
-      const costMinor = item?.costMinor ?? 0;
+      const costMinor = item.costMinor;
       const wearCount = existing?.wearCount ?? 0;
       const rec: ItemMetricRecord = {
         id: existing?.id ?? randomUUID(),
@@ -3855,11 +4051,12 @@ export function createMemoryRepositories(): Repositories {
       return true;
     },
     async findWardrobeItemById(id) {
-      return wardrobeItemsStore.get(id) ?? null;
+      const r = wardrobeItemsStore.get(id);
+      return r && !r.discardedAt ? r : null;
     },
     async updateWardrobeItemById(id, patch) {
       const existing = wardrobeItemsStore.get(id);
-      if (!existing) return null;
+      if (!existing || existing.discardedAt) return null;
       const updated: WardrobeItemRecord = {
         ...existing,
         ...(patch.category !== undefined ? { category: patch.category } : {}),
@@ -3890,6 +4087,23 @@ export function createMemoryRepositories(): Repositories {
         householdId: input.householdId ?? null,
         name: input.name,
         kind: input.kind,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      closetProfilesStore.set(rec.id, rec);
+      return rec;
+    },
+    async ensureSelfClosetProfile(ownerUserId, name) {
+      const existing = [...closetProfilesStore.values()]
+        .filter((p) => p.ownerUserId === ownerUserId && p.kind === "SELF")
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+      if (existing) return existing;
+      const rec: ClosetProfileRecord = {
+        id: randomUUID(),
+        ownerUserId,
+        householdId: null,
+        name,
+        kind: "SELF",
         createdAt: now(),
         updatedAt: now(),
       };

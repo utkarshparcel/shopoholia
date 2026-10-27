@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { garmentTypeEnum, tailorOrderStateEnum } from "./enums.js";
 import { sellers } from "./sellers.js";
@@ -31,6 +31,32 @@ export const customizationTemplates = pgTable("customization_templates", {
     .default({}),
   ...timestamps,
 });
+
+/** Rendered fit previews, one per (user, template, selections): repeat requests reuse the render. */
+export const fitPreviews = pgTable(
+  "fit_previews",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => customizationTemplates.id, { onDelete: "cascade" }),
+    /** sha256 of the garment key and the sorted selections. */
+    selectionsKey: text("selections_key").notNull(),
+    garmentKey: text("garment_key").notNull(),
+    /** READY | PROCESSING | FAILED. */
+    status: text("status").$type<"READY" | "PROCESSING" | "FAILED">().notNull().default("PROCESSING"),
+    imageKey: text("image_key"),
+    error: text("error"),
+    retryAfter: timestamp("retry_after", { withTimezone: true }),
+    provider: text("provider").notNull(),
+    costMicros: integer("cost_micros").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("fit_previews_user_template_selections_uidx").on(t.userId, t.templateId, t.selectionsKey)],
+);
 
 export const tailoringOrders = pgTable(
   "tailoring_orders",
@@ -91,5 +117,6 @@ export const tailoringReviews = pgTable(
 
 export type MeasurementProfileRow = typeof measurementProfiles.$inferSelect;
 export type CustomizationTemplateRow = typeof customizationTemplates.$inferSelect;
+export type FitPreviewRow = typeof fitPreviews.$inferSelect;
 export type TailoringOrderRow = typeof tailoringOrders.$inferSelect;
 export type TailoringReviewRow = typeof tailoringReviews.$inferSelect;

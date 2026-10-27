@@ -1,4 +1,4 @@
-import { index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { listingVariants } from "./listing-variants.js";
 import { users } from "./users.js";
@@ -19,6 +19,12 @@ export const tryonPreviews = pgTable(
       onDelete: "cascade",
     }),
     imageKey: text("image_key"),
+    /** READY | PROCESSING | FAILED. Null on rows written before the column: derived from image_key. */
+    status: text("status").$type<"READY" | "PROCESSING" | "FAILED">(),
+    /** Why the last render failed (FAILED only). */
+    error: text("error"),
+    /** FAILED: no new render before this time. */
+    retryAfter: timestamp("retry_after", { withTimezone: true }),
     provider: text("provider").notNull(),
     costMicros: integer("cost_micros").notNull().default(0),
     ...timestamps,

@@ -1,16 +1,19 @@
 /**
  * N55-PHOTO-DUMP — ingest a batch of closet photos into tagged wardrobe items.
  */
+import { randomUUID } from "node:crypto";
 import {
   toPhotoDumpCreatePayload,
   type DuplicateWarning,
   type OwnedItemLike,
   type PhotoDumpPhoto,
 } from "@worn/shared";
-import type { Repositories, WardrobeItemRecord } from "./repositories/types.js";
+import type { CreateWardrobeItemInput, Repositories, WardrobeItemRecord } from "./repositories/types.js";
 import {
   createVisionTagClientFromEnv,
-  tagImageWithDupes,
+  resolvePlaceholderIds,
+  tagBatch,
+  withDuplicateCheck,
   type VisionTagClient,
 } from "./wardrobe-vision.js";
 
@@ -43,20 +46,18 @@ export async function runPhotoDump(
   const existing = await repos.listWardrobeItems(input.userId);
   const owned = ownedFromRecords(existing);
   const duplicateWarnings: DuplicateWarning[] = [];
-  const records: WardrobeItemRecord[] = [];
+  const inputs: CreateWardrobeItemInput[] = [];
+  const placeholders: string[] = [];
   let tagged = 0;
 
-  for (const photo of input.photos) {
-    const taggedResult = await tagImageWithDupes(
-      client,
-      {
-        imageKey: photo.imageKey,
-        labels: photo.labels,
-        text: photo.text,
-        titleHint: photo.titleHint,
-      },
-      owned,
-    );
+  // Provider calls run in parallel under one deadline; the duplicate check then runs in order so
+  // each photo is also checked against the earlier photos of this dump.
+  const visions = await tagBatch(
+    client,
+    input.photos.map((photo) => ({ imageKey: photo.imageKey, labels: photo.labels, text: photo.text })),
+  );
+  for (const [i, photo] of input.photos.entries()) {
+    const taggedResult = withDuplicateCheck(visions[i]!, photo, owned);
     tagged += 1;
     for (const w of taggedResult.duplicateWarnings) {
       duplicateWarnings.push(w as DuplicateWarning);
@@ -75,7 +76,7 @@ export async function runPhotoDump(
       },
       { profileId: input.profileId, extraTags: input.extraTags },
     );
-    const item = await repos.createWardrobeItem({
+    inputs.push({
       userId: input.userId,
       source: payload.source,
       category: payload.category,
@@ -90,14 +91,22 @@ export async function runPhotoDump(
       tags: payload.tags,
       profileId: payload.profileId ?? null,
     });
-    records.push(item);
+    const placeholder = randomUUID();
+    placeholders.push(placeholder);
     owned.push({
-      id: item.id,
-      title: [item.brand, item.colors?.[0], item.category].filter(Boolean).join(" "),
-      brand: item.brand ?? null,
-      category: item.category ?? null,
+      id: placeholder,
+      title: [payload.brand, payload.colors?.[0], payload.category].filter(Boolean).join(" "),
+      brand: payload.brand ?? null,
+      category: payload.category ?? null,
     });
   }
 
-  return { records, tagged, duplicateWarnings };
+  // One transaction for the whole dump.
+  const created = await repos.createWardrobeItems(inputs);
+  const ids = new Map(placeholders.map((p, i) => [p, created[i]!.item.id]));
+  return {
+    records: created.map((c) => c.item),
+    tagged,
+    duplicateWarnings: resolvePlaceholderIds(duplicateWarnings, ids),
+  };
 }

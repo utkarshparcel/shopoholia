@@ -46,6 +46,8 @@ export const wardrobeItems = pgTable(
     lentDueOn: date("lent_due_on"),
     /** N27 — closet profile scope (kids / multi-profile). */
     profileId: uuid("profile_id").references(() => closetProfiles.id, { onDelete: "set null" }),
+    /** Photo-dump discard: hidden from every list until undone or purged after the undo window. */
+    discardedAt: timestamp("discarded_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -95,9 +97,14 @@ export const wearLog = pgTable(
     outfitId: uuid("outfit_id").references(() => outfits.id, { onDelete: "cascade" }),
     wornOn: timestamp("worn_on", { withTimezone: true }).notNull().defaultNow(),
     imageKey: text("image_key"),
+    /** Client key from POST /wear: a retried request returns the first row. */
+    idempotencyKey: text("idempotency_key"),
     ...timestamps,
   },
   (t) => [
+    uniqueIndex("wear_log_user_idempotency_uidx")
+      .on(t.userId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} IS NOT NULL`),
     index("wear_log_user_worn_on_idx").on(t.userId, t.wornOn.desc().nullsFirst()),
     index("wear_log_wardrobe_item_idx").on(t.wardrobeItemId),
     index("wear_log_outfit_idx")

@@ -2,6 +2,7 @@
  * N39 — Wedding / festival multi-day wardrobe planner + spend envelope.
  */
 
+import { WEDDING_FESTIVAL_MAX_DAYS } from "@worn/shared";
 import { evaluateSpendEnvelope, type SpendEnvelopeEvaluation } from "./budget.js";
 import { categorySlot, type GarmentSlot } from "./outfit-goes-with.js";
 import { parseDateKey, toDateKey, type WeekDayKey } from "./outfit-week.js";
@@ -42,7 +43,10 @@ export type WeddingFestivalPlan = {
   envelope: WeddingFestivalEnvelope | null;
 };
 
-/** Inclusive YYYY-MM-DD keys from start→end (UTC). Empty when end < start. */
+/**
+ * Inclusive YYYY-MM-DD keys from start→end (UTC). Empty when end < start. At most
+ * `WEDDING_FESTIVAL_MAX_DAYS` keys, whatever the span (the body schema rejects longer ones).
+ */
 export function eventDayKeys(startDate: string, endDate: string): string[] {
   const start = parseDateKey(startDate);
   const end = parseDateKey(endDate);
@@ -50,7 +54,7 @@ export function eventDayKeys(startDate: string, endDate: string): string[] {
     return [];
   }
   const keys: string[] = [];
-  for (let t = start.getTime(); t <= end.getTime(); t += DAY_MS) {
+  for (let t = start.getTime(); t <= end.getTime() && keys.length < WEDDING_FESTIVAL_MAX_DAYS; t += DAY_MS) {
     keys.push(toDateKey(new Date(t)));
   }
   return keys;

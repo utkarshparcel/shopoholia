@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOcrClientFromEnv, MockOcrClient, HostedOcrClient } from "./index.js";
+import {
+  createOcrClientFromEnv,
+  MockOcrClient,
+  HostedOcrClient,
+  OcrUnavailableError,
+  UnavailableOcrClient,
+} from "./index.js";
 import { normalizeHostedResponse } from "./hosted.js";
 
 describe("ocr", () => {
@@ -60,6 +66,34 @@ describe("ocr", () => {
     const client = createOcrClientFromEnv({ OCR_PROVIDER: "hosted" });
     expect(client).toBeInstanceOf(MockOcrClient);
     warn.mockRestore();
+  });
+
+  it("never uses the mock in production: no URL, or OCR_PROVIDER=mock, is unavailable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    for (const env of [
+      { NODE_ENV: "production" },
+      { NODE_ENV: "production", OCR_PROVIDER: "mock", OCR_PROVIDER_URL: "https://ocr.example/v1" },
+      { NODE_ENV: "production", OCR_PROVIDER: "hosted" },
+    ]) {
+      const client = createOcrClientFromEnv(env);
+      expect(client).toBeInstanceOf(UnavailableOcrClient);
+      await expect(client.recognize("care-tags/u/tag.jpg")).rejects.toBeInstanceOf(OcrUnavailableError);
+    }
+    expect(
+      createOcrClientFromEnv({ NODE_ENV: "production", OCR_PROVIDER_URL: "https://ocr.example/v1" }),
+    ).toBeInstanceOf(HostedOcrClient);
+    warn.mockRestore();
+  });
+
+  it("hosted client gives up on a provider that doesn't answer", async () => {
+    const client = new HostedOcrClient({
+      url: "https://ocr.example/v1",
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        throw new DOMException("The operation timed out.", "TimeoutError");
+      }) as unknown as typeof fetch,
+    });
+    await expect(client.recognize("care-tags/u/tag.jpg")).rejects.toThrow(/timed out/);
   });
 
   it("hosted client POSTs to OCR_PROVIDER_URL and maps generic JSON with confidence", async () => {

@@ -65,8 +65,8 @@ describe("N37 swap circle", () => {
       payload: {
         category: "jacket",
         costMinor: 5000,
-        imageKeys: ["j.jpg"],
-        garmentImageKey: "j.jpg",
+        imageKeys: [`u/${owner.userId}/wardrobe/j.jpg`],
+        garmentImageKey: `u/${owner.userId}/wardrobe/j.jpg`,
       },
     });
     const itemId = (itemRes.json() as WardrobeItem).id;

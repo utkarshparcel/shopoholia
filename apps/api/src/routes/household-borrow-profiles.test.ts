@@ -24,7 +24,7 @@ describe("N25 borrow / lent tracker", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${user.accessToken}` },
-      payload: { category: "kurta", costMinor: 2000, imageKeys: ["k.jpg"] },
+      payload: { category: "kurta", costMinor: 2000, imageKeys: [`u/${user.userId}/wardrobe/k.jpg`] },
     });
     expect(created.statusCode).toBe(201);
     const itemId = (created.json() as WardrobeItem).id;
@@ -498,11 +498,20 @@ describe("N27 kids / multi-profile closets", () => {
     expect(profiles.profiles.some((p) => p.kind === "SELF")).toBe(true);
     const selfId = profiles.profiles.find((p) => p.kind === "SELF")!.id;
 
-    const kid = await app.inject({
+    // Kid closets are blocked until there is a guardian-consent flow.
+    const blockedKid = await app.inject({
       method: "POST",
       url: "/closet-profiles",
       headers: { authorization: `Bearer ${user.accessToken}` },
       payload: { name: "Aarav", kind: "KID" },
+    });
+    expect(blockedKid.statusCode).toBe(400);
+
+    const kid = await app.inject({
+      method: "POST",
+      url: "/closet-profiles",
+      headers: { authorization: `Bearer ${user.accessToken}` },
+      payload: { name: "Aarav", kind: "PARTNER" },
     });
     expect(kid.statusCode).toBe(201);
     const kidProfile = kid.json() as ClosetProfile;
@@ -511,7 +520,7 @@ describe("N27 kids / multi-profile closets", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${user.accessToken}` },
-      payload: { category: "blazer", profileId: selfId, imageKeys: ["b.jpg"] },
+      payload: { category: "blazer", profileId: selfId, imageKeys: [`u/${user.userId}/wardrobe/b.jpg`] },
     });
     const mineId = (mine.json() as WardrobeItem).id;
 
@@ -519,7 +528,7 @@ describe("N27 kids / multi-profile closets", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${user.accessToken}` },
-      payload: { category: "tee", profileId: kidProfile.id, imageKeys: ["t.jpg"] },
+      payload: { category: "tee", profileId: kidProfile.id, imageKeys: [`u/${user.userId}/wardrobe/t.jpg`] },
     });
     const kidItemId = (kids.json() as WardrobeItem).id;
 
@@ -569,5 +578,135 @@ describe("N27 kids / multi-profile closets", () => {
     expect((selfOutfits.json() as ClosetProfileOutfitsResponse).outfits[0]?.itemIds).toEqual([
       mineId,
     ]);
+
+    // An outfit mixing two profiles' items belongs to neither.
+    await repos.createOutfit({ userId: user.userId, itemIds: [mineId, kidItemId], occasion: "CASUAL" });
+    const afterMixed = await app.inject({
+      method: "GET",
+      url: `/closet-profiles/${kidProfile.id}/outfits`,
+      headers: { authorization: `Bearer ${user.accessToken}` },
+    });
+    expect((afterMixed.json() as ClosetProfileOutfitsResponse).outfits).toHaveLength(1);
+  });
+
+  it("pages a profile's wardrobe and outfits with a cursor", async () => {
+    const { app, repos } = await buildTestServer();
+    const user = await login(app, "919810000031");
+    const auth = { authorization: `Bearer ${user.accessToken}` };
+    const list = await app.inject({ method: "GET", url: "/closet-profiles", headers: auth });
+    const selfId = (list.json() as ClosetProfileListResponse).activeProfileId!;
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/wardrobe",
+        headers: auth,
+        payload: { category: `tee ${i}`, profileId: selfId, imageKeys: [] },
+      });
+      ids.push((res.json() as WardrobeItem).id);
+      await repos.createOutfit({ userId: user.userId, itemIds: [ids[i]!], occasion: "CASUAL" });
+    }
+
+    const seen: string[] = [];
+    let cursor: string | null | undefined;
+    do {
+      const res = await app.inject({
+        method: "GET",
+        url: `/closet-profiles/${selfId}/wardrobe?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        headers: auth,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as ClosetProfileWardrobeResponse;
+      expect(body.items.length).toBeLessThanOrEqual(2);
+      seen.push(...body.items.map((i) => i.id));
+      cursor = body.nextCursor;
+    } while (cursor);
+    expect(seen.sort()).toEqual([...ids].sort());
+
+    const outfitsPage = await app.inject({
+      method: "GET",
+      url: `/closet-profiles/${selfId}/outfits?limit=2`,
+      headers: auth,
+    });
+    const oBody = outfitsPage.json() as ClosetProfileOutfitsResponse;
+    expect(oBody.outfits).toHaveLength(2);
+    expect(oBody.nextCursor).toBeTruthy();
+
+    const badCursor = await app.inject({
+      method: "GET",
+      url: `/closet-profiles/${selfId}/wardrobe?cursor=not-a-cursor`,
+      headers: auth,
+    });
+    expect(badCursor.statusCode).toBe(400);
+  });
+
+  it("makes one SELF profile under concurrent first loads, and keeps it the only one", async () => {
+    const { app, repos } = await buildTestServer();
+    const user = await login(app, "919810000032");
+    const auth = { authorization: `Bearer ${user.accessToken}` };
+    const loads = await Promise.all(
+      [0, 1, 2].map(() => app.inject({ method: "GET", url: "/closet-profiles", headers: auth })),
+    );
+    expect(loads.every((r) => r.statusCode === 200)).toBe(true);
+    const selfRows = (await repos.listClosetProfiles(user.userId)).filter((p) => p.kind === "SELF");
+    expect(selfRows).toHaveLength(1);
+
+    // Body kind defaults to SELF, and a second SELF is refused.
+    const second = await app.inject({
+      method: "POST",
+      url: "/closet-profiles",
+      headers: auth,
+      payload: { name: "Me again" },
+    });
+    expect(second.statusCode).toBe(409);
+
+    const partner = await app.inject({
+      method: "POST",
+      url: "/closet-profiles",
+      headers: auth,
+      payload: { name: "Partner", kind: "PARTNER" },
+    });
+    const partnerId = (partner.json() as ClosetProfile).id;
+    const toKid = await app.inject({
+      method: "PATCH",
+      url: `/closet-profiles/${partnerId}`,
+      headers: auth,
+      payload: { kind: "KID" },
+    });
+    expect(toKid.statusCode).toBe(400);
+    const toSelf = await app.inject({
+      method: "PATCH",
+      url: `/closet-profiles/${partnerId}`,
+      headers: auth,
+      payload: { kind: "SELF" },
+    });
+    expect(toSelf.statusCode).toBe(400);
+  });
+
+  it("answers 404 for another user's profile on every route", async () => {
+    const { app } = await buildTestServer();
+    const owner = await login(app, "919810000033");
+    const other = await login(app, "919810000034");
+    const created = await app.inject({
+      method: "POST",
+      url: "/closet-profiles",
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { name: "Partner", kind: "PARTNER" },
+    });
+    const id = (created.json() as ClosetProfile).id;
+    const auth = { authorization: `Bearer ${other.accessToken}` };
+    const results = await Promise.all([
+      app.inject({ method: "PATCH", url: `/closet-profiles/${id}`, headers: auth, payload: { name: "Mine" } }),
+      app.inject({ method: "DELETE", url: `/closet-profiles/${id}`, headers: auth }),
+      app.inject({ method: "GET", url: `/closet-profiles/${id}/wardrobe`, headers: auth }),
+      app.inject({ method: "GET", url: `/closet-profiles/${id}/outfits`, headers: auth }),
+    ]);
+    expect(results.map((r) => r.statusCode)).toEqual([404, 404, 404, 404]);
+    const missing = await app.inject({
+      method: "GET",
+      url: "/closet-profiles/00000000-0000-4000-8000-0000000000ee/wardrobe",
+      headers: auth,
+    });
+    expect(results[2]!.json()).toEqual(missing.json());
   });
 });

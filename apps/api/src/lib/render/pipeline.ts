@@ -35,6 +35,8 @@ export async function seedOrderRenders(repos: Repositories, orderId: string) {
       costMicros: 0,
     })),
   ]);
+  // An order with no items has nothing to render, and Postgres rejects an empty insert.
+  if (rows.length === 0) return [];
 
   return repos.createRenders(rows);
 }

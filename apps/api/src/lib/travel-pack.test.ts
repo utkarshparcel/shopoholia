@@ -10,7 +10,7 @@ import type { WeatherCtx } from "./weather.js";
 const coolRain: WeatherCtx = {
   tempC: 18,
   condition: "rain",
-  source: "mock",
+  source: "api",
   fetchedAt: "2026-08-26T00:00:00.000Z",
 };
 

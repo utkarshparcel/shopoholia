@@ -74,6 +74,7 @@ export { refreshTokens } from "./schema/refresh-tokens.js";
 export { sellers } from "./schema/sellers.js";
 export { recipients, recipientProfiles, giftOrders, groupGiftContributions, type RecipientRow, type RecipientProfileRow, type GiftOrderRow, type GroupGiftContributionRow, type WishlistRef } from "./schema/gift.js";
 export { measurementProfiles, customizationTemplates, tailoringOrders, tailoringReviews, type MeasurementProfileRow, type CustomizationTemplateRow, type TailoringOrderRow, type TailoringReviewRow } from "./schema/fit.js";
+export { fitPreviews, type FitPreviewRow } from "./schema/fit.js";
 export {
   swapCircles,
   swapCircleMembers,

@@ -239,7 +239,7 @@ export type ListingVariantRecord = {
   garmentImageKey: string;
 };
 
-export type TryonPreviewStatus = "READY" | "PROCESSING";
+export type TryonPreviewStatus = "READY" | "PROCESSING" | "FAILED";
 
 export type TryonPreviewRecord = {
   id: string;
@@ -248,6 +248,31 @@ export type TryonPreviewRecord = {
   wardrobeItemId?: string | null;
   imageKey: string | null;
   status: TryonPreviewStatus;
+  /** FAILED: why the last render failed. */
+  error?: string | null;
+  /** FAILED: no new render before this time. */
+  retryAfter?: Date | null;
+  provider: string;
+  costMicros: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/** A render's outcome, written by the job that ran it. */
+export type PreviewResult =
+  | { status: "READY"; imageKey: string; provider: string; costMicros: number }
+  | { status: "FAILED"; error: string; retryAfter: Date };
+
+export type FitPreviewRecord = {
+  id: string;
+  userId: string;
+  templateId: string;
+  selectionsKey: string;
+  garmentKey: string;
+  status: TryonPreviewStatus;
+  imageKey: string | null;
+  error: string | null;
+  retryAfter: Date | null;
   provider: string;
   costMicros: number;
   createdAt: Date;
@@ -867,6 +892,34 @@ export interface Repositories {
   upsertTryonPreview(
     data: Omit<TryonPreviewRecord, "id" | "createdAt" | "updatedAt"> & { id?: string },
   ): Promise<TryonPreviewRecord>;
+  /**
+   * Atomically mark the caller's wardrobe try-on PROCESSING unless it is READY, PROCESSING since
+   * `staleBefore` or later, or FAILED with `retryAfter` still ahead. `claimed` says whether this
+   * caller made the change (and so should enqueue the render).
+   */
+  claimWardrobeTryon(input: {
+    userId: string;
+    wardrobeItemId: string;
+    provider: string;
+    staleBefore: Date;
+  }): Promise<{ claimed: boolean; preview: TryonPreviewRecord }>;
+  /** Store a render's outcome; a no-op (null) unless the row is still PROCESSING. */
+  finishWardrobeTryon(
+    userId: string,
+    wardrobeItemId: string,
+    result: PreviewResult,
+  ): Promise<TryonPreviewRecord | null>;
+  findFitPreview(id: string, userId: string): Promise<FitPreviewRecord | null>;
+  /** `claimWardrobeTryon`'s rules, keyed by (user, template, selections). */
+  claimFitPreview(input: {
+    userId: string;
+    templateId: string;
+    selectionsKey: string;
+    garmentKey: string;
+    provider: string;
+    staleBefore: Date;
+  }): Promise<{ claimed: boolean; preview: FitPreviewRecord }>;
+  finishFitPreview(id: string, userId: string, result: PreviewResult): Promise<FitPreviewRecord | null>;
 
   getOrCreateCart(userId: string): Promise<CartRecord>;
   getCartItems(cartId: string): Promise<CartItemRecord[]>;
@@ -1407,17 +1460,48 @@ export interface Repositories {
 
   // --- Universe P2: wardrobe / outfits / wear / waste ---
   listWardrobeItems(userId: string): Promise<WardrobeItemRecord[]>;
+  /** C3 page of the caller's items, newest first. Discarded items are left out. */
+  listWardrobeItemsPage(
+    userId: string,
+    query: WardrobeItemsPageQuery,
+  ): Promise<PageResponse<WardrobeItemRecord>>;
+  /** The caller's items among `ids`; unknown, other users' and discarded ids are left out. */
+  findWardrobeItemsByIds(userId: string, ids: string[]): Promise<WardrobeItemRecord[]>;
   findWardrobeItem(id: string, userId: string): Promise<WardrobeItemRecord | null>;
+  /** With a `purchaseItemId` the caller already imported, returns that item instead. */
   createWardrobeItem(input: CreateWardrobeItemInput): Promise<WardrobeItemRecord>;
+  /**
+   * All items and their metrics rows in one transaction, in input order. An input whose
+   * (user, purchaseItemId) already exists returns the existing item with `created: false`.
+   */
+  createWardrobeItems(
+    inputs: CreateWardrobeItemInput[],
+  ): Promise<Array<{ item: WardrobeItemRecord; created: boolean }>>;
   updateWardrobeItem(
     id: string,
     userId: string,
     patch: UpdateWardrobeItemInput,
   ): Promise<WardrobeItemRecord | null>;
+  /** One patch on many of the caller's items, all or nothing: null when any id isn't theirs. */
+  updateWardrobeItems(
+    userId: string,
+    ids: string[],
+    patch: UpdateWardrobeItemInput,
+  ): Promise<WardrobeItemRecord[] | null>;
   deleteWardrobeItem(id: string, userId: string): Promise<boolean>;
+  /**
+   * Hide an item (photo-dump discard) until restored or purged; `discardedAt` is set. Discarding an
+   * already discarded item returns it unchanged. Null when not found.
+   */
+  discardWardrobeItem(id: string, userId: string): Promise<WardrobeItemRecord | null>;
+  /** Undo a discard made at or after `discardedSince`. Null when gone, not discarded, or older. */
+  restoreWardrobeItem(id: string, userId: string, discardedSince: Date): Promise<WardrobeItemRecord | null>;
+  /** Delete the item only if it is still discarded, at `discardedBefore` or earlier. */
+  purgeDiscardedWardrobeItem(id: string, userId: string, discardedBefore: Date): Promise<boolean>;
   createOutfit(input: CreateOutfitInput): Promise<OutfitRecord>;
   findOutfitById(id: string, userId: string): Promise<OutfitRecord | null>;
-  getTodayOutfit(userId: string): Promise<OutfitRecord | null>;
+  /** The outfit planned for `todayKey` (the user's local YYYY-MM-DD), else the latest generated. */
+  getTodayOutfit(userId: string, todayKey: string): Promise<OutfitRecord | null>;
   /** Outfit planned for a specific YYYY-MM-DD calendar day. */
   getOutfitForDate(userId: string, plannedFor: string): Promise<OutfitRecord | null>;
   /** Replace (or create) the outfit slotted for a calendar day. */
@@ -1427,10 +1511,22 @@ export interface Repositories {
     userId: string,
     patch: { itemIds?: string[]; occasion?: OutfitRecord["occasion"]; weatherCtx?: Record<string, unknown> | null },
   ): Promise<OutfitRecord | null>;
-  listOutfits(userId: string): Promise<OutfitRecord[]>;
+  /** Newest first; `limit` caps the rows. */
+  listOutfits(userId: string, opts?: { limit?: number }): Promise<OutfitRecord[]>;
+  /** C3 page of outfits, newest first; with `profileId`, only outfits made entirely of that profile's items. */
+  listOutfitsPage(
+    userId: string,
+    query: { limit: number; after: KeysetPosition | null; profileId?: string },
+  ): Promise<PageResponse<OutfitRecord>>;
   listOutfitsInRange(userId: string, fromDate: string, toDate: string): Promise<OutfitRecord[]>;
-  createWearLog(input: CreateWearLogInput): Promise<WearLogRecord>;
-  listWearLogs(userId: string): Promise<WearLogRecord[]>;
+  /**
+   * One transaction: the log row, then each of the caller's items gets one more wear (atomic), a
+   * last-worn that never moves backwards, and a fresh CPW. A repeated `idempotencyKey` returns the
+   * first row with `created: false` and changes nothing.
+   */
+  createWearLog(input: CreateWearLogInput): Promise<{ log: WearLogRecord; created: boolean }>;
+  /** Newest first; `since` and `limit` bound the rows. */
+  listWearLogs(userId: string, opts?: { since?: Date; limit?: number }): Promise<WearLogRecord[]>;
   /** U031 — undo wear within window; decrements metrics for affected items. */
   deleteWearLog(id: string, userId: string): Promise<WearLogRecord | null>;
   findWearLog(id: string, userId: string): Promise<WearLogRecord | null>;
@@ -1771,6 +1867,8 @@ export interface Repositories {
     kind: ClosetProfileRecord["kind"];
     householdId?: string | null;
   }): Promise<ClosetProfileRecord>;
+  /** The owner's SELF profile, created once with `name` when missing (concurrent calls make one). */
+  ensureSelfClosetProfile(ownerUserId: string, name: string): Promise<ClosetProfileRecord>;
   findClosetProfile(id: string): Promise<ClosetProfileRecord | null>;
   listClosetProfiles(ownerUserId: string): Promise<ClosetProfileRecord[]>;
   updateClosetProfile(
@@ -1913,8 +2011,20 @@ export type WardrobeItemRecord = {
   lentDueOn: string | null;
   /** N27 — closet profile id; null = unscoped. */
   profileId: string | null;
+  /** Set while a photo-dump discard can still be undone; lists never return discarded items. */
+  discardedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+/** Query for `listWardrobeItemsPage`. */
+export type WardrobeItemsPageQuery = {
+  limit: number;
+  after: KeysetPosition | null;
+  /** Only items in this closet profile. */
+  profileId?: string;
+  /** Only lent items; `due` = due on or before `asOf`, `overdue` = before `asOf` (YYYY-MM-DD). */
+  lent?: { filter: "all" | "due" | "overdue"; asOf: string };
 };
 
 export type CreateWardrobeItemInput = {
@@ -1996,6 +2106,7 @@ export type CreateWearLogInput = {
   outfitId?: string | null;
   wornOn?: Date;
   imageKey?: string | null;
+  idempotencyKey?: string | null;
 };
 
 export type ItemMetricRecord = {

@@ -1,3 +1,4 @@
+import { localParts, resolveTimeZone } from "@worn/shared";
 import type { WeatherCtx } from "./weather.js";
 
 /** °C delta that counts as a meaningful forecast shift. */
@@ -45,26 +46,18 @@ export function weatherShiftExceedsThreshold(
  */
 export function shouldRerollOutfitForWeather(opts: {
   prevWeather: Pick<WeatherCtx, "tempC" | "condition"> | null | undefined;
-  currentWeather: Pick<WeatherCtx, "tempC" | "condition">;
+  /** Null when no weather provider answered: never a reason to re-roll. */
+  currentWeather: Pick<WeatherCtx, "tempC" | "condition"> | null;
   now?: Date;
   noonHour?: number;
   tempDeltaC?: number;
-  /** Timezone offset minutes east of UTC (Date#getTimezoneOffset is inverted). Default: local. */
-  tzOffsetMinutes?: number;
+  /** The user's IANA zone (C1): noon is their local noon. */
+  timeZone?: string | null;
 }): boolean {
-  if (!opts.prevWeather) return false;
+  if (!opts.prevWeather || !opts.currentWeather) return false;
   const now = opts.now ?? new Date();
   const noonHour = opts.noonHour ?? WEATHER_REROLL_NOON_HOUR;
-
-  let localHour: number;
-  if (opts.tzOffsetMinutes != null) {
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
-    const local = new Date(utcMs + opts.tzOffsetMinutes * 60_000);
-    localHour = local.getHours();
-  } else {
-    localHour = now.getHours();
-  }
-  if (localHour >= noonHour) return false;
+  if (localParts(now, resolveTimeZone(opts.timeZone)).hour >= noonHour) return false;
 
   return weatherShiftExceedsThreshold(opts.prevWeather, opts.currentWeather, {
     tempDeltaC: opts.tempDeltaC,
@@ -75,7 +68,8 @@ export function shouldRerollOutfitForWeather(opts: {
 export function weatherFromCtx(
   ctx: Record<string, unknown> | null | undefined,
 ): Pick<WeatherCtx, "tempC" | "condition"> | null {
-  if (!ctx) return null;
+  // Only weather a provider reported: rows written before C5 can hold invented ("mock") values.
+  if (!ctx || ctx.source !== "api") return null;
   const tempC = typeof ctx.tempC === "number" ? ctx.tempC : null;
   const condition = typeof ctx.condition === "string" ? ctx.condition : null;
   if (tempC == null || !condition) return null;

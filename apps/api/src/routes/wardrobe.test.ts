@@ -7,18 +7,40 @@ import type {
   WardrobeTryonResponse,
   WasteSummaryResponse,
 } from "@worn/shared";
+import { buildServer } from "../index.js";
+import { UnavailableOcrClient } from "../lib/ocr/index.js";
+import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import { buildTestServer, login } from "../test-utils.js";
+
+/** Ask again (as the app does) until the in-process render job has finished. */
+async function pollTryon(
+  app: Awaited<ReturnType<typeof buildTestServer>>["app"],
+  accessToken: string,
+  id: string,
+): Promise<WardrobeTryonResponse> {
+  for (let i = 0; i < 100; i++) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/wardrobe/${id}/tryon`,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    const body = res.json() as WardrobeTryonResponse;
+    if (body.status !== "PROCESSING") return body;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error("try-on still PROCESSING");
+}
 
 describe("wardrobe", () => {
   it("creates and lists wardrobe items", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const create = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", colors: ["blue"], brand: "Zara", costMinor: 199900, imageKeys: ["wardrobe/a.jpg"], garmentImageKey: "wardrobe/a.jpg" },
+      payload: { category: "shirt", colors: ["blue"], brand: "Zara", costMinor: 199900, imageKeys: [`u/${userId}/wardrobe/a.jpg`], garmentImageKey: `u/${userId}/wardrobe/a.jpg` },
     });
     expect(create.statusCode).toBe(201);
     const body = create.json() as WardrobeItem;
@@ -31,21 +53,109 @@ describe("wardrobe", () => {
     expect(listed.items[0]!.id).toBe(body.id);
   });
 
-  it("tryon stub returns previewUrl", async () => {
-    const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+  it("tryon without an avatar says NO_AVATAR; with one it renders as a job", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
     const created = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "kurta", garmentImageKey: "wardrobe/kurta.jpg", imageKeys: ["wardrobe/kurta.jpg"] },
+      payload: { category: "kurta", garmentImageKey: `u/${userId}/wardrobe/kurta.jpg`, imageKeys: [`u/${userId}/wardrobe/kurta.jpg`] },
     });
     const id = (created.json() as WardrobeItem).id;
     const tryon = await app.inject({ method: "POST", url: `/wardrobe/${id}/tryon`, headers: { authorization: `Bearer ${accessToken}` } });
     expect(tryon.statusCode).toBe(200);
-    const j = tryon.json() as WardrobeTryonResponse;
-    expect(j.status).toBe("READY");
-    expect(j.previewUrl).toBeTruthy();
+    expect(tryon.json()).toMatchObject({ status: "NO_AVATAR", previewUrl: null, imageKey: null });
+
+    await repos.upsertAvatar({
+      userId,
+      status: "READY",
+      referenceImageKey: "references/user.jpg",
+      sourceUploadKeys: ["uploads/a.jpg"],
+      bodyMeta: {},
+    });
+    const queued = await app.inject({ method: "POST", url: `/wardrobe/${id}/tryon`, headers: { authorization: `Bearer ${accessToken}` } });
+    expect(queued.statusCode).toBe(202);
+    expect((queued.json() as WardrobeTryonResponse).status).toBe("PROCESSING");
+    const done = await pollTryon(app, accessToken, id);
+    expect(done.status).toBe("READY");
+    expect(done.previewUrl).toBeTruthy();
+    // The render is stored under the user's own key space, never the garment's key.
+    expect(done.imageKey).toMatch(new RegExp(`^u/${userId}/`));
+    await app.close();
+  });
+
+  it("tryon that fails is stored FAILED with a retryAfter, and isn't re-rendered before it", async () => {
+    const { createMockRenderProvider } = await import("../lib/render/provider.js");
+    const { createMemoryRepositories } = await import("../lib/repositories/memory.js");
+    const { buildServer } = await import("../index.js");
+    const base = createMockRenderProvider();
+    let tryOnCalls = 0;
+    const renderProvider = {
+      ...base,
+      async tryOn() {
+        tryOnCalls += 1;
+        throw new Error("provider exploded");
+      },
+    };
+    const repos = createMemoryRepositories();
+    const app = await buildServer({ logger: false, deps: { repos, renderProvider } });
+    const { accessToken, userId } = await login(app);
+    await repos.upsertAvatar({
+      userId,
+      status: "READY",
+      referenceImageKey: "references/user.jpg",
+      sourceUploadKeys: ["uploads/a.jpg"],
+      bodyMeta: {},
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "shirt", garmentImageKey: `u/${userId}/wardrobe/shirt.jpg`, imageKeys: [`u/${userId}/wardrobe/shirt.jpg`] },
+    });
+    const id = (created.json() as WardrobeItem).id;
+    const first = await app.inject({ method: "POST", url: `/wardrobe/${id}/tryon`, headers: { authorization: `Bearer ${accessToken}` } });
+    expect(first.statusCode).toBe(202);
+    const failed = await pollTryon(app, accessToken, id);
+    expect(failed.status).toBe("FAILED");
+    expect(failed.previewUrl).toBeNull();
+    expect((failed as { retryAfter?: string | null }).retryAfter).toBeTruthy();
+    const calls = tryOnCalls;
+    const again = await app.inject({ method: "POST", url: `/wardrobe/${id}/tryon`, headers: { authorization: `Bearer ${accessToken}` } });
+    expect(again.statusCode).toBe(200);
+    expect((again.json() as WardrobeTryonResponse).status).toBe("FAILED");
+    expect(tryOnCalls).toBe(calls);
+    await app.close();
+  });
+
+  it("tryon is 503 when the render provider isn't configured", async () => {
+    const { createMemoryRepositories } = await import("../lib/repositories/memory.js");
+    const { buildServer } = await import("../index.js");
+    const { createUnavailableRenderProvider } = await import("../lib/render/provider.js");
+    const repos = createMemoryRepositories();
+    const app = await buildServer({
+      logger: false,
+      deps: { repos, renderProvider: createUnavailableRenderProvider() },
+    });
+    const { accessToken, userId } = await login(app);
+    await repos.upsertAvatar({
+      userId,
+      status: "READY",
+      referenceImageKey: "references/user.jpg",
+      sourceUploadKeys: ["uploads/a.jpg"],
+      bodyMeta: {},
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "shirt", garmentImageKey: `u/${userId}/wardrobe/shirt.jpg`, imageKeys: [`u/${userId}/wardrobe/shirt.jpg`] },
+    });
+    const id = (created.json() as WardrobeItem).id;
+    const res = await app.inject({ method: "POST", url: `/wardrobe/${id}/tryon`, headers: { authorization: `Bearer ${accessToken}` } });
+    expect(res.statusCode).toBe(503);
+    await app.close();
   });
 
   it("tryon cache hit skips second render call", async () => {
@@ -79,20 +189,25 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: {
         category: "shirt",
-        garmentImageKey: "wardrobe/shirt.jpg",
-        imageKeys: ["wardrobe/shirt.jpg"],
+        garmentImageKey: `u/${userId}/wardrobe/shirt.jpg`,
+        imageKeys: [`u/${userId}/wardrobe/shirt.jpg`],
       },
     });
     const id = (created.json() as WardrobeItem).id;
 
-    const first = await app.inject({
-      method: "POST",
-      url: `/wardrobe/${id}/tryon`,
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    expect(first.statusCode).toBe(200);
+    const [first, doubleTap] = await Promise.all(
+      [0, 1].map(() =>
+        app.inject({
+          method: "POST",
+          url: `/wardrobe/${id}/tryon`,
+          headers: { authorization: `Bearer ${accessToken}` },
+        }),
+      ),
+    );
+    expect(first!.statusCode).toBe(202);
+    expect(doubleTap!.statusCode).toBe(202);
+    const firstKey = (await pollTryon(app, accessToken, id)).imageKey;
     expect(tryOnCalls).toBe(1);
-    const firstKey = (first.json() as WardrobeTryonResponse).imageKey;
 
     const second = await app.inject({
       method: "POST",
@@ -108,12 +223,12 @@ describe("wardrobe", () => {
 
   it("logs wear and updates waste summary", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const created = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "saree", costMinor: 500000, imageKeys: ["wardrobe/s.jpg"], garmentImageKey: "wardrobe/s.jpg" },
+      payload: { category: "saree", costMinor: 500000, imageKeys: [`u/${userId}/wardrobe/s.jpg`], garmentImageKey: `u/${userId}/wardrobe/s.jpg` },
     });
     const id = (created.json() as WardrobeItem).id;
     const wear = await app.inject({
@@ -209,15 +324,15 @@ describe("wardrobe", () => {
 
   it("POST /wear accepts optional imageKey", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const created = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "kurta", imageKeys: ["w/k.jpg"] },
+      payload: { category: "kurta", imageKeys: [`u/${userId}/w/k.jpg`] },
     });
     const id = (created.json() as WardrobeItem).id;
-    const imageKey = "wear/user/photo-1.jpg";
+    const imageKey = `u/${userId}/wear/photo-1.jpg`;
 
     const wear = await app.inject({
       method: "POST",
@@ -229,6 +344,40 @@ describe("wardrobe", () => {
     const body = wear.json() as { imageKey: string | null; imageUrl: string | null };
     expect(body.imageKey).toBe(imageKey);
     expect(body.imageUrl).toBeTruthy();
+
+    const foreign = await app.inject({
+      method: "POST",
+      url: "/wear",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { wardrobeItemId: id, imageKey: "u/00000000-0000-4000-8000-0000000000cc/wear/p.jpg" },
+    });
+    expect(foreign.statusCode).toBe(404);
+  });
+
+  it("POST /wear with the same idempotencyKey logs once and answers 200 on the retry", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const created = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "kurta", imageKeys: [`u/${userId}/w/k.jpg`] },
+    });
+    const id = (created.json() as WardrobeItem).id;
+    const send = () =>
+      app.inject({
+        method: "POST",
+        url: "/wear",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { wardrobeItemId: id, idempotencyKey: "6f1d2c3b-4a59-4e6d-8c7b-9a0b1c2d3e4f" },
+      });
+    const [a, b] = await Promise.all([send(), send()]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 201]);
+    expect((a.json() as { id: string }).id).toBe((b.json() as { id: string }).id);
+    const retry = await send();
+    expect(retry.statusCode).toBe(200);
+    expect(await repos.listWearLogs(userId, { limit: 10 })).toHaveLength(1);
+    await app.close();
   });
 
   it("PATCH /wardrobe/:id returns 404 for unknown item", async () => {
@@ -244,7 +393,7 @@ describe("wardrobe", () => {
     await app.close();
   });
 
-  it("tryon without garment image returns PROCESSING", async () => {
+  it("tryon without a garment image is a 400, not a forever PROCESSING", async () => {
     const { app } = await buildTestServer();
     const { accessToken } = await login(app);
     const created = await app.inject({
@@ -259,10 +408,8 @@ describe("wardrobe", () => {
       url: `/wardrobe/${id}/tryon`,
       headers: { authorization: `Bearer ${accessToken}` },
     });
-    expect(tryon.statusCode).toBe(200);
-    const j = tryon.json() as WardrobeTryonResponse;
-    expect(j.status).toBe("PROCESSING");
-    expect(j.previewUrl).toBeNull();
+    expect(tryon.statusCode).toBe(400);
+    expect((tryon.json() as { message: string }).message).toMatch(/photo/);
     await app.close();
   });
 
@@ -357,7 +504,7 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { wardrobeItemId: "00000000-0000-4000-8000-0000000000aa" },
     });
-    expect(badItem.statusCode).toBe(400);
+    expect(badItem.statusCode).toBe(404);
 
     const badOutfit = await app.inject({
       method: "POST",
@@ -365,7 +512,7 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { outfitId: "00000000-0000-4000-8000-0000000000bb" },
     });
-    expect(badOutfit.statusCode).toBe(400);
+    expect(badOutfit.statusCode).toBe(404);
 
     const boundary = "----wornwear";
     const noFile = await app.inject({
@@ -399,20 +546,20 @@ describe("wardrobe", () => {
     });
     expect(photo.statusCode).toBe(201);
     const uploaded = photo.json() as { imageKey: string; imageUrl: string };
-    expect(uploaded.imageKey).toMatch(/^wear\//);
+    expect(uploaded.imageKey).toMatch(/^u\/[0-9a-f-]{36}\/wear\//);
     expect(uploaded.imageUrl).toBeTruthy();
     await app.close();
   });
 
   it("outfits/today generates outfit and waste/dead", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     // need at least one item
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "jeans", imageKeys: ["wardrobe/j.jpg"], garmentImageKey: "wardrobe/j.jpg" },
+      payload: { category: "jeans", imageKeys: [`u/${userId}/wardrobe/j.jpg`], garmentImageKey: `u/${userId}/wardrobe/j.jpg` },
     });
     const today = await app.inject({ method: "GET", url: "/outfits/today", headers: { authorization: `Bearer ${accessToken}` } });
     expect(today.statusCode).toBe(200);
@@ -435,31 +582,31 @@ describe("wardrobe", () => {
 
   it("GET /wardrobe/:id/goes-with returns ranked bottoms and shoes", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const shirt = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "oxford shirt", colors: ["white"], imageKeys: ["w/shirt.jpg"] },
+      payload: { category: "oxford shirt", colors: ["white"], imageKeys: [`u/${userId}/w/shirt.jpg`] },
     });
     const jeans = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "dark jeans", colors: ["blue"], imageKeys: ["w/jeans.jpg"] },
+      payload: { category: "dark jeans", colors: ["blue"], imageKeys: [`u/${userId}/w/jeans.jpg`] },
     });
     const sneakers = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "leather sneakers", colors: ["white"], imageKeys: ["w/shoes.jpg"] },
+      payload: { category: "leather sneakers", colors: ["white"], imageKeys: [`u/${userId}/w/shoes.jpg`] },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "polo tee", colors: ["navy"], imageKeys: ["w/polo.jpg"] },
+      payload: { category: "polo tee", colors: ["navy"], imageKeys: [`u/${userId}/w/polo.jpg`] },
     });
 
     const shirtId = (shirt.json() as WardrobeItem).id;
@@ -487,12 +634,12 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe normalizes jewelry category (N30)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const res = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "Gold Necklace", colors: ["gold"], imageKeys: ["w/neck.jpg"] },
+      payload: { category: "Gold Necklace", colors: ["gold"], imageKeys: [`u/${userId}/w/neck.jpg`] },
     });
     expect(res.statusCode).toBe(201);
     expect((res.json() as WardrobeItem).category).toBe("necklace");
@@ -500,24 +647,24 @@ describe("wardrobe", () => {
 
   it("GET /wardrobe/rotation filters shoes and bags (N29)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "white sneakers", imageKeys: ["w/s.jpg"] },
+      payload: { category: "white sneakers", imageKeys: [`u/${userId}/w/s.jpg`] },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "leather tote bag", imageKeys: ["w/b.jpg"] },
+      payload: { category: "leather tote bag", imageKeys: [`u/${userId}/w/b.jpg`] },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "oxford shirt", imageKeys: ["w/t.jpg"] },
+      payload: { category: "oxford shirt", imageKeys: [`u/${userId}/w/t.jpg`] },
     });
     const res = await app.inject({
       method: "GET",
@@ -535,13 +682,13 @@ describe("wardrobe", () => {
 
   it("GET /wardrobe/missing-pieces reports gaps with affiliate urls (N31)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     for (const cat of ["white shirt", "navy tee", "striped blouse", "linen shirt"]) {
       await app.inject({
         method: "POST",
         url: "/wardrobe",
         headers: { authorization: `Bearer ${accessToken}` },
-        payload: { category: cat, colors: ["black"], imageKeys: [`w/${cat}.jpg`] },
+        payload: { category: cat, colors: ["black"], imageKeys: [`u/${userId}/w/${cat}.jpg`] },
       });
     }
     const res = await app.inject({
@@ -562,16 +709,16 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/bulk creates N items", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const res = await app.inject({
       method: "POST",
       url: "/wardrobe/bulk",
       headers: { authorization: `Bearer ${accessToken}` },
       payload: {
         items: [
-          { category: "shirt", colors: ["white"], imageKeys: ["w/1.jpg"] },
-          { category: "jeans", colors: ["blue"], imageKeys: ["w/2.jpg"] },
-          { category: "sneakers", brand: "Nike", costMinor: 500000, imageKeys: ["w/3.jpg"] },
+          { category: "shirt", colors: ["white"], imageKeys: [`u/${userId}/w/1.jpg`] },
+          { category: "jeans", colors: ["blue"], imageKeys: [`u/${userId}/w/2.jpg`] },
+          { category: "sneakers", brand: "Nike", costMinor: 500000, imageKeys: [`u/${userId}/w/3.jpg`] },
         ],
       },
     });
@@ -591,7 +738,7 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/autotag returns category/color/brand + near-dup warn", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     await app.inject({
       method: "POST",
@@ -601,7 +748,7 @@ describe("wardrobe", () => {
         category: "shirt",
         brand: "Zara",
         colors: ["navy"],
-        imageKeys: ["wardrobe/existing-zara.jpg"],
+        imageKeys: [`u/${userId}/wardrobe/existing-zara.jpg`],
       },
     });
 
@@ -610,7 +757,7 @@ describe("wardrobe", () => {
       url: "/wardrobe/autotag",
       headers: { authorization: `Bearer ${accessToken}` },
       payload: {
-        images: [{ imageKey: "wardrobe/zara-navy-shirt.jpg" }],
+        images: [{ imageKey: `u/${userId}/wardrobe/zara-navy-shirt.jpg` }],
       },
     });
     expect(res.statusCode).toBe(200);
@@ -632,14 +779,14 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/bulk?autoTag fills tags from image key", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const res = await app.inject({
       method: "POST",
       url: "/wardrobe/bulk",
       headers: { authorization: `Bearer ${accessToken}` },
       payload: {
         autoTag: true,
-        items: [{ category: "other", imageKeys: ["wardrobe/nike-black-sneakers.jpg"] }],
+        items: [{ category: "other", imageKeys: [`u/${userId}/wardrobe/nike-black-sneakers.jpg`] }],
       },
     });
     expect(res.statusCode).toBe(201);
@@ -652,28 +799,28 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/photo-dump tags a 20+ batch into wardrobe items (N55)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const keys = [
-      "wardrobe/nike-black-sneakers.jpg",
-      "wardrobe/zara-navy-shirt.jpg",
-      "wardrobe/levis-blue-jeans.jpg",
-      "wardrobe/uniqlo-white-tee.jpg",
-      "wardrobe/adidas-white-sneakers.jpg",
-      "wardrobe/hm-black-dress.jpg",
-      "wardrobe/puma-red-hoodie.jpg",
-      "wardrobe/gap-khaki-pants.jpg",
-      "wardrobe/ralph-blue-blazer.jpg",
-      "wardrobe/mango-beige-skirt.jpg",
-      "wardrobe/nike-grey-joggers.jpg",
-      "wardrobe/zara-black-boots.jpg",
-      "wardrobe/levis-denim-jacket.jpg",
-      "wardrobe/uniqlo-green-shirt.jpg",
-      "wardrobe/adidas-black-shorts.jpg",
-      "wardrobe/hm-pink-blouse.jpg",
-      "wardrobe/puma-blue-sneakers.jpg",
-      "wardrobe/gap-white-shirt.jpg",
-      "wardrobe/ralph-brown-belt.jpg",
-      "wardrobe/mango-orange-kurta.jpg",
+      `u/${userId}/wardrobe/nike-black-sneakers.jpg`,
+      `u/${userId}/wardrobe/zara-navy-shirt.jpg`,
+      `u/${userId}/wardrobe/levis-blue-jeans.jpg`,
+      `u/${userId}/wardrobe/uniqlo-white-tee.jpg`,
+      `u/${userId}/wardrobe/adidas-white-sneakers.jpg`,
+      `u/${userId}/wardrobe/hm-black-dress.jpg`,
+      `u/${userId}/wardrobe/puma-red-hoodie.jpg`,
+      `u/${userId}/wardrobe/gap-khaki-pants.jpg`,
+      `u/${userId}/wardrobe/ralph-blue-blazer.jpg`,
+      `u/${userId}/wardrobe/mango-beige-skirt.jpg`,
+      `u/${userId}/wardrobe/nike-grey-joggers.jpg`,
+      `u/${userId}/wardrobe/zara-black-boots.jpg`,
+      `u/${userId}/wardrobe/levis-denim-jacket.jpg`,
+      `u/${userId}/wardrobe/uniqlo-green-shirt.jpg`,
+      `u/${userId}/wardrobe/adidas-black-shorts.jpg`,
+      `u/${userId}/wardrobe/hm-pink-blouse.jpg`,
+      `u/${userId}/wardrobe/puma-blue-sneakers.jpg`,
+      `u/${userId}/wardrobe/gap-white-shirt.jpg`,
+      `u/${userId}/wardrobe/ralph-brown-belt.jpg`,
+      `u/${userId}/wardrobe/mango-orange-kurta.jpg`,
     ];
     expect(keys.length).toBeGreaterThanOrEqual(20);
 
@@ -775,24 +922,24 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/seasonal-swap marks ACTIVE/STORED by season", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const summer = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "linen shirt", tags: ["season:summer"], imageKeys: ["w/s.jpg"] },
+      payload: { category: "linen shirt", tags: ["season:summer"], imageKeys: [`u/${userId}/w/s.jpg`] },
     });
     const winter = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "wool coat", tags: ["season:winter"], imageKeys: ["w/w.jpg"] },
+      payload: { category: "wool coat", tags: ["season:winter"], imageKeys: [`u/${userId}/w/w.jpg`] },
     });
     const jeans = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "jeans", imageKeys: ["w/j.jpg"] },
+      payload: { category: "jeans", imageKeys: [`u/${userId}/w/j.jpg`] },
     });
     expect(summer.statusCode).toBe(201);
     expect(winter.statusCode).toBe(201);
@@ -821,12 +968,12 @@ describe("wardrobe", () => {
 
   it("POST /wardrobe/:id/care-ocr parses fixture text onto item", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const created = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "cotton tee", imageKeys: ["wardrobe/tee.jpg"] },
+      payload: { category: "cotton tee", imageKeys: [`u/${userId}/wardrobe/tee.jpg`] },
     });
     const id = (created.json() as WardrobeItem).id;
 
@@ -857,22 +1004,31 @@ describe("wardrobe", () => {
       method: "POST",
       url: `/wardrobe/${id}/care-ocr`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { imageKey: "care-tags/user/wash-label.jpg" },
+      payload: { imageKey: `u/${userId}/care-tags/wash-label.jpg` },
     });
     expect(fromImage.statusCode).toBe(200);
     expect((fromImage.json() as { careRules: { wash: string } }).careRules.wash).toBe(
       "machine_cold",
     );
+
+    // Another user's tag photo is never read.
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/wardrobe/${id}/care-ocr`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { imageKey: "u/00000000-0000-4000-8000-0000000000cc/care-tags/wash-label.jpg" },
+    });
+    expect(foreign.statusCode).toBe(404);
   });
 
   it("POST /wardrobe/:id/care-ocr/photo snaps tag via multipart", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const created = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", imageKeys: ["wardrobe/s.jpg"] },
+      payload: { category: "shirt", imageKeys: [`u/${userId}/wardrobe/s.jpg`] },
     });
     const id = (created.json() as WardrobeItem).id;
 
@@ -1046,7 +1202,7 @@ describe("wardrobe", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "linen shirt", imageKeys: ["w/linen.jpg"] },
+      payload: { category: "linen shirt", imageKeys: [`u/${userId}/w/linen.jpg`] },
     });
     const id = (created.json() as WardrobeItem).id;
 
@@ -1188,7 +1344,7 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { purchaseItemIds: [missing] },
     });
-    expect(fromMissing.statusCode).toBe(400);
+    expect(fromMissing.statusCode).toBe(404);
 
     const other = await login(app, "919876543299");
     const { items: otherItems } = await repos.createMerchantPurchase({
@@ -1206,7 +1362,8 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { purchaseItemIds: [otherItems[0]!.id] },
     });
-    expect(stolen.statusCode).toBe(400);
+    // Someone else's purchase reads exactly like a missing one.
+    expect(stolen.statusCode).toBe(404);
 
     const { items: mine } = await repos.createMerchantPurchase({
       userId,
@@ -1290,8 +1447,8 @@ describe("wardrobe", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: {
         category: "shirt",
-        garmentImageKey: "wardrobe/shirt.jpg",
-        imageKeys: ["wardrobe/shirt.jpg"],
+        garmentImageKey: `u/${userId}/wardrobe/shirt.jpg`,
+        imageKeys: [`u/${userId}/wardrobe/shirt.jpg`],
         costMinor: 100000,
       },
     });
@@ -1302,28 +1459,30 @@ describe("wardrobe", () => {
       url: `/wardrobe/${id}/tryon`,
       headers: { authorization: `Bearer ${accessToken}` },
     });
-    expect(tryonOk.statusCode).toBe(200);
-    expect((tryonOk.json() as WardrobeTryonResponse).status).toBe("READY");
-    expect((tryonOk.json() as WardrobeTryonResponse).previewUrl).toBeTruthy();
+    expect(tryonOk.statusCode).toBe(202);
+    const ready = await pollTryon(app, accessToken, id);
+    expect(ready.status).toBe("READY");
+    expect(ready.previewUrl).toBeTruthy();
 
-    // Clear cache + force catch fallback.
+    // A fresh PROCESSING row is a render already in flight: it isn't claimed or rendered again,
+    // and a failing provider never turns into a READY that shows the garment photo.
     await repos.upsertTryonPreview({
       userId,
       listingVariantId: null,
       wardrobeItemId: id,
-      imageKey: "stale.jpg",
+      imageKey: null,
       status: "PROCESSING",
       provider: "mock",
       costMicros: 0,
     });
     boom = true;
-    const tryonCatch = await app.inject({
+    const tryonInFlight = await app.inject({
       method: "POST",
       url: `/wardrobe/${id}/tryon`,
       headers: { authorization: `Bearer ${accessToken}` },
     });
-    expect(tryonCatch.statusCode).toBe(200);
-    expect((tryonCatch.json() as WardrobeTryonResponse).status).toBe("READY");
+    expect(tryonInFlight.statusCode).toBe(202);
+    expect((tryonInFlight.json() as WardrobeTryonResponse).status).toBe("PROCESSING");
 
     const outfit = await repos.createOutfit({
       userId,
@@ -1538,7 +1697,7 @@ describe("wardrobe", () => {
 
   it("multipart upload skips empty file part; wear/photo skips empty; lent due filter", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const boundary = "----wornSkipEmpty";
     const emptyThenFile = Buffer.concat([
@@ -1592,7 +1751,7 @@ describe("wardrobe", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "scarf", imageKeys: ["w/scarf.jpg"], garmentImageKey: "w/scarf.jpg" },
+      payload: { category: "scarf", imageKeys: [`u/${userId}/w/scarf.jpg`], garmentImageKey: `u/${userId}/w/scarf.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     await app.inject({
@@ -1622,8 +1781,22 @@ describe("wardrobe", () => {
 
   it("capsule GET/PUT happy path + profileId wardrobe filter + overdue lent", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
-    const profileId = "11111111-1111-4111-8111-111111111111";
+    const { accessToken, userId } = await login(app);
+    const profiles = await app.inject({
+      method: "GET",
+      url: "/closet-profiles",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    const profileId = (profiles.json() as { activeProfileId: string }).activeProfileId;
+
+    // A profile id that isn't the caller's is a 404, not a dangling reference.
+    const foreignProfile = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { category: "shirt", profileId: "11111111-1111-4111-8111-111111111111" },
+    });
+    expect(foreignProfile.statusCode).toBe(404);
 
     const a = await app.inject({
       method: "POST",
@@ -1632,8 +1805,8 @@ describe("wardrobe", () => {
       payload: {
         category: "shirt",
         colors: ["navy"],
-        imageKeys: ["wardrobe/a.jpg"],
-        garmentImageKey: "wardrobe/a.jpg",
+        imageKeys: [`u/${userId}/wardrobe/a.jpg`],
+        garmentImageKey: `u/${userId}/wardrobe/a.jpg`,
         profileId,
       },
     });
@@ -1644,8 +1817,8 @@ describe("wardrobe", () => {
       payload: {
         category: "pants",
         colors: ["black"],
-        imageKeys: ["wardrobe/b.jpg"],
-        garmentImageKey: "wardrobe/b.jpg",
+        imageKeys: [`u/${userId}/wardrobe/b.jpg`],
+        garmentImageKey: `u/${userId}/wardrobe/b.jpg`,
       },
     });
     expect(a.statusCode).toBe(201);
@@ -1707,5 +1880,242 @@ describe("wardrobe", () => {
     expect(returned.statusCode).toBe(200);
     expect((returned.json() as { item: { lentTo: string | null }; overdue: boolean }).item.lentTo).toBeNull();
     expect((returned.json() as { overdue: boolean }).overdue).toBe(false);
+  });
+
+  it("photo-dump discard hides the item until undone; another user can't triage or undo it", async () => {
+    const { app } = await buildTestServer();
+    const owner = await login(app, "919800000301");
+    const other = await login(app, "919800000302");
+    const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+    const created = await app.inject({
+      method: "POST",
+      url: "/wardrobe",
+      headers: auth(owner.accessToken),
+      payload: { category: "tee", tags: ["photo-dump"] },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as WardrobeItem).id;
+    const listedIds = async () =>
+      (
+        (await app.inject({ method: "GET", url: "/wardrobe", headers: auth(owner.accessToken) })).json() as WardrobeListResponse
+      ).items.map((i) => i.id);
+    const triage = (token: string) =>
+      app.inject({
+        method: "POST",
+        url: `/wardrobe/${id}/photo-dump/triage`,
+        headers: auth(token),
+        payload: { decision: "discard" },
+      });
+    const undo = (token: string) =>
+      app.inject({ method: "POST", url: `/wardrobe/${id}/photo-dump/triage/undo`, headers: auth(token) });
+
+    expect((await triage(other.accessToken)).statusCode).toBe(404);
+    const discarded = await triage(owner.accessToken);
+    expect(discarded.statusCode).toBe(200);
+    expect(discarded.json()).toMatchObject({ decision: "discard", item: null, deleted: true });
+    expect(await listedIds()).not.toContain(id);
+    // Hidden means hidden everywhere, including edits.
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/wardrobe/${id}`,
+      headers: auth(owner.accessToken),
+      payload: { laundryStatus: "DIRTY" },
+    });
+    expect(patched.statusCode).toBe(404);
+
+    expect((await undo(other.accessToken)).statusCode).toBe(404);
+    const restored = await undo(owner.accessToken);
+    expect(restored.statusCode).toBe(200);
+    expect((restored.json() as { item: WardrobeItem }).item.id).toBe(id);
+    expect(await listedIds()).toContain(id);
+    // Nothing left to undo.
+    expect((await undo(owner.accessToken)).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("PATCH /wardrobe/items changes every listed item or none", async () => {
+    const { app } = await buildTestServer();
+    const owner = await login(app, "919800000303");
+    const other = await login(app, "919800000304");
+    const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+    const make = async (token: string) =>
+      (
+        (
+          await app.inject({ method: "POST", url: "/wardrobe", headers: auth(token), payload: { category: "tee" } })
+        ).json() as WardrobeItem
+      ).id;
+    const a = await make(owner.accessToken);
+    const b = await make(owner.accessToken);
+    const foreign = await make(other.accessToken);
+
+    const mixed = await app.inject({
+      method: "PATCH",
+      url: "/wardrobe/items",
+      headers: auth(owner.accessToken),
+      payload: { ids: [a, foreign], patch: { laundryStatus: "DIRTY" } },
+    });
+    expect(mixed.statusCode).toBe(404);
+    const dup = await app.inject({
+      method: "PATCH",
+      url: "/wardrobe/items",
+      headers: auth(owner.accessToken),
+      payload: { ids: [a, a], patch: { laundryStatus: "DIRTY" } },
+    });
+    expect(dup.statusCode).toBe(400);
+    const list = async (token: string) =>
+      ((await app.inject({ method: "GET", url: "/wardrobe", headers: auth(token) })).json() as WardrobeListResponse)
+        .items;
+    expect((await list(owner.accessToken)).every((i) => i.laundryStatus === "CLEAN")).toBe(true);
+    expect((await list(other.accessToken))[0]!.laundryStatus).toBe("CLEAN");
+
+    const ok = await app.inject({
+      method: "PATCH",
+      url: "/wardrobe/items",
+      headers: auth(owner.accessToken),
+      payload: { ids: [a, b], patch: { laundryStatus: "DIRTY" } },
+    });
+    expect(ok.statusCode).toBe(200);
+    const items = (ok.json() as { items: WardrobeItem[] }).items;
+    expect(items.map((i) => i.id).sort()).toEqual([a, b].sort());
+    expect(items.every((i) => i.laundryStatus === "DIRTY")).toBe(true);
+    await app.close();
+  });
+
+  it("GET /wardrobe pages with nextCursor and rejects a bad cursor", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken } = await login(app, "919800000305");
+    const headers = { authorization: `Bearer ${accessToken}` };
+    for (const category of ["tee", "jeans", "kurta"]) {
+      await app.inject({ method: "POST", url: "/wardrobe", headers, payload: { category } });
+    }
+    const first = await app.inject({ method: "GET", url: "/wardrobe?limit=2", headers });
+    expect(first.statusCode).toBe(200);
+    const page1 = first.json() as WardrobeListResponse;
+    expect(page1.items).toHaveLength(2);
+    expect(page1.nextCursor).toBeTruthy();
+    const second = await app.inject({
+      method: "GET",
+      url: `/wardrobe?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`,
+      headers,
+    });
+    const page2 = second.json() as WardrobeListResponse;
+    expect(page2.items).toHaveLength(1);
+    expect(page2.nextCursor ?? null).toBeNull();
+    expect(new Set([...page1.items, ...page2.items].map((i) => i.id)).size).toBe(3);
+
+    const bad = await app.inject({ method: "GET", url: "/wardrobe?cursor=not-a-cursor", headers });
+    expect(bad.statusCode).toBe(400);
+    const tooMany = await app.inject({ method: "GET", url: "/wardrobe?limit=201", headers });
+    expect(tooMany.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("from-purchases called twice at once imports each purchase item once", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken, userId } = await login(app, "919800000306");
+    const other = await login(app, "919800000307");
+    const { items } = await repos.createMerchantPurchase({
+      userId,
+      source: "EMAIL",
+      merchant: "Myntra",
+      currency: "INR",
+      totalMinor: 99900,
+      purchasedAt: new Date(),
+      items: [{ title: "Cotton Tee", category: "tee", priceMinor: 99900, qty: 1 }],
+    });
+    const purchaseItemIds = items.map((i: { id: string }) => i.id);
+    const post = (token: string) =>
+      app.inject({
+        method: "POST",
+        url: "/wardrobe/from-purchases",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { purchaseItemIds },
+      });
+    const [r1, r2] = await Promise.all([post(accessToken), post(accessToken)]);
+    expect([r1.statusCode, r2.statusCode]).toEqual([201, 201]);
+    const b1 = r1.json() as { items: WardrobeItem[]; created: number };
+    const b2 = r2.json() as { items: WardrobeItem[]; created: number };
+    expect(b1.created + b2.created).toBe(1);
+    expect(b1.items[0]!.id).toBe(b2.items[0]!.id);
+    const listed = (
+      await app.inject({ method: "GET", url: "/wardrobe", headers: { authorization: `Bearer ${accessToken}` } })
+    ).json() as WardrobeListResponse;
+    expect(listed.items).toHaveLength(1);
+    // Someone else's purchase is not theirs to import.
+    expect((await post(other.accessToken)).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("POST /wardrobe/bulk with another user's profile creates nothing", async () => {
+    const { app, repos } = await buildTestServer();
+    const { accessToken } = await login(app, "919800000308");
+    const other = await login(app, "919800000309");
+    const foreignProfile = await repos.createClosetProfile({
+      ownerUserId: other.userId,
+      householdId: null,
+      name: "Partner",
+      kind: "PARTNER",
+    });
+    const headers = { authorization: `Bearer ${accessToken}` };
+    const res = await app.inject({
+      method: "POST",
+      url: "/wardrobe/bulk",
+      headers,
+      payload: { items: [{ category: "tee" }, { category: "jeans", profileId: foreignProfile.id }] },
+    });
+    expect(res.statusCode).toBe(404);
+    const listed = (await app.inject({ method: "GET", url: "/wardrobe", headers })).json() as WardrobeListResponse;
+    expect(listed.items).toHaveLength(0);
+    await app.close();
+  });
+
+  it("POST /wardrobe/upload rejects bad fields before anything is stored", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken } = await login(app, "919800000310");
+    let puts = 0;
+    const put = app.deps.storage.put.bind(app.deps.storage);
+    app.deps.storage.put = async (input) => {
+      puts += 1;
+      return put(input);
+    };
+    const boundary = "----wornbadfields";
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="tee.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`,
+      ),
+      Buffer.from("fake-jpeg"),
+      Buffer.from(
+        `\r\n--${boundary}\r\nContent-Disposition: form-data; name="costMinor"\r\n\r\n-5\r\n--${boundary}--\r\n`,
+      ),
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/wardrobe/upload",
+      headers: { authorization: `Bearer ${accessToken}`, "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(puts).toBe(0);
+    await app.close();
+  });
+
+  it("care-ocr says 503 when no OCR provider is configured, and stores nothing", async () => {
+    const repos = createMemoryRepositories();
+    const app = await buildServer({ logger: false, deps: { repos, ocr: new UnavailableOcrClient() } });
+    const { accessToken, userId } = await login(app, "919800000311");
+    const headers = { authorization: `Bearer ${accessToken}` };
+    const id = (
+      (await app.inject({ method: "POST", url: "/wardrobe", headers, payload: { category: "kurta" } })).json() as WardrobeItem
+    ).id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/wardrobe/${id}/care-ocr`,
+      headers,
+      payload: { imageKey: `u/${userId}/care-tags/tag.jpg` },
+    });
+    expect(res.statusCode).toBe(503);
+    expect((res.json() as { error: string }).error).toBe("ocr_unavailable");
+    expect((await repos.findWardrobeItem(id, userId))?.careRules ?? null).toBeNull();
+    await app.close();
   });
 });

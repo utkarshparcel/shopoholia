@@ -11,6 +11,17 @@ export type RenderProviderDeps = {
   downloadImage?: (url: string) => Promise<Uint8Array>;
 };
 
+/** No live try-on provider is configured (production without FASHN_API_KEY). */
+export class RenderUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly code = "tryon_unavailable";
+
+  constructor(message = "Try-on rendering is not configured") {
+    super(message);
+    this.name = "RenderUnavailableError";
+  }
+}
+
 export function createMockRenderProvider(): RenderProvider {
   return {
     name: "mock-fashn",
@@ -66,12 +77,8 @@ export function createFashnRenderProvider(
       ]);
 
       const fashnResult = await client.tryOnMax({ modelImage, productImage });
-      let imageBytes: Uint8Array | undefined;
-      try {
-        imageBytes = await client.downloadFromUrl(fashnResult.outputUrl);
-      } catch {
-        // Fall through — try-on still returns a remote key without local bytes.
-      }
+      // The render is only usable once its bytes are ours: a failed download fails the try-on.
+      const imageBytes = await client.downloadFromUrl(fashnResult.outputUrl);
 
       return {
         imageKey: `tryon/fashn/${fashnResult.predictionId}.jpg`,
@@ -102,8 +109,30 @@ export function createFashnRenderProvider(
   };
 }
 
+/**
+ * Production without a key: try-on throws RenderUnavailableError instead of returning mock
+ * images. Avatar references and scenario passes keep their current behaviour.
+ */
+export function createUnavailableRenderProvider(): RenderProvider {
+  const mock = createMockRenderProvider();
+  return {
+    name: "unavailable",
+    createAvatarReference: (input) => mock.createAvatarReference(input),
+    async tryOn() {
+      throw new RenderUnavailableError();
+    },
+    scenarioPass: (input) => mock.scenarioPass(input),
+  };
+}
+
+/** Whether try-on can render: false only for the production provider without a key. */
+export function renderProviderAvailable(provider: RenderProvider): boolean {
+  return provider.name !== "unavailable";
+}
+
 /** Factory used by API deps — picks live FASHN when FASHN_API_KEY is set. */
 export function createRenderProvider(deps: RenderProviderDeps = {}): RenderProvider {
   const apiKey = deps.apiKey ?? process.env.FASHN_API_KEY;
+  if (!apiKey && process.env.NODE_ENV === "production") return createUnavailableRenderProvider();
   return createFashnRenderProvider(apiKey, deps);
 }

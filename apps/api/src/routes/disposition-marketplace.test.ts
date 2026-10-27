@@ -10,7 +10,7 @@ describe("disposition marketplace real rails", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", colors: ["blue"], brand: "Zara", costMinor: 199900, imageKeys: ["a.jpg"], garmentImageKey: "a.jpg" },
+      payload: { category: "shirt", colors: ["blue"], brand: "Zara", costMinor: 199900, imageKeys: [`u/${userId}/wardrobe/a.jpg`], garmentImageKey: `u/${userId}/wardrobe/a.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const create = await app.inject({
@@ -38,7 +38,7 @@ describe("disposition marketplace real rails", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "jeans", imageKeys: ["j.jpg"], garmentImageKey: "j.jpg" },
+      payload: { category: "jeans", imageKeys: [`u/${userId}/wardrobe/j.jpg`], garmentImageKey: `u/${userId}/wardrobe/j.jpg` },
     });
     const itemId2 = (item2.json() as WardrobeItem).id;
     const dispose = await app.inject({
@@ -60,7 +60,7 @@ describe("disposition marketplace real rails", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "dress", imageKeys: ["d.jpg"], garmentImageKey: "d.jpg" },
+      payload: { category: "dress", imageKeys: [`u/${userId}/wardrobe/d.jpg`], garmentImageKey: `u/${userId}/wardrobe/d.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const donate = await app.inject({
@@ -78,7 +78,7 @@ describe("disposition marketplace real rails", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "kurta", imageKeys: ["k.jpg"], garmentImageKey: "k.jpg" },
+      payload: { category: "kurta", imageKeys: [`u/${userId}/wardrobe/k.jpg`], garmentImageKey: `u/${userId}/wardrobe/k.jpg` },
     });
     const itemId2 = (item2.json() as WardrobeItem).id;
     const barter = await app.inject({
@@ -93,7 +93,7 @@ describe("disposition marketplace real rails", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "coat", imageKeys: ["c.jpg"], garmentImageKey: "c.jpg" },
+      payload: { category: "coat", imageKeys: [`u/${userId}/wardrobe/c.jpg`], garmentImageKey: `u/${userId}/wardrobe/c.jpg` },
     });
     const itemId3 = (barterListing.json() as WardrobeItem).id;
     const barterDisp = await app.inject({
@@ -113,12 +113,12 @@ describe("disposition marketplace real rails", () => {
 
   it("waste dispose DONATE linking via disposition listings", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const item = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "saree", imageKeys: ["s.jpg"], garmentImageKey: "s.jpg" },
+      payload: { category: "saree", imageKeys: [`u/${userId}/wardrobe/s.jpg`], garmentImageKey: `u/${userId}/wardrobe/s.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     await app.inject({

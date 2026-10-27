@@ -17,7 +17,7 @@ export type ClosetProfile = z.infer<typeof ClosetProfileSchema>;
 
 export const CreateClosetProfileBodySchema = z.object({
   name: z.string().min(1).max(80),
-  kind: ClosetProfileKindSchema.optional().default("KID"),
+  kind: ClosetProfileKindSchema.optional().default("SELF"),
   householdId: z.string().uuid().optional().nullable(),
 });
 export type CreateClosetProfileBody = z.infer<typeof CreateClosetProfileBodySchema>;
@@ -40,11 +40,13 @@ export type ClosetProfileListResponse = z.infer<typeof ClosetProfileListResponse
 export const ClosetProfileWardrobeResponseSchema = z.object({
   profileId: z.string().uuid(),
   items: z.array(WardrobeItemSchema),
+  nextCursor: z.string().nullable().optional(),
 });
 export type ClosetProfileWardrobeResponse = z.infer<typeof ClosetProfileWardrobeResponseSchema>;
 
 export const ClosetProfileOutfitsResponseSchema = z.object({
   profileId: z.string().uuid(),
   outfits: z.array(OutfitSchema),
+  nextCursor: z.string().nullable().optional(),
 });
 export type ClosetProfileOutfitsResponse = z.infer<typeof ClosetProfileOutfitsResponseSchema>;

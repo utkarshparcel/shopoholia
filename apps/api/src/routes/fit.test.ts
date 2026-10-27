@@ -215,7 +215,7 @@ describe("fit", () => {
 
   it("assigns a tailor seller and accepts fabric photo keys + reviews", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const tailorsRes = await app.inject({
       method: "GET",
       url: "/fit/tailors",
@@ -238,23 +238,23 @@ describe("fit", () => {
       payload: {
         templateId,
         selections: { neckline: "Boat" },
-        fabricPhotoKeys: ["fit/fabric/demo.jpg"],
+        fabricPhotoKeys: [`u/${userId}/fit-fabric/demo.jpg`],
       },
     });
     expect(order.statusCode).toBe(201);
     const o = order.json() as TailoringOrder;
     expect(o.tailorSellerId).toBeTruthy();
-    expect(o.fabricPhotoKeys).toContain("fit/fabric/demo.jpg");
+    expect(o.fabricPhotoKeys).toContain(`u/${userId}/fit-fabric/demo.jpg`);
 
     const attach = await app.inject({
       method: "POST",
       url: `/fit/orders/${o.id}/fabric`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { fabricPhotoKeys: ["fit/fabric/extra.jpg"], fabricRef: "silk-navy" },
+      payload: { fabricPhotoKeys: [`u/${userId}/fit-fabric/extra.jpg`], fabricRef: "silk-navy" },
     });
     expect(attach.statusCode).toBe(200);
     expect((attach.json() as TailoringOrder).fabricPhotoKeys).toEqual(
-      expect.arrayContaining(["fit/fabric/demo.jpg", "fit/fabric/extra.jpg"]),
+      expect.arrayContaining([`u/${userId}/fit-fabric/demo.jpg`, `u/${userId}/fit-fabric/extra.jpg`]),
     );
 
     const review = await app.inject({
@@ -305,7 +305,7 @@ describe("fit", () => {
 
   it("clones fabric photos on reorder", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const templates = await app.inject({
       method: "GET",
       url: "/fit/templates?region=IN",
@@ -319,7 +319,7 @@ describe("fit", () => {
       payload: {
         templateId,
         selections: { neckline: "V" },
-        fabricPhotoKeys: ["fit/fabric/clone-me.jpg"],
+        fabricPhotoKeys: [`u/${userId}/fit-fabric/clone-me.jpg`],
       },
     });
     const source = order.json() as TailoringOrder;
@@ -330,7 +330,7 @@ describe("fit", () => {
     });
     expect(reorder.statusCode).toBe(201);
     const draft = reorder.json() as TailoringOrder;
-    expect(draft.fabricPhotoKeys).toEqual(["fit/fabric/clone-me.jpg"]);
+    expect(draft.fabricPhotoKeys).toEqual([`u/${userId}/fit-fabric/clone-me.jpg`]);
     expect(draft.selections).toEqual({ neckline: "V" });
     expect(draft.tailorSellerId).toBeTruthy();
   });
@@ -352,7 +352,7 @@ describe("fit", () => {
 
   it("uploads fabric photo via multipart and rejects empty uploads", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const ok = buildMultipart([
       { kind: "field", name: "note", value: "silk" },
@@ -366,7 +366,7 @@ describe("fit", () => {
     });
     expect(uploaded.statusCode).toBe(201);
     const body = uploaded.json() as { key: string; url: string | null };
-    expect(body.key).toMatch(/^fit\/fabric\//);
+    expect(body.key).toMatch(new RegExp(`^u/${userId}/fit-fabric/`));
     expect(body.url).toBeTruthy();
 
     const empty = buildMultipart([{ kind: "file", buffer: Buffer.alloc(0), filename: "empty.jpg" }]);
@@ -488,40 +488,50 @@ describe("fit", () => {
       bodyMeta: { bust: 34 },
     });
 
-    const ready = await app.inject({
+    type PreviewBody = { status: string; previewUrl: string | null; imageKey: string | null; retryAfter?: string | null };
+    /** Ask again (as the app does) until the in-process render job has finished. */
+    const settle = async (selections: Record<string, string>) => {
+      for (let i = 0; i < 100; i++) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/fit/preview",
+          headers: { authorization: `Bearer ${accessToken}` },
+          payload: { templateId, selections },
+        });
+        const body = res.json() as PreviewBody;
+        if (body.status !== "PROCESSING") return { res, body };
+        expect(res.statusCode).toBe(202);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error("preview still PROCESSING");
+    };
+
+    const queued = await app.inject({
       method: "POST",
       url: "/fit/preview",
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { templateId, selections: { neckline: "Boat" } },
     });
-    expect(ready.statusCode).toBe(200);
-    const readyBody = ready.json() as { status: string; previewUrl: string | null; imageKey: string };
-    expect(readyBody.status).toBe("READY");
-    expect(readyBody.previewUrl).toBeTruthy();
-    expect(readyBody.imageKey).toContain("tryon/");
+    expect(queued.statusCode).toBe(202);
+    const ready = await settle({ neckline: "Boat" });
+    expect(ready.res.statusCode).toBe(200);
+    expect(ready.body.status).toBe("READY");
+    expect(ready.body.previewUrl).toBeTruthy();
+    expect(ready.body.imageKey).toMatch(new RegExp(`^u/${userId}/fit-preview/`));
 
+    // No bytes back from the provider is a failure, never a READY that points at nothing.
     omitBytes = true;
-    const noBytes = await app.inject({
-      method: "POST",
-      url: "/fit/preview",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { templateId, selections: { neckline: "V" } },
-    });
-    expect(noBytes.statusCode).toBe(200);
-    expect((noBytes.json() as { status: string }).status).toBe("READY");
+    const noBytes = await settle({ neckline: "V" });
+    expect(noBytes.body.status).toBe("FAILED");
 
+    // A provider error is stored FAILED with a retryAfter, not swapped for the avatar photo.
     failTryOn = true;
-    const fallback = await app.inject({
-      method: "POST",
-      url: "/fit/preview",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { templateId, selections: { neckline: "Round" } },
-    });
-    expect(fallback.statusCode).toBe(200);
-    const fb = fallback.json() as { status: string; imageKey: string; previewUrl: string | null };
-    expect(fb.status).toBe("READY");
-    expect(fb.imageKey).toBe("references/fit-user.jpg");
-    expect(fb.previewUrl).toBeTruthy();
+    const failed = await settle({ neckline: "Round" });
+    expect(failed.res.statusCode).toBe(200);
+    expect(failed.body.status).toBe("FAILED");
+    expect(failed.body.previewUrl).toBeNull();
+    expect(failed.body.imageKey).not.toBe("references/fit-user.jpg");
+    expect(failed.body.retryAfter).toBeTruthy();
 
     // Empty optionsSchema → empty summary falls back to template name
     const tmpl = await repos.findCustomizationTemplate(templateId);
@@ -535,7 +545,7 @@ describe("fit", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { templateId, selections: {} },
     });
-    expect(emptyOpts.statusCode).toBe(200);
+    expect([200, 202]).toContain(emptyOpts.statusCode);
     expect((emptyOpts.json() as { summary: string }).summary).toBe(tmpl!.name);
 
     await app.close();
@@ -602,7 +612,7 @@ describe("fit", () => {
       method: "POST",
       url: "/fit/orders/00000000-0000-4000-8000-000000000077/fabric",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { fabricPhotoKeys: ["fit/fabric/x.jpg"] },
+      payload: { fabricPhotoKeys: [`u/${userId}/fit-fabric/x.jpg`] },
     });
     expect(attachMissing.statusCode).toBe(404);
 
@@ -613,7 +623,7 @@ describe("fit", () => {
       method: "POST",
       url: `/fit/orders/${orderId}/fabric`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { fabricPhotoKeys: ["fit/fabric/race.jpg"] },
+      payload: { fabricPhotoKeys: [`u/${userId}/fit-fabric/race.jpg`] },
     });
     expect(race.statusCode).toBe(404);
     repos.updateTailoringOrderFabric = origUpdate;
@@ -678,7 +688,7 @@ describe("fit", () => {
 
   it("attaches fabric without fabricRef keeps existing ref", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const templates = await app.inject({
       method: "GET",
       url: "/fit/templates?region=IN",
@@ -692,7 +702,7 @@ describe("fit", () => {
       payload: {
         templateId,
         fabricRef: "keep-me",
-        fabricPhotoKeys: ["fit/fabric/a.jpg"],
+        fabricPhotoKeys: [`u/${userId}/fit-fabric/a.jpg`],
       },
     });
     const id = (order.json() as TailoringOrder).id;
@@ -700,11 +710,11 @@ describe("fit", () => {
       method: "POST",
       url: `/fit/orders/${id}/fabric`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { fabricPhotoKeys: ["fit/fabric/b.jpg"] },
+      payload: { fabricPhotoKeys: [`u/${userId}/fit-fabric/b.jpg`] },
     });
     expect(attach.statusCode).toBe(200);
     const body = attach.json() as TailoringOrder;
     expect(body.fabricRef).toBe("keep-me");
-    expect(body.fabricPhotoKeys).toEqual(expect.arrayContaining(["fit/fabric/a.jpg", "fit/fabric/b.jpg"]));
+    expect(body.fabricPhotoKeys).toEqual(expect.arrayContaining([`u/${userId}/fit-fabric/a.jpg`, `u/${userId}/fit-fabric/b.jpg`]));
   });
 });

@@ -1,17 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mockWeatherFromDateLat, resolveWeather } from "./weather.js";
-
-describe("mockWeatherFromDateLat", () => {
-  it("is deterministic for the same date + lat", () => {
-    const d = new Date("2026-08-26T08:00:00.000Z");
-    const a = mockWeatherFromDateLat(d, 12.97);
-    const b = mockWeatherFromDateLat(d, 12.97);
-    expect(a).toEqual(b);
-    expect(a.source).toBe("mock");
-    expect(a.tempC).toBeGreaterThanOrEqual(18);
-    expect(a.tempC).toBeLessThanOrEqual(33);
-  });
-});
+import { resolveWeather } from "./weather.js";
 
 describe("resolveWeather", () => {
   const original = process.env.WEATHER_API;
@@ -21,26 +9,38 @@ describe("resolveWeather", () => {
     else process.env.WEATHER_API = original;
   });
 
-  it("returns mock when WEATHER_API unset", async () => {
+  it("is null when WEATHER_API is unset, and never calls out", async () => {
     delete process.env.WEATHER_API;
-    const w = await resolveWeather({ date: new Date("2026-01-01T00:00:00.000Z") });
-    expect(w.source).toBe("mock");
+    let called = false;
+    const w = await resolveWeather({
+      date: new Date("2026-01-01T00:00:00.000Z"),
+      fetchImpl: (async () => {
+        called = true;
+        throw new Error("unexpected");
+      }) as typeof fetch,
+    });
+    expect(w).toBeNull();
+    expect(called).toBe(false);
   });
 
   it("parses simple {tempC,condition} payloads", async () => {
     process.env.WEATHER_API = "https://weather.test/{lat}/{lon}";
+    let url = "";
     const w = await resolveWeather({
       lat: 19.07,
       lon: 72.87,
-      fetchImpl: (async () =>
-        ({
+      fetchImpl: (async (u: string) => {
+        url = u;
+        return {
           ok: true,
           json: async () => ({ tempC: 29, condition: "humid" }),
-        }) as Response) as typeof fetch,
+        } as Response;
+      }) as unknown as typeof fetch,
     });
-    expect(w.source).toBe("api");
-    expect(w.tempC).toBe(29);
-    expect(w.condition).toBe("humid");
+    expect(url).toBe("https://weather.test/19.07/72.87");
+    expect(w?.source).toBe("api");
+    expect(w?.tempC).toBe(29);
+    expect(w?.condition).toBe("humid");
   });
 
   it("parses Open-Meteo current.temperature_2m", async () => {
@@ -54,17 +54,17 @@ describe("resolveWeather", () => {
           }),
         }) as Response) as typeof fetch,
     });
-    expect(w.source).toBe("api");
-    expect(w.tempC).toBe(31);
-    expect(w.condition).toBe("rain");
+    expect(w?.source).toBe("api");
+    expect(w?.tempC).toBe(31);
+    expect(w?.condition).toBe("rain");
   });
 
-  it("falls back to mock on non-OK or invalid payload", async () => {
+  it("is null on a non-OK status or an unknown payload", async () => {
     process.env.WEATHER_API = "https://weather.test";
     const badStatus = await resolveWeather({
       fetchImpl: (async () => ({ ok: false }) as Response) as typeof fetch,
     });
-    expect(badStatus.source).toBe("mock");
+    expect(badStatus).toBeNull();
 
     const badJson = await resolveWeather({
       fetchImpl: (async () =>
@@ -73,16 +73,25 @@ describe("resolveWeather", () => {
           json: async () => ({ nonsense: true }),
         }) as Response) as typeof fetch,
     });
-    expect(badJson.source).toBe("mock");
+    expect(badJson).toBeNull();
   });
 
-  it("falls back to mock when fetch throws", async () => {
+  it("is null when the fetch throws or times out", async () => {
     process.env.WEATHER_API = "https://weather.test";
     const w = await resolveWeather({
       fetchImpl: (async () => {
         throw new Error("network");
       }) as typeof fetch,
     });
-    expect(w.source).toBe("mock");
+    expect(w).toBeNull();
+
+    let signal: AbortSignal | undefined;
+    await resolveWeather({
+      fetchImpl: (async (_u: string, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        throw new DOMException("timed out", "TimeoutError");
+      }) as unknown as typeof fetch,
+    });
+    expect(signal).toBeInstanceOf(AbortSignal);
   });
 });

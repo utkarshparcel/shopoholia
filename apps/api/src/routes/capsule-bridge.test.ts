@@ -5,25 +5,25 @@ import { buildTestServer, login } from "../test-utils.js";
 describe("N32 capsule", () => {
   it("PUT/GET capsule membership and outfit prefers capsule", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const a = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "capsule tee", colors: ["black"], imageKeys: ["a.jpg"] },
+      payload: { category: "capsule tee", colors: ["black"], imageKeys: [`u/${userId}/wardrobe/a.jpg`] },
     });
     const b = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "capsule jeans", colors: ["blue"], imageKeys: ["b.jpg"] },
+      payload: { category: "capsule jeans", colors: ["blue"], imageKeys: [`u/${userId}/wardrobe/b.jpg`] },
     });
     await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "outside hoodie", colors: ["red"], imageKeys: ["c.jpg"] },
+      payload: { category: "outside hoodie", colors: ["red"], imageKeys: [`u/${userId}/wardrobe/c.jpg`] },
     });
     const idA = (a.json() as { id: string }).id;
     const idB = (b.json() as { id: string }).id;

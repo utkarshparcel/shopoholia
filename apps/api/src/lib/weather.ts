@@ -1,46 +1,24 @@
 /**
  * Closet weather helper.
  *
- * Structure (always returned):
- *   { tempC: number, condition: string, source: "api" | "mock", fetchedAt: string }
- *
  * If `WEATHER_API` is set (URL template or base URL), we fetch live weather.
  * Supported shapes:
  *   - Open-Meteo-like: `{ current: { temperature_2m, weather_code } }`
  *   - Simple: `{ tempC, condition }` or `{ temperature, weather }`
- * On fetch failure, falls back to a deterministic mock from date + lat.
+ * With no provider, or when the fetch fails, the answer is null: no weather is shown or used,
+ * and nothing is invented (C5).
  */
 
 export type WeatherCtx = {
   tempC: number;
   condition: string;
-  source: "api" | "mock";
+  source: "api";
   fetchedAt: string;
   lat?: number;
 };
 
-const CONDITIONS = ["sunny", "partly_cloudy", "cloudy", "rain", "humid", "clear"] as const;
-
-function hashSeed(dateIso: string, lat: number): number {
-  let h = 0;
-  const s = `${dateIso.slice(0, 10)}:${lat.toFixed(2)}`;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h;
-}
-
-/** Deterministic mock weather from calendar date + latitude (no network). */
-export function mockWeatherFromDateLat(date = new Date(), lat = 12.97): WeatherCtx {
-  const seed = hashSeed(date.toISOString(), lat);
-  const tempC = 18 + (seed % 16); // 18–33°C
-  const condition = CONDITIONS[seed % CONDITIONS.length]!;
-  return {
-    tempC,
-    condition,
-    source: "mock",
-    fetchedAt: date.toISOString(),
-    lat,
-  };
-}
+/** Per-request budget for the provider call. */
+export const WEATHER_TIMEOUT_MS = 4_000;
 
 function mapWeatherCode(code: number): string {
   if (code === 0) return "clear";
@@ -72,28 +50,27 @@ function parseWeatherPayload(data: unknown): Pick<WeatherCtx, "tempC" | "conditi
 }
 
 /**
- * Resolve weather for outfit generation.
- * Prefers `WEATHER_API` env (URL; `{lat}` / `{lon}` placeholders supported).
+ * Resolve weather for outfit generation, or null when there is no provider or it didn't answer.
+ * Uses `WEATHER_API` (URL; `{lat}` / `{lon}` placeholders supported).
  */
 export async function resolveWeather(opts?: {
   lat?: number;
   lon?: number;
   date?: Date;
   fetchImpl?: typeof fetch;
-}): Promise<WeatherCtx> {
+}): Promise<WeatherCtx | null> {
   const lat = opts?.lat ?? 12.97;
   const lon = opts?.lon ?? 77.59;
-  const date = opts?.date ?? new Date();
   const api = process.env.WEATHER_API?.trim();
-  if (!api) return mockWeatherFromDateLat(date, lat);
+  if (!api) return null;
 
   const url = api.replace(/\{lat\}/g, String(lat)).replace(/\{lon\}/g, String(lon));
   try {
     const fetchFn = opts?.fetchImpl ?? fetch;
-    const res = await fetchFn(url, { signal: AbortSignal.timeout(4_000) });
-    if (!res.ok) return mockWeatherFromDateLat(date, lat);
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(WEATHER_TIMEOUT_MS) });
+    if (!res.ok) return null;
     const parsed = parseWeatherPayload(await res.json());
-    if (!parsed) return mockWeatherFromDateLat(date, lat);
+    if (!parsed) return null;
     return {
       ...parsed,
       source: "api",
@@ -101,6 +78,6 @@ export async function resolveWeather(opts?: {
       lat,
     };
   } catch {
-    return mockWeatherFromDateLat(date, lat);
+    return null;
   }
 }

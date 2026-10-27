@@ -10,12 +10,12 @@ import { buildTestServer, login } from "../test-utils.js";
 describe("disposition", () => {
   it("creates and lists disposition listings", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const item = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "shirt", costMinor: 10000, imageKeys: ["a.jpg"], garmentImageKey: "a.jpg" },
+      payload: { category: "shirt", costMinor: 10000, imageKeys: [`u/${userId}/wardrobe/a.jpg`], garmentImageKey: `u/${userId}/wardrobe/a.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const create = await app.inject({
@@ -37,12 +37,12 @@ describe("disposition", () => {
 
   it("DONATE creates ACTIVE disposition listing without seller", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const item = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "dress", imageKeys: ["d.jpg"], garmentImageKey: "d.jpg" },
+      payload: { category: "dress", imageKeys: [`u/${userId}/wardrobe/d.jpg`], garmentImageKey: `u/${userId}/wardrobe/d.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const create = await app.inject({
@@ -66,7 +66,7 @@ describe("disposition", () => {
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "kurta", imageKeys: ["k.jpg"], garmentImageKey: "k.jpg" },
+      payload: { category: "kurta", imageKeys: [`u/${userId}/wardrobe/k.jpg`], garmentImageKey: `u/${userId}/wardrobe/k.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const create = await app.inject({
@@ -129,12 +129,12 @@ describe("disposition", () => {
 
   it("waste dispose creates disposition listing (real)", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
     const item = await app.inject({
       method: "POST",
       url: "/wardrobe",
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { category: "dress", imageKeys: ["d.jpg"], garmentImageKey: "d.jpg" },
+      payload: { category: "dress", imageKeys: [`u/${userId}/wardrobe/d.jpg`], garmentImageKey: `u/${userId}/wardrobe/d.jpg` },
     });
     const itemId = (item.json() as WardrobeItem).id;
     const dispose = await app.inject({
@@ -189,8 +189,8 @@ describe("disposition", () => {
         headers: { authorization: `Bearer ${accessToken}` },
         payload: {
           category: `tee-${i}`,
-          imageKeys: [`t${i}.jpg`],
-          garmentImageKey: `t${i}.jpg`,
+          imageKeys: [`u/${userId}/wardrobe/t${i}.jpg`],
+          garmentImageKey: `u/${userId}/wardrobe/t${i}.jpg`,
         },
       });
       const itemId = (item.json() as WardrobeItem).id;
@@ -246,7 +246,7 @@ describe("disposition", () => {
 
   it("suggests price and books logistics pickup stub", async () => {
     const { app } = await buildTestServer();
-    const { accessToken } = await login(app);
+    const { accessToken, userId } = await login(app);
 
     const item = await app.inject({
       method: "POST",
@@ -256,8 +256,8 @@ describe("disposition", () => {
         category: "blazer",
         brand: "Raymond",
         costMinor: 800000,
-        imageKeys: ["b.jpg"],
-        garmentImageKey: "b.jpg",
+        imageKeys: [`u/${userId}/wardrobe/b.jpg`],
+        garmentImageKey: `u/${userId}/wardrobe/b.jpg`,
       },
     });
     const itemId = (item.json() as WardrobeItem).id;

@@ -13,6 +13,7 @@ import {
 import { mondayOfWeek, toDateKey, weekDayKeys } from "./outfit-week.js";
 import {
   shouldRerollOutfitForWeather,
+  weatherFromCtx,
   weatherShiftExceedsThreshold,
   WEATHER_REROLL_TEMP_DELTA_C,
 } from "./weather-reroll.js";
@@ -102,6 +103,17 @@ describe("week calendar helpers", () => {
     expect(days.find((d) => d.isToday)?.date).toBe("2026-08-26");
   });
 
+  it("takes today and the week from the user's zone, not UTC", () => {
+    // Mon 2026-08-31 01:00 in Kolkata is still Sun 30 Aug in UTC.
+    const now = new Date("2026-08-30T19:30:00.000Z");
+    const ist = weekDayKeys({ now, timeZone: "Asia/Kolkata" });
+    expect(ist[0]!.date).toBe("2026-08-31");
+    expect(ist.find((d) => d.isToday)?.date).toBe("2026-08-31");
+    const utc = weekDayKeys({ now });
+    expect(utc[0]!.date).toBe("2026-08-24");
+    expect(toDateKey(now, "Asia/Kolkata")).toBe("2026-08-31");
+  });
+
   it("mondayOfWeek rolls Sunday back", () => {
     const mon = mondayOfWeek(new Date("2026-08-30T12:00:00.000Z")); // Sunday
     expect(toDateKey(mon)).toBe("2026-08-24");
@@ -133,22 +145,49 @@ describe("weather reroll threshold", () => {
     ).toBe(true);
   });
 
-  it("only re-rolls before noon", () => {
+  it("only re-rolls before the user's local noon", () => {
     const prev = { tempC: 20, condition: "sunny" };
     const next = { tempC: 30, condition: "rain" };
+    // 09:00 and 14:00 in Kolkata.
     expect(
       shouldRerollOutfitForWeather({
         prevWeather: prev,
         currentWeather: next,
-        now: new Date("2026-08-26T09:00:00"),
+        now: new Date("2026-08-26T03:30:00.000Z"),
+        timeZone: "Asia/Kolkata",
       }),
     ).toBe(true);
     expect(
       shouldRerollOutfitForWeather({
         prevWeather: prev,
         currentWeather: next,
-        now: new Date("2026-08-26T14:00:00"),
+        now: new Date("2026-08-26T08:30:00.000Z"),
+        timeZone: "Asia/Kolkata",
       }),
     ).toBe(false);
+    // 08:30 UTC is 04:30 in New York: still morning there.
+    expect(
+      shouldRerollOutfitForWeather({
+        prevWeather: prev,
+        currentWeather: next,
+        now: new Date("2026-08-26T08:30:00.000Z"),
+        timeZone: "America/New_York",
+      }),
+    ).toBe(true);
+  });
+
+  it("never re-rolls without current weather, or against invented weather", () => {
+    expect(
+      shouldRerollOutfitForWeather({
+        prevWeather: { tempC: 20, condition: "sunny" },
+        currentWeather: null,
+        now: new Date("2026-08-26T03:30:00.000Z"),
+      }),
+    ).toBe(false);
+    expect(weatherFromCtx({ tempC: 20, condition: "sunny", source: "mock" })).toBeNull();
+    expect(weatherFromCtx({ tempC: 20, condition: "sunny", source: "api" })).toEqual({
+      tempC: 20,
+      condition: "sunny",
+    });
   });
 });

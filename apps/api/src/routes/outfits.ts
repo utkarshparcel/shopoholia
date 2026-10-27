@@ -19,10 +19,13 @@ import {
   WorkwearRotationBodySchema,
   WorkwearRotationResponseSchema,
   isOutfitPinned,
+  mapLimit,
   pinConflictWarn,
+  resolveTimeZone,
   shouldSkipPinnedOnReroll,
   withOutfitPinned,
 } from "@worn/shared";
+import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
@@ -40,7 +43,7 @@ import {
   preferCapsulePool,
   readCapsuleItemIds,
 } from "../lib/capsule.js";
-import { buildCompleteLook } from "../lib/complete-look.js";
+import { buildCompleteLook, detectMissingSlots } from "../lib/complete-look.js";
 import {
   createInterviewKitStore,
   scheduleInterviewKitReminder,
@@ -67,10 +70,7 @@ import {
   planWorkwearRotation,
   rotationIsUnique,
 } from "../lib/workwear-rotation.js";
-import {
-  resolveUserTimeZone,
-  scheduleMorningOutfit,
-} from "../lib/wardrobe-jobs.js";
+import { scheduleMorningOutfit } from "../lib/wardrobe-jobs.js";
 import {
   shouldRerollOutfitForWeather,
   weatherFromCtx,
@@ -78,6 +78,15 @@ import {
 import { resolveWeather, type WeatherCtx } from "../lib/weather.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+const DAY_MS = 86_400_000;
+/** Wear history the generator reads: avoid-repeat and wear counts look no further back. */
+export const OUTFIT_HISTORY_DAYS = 60;
+const OUTFIT_HISTORY_MAX_LOGS = 2_000;
+/** Recent outfits, to turn outfit wear logs into item ids. */
+const OUTFIT_HISTORY_MAX_OUTFITS = 500;
+/** Listings scanned for complete-the-look fills, 100 per page. */
+export const COMPLETE_LOOK_MAX_LISTINGS = 300;
 
 function toOutfitJson(o: any, items?: any[], signedItemMaps?: Map<string, any>, whyThis?: string[]) {
   const itemJsons = items
@@ -104,9 +113,14 @@ function toOutfitJson(o: any, items?: any[], signedItemMaps?: Map<string, any>, 
         };
       })
     : undefined;
-  const weatherCtx = o.weatherCtx as (WeatherCtx & { whyThis?: string[] }) | null;
-  const reasons = whyThis ?? weatherCtx?.whyThis ?? undefined;
-  const publicWeather = weatherCtx
+  const weatherCtx = o.weatherCtx as (Omit<WeatherCtx, "source"> & { source?: string; whyThis?: string[] }) | null;
+  // Rows written before C5 can carry invented ("mock") weather: it is never shown.
+  const realWeather = weatherCtx?.source === "api";
+  const storedReasons = realWeather
+    ? weatherCtx?.whyThis
+    : weatherCtx?.whyThis?.filter((r) => !r.startsWith("Weather "));
+  const reasons = whyThis ?? storedReasons ?? undefined;
+  const publicWeather = weatherCtx && realWeather
     ? {
         tempC: weatherCtx.tempC,
         condition: weatherCtx.condition,
@@ -129,20 +143,57 @@ function toOutfitJson(o: any, items?: any[], signedItemMaps?: Map<string, any>, 
   };
 }
 
-async function hydrateOutfit(app: any, userId: string, outfit: any) {
-  const itemRows = await Promise.all(
-    (outfit.itemIds ?? []).map((id: string) => app.deps.repos.findWardrobeItem(id, userId)),
-  );
-  const validItems = itemRows.filter(Boolean) as any[];
+/** Outfits with their items: one item query for all of them, and a few presigns at a time. */
+async function hydrateOutfits(app: any, userId: string, outfits: any[]) {
+  const ids = [...new Set(outfits.flatMap((o) => (o.itemIds ?? []) as string[]))];
+  const rows: any[] = ids.length > 0 ? await app.deps.repos.findWardrobeItemsByIds(userId, ids) : [];
+  const byId = new Map(rows.map((r) => [r.id, r]));
   const signedMap = new Map();
-  await Promise.all(
-    validItems.map(async (r) => {
-      const imageUrls = await Promise.all((r.imageKeys ?? []).map((k: string) => app.deps.storage.getSignedUrl(k)));
-      const garmentImageUrl = r.garmentImageKey ? await app.deps.storage.getSignedUrl(r.garmentImageKey) : null;
-      signedMap.set(r.id, { imageUrls, garmentImageUrl });
+  await mapLimit(rows, 4, async (r: any) => {
+    const imageUrls = await mapLimit((r.imageKeys ?? []) as string[], 4, (k) => app.deps.storage.getSignedUrl(k));
+    const garmentImageUrl = r.garmentImageKey ? await app.deps.storage.getSignedUrl(r.garmentImageKey) : null;
+    signedMap.set(r.id, { imageUrls, garmentImageUrl });
+  });
+  return outfits.map((o) => {
+    const items = ((o.itemIds ?? []) as string[]).map((id) => byId.get(id)).filter(Boolean);
+    return toOutfitJson(o, items, signedMap);
+  });
+}
+
+async function hydrateOutfit(app: any, userId: string, outfit: any) {
+  return (await hydrateOutfits(app, userId, [outfit]))[0]!;
+}
+
+/** True when every id is one of the caller's (not discarded) items. */
+async function ownsAllItems(app: any, userId: string, itemIds: string[]): Promise<boolean> {
+  const unique = [...new Set(itemIds)];
+  if (unique.length === 0) return true;
+  const found = await app.deps.repos.findWardrobeItemsByIds(userId, unique);
+  return found.length === unique.length;
+}
+
+/** What the generator reads, loaded once per request and shared by every outfit it makes. */
+export type OutfitContext = {
+  user: any;
+  timeZone: string;
+  items: any[];
+  wearLogs: any[];
+  outfits: any[];
+  weather: WeatherCtx | null;
+};
+
+async function loadOutfitContext(app: any, userId: string, now: Date = new Date()): Promise<OutfitContext> {
+  const [user, items, wearLogs, outfits, weather] = await Promise.all([
+    app.deps.repos.findUserById(userId),
+    app.deps.repos.listWardrobeItems(userId),
+    app.deps.repos.listWearLogs(userId, {
+      since: new Date(now.getTime() - OUTFIT_HISTORY_DAYS * DAY_MS),
+      limit: OUTFIT_HISTORY_MAX_LOGS,
     }),
-  );
-  return toOutfitJson(outfit, validItems, signedMap);
+    app.deps.repos.listOutfits(userId, { limit: OUTFIT_HISTORY_MAX_OUTFITS }),
+    resolveWeather({ lat: 12.97, lon: 77.59, date: now }),
+  ]);
+  return { user, timeZone: resolveTimeZone(user?.timeZone), items, wearLogs, outfits, weather };
 }
 
 export type GenerateOutfitOpts = {
@@ -153,7 +204,7 @@ export type GenerateOutfitOpts = {
   replace?: boolean;
   /** Ranked alternative index (0 = primary). */
   altIndex?: number;
-  /** Skip push event (e.g. swipe preview). */
+  /** Skip the push event and the morning-job scheduling (swipe previews, GET requests). */
   skipPush?: boolean;
   /** Override weather-derived occasion (e.g. calendar event map). */
   occasion?: OutfitOccasion | null;
@@ -164,23 +215,31 @@ export type GenerateOutfitOpts = {
    * When false, skip capsule restrict/boost. When undefined, prefer capsule (N32 default).
    */
   preferCapsule?: boolean;
+  /** Closet, history and weather already loaded for this request (see `loadOutfitContext`). */
+  ctx?: OutfitContext;
+  /**
+   * False returns the outfit without saving it (swipe alternatives): a preview with a fresh id,
+   * no row, push or job. Default true.
+   */
+  persist?: boolean;
 };
 
 async function generateOutfitForUser(app: any, userId: string, opts: GenerateOutfitOpts = {}) {
-  const items = await app.deps.repos.listWardrobeItems(userId);
+  const ctx = opts.ctx ?? (await loadOutfitContext(app, userId, opts.now));
+  const items = ctx.items;
   if (items.length === 0) return null;
 
-  const user = await app.deps.repos.findUserById(userId);
+  const user = ctx.user;
   const styleProfile = user?.styleProfile ?? null;
-  const wearLogs = (await app.deps.repos.listWearLogs?.(userId)) ?? [];
-  const allOutfits = (await app.deps.repos.listOutfits?.(userId)) ?? [];
+  const wearLogs = ctx.wearLogs;
+  const allOutfits = ctx.outfits;
   const wearCount = new Map<string, number>();
   for (const log of wearLogs) {
     if (!log.wardrobeItemId) continue;
     wearCount.set(log.wardrobeItemId, (wearCount.get(log.wardrobeItemId) ?? 0) + 1);
   }
 
-  const weather = await resolveWeather({ lat: 12.97, lon: 77.59, date: opts.now });
+  const weather = ctx.weather;
   const altIndex = Math.max(0, opts.altIndex ?? 0);
 
   // Prefer clean / out-of-laundry items when those fields exist
@@ -212,7 +271,7 @@ async function generateOutfitForUser(app: any, userId: string, opts: GenerateOut
   }
 
   // N32 / W052: prefer user-defined capsule when toggle allows and members remain
-  const capsuleIds = readCapsuleItemIds(user?.consentFlags as Record<string, unknown> | null);
+  const capsuleIds = readCapsuleItemIds(user?.prefs);
   const wantCapsule = opts.preferCapsule !== false;
   let capsulePool: { pool: typeof pool; restricted: boolean; memberCount: number } = {
     pool,
@@ -283,17 +342,22 @@ async function generateOutfitForUser(app: any, userId: string, opts: GenerateOut
   });
   const itemIds = withAccessories.map((it) => it.id);
   const occasion = opts.occasion ?? weatherOccasion(weather);
-  const plannedFor = opts.plannedFor ?? toDateKey(opts.now ?? new Date());
+  const now = opts.now ?? new Date();
+  const plannedFor = opts.plannedFor ?? toDateKey(now, ctx.timeZone);
   const payload = {
     userId,
     itemIds,
     occasion,
-    weatherCtx: { ...weather, whyThis, altIndex, hasMore, calendarOccasion: opts.occasion ?? null },
+    weatherCtx: { ...(weather ?? {}), whyThis, altIndex, hasMore, calendarOccasion: opts.occasion ?? null },
     styleProfileSnapshot: styleProfile,
     plannedFor: altIndex > 0 && !opts.replace ? null : plannedFor,
   };
 
-  // Alt previews are ephemeral (no plannedFor) unless the user commits via /select
+  // Alt previews are never saved; /outfits/today/select commits one for the day.
+  if (opts.persist === false) {
+    const preview = { ...payload, id: randomUUID(), plannedFor: null, generatedAt: now, createdAt: now };
+    return Object.assign(preview, { _hasMore: hasMore, _altIndex: altIndex });
+  }
   const outfit =
     payload.plannedFor && app.deps.repos.upsertOutfitForDate
       ? await app.deps.repos.upsertOutfitForDate(payload as any)
@@ -320,11 +384,12 @@ async function generateOutfitForUser(app: any, userId: string, opts: GenerateOut
     // ignore push failure — generation succeeded
   }
 
-  try {
-    const tz = resolveUserTimeZone(user?.consentFlags);
-    await scheduleMorningOutfit(userId, { timeZone: tz });
-  } catch {
-    // best-effort morning job
+  if (!opts.skipPush) {
+    try {
+      await scheduleMorningOutfit(userId, { timeZone: ctx.timeZone });
+    } catch {
+      // best-effort morning job
+    }
   }
 
   trackServerEvent("outfit_generated", { userId, outfitId: outfit.id, plannedFor, altIndex });
@@ -349,33 +414,47 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const rawIds = (request.query as { itemIds?: string }).itemIds;
+      const uuid = z.string().uuid();
       const requestedIds = rawIds
-        ? rawIds.split(",").map((s) => s.trim()).filter(Boolean)
+        ? [...new Set(rawIds.split(",").map((s) => s.trim()))].filter((s) => uuid.safeParse(s).success).slice(0, 20)
         : [];
 
-      let ownedItems = await app.deps.repos.listWardrobeItems(userId);
+      let ownedItems: any[];
       if (requestedIds.length > 0) {
-        const set = new Set(requestedIds);
-        ownedItems = ownedItems.filter((it: { id: string }) => set.has(it.id));
+        ownedItems = await app.deps.repos.findWardrobeItemsByIds(userId, requestedIds);
       } else {
-        const today = await app.deps.repos.getTodayOutfit?.(userId);
-        if (today?.itemIds?.length) {
-          const set = new Set(today.itemIds as string[]);
-          const fromOutfit = ownedItems.filter((it: { id: string }) => set.has(it.id));
-          if (fromOutfit.length > 0) ownedItems = fromOutfit;
-        }
+        const user = await app.deps.repos.findUserById(userId);
+        const todayKey = toDateKey(new Date(), resolveTimeZone(user?.timeZone));
+        const today = await app.deps.repos.getTodayOutfit(userId, todayKey);
+        const fromOutfit = today?.itemIds?.length
+          ? await app.deps.repos.findWardrobeItemsByIds(userId, today.itemIds as string[])
+          : [];
+        ownedItems = fromOutfit.length > 0 ? fromOutfit : await app.deps.repos.listWardrobeItems(userId);
       }
+      const owned = ownedItems.map((it: any) => ({
+        id: it.id,
+        category: it.category,
+        colors: it.colors,
+        brand: it.brand,
+      }));
 
-      const listings = (await app.deps.repos.listListings({ limit: 100 })).items;
-      const look = buildCompleteLook({
-        owned: ownedItems.map((it: any) => ({
-          id: it.id,
-          category: it.category,
-          colors: it.colors,
-          brand: it.brand,
-        })),
-        listings,
-      });
+      // Scan listings a page at a time (owned colours first) until every gap has a fill or the
+      // bound is reached, instead of only ever seeing the newest 100.
+      const gaps = detectMissingSlots(owned);
+      const listings: any[] = [];
+      const styleKeywords = [...new Set(owned.flatMap((o) => o.colors ?? []))].slice(0, 10);
+      let cursor: string | undefined;
+      while (gaps.length > 0 && listings.length < COMPLETE_LOOK_MAX_LISTINGS) {
+        const page = await app.deps.repos.listListings({
+          limit: 100,
+          cursor,
+          styleKeywords: styleKeywords.length > 0 ? styleKeywords : undefined,
+        });
+        listings.push(...page.items);
+        if (buildCompleteLook({ owned, listings }).missing.length >= gaps.length || !page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      const look = buildCompleteLook({ owned, listings });
       trackServerEvent("outfit_complete_look", {
         userId,
         owned: look.owned.length,
@@ -422,14 +501,19 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const altIndex = (request.query as { alt?: number }).alt ?? 0;
       const now = new Date();
+      // A GET: no pushes and no jobs. It only saves today's outfit (one row per user and local day)
+      // when the day has none yet, or re-rolls it for a weather shift.
+      const ctx = await loadOutfitContext(app, userId, now);
 
-      // Swipe alternatives: ranked slices excluding recently worn
+      // Swipe alternatives: ranked slices excluding recently worn, never saved
       if (altIndex > 0) {
         const fresh = await generateOutfitForUser(app, userId, {
           altIndex,
           skipPush: true,
           now,
           plannedFor: null,
+          ctx,
+          persist: false,
         });
         if (!fresh) {
           trackServerEvent("outfit_alt_viewed", { userId, hasOutfit: false, altIndex });
@@ -445,63 +529,48 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
         };
       }
 
-      let outfit = await app.deps.repos.getTodayOutfit(userId);
+      const todayKey = toDateKey(now, ctx.timeZone);
+      let outfit = await app.deps.repos.getTodayOutfit(userId, todayKey);
       let generated = false;
       let weatherRerolled = false;
-      const stale = !outfit || Date.now() - new Date(outfit.generatedAt).getTime() > 18 * 60 * 60 * 1000;
+      // A plan for the user's today is kept whenever it was made (week plans, pins); anything else
+      // (no outfit, or the latest one is for another day) gets today's generated.
+      const stale = !outfit || outfit.plannedFor !== todayKey;
 
-      // Weather re-roll before noon when forecast shifted past threshold
-      if (outfit && !stale) {
+      // Weather re-roll before the user's noon when the forecast shifted past threshold (never a pinned day)
+      if (outfit && !stale && !shouldSkipPinnedOnReroll(outfit.weatherCtx, { replacePinned: false })) {
         const prev = weatherFromCtx(outfit.weatherCtx);
-        if (prev) {
-          const current = await resolveWeather({ lat: 12.97, lon: 77.59, date: now });
-          if (
-            shouldRerollOutfitForWeather({
-              prevWeather: prev,
-              currentWeather: current,
-              now,
-            })
-          ) {
-            const fresh = await generateOutfitForUser(app, userId, {
-              plannedFor: toDateKey(now),
-              now,
-              replace: true,
-            });
-            if (fresh) {
-              outfit = fresh;
-              generated = true;
-              weatherRerolled = true;
-              trackServerEvent("outfit_weather_rerolled", { userId, outfitId: fresh.id });
-              try {
-                if (app.deps.repos.recordPushEvent) {
-                  await app.deps.repos.recordPushEvent({
-                    userId,
-                    orderId: null,
-                    eventType: "OUTFIT_READY",
-                    dedupeKey: `outfit-weather-reroll:${fresh.id}`,
-                    title: "Weather shifted — new outfit",
-                    body: "We refreshed today's look for the updated forecast.",
-                    payload: {
-                      outfitId: fresh.id,
-                      screen: "today",
-                      deepLink: "worn://today?focus=outfit",
-                      weatherReroll: true,
-                    } as any,
-                    status: "QUEUED",
-                  });
-                }
-              } catch {
-                // quiet push is best-effort
-              }
-            }
+        if (
+          prev &&
+          shouldRerollOutfitForWeather({
+            prevWeather: prev,
+            currentWeather: ctx.weather,
+            now,
+            timeZone: ctx.timeZone,
+          })
+        ) {
+          const fresh = await generateOutfitForUser(app, userId, {
+            plannedFor: todayKey,
+            now,
+            replace: true,
+            skipPush: true,
+            ctx,
+          });
+          if (fresh) {
+            outfit = fresh;
+            generated = true;
+            weatherRerolled = true;
+            trackServerEvent("outfit_weather_rerolled", { userId, outfitId: fresh.id });
           }
         }
       }
 
       if (stale && !weatherRerolled) {
         const fresh = await generateOutfitForUser(app, userId, {
-          plannedFor: toDateKey(now),
+          plannedFor: todayKey,
           now,
+          skipPush: true,
+          ctx,
         });
         if (fresh) {
           outfit = fresh;
@@ -549,24 +618,30 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const body = request.body as { outfitId?: string; alt?: number };
       let altIndex = body.alt ?? 0;
       let source: any = null;
+      const outfitCtx = await loadOutfitContext(app, userId);
 
       if (body.outfitId) {
         source = await app.deps.repos.findOutfitById(body.outfitId, userId);
-        if (!source) {
+        // Swipe previews are not saved, so their id is unknown here: the client also sends `alt`,
+        // which ranks the same look again.
+        if (!source && body.alt === undefined) {
           return reply.code(400).send({ error: "Bad Request", message: "Outfit not found" });
         }
-        const ctx = (source.weatherCtx ?? {}) as { altIndex?: number };
+        const ctx = (source?.weatherCtx ?? {}) as { altIndex?: number };
         if (typeof ctx.altIndex === "number") altIndex = ctx.altIndex;
-      } else {
+      }
+      if (!source) {
         source = await generateOutfitForUser(app, userId, {
           altIndex,
           skipPush: true,
           plannedFor: null,
+          ctx: outfitCtx,
+          persist: false,
         });
       }
       if (!source) return { outfit: null, altIndex };
 
-      const plannedFor = toDateKey(new Date());
+      const plannedFor = toDateKey(new Date(), outfitCtx.timeZone);
       const committed = await app.deps.repos.upsertOutfitForDate({
         userId,
         itemIds: source.itemIds,
@@ -599,27 +674,24 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const weekStart = (request.query as { weekStart?: string }).weekStart;
-      const days = weekDayKeys({ weekStart, now: new Date() });
+      const user = await app.deps.repos.findUserById(userId);
+      const days = weekDayKeys({ weekStart, now: new Date(), timeZone: resolveTimeZone(user?.timeZone) });
       const from = days[0]!.date;
       const to = days[6]!.date;
-      const planned =
-        (await app.deps.repos.listOutfitsInRange?.(userId, from, to)) ??
-        ((await app.deps.repos.listOutfits(userId)) as any[]).filter(
-          (o) => o.plannedFor && o.plannedFor >= from && o.plannedFor <= to,
-        );
+      const planned = await app.deps.repos.listOutfitsInRange(userId, from, to);
       const byDate = new Map(planned.map((o: any) => [o.plannedFor as string, o]));
-      const hydrated = await Promise.all(
-        days.map(async (d) => {
-          const o = byDate.get(d.date);
-          return {
-            date: d.date,
-            weekday: d.weekday,
-            isToday: d.isToday,
-            outfit: o ? await hydrateOutfit(app, userId, o) : null,
-          };
-        }),
-      );
-      return { weekStart: from, days: hydrated };
+      const dayOutfits = days.map((d) => byDate.get(d.date) ?? null);
+      const hydrated = await hydrateOutfits(app, userId, dayOutfits.filter(Boolean));
+      const hydratedById = new Map(hydrated.map((h) => [h.id, h]));
+      return {
+        weekStart: from,
+        days: days.map((d, i) => ({
+          date: d.date,
+          weekday: d.weekday,
+          isToday: d.isToday,
+          outfit: dayOutfits[i] ? (hydratedById.get(dayOutfits[i].id) ?? null) : null,
+        })),
+      };
     },
   );
 
@@ -646,10 +718,12 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const body = request.body as { date?: string; fillWeek?: boolean; preferCapsule?: boolean; replacePinned?: boolean };
-      const daysMeta = weekDayKeys({ now: new Date() });
+      const now = new Date();
+      const ctx = await loadOutfitContext(app, userId, now);
+      const daysMeta = weekDayKeys({ now, timeZone: ctx.timeZone });
       const targets = body.fillWeek
         ? daysMeta.map((d) => d.date)
-        : [body.date ?? toDateKey(new Date())];
+        : [body.date ?? toDateKey(now, ctx.timeZone)];
 
       const results: Array<{ date: string; outfit: any; skippedPinned?: boolean; pinConflict?: string }> = [];
       for (const date of targets) {
@@ -658,27 +732,30 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
           const warn = pinConflictWarn(date, existing.weatherCtx, Boolean(body.replacePinned));
           results.push({
             date,
-            outfit: await hydrateOutfit(app, userId, existing),
+            outfit: existing,
             skippedPinned: true,
             pinConflict: warn?.message,
           });
           continue;
         }
         if (existing && !body.date && body.fillWeek) {
-          results.push({ date, outfit: await hydrateOutfit(app, userId, existing) });
+          results.push({ date, outfit: existing });
           continue;
         }
         const outfit = await generateOutfitForUser(app, userId, {
           plannedFor: date,
           replace: true,
           preferCapsule: body.preferCapsule,
+          ctx,
+          now,
         });
-        results.push({
-          date,
-          outfit: outfit ? await hydrateOutfit(app, userId, outfit) : null,
-        });
+        results.push({ date, outfit: outfit ?? null });
       }
-      return { days: results };
+      const hydrated = await hydrateOutfits(app, userId, results.flatMap((r) => (r.outfit ? [r.outfit] : [])));
+      const hydratedById = new Map(hydrated.map((h) => [h.id, h]));
+      return {
+        days: results.map((r) => ({ ...r, outfit: r.outfit ? (hydratedById.get(r.outfit.id) ?? null) : null })),
+      };
     },
   );
 
@@ -697,6 +774,9 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { date } = request.params as { date: string };
       const body = request.body as { itemIds?: string[]; occasion?: any; pinned?: boolean };
+      if (body.itemIds && !(await ownsAllItems(app, userId, body.itemIds))) {
+        return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+      }
       let outfit = await app.deps.repos.getOutfitForDate?.(userId, date);
       if (!outfit) {
         if (!body.itemIds?.length && body.pinned === undefined) {
@@ -757,9 +837,11 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
+      const ctx = await loadOutfitContext(app, userId);
       const outfit = await generateOutfitForUser(app, userId, {
-        plannedFor: toDateKey(new Date()),
+        plannedFor: toDateKey(new Date(), ctx.timeZone),
         replace: true,
+        ctx,
       });
       if (!outfit) return { outfit: null };
       return { outfit: await hydrateOutfit(app, userId, outfit) };
@@ -843,33 +925,35 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const body = request.body as { weekStart?: string; commit?: boolean };
-      const daysMeta = weekDayKeys({ weekStart: body.weekStart, now: new Date() });
+      const user = await app.deps.repos.findUserById(userId);
+      const daysMeta = weekDayKeys({ weekStart: body.weekStart, now: new Date(), timeZone: resolveTimeZone(user?.timeZone) });
       const wardrobe = await app.deps.repos.listWardrobeItems(userId);
       const plans = planWorkwearRotation(wardrobe, daysMeta);
       const unique = rotationIsUnique(plans);
       const commit = body.commit !== false;
 
-      const days = [];
-      for (const plan of plans) {
-        let outfit: any = null;
-        if (commit) {
-          outfit = await app.deps.repos.upsertOutfitForDate({
-            userId,
-            plannedFor: plan.date,
-            itemIds: plan.itemIds,
-            occasion: "WORK",
-            weatherCtx: { source: "workwear_rotation", unique },
-          });
-          outfit = await hydrateOutfit(app, userId, outfit);
+      const saved: any[] = [];
+      if (commit) {
+        for (const plan of plans) {
+          saved.push(
+            await app.deps.repos.upsertOutfitForDate({
+              userId,
+              plannedFor: plan.date,
+              itemIds: plan.itemIds,
+              occasion: "WORK",
+              weatherCtx: { source: "workwear_rotation", unique },
+            }),
+          );
         }
-        days.push({
-          date: plan.date,
-          weekday: plan.weekday,
-          itemIds: plan.itemIds,
-          occasion: "WORK" as const,
-          outfit,
-        });
       }
+      const hydrated = await hydrateOutfits(app, userId, saved);
+      const days = plans.map((plan, i) => ({
+        date: plan.date,
+        weekday: plan.weekday,
+        itemIds: plan.itemIds,
+        occasion: "WORK" as const,
+        outfit: commit ? (hydrated[i] ?? null) : null,
+      }));
 
       trackServerEvent("workwear_rotation_planned", {
         userId,
@@ -906,6 +990,8 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const remindNightBefore = body.remindNightBefore === true;
       const commit = body.commit !== false;
       const now = new Date();
+      // One read of the closet and history for all (up to 20) events.
+      const ctx = commit ? await loadOutfitContext(app, userId, now) : undefined;
 
       const results = [];
       for (const ev of body.events) {
@@ -919,6 +1005,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
             whyHints: [plan.reason, `Calendar: ${plan.title}`],
             skipPush: true,
             now,
+            ctx,
           });
           if (outfit) outfit = await hydrateOutfit(app, userId, outfit);
         }
@@ -1022,34 +1109,43 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       });
       const commit = body.commit !== false;
 
-      const days = [];
-      for (const day of plan.days) {
-        let outfit: any = null;
-        if (commit && day.itemIds.length) {
-          outfit = await app.deps.repos.upsertOutfitForDate({
-            userId,
-            plannedFor: day.date,
-            itemIds: day.itemIds,
-            occasion: day.occasion,
-            weatherCtx: {
-              source: "wedding_festival",
-              kind: plan.kind,
-              dayLabel: day.dayLabel,
-              label: plan.label,
-            },
-          });
-          outfit = await hydrateOutfit(app, userId, outfit);
+      // At most WEDDING_FESTIVAL_MAX_DAYS days (body schema and eventDayKeys): one upsert per day,
+      // then one item read for all of them.
+      const savedByDate = new Map<string, any>();
+      if (commit) {
+        for (const day of plan.days) {
+          if (!day.itemIds.length) continue;
+          savedByDate.set(
+            day.date,
+            await app.deps.repos.upsertOutfitForDate({
+              userId,
+              plannedFor: day.date,
+              itemIds: day.itemIds,
+              occasion: day.occasion,
+              weatherCtx: {
+                source: "wedding_festival",
+                kind: plan.kind,
+                dayLabel: day.dayLabel,
+                label: plan.label,
+              },
+            }),
+          );
         }
-        days.push({
+      }
+      const hydrated = await hydrateOutfits(app, userId, [...savedByDate.values()]);
+      const hydratedById = new Map(hydrated.map((h) => [h.id, h]));
+      const days = plan.days.map((day) => {
+        const saved = savedByDate.get(day.date);
+        return {
           date: day.date,
           weekday: day.weekday,
           dayIndex: day.dayIndex,
           dayLabel: day.dayLabel,
           occasion: day.occasion,
           itemIds: day.itemIds,
-          outfit,
-        });
-      }
+          outfit: saved ? (hydratedById.get(saved.id) ?? null) : null,
+        };
+      });
 
       trackServerEvent("wedding_festival_planned", {
         userId,
@@ -1123,7 +1219,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["outfits"],
         body: InterviewKitBodySchema,
-        response: { 200: InterviewKitResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
+        response: { 200: InterviewKitResponseSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -1137,6 +1233,9 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
         remindNightBefore?: boolean;
         commit?: boolean;
       };
+      if (!(await ownsAllItems(app, userId, body.itemIds))) {
+        return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+      }
       const now = new Date();
       let kit;
       try {
