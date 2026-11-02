@@ -21,7 +21,12 @@ function anchorY(el: HTMLElement) {
   const head = header ? header.offsetTop + header.offsetHeight + 12 : 0;
   const pad = el.matches('.section-py') ? el : el.querySelector<HTMLElement>(':scope > .section-py');
   const padTop = pad ? parseFloat(getComputedStyle(pad).paddingTop) || 0 : 0;
-  const top = el.getBoundingClientRect().top + window.scrollY - Math.max(0, head - padTop);
+  // A GSAP-pinned section (the demo, the Coins track) lives in a .pin-spacer. While pinned it is
+  // position: fixed, and once the page is past the pin it is translated to the pin's end, so its own
+  // box says where the pin finished, not where it starts: a jump from below landed on the last step.
+  // The spacer stays in flow and its top is where the pin begins, so measure that instead.
+  const spacer = el.parentElement?.classList.contains('pin-spacer') ? el.parentElement : null;
+  const top = (spacer ?? el).getBoundingClientRect().top + window.scrollY - Math.max(0, head - padTop);
   const max = document.documentElement.scrollHeight - window.innerHeight;
   return Math.max(0, Math.min(max, Math.round(top)));
 }
