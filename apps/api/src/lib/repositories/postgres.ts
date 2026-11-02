@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, typ
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
+import { withNewReferralCode } from "../referral-code.js";
 import {
   avatars,
   budgets,
@@ -437,21 +438,6 @@ async function repointPurchaseRefs(tx: Tx, fromPurchaseId: string, toPurchaseId:
     .update(returnRequests)
     .set({ purchaseId: toPurchaseId, updatedAt: now() })
     .where(eq(returnRequests.purchaseId, fromPurchaseId));
-}
-
-function generateReferralCode(userId: string): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
-  }
-  let code = "";
-  let n = Math.abs(hash);
-  for (let i = 0; i < 6; i++) {
-    code += chars[n % chars.length]!;
-    n = Math.floor(n / chars.length);
-  }
-  return code;
 }
 
 function mapUser(row: UserRow): UserRecord {
@@ -1196,6 +1182,22 @@ function mapDispositionListing(row: DispositionListingRow): DispositionListingRe
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
+  /** Gives a user who has no referral code a new one, trying another code if one is taken. */
+  async function assignReferralCode(userId: string): Promise<UserRecord> {
+    const row = await withNewReferralCode((referralCode) =>
+      db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(users)
+          .set({ referralCode, updatedAt: now() })
+          .where(eq(users.id, userId))
+          .returning();
+        return updated;
+      }),
+    );
+    if (!row) throw new Error(`User not found: ${userId}`);
+    return mapUser(row);
+  }
+
   const repos: Repositories = {
     async findUserByPhone(phone) {
       const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
@@ -1221,42 +1223,42 @@ export function createPostgresRepositories(db: Db): Repositories {
       const existing = await repos.findUserByPhone(phone);
       if (existing) {
         if (!existing.referralCode) {
-          const code = generateReferralCode(existing.id);
-          const updated = await repos.updateUser(existing.id, { referralCode: code });
-          return { user: updated, isNew: false };
+          return { user: await assignReferralCode(existing.id), isNew: false };
         }
         return { user: existing, isNew: false };
       }
 
       const userId = randomUUID();
-      const referralCode = generateReferralCode(userId);
+      const row = await withNewReferralCode((referralCode) =>
+        // A savepoint per try: a taken code must not abort a surrounding transaction.
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone,
+              email: null,
+              googleSub: null,
+              displayName: null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
 
-      const [row] = await db
-        .insert(users)
-        .values({
-          id: userId,
-          phone,
-          email: null,
-          googleSub: null,
-          displayName: null,
-          avatarStatus: "NONE",
-          coinBalanceCache: 0,
-          consentFlags: {},
-          pushToken: null,
-          referralCode,
-        })
-        .returning();
-
-      return { user: mapUser(row!), isNew: true };
+      return { user: mapUser(row), isNew: true };
     },
 
     async findOrCreateGoogleUser({ googleSub, email, displayName }) {
       const existingGoogle = await repos.findUserByGoogleSub(googleSub);
       if (existingGoogle) {
         if (!existingGoogle.referralCode) {
-          const code = generateReferralCode(existingGoogle.id);
-          const updated = await repos.updateUser(existingGoogle.id, { referralCode: code });
-          return { user: updated, isNew: false };
+          return { user: await assignReferralCode(existingGoogle.id), isNew: false };
         }
         return { user: existingGoogle, isNew: false };
       }
@@ -1267,30 +1269,33 @@ export function createPostgresRepositories(db: Db): Repositories {
           googleSub,
           email: email.toLowerCase(),
           displayName: displayName ?? existingEmail.displayName,
-          referralCode: existingEmail.referralCode ?? generateReferralCode(existingEmail.id),
         });
-        return { user: updated, isNew: false };
+        return { user: updated.referralCode ? updated : await assignReferralCode(updated.id), isNew: false };
       }
 
       const userId = randomUUID();
-      const referralCode = generateReferralCode(userId);
-      const [row] = await db
-        .insert(users)
-        .values({
-          id: userId,
-          phone: null,
-          email: email.toLowerCase(),
-          googleSub,
-          displayName: displayName ?? null,
-          avatarStatus: "NONE",
-          coinBalanceCache: 0,
-          consentFlags: {},
-          pushToken: null,
-          referralCode,
-        })
-        .returning();
+      const row = await withNewReferralCode((referralCode) =>
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone: null,
+              email: email.toLowerCase(),
+              googleSub,
+              displayName: displayName ?? null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
 
-      return { user: mapUser(row!), isNew: true };
+      return { user: mapUser(row), isNew: true };
     },
 
     async updateUser(id, patch) {
