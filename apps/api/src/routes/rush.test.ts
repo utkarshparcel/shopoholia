@@ -224,18 +224,33 @@ describe("POST /orders/:id/rush", () => {
     expect(await balance()).toBe(before);
   });
 
-  it("returns 409 when Express wouldn't be any sooner", async () => {
-    // Beta timings are the same for every tier.
+  it("offers the rush in beta too, where Express is faster than the other tiers", async () => {
     vi.stubEnv("WORN_ECONOMY_MODE", "beta");
     const order = await placeOrder(app, token, "STANDARD");
-    expect(order).toMatchObject({ rushAvailable: false });
+    expect(order).toMatchObject({ rushAvailable: true });
+
+    const res = await rush(order.id);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().order).toMatchObject({
+      tier: "EXPRESS",
+      stateEta: buildStateEta(new Date(order.placedAt), "EXPRESS"),
+    });
+  });
+
+  it("returns 409 when Express wouldn't be any sooner", async () => {
+    const order = await placeOrder(app, token, "STANDARD");
+    // Only delivery is left, and it is already due.
+    const stateEta = { ...order.stateEta, DELIVERED: new Date(Date.now() - 60_000).toISOString() };
+    await app.deps.repos.updateOrderState(order.id, "ARRIVING_SOON", { stateEta });
+    expect(await getOrder(order.id)).toMatchObject({ rushAvailable: false });
     const before = await balance();
 
     const res = await rush(order.id);
 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ error: "NO_SPEEDUP" });
-    expect(await getOrder(order.id)).toMatchObject({ tier: "STANDARD", stateEta: order.stateEta });
+    expect(await getOrder(order.id)).toMatchObject({ tier: "STANDARD", stateEta });
     expect(await balance()).toBe(before);
   });
 

@@ -78,7 +78,7 @@ describe("createMemoryJobQueue order ladder", () => {
   });
 
   it("moves the order along at each step's stateEta time", async () => {
-    // Beta EXPRESS: packed at 1m, out for delivery at 2m, arriving at 3m, delivered at 5m.
+    // Beta EXPRESS: packed at 20s, out for delivery at 45s, arriving at 90s, delivered at 2m.
     const { repos, queue, onDelivered } = setup();
     const order = await createOrder(repos, new Date());
     await queue.scheduleOrderLadder(order.id);
@@ -88,13 +88,13 @@ describe("createMemoryJobQueue order ladder", () => {
       return (await repos.findOrderById(order.id))!.state;
     };
 
-    expect(await stateAfter(59_000)).toBe("PROCESSING");
+    expect(await stateAfter(19_000)).toBe("PROCESSING");
     expect(await stateAfter(1_000)).toBe("PACKED");
-    expect(await stateAfter(59_000)).toBe("PACKED");
+    expect(await stateAfter(24_000)).toBe("PACKED");
     expect(await stateAfter(1_000)).toBe("OUT_FOR_DELIVERY");
-    expect(await stateAfter(59_000)).toBe("OUT_FOR_DELIVERY");
+    expect(await stateAfter(44_000)).toBe("OUT_FOR_DELIVERY");
     expect(await stateAfter(1_000)).toBe("ARRIVING_SOON");
-    expect(await stateAfter(119_000)).toBe("ARRIVING_SOON");
+    expect(await stateAfter(29_000)).toBe("ARRIVING_SOON");
     expect(await stateAfter(1_000)).toBe("DELIVERED");
     expect(onDelivered).toHaveBeenCalledExactlyOnceWith(order.id);
   });

@@ -30,14 +30,18 @@ export const TIER_TIMINGS_PROD: Record<DeliveryTier, TierTimings> = {
   },
 };
 
-/** Compressed timers for beta validation (~5 min total arc). */
+/**
+ * Compressed timers for beta validation: Standard keeps the ~5 min arc, Express lands in ~2 min
+ * and Slow burn in ~8 min. Every step is sooner on a faster tier, so Rush to Express has
+ * something to speed up in beta as it does in prod.
+ */
 export const TIER_TIMINGS_BETA: Record<DeliveryTier, TierTimings> = {
   EXPRESS: {
-    PROCESSING: 30_000,
-    PACKED: 60_000,
-    OUT_FOR_DELIVERY: 120_000,
-    ARRIVING_SOON: 180_000,
-    DELIVERED: 300_000,
+    PROCESSING: 10_000,
+    PACKED: 20_000,
+    OUT_FOR_DELIVERY: 45_000,
+    ARRIVING_SOON: 90_000,
+    DELIVERED: 120_000,
   },
   STANDARD: {
     PROCESSING: 30_000,
@@ -47,11 +51,11 @@ export const TIER_TIMINGS_BETA: Record<DeliveryTier, TierTimings> = {
     DELIVERED: 300_000,
   },
   SLOW_BURN: {
-    PROCESSING: 30_000,
-    PACKED: 60_000,
-    OUT_FOR_DELIVERY: 120_000,
-    ARRIVING_SOON: 180_000,
-    DELIVERED: 300_000,
+    PROCESSING: 60_000,
+    PACKED: 120_000,
+    OUT_FOR_DELIVERY: 240_000,
+    ARRIVING_SOON: 360_000,
+    DELIVERED: 480_000,
   },
 };
 

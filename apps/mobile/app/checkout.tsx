@@ -45,9 +45,9 @@ const TIERS: Array<{
   detail: string;
   icon: string;
 }> = [
-  { id: 'EXPRESS', label: 'Express', detail: 'Fastest arc — ~5 min in beta', icon: '▸' },
+  { id: 'EXPRESS', label: 'Express', detail: 'Fastest arc — ~2 min in beta', icon: '▸' },
   { id: 'STANDARD', label: 'Standard', detail: 'Balanced pace — beta ~5 min', icon: '→' },
-  { id: 'SLOW_BURN', label: 'Slow burn', detail: 'Maximum anticipation — beta ~5 min', icon: '⟳' },
+  { id: 'SLOW_BURN', label: 'Slow burn', detail: 'Maximum anticipation — beta ~8 min', icon: '⟳' },
 ];
 
 export default function CheckoutScreen() {
