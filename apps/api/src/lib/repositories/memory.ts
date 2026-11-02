@@ -1664,6 +1664,7 @@ export function createMemoryRepositories(): Repositories {
           isFree: row.isFree,
           unlocked: row.unlocked,
           provider: row.provider,
+          combinedItemIds: row.combinedItemIds ?? null,
           status: row.status,
           costMicros: row.costMicros,
           createdAt: timestamp,
@@ -1792,7 +1793,13 @@ export function createMemoryRepositories(): Repositories {
           return { status: "insufficient_coins" as const, coinsNeeded: input.cost, balance };
         }
         const timestamp = now();
-        const render: RenderRecord = { ...input.render, id: renderId, createdAt: timestamp, updatedAt: timestamp };
+        const render: RenderRecord = {
+          ...input.render,
+          combinedItemIds: input.render.combinedItemIds ?? null,
+          id: renderId,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
         renders.set(render.id, render);
         rendersByOrderItem.set(render.orderItemId, [...(rendersByOrderItem.get(render.orderItemId) ?? []), render.id]);
         const balanceAfter = balance - input.cost;

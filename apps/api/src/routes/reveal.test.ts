@@ -217,6 +217,12 @@ describe("reveal generate", () => {
     expect(body).toMatchObject({ coinsSpent: REVEAL_COMBINE_COST_COINS, isCombine: true });
     expect(body.renders).toHaveLength(1);
     expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_COMBINE_COST_COINS);
+    // Done, and it still knows its items: the provider name no longer overwrites them.
+    expect(await repos.findRenderById(body.renders[0]!.id)).toMatchObject({
+      status: "DONE",
+      provider: app.deps.renderProvider.name,
+      combinedItemIds: items.map((i) => i.id),
+    });
     await app.close();
   });
 

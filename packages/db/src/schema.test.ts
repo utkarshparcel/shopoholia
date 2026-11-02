@@ -70,6 +70,13 @@ describe("migrations", () => {
     expect(sql).toContain(`ALTER TYPE "public"."coin_ledger_type" ADD VALUE 'SPEND_COMBINE'`);
     expect(coinLedgerTypeEnum.enumValues).toEqual(expect.arrayContaining(["SPEND_RENDER", "SPEND_COMBINE"]));
   });
+
+  it("gives a combined render's items their own column and copies them out of the old marker", () => {
+    const sql = readFileSync(join(root, "../migrations/0020_render_combined_items.sql"), "utf8");
+    expect(sql).toContain('ALTER TABLE "renders" ADD COLUMN "combined_item_ids" uuid[]');
+    expect(sql).toContain(`UPDATE "renders" SET "combined_item_ids" =`);
+    expect(schema.renders.combinedItemIds.notNull).toBe(false);
+  });
 });
 
 describe("grantCoins", () => {

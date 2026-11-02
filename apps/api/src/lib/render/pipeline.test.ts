@@ -1,4 +1,4 @@
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   FREE_RENDER_SCENARIOS,
@@ -14,6 +14,7 @@ import { createMockStorage } from "../storage/r2.js";
 import { createStubPushService } from "../push/stub.js";
 import {
   checkAndMarkRevealReady,
+  combinedItemIds,
   processRenderJob,
   seedOrderRenders,
 } from "./pipeline.js";
@@ -233,5 +234,132 @@ function nothingToSeedCases(getRepos: () => Repositories) {
     } finally {
       createRenders.mockRestore();
     }
+  });
+}
+
+describe("combinedItemIds", () => {
+  it("reads the column, falls back to an old row's provider marker, and is null for one item", () => {
+    expect(combinedItemIds({ combinedItemIds: ["a", "b"], provider: "mock-fashn" })).toEqual(["a", "b"]);
+    expect(combinedItemIds({ combinedItemIds: null, provider: "combined:a,b" })).toEqual(["a", "b"]);
+    expect(combinedItemIds({ combinedItemIds: null, provider: "user-generated" })).toBeNull();
+    expect(combinedItemIds({ combinedItemIds: [], provider: "" })).toBeNull();
+    expect(combinedItemIds({ combinedItemIds: null, provider: "combined:" })).toBeNull();
+  });
+});
+
+describe("combined renders (memory)", () => {
+  const repos = createMemoryRepositories();
+  combinedRenderCases(() => repos);
+});
+
+describePostgres("combined renders (Postgres)", () => {
+  const repos = databaseUrl ? createPostgresRepositoriesFromUrl(databaseUrl) : null!;
+  combinedRenderCases(() => repos);
+});
+
+function combinedRenderCases(getRepos: () => Repositories) {
+  /** A delivered order of two items with different garments, and a user with coins. */
+  async function setup(repos: Repositories) {
+    const { user } = await repos.createUser(`9${randomInt(10 ** 10, 10 ** 11)}`);
+    await repos.grantCoins({ userId: user.id, delta: 500, type: "GRANT" });
+    const listingId = randomUUID();
+    const variants = [randomUUID(), randomUUID()];
+    await repos.seedListings(
+      [
+        {
+          id: listingId,
+          sellerId: null,
+          title: "Combined render test",
+          category: "TOPS",
+          tags: [],
+          coinPrice: 50,
+          realPrice: null,
+          productImageKeys: [],
+          houseModelRenderKey: "",
+          affiliateUrl: null,
+          affiliateLinks: null,
+          // Kept out of the feed so these rows can't be mistaken for the real catalog.
+          status: "DRAFT",
+          sortOrder: 0,
+          createdAt: new Date(),
+        },
+      ],
+      variants.map((id, i) => ({ id, listingId, size: "M", color: "Black", garmentImageKey: `garments/${id}-${i}.jpg` })),
+    );
+    const { order, items } = await repos.createOrder({
+      userId: user.id,
+      tier: "EXPRESS",
+      coinTotal: 0,
+      stateEta: {},
+      items: variants.map((listingVariantId) => ({ listingVariantId, coinPriceSnapshot: 50, quantity: 1 })),
+    });
+    await repos.updateOrderState(order.id, "DELIVERED");
+    const deps = {
+      repos,
+      storage: createMockStorage(),
+      renderProvider: createMockRenderProvider(),
+      push: createStubPushService(repos),
+    };
+    const tryOn = vi.spyOn(deps.renderProvider, "tryOn");
+    return { user, order, items, variants, deps, tryOn };
+  }
+
+  it("keeps a combined render's items after it is done, and dresses every item", async () => {
+    const repos = getRepos();
+    const { user, order, items, variants, deps, tryOn } = await setup(repos);
+    const itemIds = items.map((i) => i.id);
+    const purchased = await repos.purchaseRender({
+      userId: user.id,
+      orderId: order.id,
+      render: {
+        orderItemId: itemIds[0]!,
+        scenario: "STUDIO",
+        imageKey: null,
+        isFree: false,
+        unlocked: true,
+        provider: "user-generated",
+        combinedItemIds: itemIds,
+        status: "QUEUED",
+        costMicros: 0,
+      },
+      cost: 75,
+      ledgerType: "SPEND_COMBINE",
+    });
+    if (purchased.status !== "created") throw new Error(purchased.status);
+
+    await processRenderJob(deps, purchased.render.id, order.id);
+
+    const done = await repos.findRenderById(purchased.render.id);
+    expect(done).toMatchObject({ status: "DONE", provider: deps.renderProvider.name, combinedItemIds: itemIds });
+    expect(combinedItemIds(done!)).toEqual(itemIds);
+    expect(tryOn.mock.calls.map(([input]) => input.garmentImageKey)).toEqual(
+      variants.map((id, i) => `garments/${id}-${i}.jpg`),
+    );
+  });
+
+  it("still combines an old row that carries the items in its provider marker", async () => {
+    const repos = getRepos();
+    const { order, items, variants, deps, tryOn } = await setup(repos);
+    const [legacy] = await repos.createRenders([
+      {
+        orderItemId: items[0]!.id,
+        scenario: "NIGHT",
+        imageKey: null,
+        isFree: false,
+        unlocked: true,
+        provider: `combined:${items.map((i) => i.id).join(",")}`,
+        status: "QUEUED",
+        costMicros: 0,
+      },
+    ]);
+    expect(legacy!.combinedItemIds).toBeNull();
+
+    await processRenderJob(deps, legacy!.id, order.id);
+
+    expect(await repos.findRenderById(legacy!.id)).toMatchObject({ status: "DONE" });
+    expect(tryOn).toHaveBeenCalledTimes(2);
+    expect(tryOn.mock.calls.map(([input]) => input.garmentImageKey)).toEqual(
+      variants.map((id, i) => `garments/${id}-${i}.jpg`),
+    );
   });
 }

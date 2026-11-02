@@ -157,7 +157,7 @@ export type PurchaseRenderInput = {
   userId: string;
   orderId: string;
   /** The render to create; its `orderItemId` must be a line of the user's `orderId`. */
-  render: Omit<RenderRecord, "id" | "createdAt" | "updatedAt">;
+  render: NewRenderRecord;
   cost: number;
   ledgerType: string;
   /** Scoped to `orderId`: the same key on another order is a new render. */
@@ -366,11 +366,19 @@ export type RenderRecord = {
   imageKey: string | null;
   isFree: boolean;
   unlocked: boolean;
+  /** The provider that made the image, once done. */
   provider: string;
+  /** The order items a combined render dresses together, in order; null for one item's render. */
+  combinedItemIds: string[] | null;
   status: RenderStatus;
   costMicros: number;
   createdAt: Date;
   updatedAt: Date;
+};
+
+/** A render to create; `combinedItemIds` defaults to null (one item's render). */
+export type NewRenderRecord = Omit<RenderRecord, "id" | "createdAt" | "updatedAt" | "combinedItemIds"> & {
+  combinedItemIds?: string[] | null;
 };
 
 export type PushEventPayload = {
@@ -1034,7 +1042,7 @@ export interface Repositories {
   findOrderItemById(id: string): Promise<OrderItemRecord | null>;
 
   createRenders(
-    rows: Array<Omit<RenderRecord, "id" | "createdAt" | "updatedAt"> & { id?: string }>,
+    rows: Array<NewRenderRecord & { id?: string }>,
   ): Promise<RenderRecord[]>;
   findRenderById(id: string): Promise<RenderRecord | null>;
   findRendersByIds(ids: string[]): Promise<RenderRecord[]>;

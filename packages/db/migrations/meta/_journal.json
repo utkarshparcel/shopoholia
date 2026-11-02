@@ -141,6 +141,13 @@
       "when": 1793609865236,
       "tag": "0019_coin_ledger_render_types",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793610486861,
+      "tag": "0020_render_combined_items",
+      "breakpoints": true
     }
   ]
 }
