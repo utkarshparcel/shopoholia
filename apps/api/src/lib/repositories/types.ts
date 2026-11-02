@@ -135,6 +135,23 @@ export type GrantCoinsInput = {
   refId?: string;
 };
 
+export type UnlockOrderRendersInput = {
+  userId: string;
+  orderId: string;
+  renderIds: string[];
+  costPerRender: number;
+  /** Scoped to `orderId`: the same key on another order is a new unlock. */
+  idempotencyKey?: string;
+};
+
+export type UnlockOrderRendersResult =
+  /** `renders` are the ones this call flipped; each was charged once. */
+  | { status: "unlocked"; renders: RenderRecord[]; coinsSpent: number; balanceAfter: number }
+  /** The key was already spent on this order; nothing was flipped or charged. */
+  | { status: "replayed"; coinsSpent: number }
+  | { status: "nothing_locked" }
+  | { status: "insufficient_coins"; coinsNeeded: number; balance: number };
+
 export type CoinPurchaseStore = "app_store" | "play_store";
 
 /** A store transaction that a verifier or a store notification vouched for. */
@@ -987,6 +1004,13 @@ export interface Repositories {
     id: string,
     patch: Partial<Pick<RenderRecord, "imageKey" | "unlocked" | "provider" | "status" | "costMicros">>,
   ): Promise<RenderRecord | null>
+  /**
+   * Unlocks the user's order's locked, paid renders among `renderIds` and debits `costPerRender`
+   * for each one this call flips, as one step under the user's coin lock. A render flips from
+   * locked once, so parallel unlocks of it charge once; renders of other orders, free ones and
+   * repeats in `renderIds` are skipped. Nothing flips when the balance can't cover them all.
+   */
+  unlockOrderRenders(input: UnlockOrderRendersInput): Promise<UnlockOrderRendersResult>;
 
   findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
   findListingsByIds(ids: string[]): Promise<ListingRecord[]>;

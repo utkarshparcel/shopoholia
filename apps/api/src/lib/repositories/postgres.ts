@@ -84,7 +84,7 @@ import {
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { streakLedgerRef } from "./ledger-refs.js";
+import { revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -252,6 +252,16 @@ async function lockedCoinBalance(tx: Tx, userId: string): Promise<number> {
     .limit(1);
 
   return latest?.balanceAfter ?? user.coinBalanceCache;
+}
+
+/** Rolls back an unlock whose flipped renders cost more than the balance. */
+class UnlockShortfall extends Error {
+  constructor(
+    readonly coinsNeeded: number,
+    readonly balance: number,
+  ) {
+    super("Not enough coins to unlock these renders");
+  }
 }
 
 /** Appends a ledger entry and updates the balance cache. Call after lockedCoinBalance. */
@@ -2811,6 +2821,75 @@ export function createPostgresRepositories(db: Db): Repositories {
         .returning();
 
       return mapRender(row!);
+    },
+
+    async unlockOrderRenders(input) {
+      const ref = input.idempotencyKey
+        ? { refType: "reveal_unlock", refId: revealUnlockLedgerRef(input.orderId, input.idempotencyKey) }
+        : { refType: "order", refId: input.orderId };
+      try {
+        return await db.transaction(async (tx) => {
+          // The user's row first, as every coin write does: a retry of the same key waits here and
+          // then finds the first one's ledger entry.
+          const balance = await lockedCoinBalance(tx, input.userId);
+          if (input.idempotencyKey) {
+            const [prior] = await tx
+              .select({ delta: coinLedger.delta })
+              .from(coinLedger)
+              .where(
+                and(
+                  eq(coinLedger.userId, input.userId),
+                  eq(coinLedger.type, "SPEND_UNLOCK"),
+                  eq(coinLedger.refType, ref.refType),
+                  eq(coinLedger.refId, ref.refId),
+                ),
+              )
+              .limit(1);
+            if (prior) return { status: "replayed" as const, coinsSpent: Math.abs(prior.delta) };
+          }
+          if (input.renderIds.length === 0) return { status: "nothing_locked" as const };
+
+          const items = await tx
+            .select({ id: orderItems.id })
+            .from(orderItems)
+            .innerJoin(orders, eq(orderItems.orderId, orders.id))
+            .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
+          if (items.length === 0) return { status: "nothing_locked" as const };
+
+          // Only rows still locked flip, so a render another request already unlocked isn't charged again.
+          const flipped = await tx
+            .update(renders)
+            .set({ unlocked: true, updatedAt: now() })
+            .where(
+              and(
+                inArray(renders.id, [...new Set(input.renderIds)]),
+                inArray(
+                  renders.orderItemId,
+                  items.map((item) => item.id),
+                ),
+                eq(renders.isFree, false),
+                eq(renders.unlocked, false),
+              ),
+            )
+            .returning();
+          if (flipped.length === 0) return { status: "nothing_locked" as const };
+
+          const coinsSpent = flipped.length * input.costPerRender;
+          if (balance < coinsSpent) throw new UnlockShortfall(coinsSpent, balance);
+          const balanceAfter = balance - coinsSpent;
+          await appendCoinLedger(
+            tx,
+            { userId: input.userId, delta: -coinsSpent, type: "SPEND_UNLOCK", ...ref },
+            balanceAfter,
+          );
+          return { status: "unlocked" as const, renders: flipped.map(mapRender), coinsSpent, balanceAfter };
+        });
+      } catch (error) {
+        if (error instanceof UnlockShortfall) {
+          return { status: "insufficient_coins" as const, coinsNeeded: error.coinsNeeded, balance: error.balance };
+        }
+        throw error;
+      }
     },
 
     async recordRevealRating(input) {

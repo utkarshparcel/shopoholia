@@ -83,54 +83,36 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      if (request.body.idempotencyKey) {
-        const existingSpend = await app.deps.repos.findCoinSpendByRef(
-          request.user.sub,
-          "reveal_unlock",
-          request.body.idempotencyKey,
+      const result = await app.deps.repos.unlockOrderRenders({
+        userId: request.user.sub,
+        orderId: order.id,
+        renderIds: request.body.renderIds,
+        costPerRender: REVEAL_UNLOCK_COST_COINS,
+        idempotencyKey: request.body.idempotencyKey,
+      });
+
+      if (result.status === "replayed") {
+        // Only this order's renders: the ids in a replayed body are not trusted.
+        const orderRenders = await app.deps.repos.findRendersByOrderId(order.id);
+        const requested = new Set(request.body.renderIds);
+        const cards = await Promise.all(
+          orderRenders
+            .filter((render) => requested.has(render.id))
+            .map((render) => renderCardDto(render, app.deps.storage)),
         );
-        if (existingSpend) {
-          const refreshed = await app.deps.repos.findRendersByIds(request.body.renderIds);
-          const cards = await Promise.all(
-            refreshed.map((render) => renderCardDto(render, app.deps.storage)),
-          );
-          return { renders: cards, coinsSpent: Math.abs(existingSpend.delta) };
-        }
+        return { renders: cards, coinsSpent: result.coinsSpent };
       }
-
-      const renders = await app.deps.repos.findRendersByIds(request.body.renderIds);
-      const orderRenders = await app.deps.repos.findRendersByOrderId(order.id);
-      const orderRenderIds = new Set(orderRenders.map((r) => r.id));
-
-      const toUnlock = renders.filter(
-        (r) => orderRenderIds.has(r.id) && !r.isFree && !r.unlocked,
-      );
-      if (toUnlock.length === 0) {
+      if (result.status === "nothing_locked") {
         return reply.code(404).send({ error: "Not Found", message: "No locked renders found" });
       }
-
-      const coinsSpent = toUnlock.length * REVEAL_UNLOCK_COST_COINS;
-      const balance = await app.deps.repos.getCoinBalance(request.user.sub);
-      if (balance < coinsSpent) {
+      if (result.status === "insufficient_coins") {
         return reply.code(402).send({
           error: "INSUFFICIENT_COINS",
           message: "Not enough coins to unlock these renders",
         });
       }
 
-      await app.deps.repos.spendCoins({
-        userId: request.user.sub,
-        delta: coinsSpent,
-        type: "SPEND_UNLOCK",
-        refType: request.body.idempotencyKey ? "reveal_unlock" : "order",
-        refId: request.body.idempotencyKey ?? order.id,
-      });
-
-      const unlocked: typeof renders = [];
-      for (const render of toUnlock) {
-        const updated = await app.deps.repos.updateRender(render.id, { unlocked: true });
-        if (updated) unlocked.push(updated);
-      }
+      const { renders: unlocked, coinsSpent } = result;
 
       for (const render of unlocked) {
         if (render.status === "QUEUED") {

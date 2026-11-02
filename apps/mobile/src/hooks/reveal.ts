@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 
 import {
   fetchCoinBalance,
@@ -9,6 +10,7 @@ import {
 } from '@/src/api/client';
 import { orderKeys } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 
@@ -37,13 +39,23 @@ export function useUnlockRenders(orderId: string) {
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
+  // One key per unlock of a set of renders, kept until it succeeds: a retry, or a second tap
+  // while the first is in flight, sends the same key and the server charges once.
+  const pendingKeys = useRef(new Map<string, string>());
 
   return useMutation({
     mutationFn: (renderIds: string[]) => {
       if (!accessToken) throw new Error('Sign in to unlock renders');
-      return unlockRenders(accessToken, orderId, renderIds);
+      const attempt = [...renderIds].sort().join(',');
+      let idempotencyKey = pendingKeys.current.get(attempt);
+      if (!idempotencyKey) {
+        idempotencyKey = newIdempotencyKey();
+        pendingKeys.current.set(attempt, idempotencyKey);
+      }
+      return unlockRenders(accessToken, orderId, renderIds, idempotencyKey);
     },
-    onSuccess: async (result) => {
+    onSuccess: async (result, renderIds) => {
+      pendingKeys.current.delete([...renderIds].sort().join(','));
       if (!accessToken) return;
       const balance = await fetchCoinBalance(accessToken);
       setCoinBalance(balance.balance);

@@ -6,7 +6,7 @@ import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { streakLedgerRef } from "./ledger-refs.js";
+import { revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -1679,6 +1679,51 @@ export function createMemoryRepositories(): Repositories {
       const updated: RenderRecord = { ...existing, ...patch, updatedAt: now() };
       renders.set(id, updated);
       return updated;
+    },
+
+    async unlockOrderRenders(input) {
+      const ref = input.idempotencyKey
+        ? { refType: "reveal_unlock", refId: revealUnlockLedgerRef(input.orderId, input.idempotencyKey) }
+        : { refType: "order", refId: input.orderId };
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+        // No await from here to the ledger entry: the replay check, the flips and the debit are one step.
+        if (input.idempotencyKey) {
+          const prior = ledger.find(
+            (e) =>
+              e.userId === input.userId &&
+              e.type === "SPEND_UNLOCK" &&
+              e.refType === ref.refType &&
+              e.refId === ref.refId,
+          );
+          if (prior) return { status: "replayed" as const, coinsSpent: Math.abs(prior.delta) };
+        }
+        const order = orders.get(input.orderId);
+        const itemIds = new Set(order?.userId === input.userId ? (orderItemsByOrder.get(order.id) ?? []) : []);
+        const toUnlock = [...new Set(input.renderIds)]
+          .map((id) => renders.get(id))
+          .filter((r): r is RenderRecord => !!r && itemIds.has(r.orderItemId) && !r.isFree && !r.unlocked);
+        if (toUnlock.length === 0) return { status: "nothing_locked" as const };
+
+        const coinsSpent = toUnlock.length * input.costPerRender;
+        if (balance < coinsSpent) {
+          return { status: "insufficient_coins" as const, coinsNeeded: coinsSpent, balance };
+        }
+        const unlocked = toUnlock.map((render) => {
+          const updated: RenderRecord = { ...render, unlocked: true, updatedAt: now() };
+          renders.set(render.id, updated);
+          return updated;
+        });
+        const balanceAfter = balance - coinsSpent;
+        appendLedger(
+          ledger,
+          { userId: input.userId, delta: -coinsSpent, type: "SPEND_UNLOCK", ...ref },
+          balanceAfter,
+        );
+        const user = users.get(input.userId);
+        if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { status: "unlocked" as const, renders: unlocked, coinsSpent, balanceAfter };
+      });
     },
 
     async recordRevealRating(input) {
