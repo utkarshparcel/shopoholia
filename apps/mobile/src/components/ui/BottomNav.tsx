@@ -122,6 +122,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     gap: 4,
+    // Equal shares of the bar even when a label is wider than its share (web sizes flex items
+    // to their content otherwise, pushing the last tab off the edge).
+    minWidth: 0,
     justifyContent: 'center',
     minHeight: tapTargetAndroid,
     position: 'relative',

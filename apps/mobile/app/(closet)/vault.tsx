@@ -173,6 +173,7 @@ import {
   fsBody,
   fsCaption,
   radiusMd,
+  space3,
   space4,
   space6,
   text,
@@ -2015,7 +2016,7 @@ function CreditsKindTab({
                     <Text style={styles.muted}>
                       {balanceRecheckNudgeCopy(account.merchant).body}
                     </Text>
-                    <View style={styles.row}>
+                    <View style={styles.actionRow}>
                       <Button
                         label={balanceRecheckNudgeCopy(account.merchant).recheckCta}
                         size="sm"
@@ -2038,7 +2039,7 @@ function CreditsKindTab({
                     </View>
                   </View>
                 ) : null}
-                <View style={styles.row}>
+                <View style={styles.actionRow}>
                   <Button
                     label={tab === 'loyalty' ? 'Use points' : 'Use it now'}
                     size="sm"
@@ -2814,6 +2815,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: space4,
+  },
+  // A card's actions (up to four buttons) wrap onto a second line on a narrow phone instead of
+  // running past the card's right edge ("Re-check" was clipped at 390pt).
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space3,
   },
   sectionTitle: {
     color: text,

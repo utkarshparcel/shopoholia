@@ -1,25 +1,13 @@
 import { Tabs, usePathname, useRouter } from 'expo-router';
 import { View } from 'react-native';
 
-import { BottomNav, type BottomNavItem } from '@/src/components/ui';
+import { BottomNav } from '@/src/components/ui';
 import { ClosetScreenFocusProvider } from '@/src/hooks/closet/screenFocus';
-import type { ClosetTabKey } from '@/src/lib/surfaceRoute';
+import { CLOSET_NAV_ITEMS as NAV_ITEMS } from '@/src/lib/closetNav';
 import { bg } from '@/src/theme/tokens';
 
 /** A render error in one Closet screen shows a retry here instead of taking down the whole app (MOB 24). */
 export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
-
-// Typed to the keys the surface pill shows on (src/lib/surfaceRoute.ts).
-const NAV_ITEMS: (BottomNavItem & { key: ClosetTabKey })[] = [
-  { key: 'today', label: 'Today', icon: '◷' },
-  { key: 'wardrobe', label: 'Wardrobe', icon: '▤' },
-  { key: 'vault', label: 'Vault', icon: '◰' },
-  { key: 'accountant', label: 'Accountant', icon: '∑' },
-  { key: 'recipients', label: 'Gifts', icon: '♡' },
-  // U+FE0E asks for the text glyph: iOS otherwise draws ✂ as a red emoji among line icons.
-  { key: 'fit', label: 'Fit', icon: '✂︎' },
-  { key: 'disposition', label: 'Market', icon: '⇄' },
-];
 
 export default function ClosetLayout() {
   const router = useRouter();
