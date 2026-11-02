@@ -2,7 +2,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -65,23 +65,28 @@ function GoogleSignInButton({ busy, setBusy, setError, onTokens }: GoogleButtonP
     androidClientId: androidClientId || undefined,
   });
 
+  // Latest callbacks, so the effect below runs once per Google response rather than again on
+  // every parent re-render (each run would exchange the same ID token and sign in again).
+  const callbacks = useRef({ onTokens, setBusy, setError });
+  callbacks.current = { onTokens, setBusy, setError };
+
   useEffect(() => {
     if (response?.type !== 'success') return;
     const idToken = response.params.id_token;
     if (!idToken) {
-      setError('Google did not return an ID token');
+      callbacks.current.setError('Google did not return an ID token');
       return;
     }
 
-    setBusy(true);
-    setError(null);
+    callbacks.current.setBusy(true);
+    callbacks.current.setError(null);
     void signInWithGoogle(idToken)
-      .then(onTokens)
+      .then((tokens) => callbacks.current.onTokens(tokens))
       .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : 'Google sign-in failed');
+        callbacks.current.setError(e instanceof Error ? e.message : 'Google sign-in failed');
       })
-      .finally(() => setBusy(false));
-  }, [response, onTokens, setBusy, setError]);
+      .finally(() => callbacks.current.setBusy(false));
+  }, [response]);
 
   return (
     <Pressable
@@ -118,27 +123,40 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Set by a sign-in on this screen, which routes on its own (a new user goes to avatar
+  // onboarding). Without it the redirect below would see the new token on the next render and
+  // send a brand-new user to `/` instead.
+  const signedInHere = useRef(false);
+
   useEffect(() => {
-    if (accessToken) {
-      // The entry route picks Play or the persisted Closet surface.
+    // A session that arrives without a sign-in here (already signed in when the screen opened,
+    // or restored/dev-provisioned underneath it): the entry route picks Play or the persisted
+    // Closet surface.
+    if (accessToken && !signedInHere.current) {
       router.replace('/');
     }
   }, [accessToken, router]);
 
-  const applyTokens = (tokens: {
-    accessToken: string;
-    refreshToken: string;
-    isNewUser?: boolean;
-    coinBalance?: number;
-  }) => {
-    setSession({
-      email: null,
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      coinBalance: tokens.coinBalance ?? 0,
-    });
-    router.replace(tokens.isNewUser ? '/(onboarding)/avatar' : '/');
-  };
+  // Stable, so the Google button's response effect doesn't re-run (and sign in again) whenever
+  // this screen re-renders.
+  const applyTokens = useCallback(
+    (tokens: {
+      accessToken: string;
+      refreshToken: string;
+      isNewUser?: boolean;
+      coinBalance?: number;
+    }) => {
+      signedInHere.current = true;
+      setSession({
+        email: null,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        coinBalance: tokens.coinBalance ?? 0,
+      });
+      router.replace(tokens.isNewUser ? '/(onboarding)/avatar' : '/');
+    },
+    [router, setSession],
+  );
 
   const continueDev = async () => {
     setBusy(true);
