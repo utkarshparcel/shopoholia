@@ -27,8 +27,13 @@ const rise: Variants = {
 const START = 2600;
 const MAX = 999999;
 const GOAL = 100;
+/** Wears the tag logs on its own when it scrolls in untouched. */
+const AUTO_WEARS = 8;
 
 const rupees = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+const describe = (wears: number, price: number) =>
+  `Worn ${wears === 1 ? 'once' : `${wears} times`}: ${rupees(price / wears)} a wear.`;
 
 const TILES = [
   {
@@ -130,6 +135,9 @@ export function ClosetValue() {
   const touched = useRef(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const inView = useInView(stageRef, { amount: 0.5 });
+  // What the live region says. It only takes settled values: the reader's own changes, and the
+  // count where the automatic run stops, so screen readers hear one update instead of seven.
+  const [said, setSaid] = useState(() => describe(1, START));
 
   const parsed = parseInt(draft, 10);
   const price = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX) : START;
@@ -143,12 +151,16 @@ export function ClosetValue() {
 
   // Untouched, it logs a few wears on its own so the drop is visible.
   useEffect(() => {
-    if (!inView || touched.current || reduced || wears >= 8) return;
+    if (!inView || touched.current || reduced || wears >= AUTO_WEARS) return;
     const t = setTimeout(() => {
       if (!touched.current) wear();
     }, wears === 1 ? 900 : 650);
     return () => clearTimeout(t);
   }, [inView, wears, reduced]);
+
+  useEffect(() => {
+    if (touched.current || reduced || wears >= AUTO_WEARS) setSaid(describe(wears, price));
+  }, [wears, price, reduced]);
 
   return (
     <section id="value" className="relative scroll-mt-24 overflow-hidden">
@@ -175,7 +187,7 @@ export function ClosetValue() {
           >
             <PriceTag price={price} wears={wears} reduced={reduced} />
             <p className="sr-only" aria-live="polite">
-              {`Worn ${wears === 1 ? 'once' : `${wears} times`}: ${rupees(price / wears)} a wear.`}
+              {said}
             </p>
 
             <div className="mt-2 flex flex-wrap items-end justify-center gap-3">
