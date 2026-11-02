@@ -57,9 +57,9 @@ describe('LoginScreen routing', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Dev continue' }));
     });
     expect(useSessionStore.getState().accessToken).toBe('a');
-    expect(mocks.replace).toHaveBeenCalledWith('/(onboarding)/avatar');
+    expect(mocks.replace).toHaveBeenCalledWith('/(onboarding)/avatar?welcome=1');
     expect(mocks.replace).not.toHaveBeenCalledWith('/');
-    expect(lastRoute()).toBe('/(onboarding)/avatar');
+    expect(lastRoute()).toBe('/(onboarding)/avatar?welcome=1');
   });
 
   it('sends a returning user (dev continue) to the entry route', async () => {
@@ -83,7 +83,7 @@ describe('LoginScreen routing', () => {
       await Promise.resolve();
     });
     expect(useSessionStore.getState().accessToken).toBe('g');
-    expect(lastRoute()).toBe('/(onboarding)/avatar');
+    expect(lastRoute()).toBe('/(onboarding)/avatar?welcome=1');
     expect(mocks.replace).not.toHaveBeenCalledWith('/');
     expect(mocks.signInWithGoogle).toHaveBeenCalledTimes(1);
   });

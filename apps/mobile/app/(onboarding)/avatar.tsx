@@ -1,8 +1,9 @@
 import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ONBOARDING_COIN_GRANT } from '@worn/shared';
 
 import { getAvatar, uploadAvatar } from '@/src/api/client';
 import { Button, SectionHeader } from '@/src/components/ui';
@@ -27,7 +28,10 @@ type AvatarStatus = 'NONE' | 'PROCESSING' | 'READY' | 'FAILED';
 
 export default function AvatarOnboardingScreen() {
   const insets = useSafeAreaInsets();
-  const { accessToken, coinBalance } = useSessionStore();
+  const accessToken = useSessionStore((s) => s.accessToken);
+  // Set by the login screen for a brand-new account; editing an avatar later shows no grant.
+  const { welcome } = useLocalSearchParams<{ welcome?: string }>();
+  const isWelcome = welcome === '1';
   const [status, setStatus] = useState<AvatarStatus>('NONE');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,6 +81,12 @@ export default function AvatarOnboardingScreen() {
     if (status !== 'READY') return;
     trackEvent('avatar_complete');
   }, [status]);
+
+  // After sign-in this screen replaced the login screen, so there may be nothing to go back to.
+  const skip = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   const handleUpload = async () => {
     setError(null);
@@ -147,8 +157,8 @@ export default function AvatarOnboardingScreen() {
           shopping arc is the product. Entertainment and self-expression, not real retail.
         </Text>
 
-        {coinBalance > 0 ? (
-          <Text style={styles.coins}>Welcome grant: {coinBalance} WORN coins</Text>
+        {isWelcome ? (
+          <Text style={styles.coins}>Welcome grant: {ONBOARDING_COIN_GRANT} WORN coins</Text>
         ) : null}
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -160,7 +170,7 @@ export default function AvatarOnboardingScreen() {
             onPress={() => void handleUpload()}
             block
           />
-          <Button label="Skip for now" onPress={() => router.back()} variant="ghost" block />
+          <Button label="Skip for now" onPress={skip} variant="ghost" block />
         </View>
       </View>
     </View>

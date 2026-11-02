@@ -153,7 +153,7 @@ export default function LoginScreen() {
         refreshToken: tokens.refreshToken,
         coinBalance: tokens.coinBalance ?? 0,
       });
-      router.replace(tokens.isNewUser ? '/(onboarding)/avatar' : '/');
+      router.replace(tokens.isNewUser ? '/(onboarding)/avatar?welcome=1' : '/');
     },
     [router, setSession],
   );
