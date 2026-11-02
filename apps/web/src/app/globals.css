@@ -13,8 +13,10 @@
     @apply border-worn-rule;
   }
 
+  /* No CSS smooth scrolling: Lenis glides the page and SmoothScroll handles in-page anchors.
+     scroll-behavior: smooth fought both, and any window.scrollTo (framer-motion measuring a
+     layout) cancelled a native glide part way. */
   html {
-    @apply scroll-smooth;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -29,6 +31,12 @@
 
   :focus-visible {
     @apply outline-none ring-2 ring-worn-gold-deep ring-offset-2 ring-offset-worn-paper;
+  }
+
+  /* A section an anchor jump moved focus to (SmoothScroll): no ring round the whole section */
+  [data-anchor-target]:focus {
+    outline: none;
+    box-shadow: none;
   }
 }
 
