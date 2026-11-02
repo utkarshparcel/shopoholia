@@ -41,6 +41,13 @@ export function Navigation() {
     const handleScroll = () => {
       const y = window.scrollY;
       setScrolled(y > TOP_ZONE);
+      // An in-page jump (SmoothScroll marks <html> while it glides): stay out of the way, whichever
+      // way it goes, so the target lands clear of the header. The next scroll up brings it back.
+      if (document.documentElement.hasAttribute('data-anchor-jump')) {
+        setHidden(y > TOP_ZONE);
+        lastY = y;
+        return;
+      }
       if (y <= TOP_ZONE) {
         setHidden(false);
         lastY = y;
@@ -89,6 +96,8 @@ export function Navigation() {
       transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
       // keyboard users tabbing into a hidden header get it back
       onFocusCapture={() => setHidden(false)}
+      // hides itself during in-page jumps, so SmoothScroll doesn't leave room for it
+      data-autohide=""
       className={`fixed top-0 left-0 right-0 z-40 transition-colors duration-300 ease-out ${
         scrolled || mobileOpen ? 'bg-worn-paper/90 backdrop-blur-md border-b border-worn-rule' : 'bg-transparent'
       }`}

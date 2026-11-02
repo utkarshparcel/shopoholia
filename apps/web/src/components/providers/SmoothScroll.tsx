@@ -11,18 +11,32 @@ const lenisNow = () => (window as unknown as { __lenis?: Lenis }).__lenis;
 
 /**
  * Where an in-page anchor should rest: the target's top edge at the top of the window, unless
- * that tucks its content (the first line after its top padding) under the fixed header, in which
- * case it sits 12px below the header. Same rule as ClosetPager's section stops, so a jump lands
- * on a stop the pager recognises.
+ * that tucks its content (the first line after its top padding) under a fixed header that stays
+ * on screen, in which case it sits 12px below the header. Same rule as ClosetPager's section
+ * stops, so a jump lands on a stop the pager recognises. A header marked data-autohide (Play's)
+ * gets out of the way during a jump instead, so pinned stages land exactly where their pin starts.
  */
 function anchorY(el: HTMLElement) {
-  const header = document.querySelector<HTMLElement>('header.fixed');
-  const head = header ? header.offsetTop + header.offsetHeight : 0;
+  const header = document.querySelector<HTMLElement>('header.fixed:not([data-autohide])');
+  const head = header ? header.offsetTop + header.offsetHeight + 12 : 0;
   const pad = el.matches('.section-py') ? el : el.querySelector<HTMLElement>(':scope > .section-py');
   const padTop = pad ? parseFloat(getComputedStyle(pad).paddingTop) || 0 : 0;
-  const top = el.getBoundingClientRect().top + window.scrollY - Math.max(0, head + 12 - padTop);
+  const top = el.getBoundingClientRect().top + window.scrollY - Math.max(0, head - padTop);
   const max = document.documentElement.scrollHeight - window.innerHeight;
   return Math.max(0, Math.min(max, Math.round(top)));
+}
+
+/* While a jump runs <html> carries this, and a data-autohide header keeps itself hidden. */
+const JUMP = 'data-anchor-jump';
+let jumpTimer: ReturnType<typeof setTimeout> | undefined;
+function jumpStart(ms: number) {
+  document.documentElement.setAttribute(JUMP, '');
+  clearTimeout(jumpTimer);
+  jumpTimer = setTimeout(jumpEnd, ms); // never outlives the glide, even if it is cut short
+}
+function jumpEnd() {
+  clearTimeout(jumpTimer);
+  document.documentElement.removeAttribute(JUMP);
 }
 
 /** Moves keyboard focus to the target without scrolling, as a fragment jump should. */
@@ -43,11 +57,13 @@ function scrollToAnchor(el: HTMLElement, tries = 3) {
   const y = anchorY(el);
   const lenis = lenisNow();
   if (!lenis) {
+    jumpStart(150); // the scroll event of an instant jump still arrives a frame later
     window.scrollTo({ top: y, behavior: 'instant' as ScrollBehavior });
     return;
   }
   const dist = Math.abs(y - window.scrollY);
   const duration = Math.min(1.6, 0.7 + (dist / window.innerHeight) * 0.05);
+  jumpStart((duration + 0.6) * 1000);
   lenis.scrollTo(y, {
     duration,
     easing: inOutCubic,
@@ -55,6 +71,8 @@ function scrollToAnchor(el: HTMLElement, tries = 3) {
     onComplete: () => {
       if (tries > 1 && Math.abs(anchorY(el) - window.scrollY) > 2) {
         requestAnimationFrame(() => scrollToAnchor(el, tries - 1));
+      } else {
+        jumpStart(150);
       }
     },
   });
@@ -130,6 +148,12 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener('hashchange', onHashChange);
 
+    // The reader taking over (wheel, touch, keys) ends a jump at once, so the header answers them.
+    const takeOver = () => jumpEnd();
+    window.addEventListener('wheel', takeOver, { passive: true });
+    window.addEventListener('touchstart', takeOver, { passive: true });
+    window.addEventListener('keydown', takeOver);
+
     // Arriving with a hash (e.g. /closet#vault): the browser jumped before the pins and step
     // tracks laid themselves out, so aim again once they have.
     let t: ReturnType<typeof setTimeout> | undefined;
@@ -159,6 +183,10 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
       clearTimeout(t);
       window.removeEventListener('click', onClick, true);
       window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener('wheel', takeOver);
+      window.removeEventListener('touchstart', takeOver);
+      window.removeEventListener('keydown', takeOver);
+      jumpEnd();
     };
   }, []);
 
