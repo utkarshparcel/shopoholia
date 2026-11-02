@@ -727,6 +727,11 @@ export type CreateOrderInput = {
   tier: DeliveryTier;
   coinTotal: number;
   stateEta: StateEta;
+  /**
+   * When the order was placed: pass the time `stateEta` was built from, so the order's placedAt and
+   * its PROCESSING ETA are the same instant. Defaults to the time of the insert.
+   */
+  placedAt?: Date;
   idempotencyKey?: string;
   items: Array<{
     listingVariantId: string;

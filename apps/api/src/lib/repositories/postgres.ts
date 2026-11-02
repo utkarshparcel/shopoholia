@@ -294,7 +294,7 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
       tier: input.tier,
       state: "PROCESSING",
       coinTotal: input.coinTotal,
-      placedAt: timestamp,
+      placedAt: input.placedAt ?? timestamp,
       stateEta: input.stateEta,
       revealReadyAt: null,
       idempotencyKey: input.idempotencyKey ?? null,

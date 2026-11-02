@@ -238,6 +238,8 @@ export async function checkoutOrder(
       tier: input.tier,
       coinTotal,
       stateEta,
+      // The instant stateEta was built from, so placedAt and stateEta.PROCESSING match exactly.
+      placedAt,
       idempotencyKey: input.idempotencyKey,
       items,
     });

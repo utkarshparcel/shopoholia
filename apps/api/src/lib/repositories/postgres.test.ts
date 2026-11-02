@@ -166,6 +166,19 @@ describePostgres("createPostgresRepositories", () => {
       };
     }
 
+    it("stamps placedAt with the instant it is given, to the millisecond", async () => {
+      const user = await userWithCoins(100);
+      const variantId = await seedVariant(repos);
+      const placedAt = new Date(Date.now() - 1234);
+
+      const placed = await repos.placeOrder({ ...orderInput(user.id, variantId, 60), placedAt });
+      const created = await repos.createOrder({ ...orderInput(user.id, variantId, 0), placedAt });
+
+      expect(placed.order.placedAt.toISOString()).toBe(placedAt.toISOString());
+      expect(created.order.placedAt.toISOString()).toBe(placedAt.toISOString());
+      expect((await repos.findOrderById(placed.order.id))!.placedAt.toISOString()).toBe(placedAt.toISOString());
+    });
+
     it("places an order and debits its coins in one transaction", async () => {
       const user = await userWithCoins(100);
       const variantId = await seedVariant(repos);
