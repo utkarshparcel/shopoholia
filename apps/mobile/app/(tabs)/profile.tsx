@@ -2,6 +2,7 @@ import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { OrderState } from '@worn/shared';
 
 import { Button, CoinWallet } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
@@ -37,6 +38,9 @@ import {
   trackingTight,
 } from '@/src/theme/tokens';
 
+/** States an order doesn't leave by itself: everything else is still on its way. */
+const SETTLED_ORDER_STATES: readonly OrderState[] = ['REVEAL_READY', 'CANCELLED', 'FAILED'];
+
 const MENU = [
   { label: 'Get more coins', href: '/coins/buy' },
   { label: 'Daily streak', href: '/streaks' },
@@ -71,7 +75,13 @@ export default function ProfileScreen() {
   const { data: ordersData } = useQuery({
     queryKey: orderKeys.list(userId),
     queryFn: () => fetchOrders(useSessionStore.getState().accessToken ?? ''),
-    enabled: signedIn,
+    // Orders move on by themselves (the delivery timers run on the server) and this tab stays
+    // mounted, so a cached list kept a delivered haul "in transit": refetch whenever the tab is
+    // shown again, and every 15s while it is shown and something is still on its way.
+    enabled: signedIn && isFocused,
+    staleTime: 0,
+    refetchInterval: (query) =>
+      query.state.data?.orders.some((o) => !SETTLED_ORDER_STATES.includes(o.state)) ? 15_000 : false,
   });
 
   const orders = ordersData?.orders ?? [];
@@ -134,7 +144,7 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>
-                {orders.filter((o) => !['REVEAL_READY', 'CANCELLED', 'FAILED'].includes(o.state)).length}
+                {orders.filter((o) => !SETTLED_ORDER_STATES.includes(o.state)).length}
               </Text>
               <Text style={styles.statLabel}>In transit</Text>
             </View>

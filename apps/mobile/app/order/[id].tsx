@@ -67,7 +67,8 @@ export default function OrderTrackingScreen() {
         created: result.created,
         wardrobeCount: result.wardrobeItemIds.length,
       });
-      void queryClient.invalidateQueries({ queryKey: ['order', id, accessToken] });
+      // Prefix match: the cached order is keyed on the shopper (orderKeys.detail), not the token.
+      void queryClient.invalidateQueries({ queryKey: ['order', id] });
     },
     onError: (e) => setTrackNote((e as Error).message),
   });

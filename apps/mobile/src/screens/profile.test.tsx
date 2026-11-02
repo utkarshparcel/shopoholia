@@ -66,10 +66,29 @@ vi.mock('react-native', () => ({
   Alert: { alert: rn.alert },
 }));
 
-vi.mock('expo-router', () => ({
-  useIsFocused: () => true,
-  useRouter: () => ({ push: rn.push, replace: vi.fn() }),
-}));
+// Whether the tab is showing; tests flip it to switch tabs away and back.
+const focus = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  return {
+    value: true,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    set(value: boolean) {
+      focus.value = value;
+      listeners.forEach((listener) => listener());
+    },
+  };
+});
+
+vi.mock('expo-router', async () => {
+  const { useSyncExternalStore } = await import('react');
+  return {
+    useIsFocused: () => useSyncExternalStore(focus.subscribe, () => focus.value),
+    useRouter: () => ({ push: rn.push, replace: vi.fn() }),
+  };
+});
 
 vi.mock('@/src/components/ui', () => ({
   Button: ({ label, onPress }: { label: string; onPress?: () => void }) => (
@@ -113,6 +132,7 @@ function pressDeleteMyPhotos() {
 }
 
 beforeEach(() => {
+  focus.value = true;
   rn.alert.mockReset();
   rn.push.mockReset();
   vi.mocked(fetchOrders).mockReset().mockResolvedValue({ orders: [] });
@@ -240,5 +260,24 @@ describe('ProfileScreen: orders', () => {
     // The banner opens the newest ready one.
     fireEvent.click(screen.getByText('Open reveal →'));
     expect(rn.push).toHaveBeenLastCalledWith('/reveal/cccccccc-ready-new');
+  });
+
+  it('refetches the orders when the tab is shown again, so a delivered haul stops showing as in transit', async () => {
+    vi.mocked(fetchOrders).mockResolvedValue({
+      orders: [order('dddddddd-on-its-way', 'OUT_FOR_DELIVERY', '2026-06-18T12:00:00.000Z', 'EXPRESS')],
+    });
+    renderProfile();
+    await waitFor(() => expect(screen.getAllByTestId('order-row')).toHaveLength(1));
+    expect(screen.queryByText('Ready')).toBeNull();
+
+    // Away on another tab while the delivery timers finish on the server.
+    act(() => focus.set(false));
+    vi.mocked(fetchOrders).mockResolvedValue({
+      orders: [order('dddddddd-on-its-way', 'REVEAL_READY', '2026-06-18T12:00:00.000Z', 'EXPRESS')],
+    });
+    act(() => focus.set(true));
+
+    await waitFor(() => expect(screen.getAllByText('Ready')).toHaveLength(1));
+    expect(fetchOrders).toHaveBeenCalledTimes(2);
   });
 });
