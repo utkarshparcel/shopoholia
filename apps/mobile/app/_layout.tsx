@@ -20,6 +20,7 @@ import { initAnalyticsFromEnv, trackInstallOnce } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
+import { clearVaultAddQueue } from '@/src/lib/vaultAddQueue';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { SurfaceToggle } from '@/src/components/SurfaceToggle';
 import { PurchasesRoot } from '@/src/lib/purchases/PurchasesRoot';
@@ -105,6 +106,7 @@ export default function RootLayout() {
         queryClient.clear();
         void clearPersistedQueries();
         useClosetStore.getState().clear();
+        void clearVaultAddQueue();
         if (segmentsRef.current[0] !== '(auth)') router.replace('/(auth)/login' as never);
       }),
     [queryClient, router],

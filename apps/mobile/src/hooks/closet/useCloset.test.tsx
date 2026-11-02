@@ -1,6 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { enqueueVaultAdd, VAULT_ADD_QUEUE_KEY } from '@/src/lib/vaultAddQueue';
 
 import {
   useAddGiftCard,
@@ -1189,6 +1192,7 @@ describe('vault / play-bridge mutations', () => {
   });
 
   it('deletes vault and clears session', async () => {
+    await enqueueVaultAdd('user-1', { kind: 'GIFT_CARD', merchant: 'Amazon', balanceMinor: 1_00 });
     let mutateAsync!: ReturnType<typeof useDeleteVault>['mutateAsync'];
     function Probe({ onReady }: { onReady: (m: typeof mutateAsync) => void }) {
       const del = useDeleteVault();
@@ -1208,6 +1212,8 @@ describe('vault / play-bridge mutations', () => {
     });
     expect(deleteVault).toHaveBeenCalledWith('test-token');
     expect(sessionState.clear).toHaveBeenCalled();
+    // Offline adds of the deleted account never sync later.
+    expect(await AsyncStorage.getItem(VAULT_ADD_QUEUE_KEY)).toBeNull();
   });
 
   it('tracks Play buy and checks prebuy fit', async () => {
