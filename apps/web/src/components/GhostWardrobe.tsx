@@ -1,6 +1,7 @@
 'use client';
 
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import { Tag } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -55,24 +56,21 @@ const GHOSTS = [
 ];
 
 export function GhostWardrobe() {
-  const reduced = useReducedMotion();
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
-    <section id="manifesto" aria-label="The ghost wardrobe" className="section-py relative overflow-hidden bg-worn-paper">
+    <section id="manifesto" aria-label="The problem" className="section-py relative overflow-hidden bg-worn-paper">
       <div className="section">
-        <motion.div {...a} variants={rise} custom={0} className="mx-auto max-w-[780px] text-center">
+        <motion.div {...reveal} variants={rise} custom={0} className="mx-auto max-w-[780px] text-center">
           <p className="ornament ml-auto mr-auto w-fit font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
-            The ghost wardrobe
+            Sound familiar?
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            Huge wardrobe. <em className="grad-text">Nothing to wear.</em>
+            You love buying clothes. <em className="grad-text">Not what it costs you.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[54ch] text-body-l text-worn-ink-soft">
-            Every piece in there was the same purchase: the buying high, bought
-            again. Worn keeps the high and drops the pile.
+            The late-night cart, the outfit worn once, the tags still on. The fun
+            was the buying; the bill and the pile came after. Worn Play keeps the
+            fun part and drops the rest.
           </p>
         </motion.div>
 
@@ -81,7 +79,7 @@ export function GhostWardrobe() {
           {RECEIPTS.map((r, i) => (
             <motion.div
               key={r.label}
-              {...a}
+              {...reveal}
               variants={rise}
               custom={0.05 * i}
               className="border-t border-worn-rule pt-5"
@@ -101,7 +99,7 @@ export function GhostWardrobe() {
           {GHOSTS.map((g, i) => (
             <motion.figure
               key={g.tag + i}
-              {...a}
+              {...reveal}
               variants={rise}
               custom={0.04 * i}
               className="relative w-[124px] overflow-hidden rounded-card border border-worn-rule bg-worn-warm shadow-sm sm:w-[140px]"
@@ -119,7 +117,7 @@ export function GhostWardrobe() {
         </div>
 
         <motion.p
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.2}
           className="mx-auto mt-14 max-w-[46ch] text-center font-display text-[clamp(22px,3vw,32px)] italic leading-snug text-worn-ink-soft"

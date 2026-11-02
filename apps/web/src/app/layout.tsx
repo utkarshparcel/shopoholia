@@ -2,8 +2,10 @@ import type { Metadata, Viewport } from 'next';
 import { DM_Sans, DM_Serif_Display, DM_Mono } from 'next/font/google';
 import './globals.css';
 import { SmoothScroll } from '@/components/providers/SmoothScroll';
+import { MotionProvider } from '@/components/providers/MotionProvider';
 import { ScrollProgress } from '@/components/ScrollProgress';
 import { GrainOverlay } from '@/components/GrainOverlay';
+import { SITE_URL } from '@/lib/site';
 
 const dmSans = DM_Sans({
   subsets: ['latin'],
@@ -28,12 +30,12 @@ const dmMono = DM_Mono({
 });
 
 const DESCRIPTION =
-  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox AI renders of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
+  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://worn.app'),
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: 'Worn — Stop Shopping. Start Wearing.',
+    default: 'Worn Play — the fashion haul without the bill',
     template: '%s | Worn',
   },
   description: DESCRIPTION,
@@ -62,14 +64,14 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://worn.app',
+    url: SITE_URL,
     siteName: 'Worn',
-    title: 'Worn: the shopping app where nothing ships',
+    title: 'Worn Play — the fashion haul without the bill',
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Worn: the shopping app where nothing ships',
+    title: 'Worn Play — the fashion haul without the bill',
     description: DESCRIPTION,
   },
   // icon.svg, apple-icon.tsx and opengraph-image.tsx in this folder supply the icons and the share image
@@ -99,38 +101,17 @@ export default function RootLayout({
         <link rel="preconnect" href="https://assets.newme.asia" />
       </head>
       <body className="min-h-screen flex flex-col">
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
-              '@context': 'https://schema.org',
-              '@type': 'MobileApplication',
-              name: 'Worn',
-              description: DESCRIPTION,
-              operatingSystem: 'iOS, Android',
-              applicationCategory: 'LifestyleApplication',
-              offers: {
-                '@type': 'Offer',
-                price: '0',
-                priceCurrency: 'USD',
-              },
-              publisher: {
-                '@type': 'Organization',
-                name: 'Worn',
-                url: 'https://worn.app',
-              },
-            }),
-          }}
-        />
         <ScrollProgress />
         <GrainOverlay />
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 z-50 btn-primary"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:px-5 focus:py-3 z-[60] btn-primary"
         >
           Skip to main content
         </a>
-        <SmoothScroll>{children}</SmoothScroll>
+        <MotionProvider>
+          <SmoothScroll>{children}</SmoothScroll>
+        </MotionProvider>
       </body>
     </html>
   );

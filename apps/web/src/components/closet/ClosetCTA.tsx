@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import { ArrowRight } from 'lucide-react';
+import { WaitlistForm } from '@/components/WaitlistForm';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -16,10 +18,6 @@ const rise: Variants = {
 };
 
 export function ClosetCTA() {
-  const reduced = useReducedMotion();
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <section id="early-access" className="relative scroll-mt-24 overflow-hidden bg-worn-ink text-worn-paper">
@@ -33,37 +31,32 @@ export function ClosetCTA() {
       />
       <div className="section section-py relative text-center">
         <motion.p
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0}
           className="mx-auto w-fit ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold"
         >
-          Coming after Worn Play
+          Worn Closet · early access
         </motion.p>
         <motion.h2
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.08}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(40px,6vw,88px)] leading-[1] tracking-tight text-balance"
         >
-          Stop shopping. <em className="grad-text font-display">Start wearing.</em>
+          Run the closet <em className="grad-text-ink font-display">you already own.</em>
         </motion.h2>
-        <motion.p {...a} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
-          Worn Play is in early access now, through TestFlight and Play internal testing. Closet is the
-          next chapter, and early access members hear about it first.
+        <motion.p {...reveal} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
+          Worn Closet is the next chapter of Worn. Join the Closet list and you’ll hear first when it
+          opens. Want the haul first? Worn Play is coming to iPhone and Android, and its list is open too.
         </motion.p>
-        <motion.div {...a} variants={rise} custom={0.24} className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            href="/#download"
-            className="inline-flex min-h-[48px] items-center gap-2 rounded-pill bg-worn-paper px-7 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
-          >
-            Request early access <ArrowRight className="h-4 w-4" aria-hidden="true" />
-          </Link>
+        <motion.div {...reveal} variants={rise} custom={0.24} className="mt-10 flex flex-col items-center gap-4">
+          <WaitlistForm list="closet" />
           <Link
             href="/"
             className="inline-flex min-h-[48px] items-center gap-2 rounded-pill border border-worn-paper/25 bg-worn-paper/10 px-7 text-[15px] font-semibold transition-colors hover:border-worn-gold hover:text-worn-gold focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
           >
-            See Worn Play
+            See Worn Play <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         </motion.div>
       </div>

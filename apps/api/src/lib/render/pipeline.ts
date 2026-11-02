@@ -3,7 +3,7 @@ import {
   PAYWALLED_RENDER_SCENARIOS,
   type RenderProvider,
 } from "@worn/shared";
-import type { Repositories } from "../repositories/types.js";
+import type { RenderRecord, Repositories } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
 import { pushCopyForState, type PushService } from "../push/stub.js";
 import { isValidTransition } from "../orders/state-machine.js";
@@ -82,6 +82,21 @@ export async function checkAndMarkRevealReady(deps: {
   });
 }
 
+const LEGACY_COMBINED_MARKER = "combined:";
+
+/**
+ * The items a combined render dresses together, or null for one item's render. Renders made
+ * before `combinedItemIds` existed kept them in `provider` as `combined:<id>,<id>` until done.
+ */
+export function combinedItemIds(render: Pick<RenderRecord, "combinedItemIds" | "provider">): string[] | null {
+  if (render.combinedItemIds && render.combinedItemIds.length > 0) return render.combinedItemIds;
+  if (render.provider.startsWith(LEGACY_COMBINED_MARKER)) {
+    const ids = render.provider.slice(LEGACY_COMBINED_MARKER.length).split(",").filter(Boolean);
+    return ids.length > 0 ? ids : null;
+  }
+  return null;
+}
+
 export async function processRenderJob(
   deps: {
     repos: Repositories;
@@ -107,17 +122,16 @@ export async function processRenderJob(
   await deps.repos.updateRender(renderId, { status: "RUNNING" });
 
   try {
-    const isCombined = render.provider.startsWith("combined:");
+    const itemIds = combinedItemIds(render);
     let finalImageKey: string;
     let costMicros = 0;
 
-    if (isCombined) {
-      const itemIds = render.provider.slice("combined:".length).split(",");
+    if (itemIds) {
       let currentModelKey = modelImageKey;
 
       for (const orderItemId of itemIds) {
         const orderItem = await deps.repos.findOrderItemById(orderItemId);
-        if (!orderItem) continue;
+        if (!orderItem || orderItem.orderId !== orderId) continue;
 
         const variant = await deps.repos.findVariantById(orderItem.listingVariantId);
         if (!variant) continue;

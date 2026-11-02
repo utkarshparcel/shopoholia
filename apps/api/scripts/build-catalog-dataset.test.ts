@@ -46,7 +46,7 @@ describe("buildSyntheticCatalogRows", () => {
       expect(row.source).toBe("synthetic");
       expect(row.tags).toContain("synthetic");
       expect(row.image_urls[0]).toMatch(/^https:\/\//);
-      expect(row.affiliate_url).toContain("worn.app/catalog/synthetic");
+      expect(row.affiliate_url).toContain("worncloset.app/catalog/synthetic");
     }
   });
 });

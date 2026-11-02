@@ -162,9 +162,11 @@ import { useClosetStore } from '@/src/stores/closet';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { closetKey, sessionToken, useClosetSubscribed, useSessionUserId } from './keys';
 import { ingestionSourcesQuery } from './useIngestion';
+import { useConsentGate } from './useConsent';
 import { trackEvent } from '@/src/lib/analytics';
 import { localDayKey } from '@/src/lib/format';
 import { shareTextFile } from '@/src/lib/shareFile';
+import { clearVaultAddQueue } from '@/src/lib/vaultAddQueue';
 import { travelPackSharePayload } from '@/src/lib/todayOccasionWow';
 import { wearChallengeProgress } from '@/src/lib/wearChallenge';
 
@@ -185,10 +187,12 @@ export {
 
 export function useIngestionActivity() {
   const userId = useSessionUserId();
+  const consent = useConsentGate('EMAIL');
   return useQuery({
     queryKey: closetKey('ingestion-activity', userId),
     queryFn: () => fetchIngestionActivity(sessionToken()),
-    enabled: Boolean(userId),
+    // The API refuses it (403) until EMAIL is granted.
+    enabled: Boolean(userId) && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
@@ -272,11 +276,13 @@ export function useSplitPurchase() {
 
 export function useGiftCards(kind?: MoneyAccountKind) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('gift-cards', userId, kind ?? 'all'),
     queryFn: () =>
       kind ? fetchCredits(sessionToken(), { kind }) : fetchCredits(sessionToken()),
-    enabled: Boolean(userId),
+    // The API refuses money data (403) until FINANCIAL is granted.
+    enabled: Boolean(userId) && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
@@ -436,10 +442,11 @@ export function useReceipts(query?: {
   gstin?: string;
 }) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('receipts', userId, query?.merchant, query?.from, query?.to, query?.gstin),
     queryFn: () => fetchReceipts(sessionToken(), query),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
@@ -480,10 +487,11 @@ export function useConfirmReceipt() {
 
 export function useWarranties() {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('warranties', userId),
     queryFn: () => fetchWarranties(sessionToken()),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
@@ -513,10 +521,11 @@ export function useUnclaimWarranty() {
 
 export function useCashbackClaims(status?: 'UNCLAIMED' | 'CLAIMED' | 'EXPIRED') {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('cashback-claims', userId, status ?? 'all'),
     queryFn: () => fetchCashbackClaims(sessionToken(), status),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && consent.allowed,
   });
 }
 
@@ -1248,37 +1257,41 @@ export function useStartDeclutterChallenge() {
 // --- Universe P3: accountant ---
 export function useAccountantSummary(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('accountant-summary', userId),
     queryFn: ({ signal }) => fetchAccountantSummary(sessionToken(), signal),
-    enabled: Boolean(userId) && opts?.enabled !== false,
+    enabled: Boolean(userId) && opts?.enabled !== false && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
 export function useAccountantSeasonRoi(year?: number, opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('accountant-roi-season', userId, year ?? 'current'),
     queryFn: ({ signal }) => fetchAccountantSeasonRoi(sessionToken(), year, signal),
-    enabled: Boolean(userId) && opts?.enabled !== false,
+    enabled: Boolean(userId) && opts?.enabled !== false && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
 export function useAccountantLedger(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('accountant-ledger', userId),
     queryFn: ({ signal }) => fetchAccountantLedger(sessionToken(), signal),
-    enabled: Boolean(userId) && opts?.enabled !== false,
+    enabled: Boolean(userId) && opts?.enabled !== false && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
 export function useBudgets(opts?: { enabled?: boolean }) {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('budgets', userId),
     queryFn: ({ signal }) => fetchBudgets(sessionToken(), signal),
-    enabled: Boolean(userId) && opts?.enabled !== false,
+    enabled: Boolean(userId) && opts?.enabled !== false && consent.allowed,
     subscribed: useClosetSubscribed(),
   });
 }
@@ -1354,6 +1367,8 @@ export function useDeleteVault() {
     mutationFn: async () => {
       const accessToken = sessionToken('Sign in to delete your account');
       await deleteVault(accessToken);
+      // Offline adds queued for the deleted account must never be sent.
+      await clearVaultAddQueue().catch(() => undefined);
     },
     onSuccess: () => {
       trackEvent('vault_deleted');
@@ -2063,10 +2078,11 @@ export function useCreatePriceWatch() {
 /** W030 — active EMI plans for don’t-miss cards. */
 export function useEmiPlans(status: 'ACTIVE' | 'PAID' | 'DEFAULTED' = 'ACTIVE') {
   const userId = useSessionUserId();
+  const consent = useConsentGate('FINANCIAL');
   return useQuery({
     queryKey: closetKey('emi-plans', userId, status),
     queryFn: () => fetchEmiPlans(sessionToken(), status),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && consent.allowed,
   });
 }
 

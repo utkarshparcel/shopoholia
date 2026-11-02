@@ -9,7 +9,7 @@ const gateMocks = vi.hoisted(() => ({
   usePremiumAccess: vi.fn(() => ({ allowed: false, checking: false })),
   push: vi.fn(),
   paywallCopyFor: vi.fn(() => ({
-    title: 'Accountant Premium',
+    title: 'Money Premium',
     subtitle: 'Budgets and ROI.',
     cta: 'Start free trial',
     trialDays: 7,
@@ -88,7 +88,7 @@ describe('PremiumGate', () => {
     );
     expect(screen.queryByText('secret')).toBeNull();
     expect(screen.getByTestId('paywall-accountant')).toBeTruthy();
-    expect(screen.getByText('Accountant Premium')).toBeTruthy();
+    expect(screen.getByText('Money Premium')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start free trial' })).toBeTruthy();
   });
 

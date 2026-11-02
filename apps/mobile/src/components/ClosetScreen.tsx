@@ -20,6 +20,7 @@ import {
   type OfflineBannerCopy,
 } from '@/src/lib/offlineBanner';
 import { readVaultAddQueue } from '@/src/lib/vaultAddQueue';
+import { useSessionUserId } from '@/src/hooks/closet/keys';
 import {
   closet,
   fontDisplay,
@@ -145,6 +146,7 @@ export function ClosetScreen<T = never>({
   const { isOffline: netOffline } = useNetworkStatus();
   const isOffline = forceOffline ?? netOffline;
   const [localRefreshing, setLocalRefreshing] = useState(false);
+  const sessionUserId = useSessionUserId();
   const [peekQueued, setPeekQueued] = useState(0);
   const refreshing = refreshingProp ?? localRefreshing;
   const queuedCount = offlineQueuedCountProp ?? peekQueued;
@@ -165,13 +167,13 @@ export function ClosetScreen<T = never>({
   useEffect(() => {
     if (!isOffline || offlineQueuedCountProp != null) return;
     let alive = true;
-    void readVaultAddQueue().then((snap) => {
+    void readVaultAddQueue(sessionUserId).then((snap) => {
       if (alive) setPeekQueued(snap.items.length);
     });
     return () => {
       alive = false;
     };
-  }, [isOffline, offlineQueuedCountProp]);
+  }, [isOffline, offlineQueuedCountProp, sessionUserId]);
 
   const handleRefresh = useCallback(async () => {
     if (!onRefresh) return;

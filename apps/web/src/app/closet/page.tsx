@@ -9,23 +9,47 @@ import { ClosetFeatures } from '@/components/closet/ClosetFeatures';
 import { ClosetCTA } from '@/components/closet/ClosetCTA';
 import { ClosetFooter } from '@/components/closet/ClosetFooter';
 import { ClosetPager } from '@/components/closet/ClosetPager';
+import { CLOSET_URL, SITE_URL } from '@/lib/site';
+
+const TITLE = 'Worn Closet — For everything you already bought';
+const DESCRIPTION =
+  'The next chapter of Worn: catalog what you own, plan the week, track cost per wear, keep tabs on gift cards, warranties and refunds, and sell, swap or donate the pile.';
 
 export const metadata: Metadata = {
-  title: {
-    absolute: 'Worn Closet — For everything you already bought',
-  },
-  description:
-    'The next chapter of Worn: catalog what you own, plan the week, track cost per wear, keep tabs on gift cards, warranties and refunds, and sell, swap or donate the pile.',
+  // Its own title, share card and search data, so /closet never reads as Worn Play.
+  title: { absolute: TITLE },
+  description: DESCRIPTION,
+  alternates: { canonical: '/closet' },
   openGraph: {
-    title: 'Worn Closet — For everything you already bought',
-    description:
-      'The next chapter of Worn: catalog what you own, plan the week, track cost per wear, keep tabs on gift cards, warranties and refunds, and sell, swap or donate the pile.',
+    type: 'website',
+    url: CLOSET_URL,
+    siteName: 'Worn Closet',
+    title: TITLE,
+    description: DESCRIPTION,
   },
+  twitter: {
+    card: 'summary_large_image',
+    title: TITLE,
+    description: DESCRIPTION,
+  },
+};
+
+const STRUCTURED_DATA = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'Worn Closet',
+  url: CLOSET_URL,
+  description: DESCRIPTION,
+  publisher: { '@type': 'Organization', name: 'Worn', url: SITE_URL },
 };
 
 export default function ClosetPage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(STRUCTURED_DATA) }}
+      />
       <ClosetHeader />
       <main id="main-content" className="flex-1">
         <ClosetHero />

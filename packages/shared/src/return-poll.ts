@@ -1,3 +1,4 @@
+import { WEB_ORIGIN } from "./domains.js";
 import { WASTE_SHARE_WATERMARK } from "./waste.js";
 
 /** Default TTL for “Should I return?” friend polls (N35). */
@@ -74,10 +75,10 @@ export type ReturnPollShareCard = {
 
 /**
  * WhatsApp-ready “Should I return?” share (N35).
- * Deep link: `worn.app/p/return/{pollId}`.
+ * Deep link: `worncloset.app/p/return/{pollId}`.
  */
 export function buildReturnPollShare(input: ReturnPollShareInput): ReturnPollShareCard {
-  const origin = (input.origin ?? "https://worn.app").replace(/\/+$/, "");
+  const origin = (input.origin ?? WEB_ORIGIN).replace(/\/+$/, "");
   const watermark = input.watermark ?? WASTE_SHARE_WATERMARK;
   const label = String(input.itemLabel ?? "this piece").trim() || "this piece";
   const deepLink = `${origin}/p/return/${input.shareToken ?? input.pollId}`;

@@ -146,8 +146,15 @@ async function renewSession(): Promise<string | null> {
     return null;
   }
 
-  // Signed out (or in as someone else) while this was in flight.
-  if (useSessionStore.getState().refreshToken !== refreshToken) return null;
+  // Signed out (or in as someone else) while this was in flight: the pair the server just issued
+  // belongs to the ended session, so it's revoked rather than left valid.
+  if (useSessionStore.getState().refreshToken !== refreshToken) {
+    if (res.ok) {
+      const renewed = (await res.json().catch(() => null)) as { refreshToken?: unknown } | null;
+      if (typeof renewed?.refreshToken === 'string') void logout(renewed.refreshToken).catch(() => undefined);
+    }
+    return null;
+  }
 
   if (!res.ok) {
     // Only a rejected token ends the session; a server error might be temporary.
@@ -163,6 +170,20 @@ async function renewSession(): Promise<string | null> {
   if (typeof tokens?.accessToken !== 'string' || typeof tokens.refreshToken !== 'string') return null;
   useSessionStore.getState().setTokens(tokens);
   return tokens.accessToken;
+}
+
+/**
+ * Ends the session on the server: the refresh token can't renew it any more. The API answers 204
+ * also for a token it doesn't know, so this is safe to repeat. No access token is sent (it may
+ * have expired).
+ */
+export async function logout(refreshToken: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_URL}/auth/logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  await parseJson<void>(res);
 }
 
 /**
@@ -355,8 +376,10 @@ export type CartResponse = {
 };
 
 export type TryonResponse = {
-  status: 'READY' | 'PROCESSING';
+  /** FAILED: the last render failed; asking again before `retryAfter` won't start a new one. */
+  status: 'READY' | 'PROCESSING' | 'FAILED';
   previewUrl: string | null;
+  retryAfter?: string | null;
 };
 
 function authHeaders(accessToken: string) {
@@ -741,6 +764,7 @@ export async function generateRenders(
   orderId: string,
   orderItemIds: string[],
   scenario: string,
+  idempotencyKey?: string,
 ) {
   const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/generate`, {
     method: 'POST',
@@ -748,7 +772,7 @@ export async function generateRenders(
       'Content-Type': 'application/json',
       ...authHeaders(accessToken),
     },
-    body: JSON.stringify({ orderItemIds, scenario }),
+    body: JSON.stringify({ orderItemIds, scenario, idempotencyKey }),
   });
   return parseJson<GenerateRenderResponse>(res);
 }
@@ -1028,14 +1052,15 @@ export async function recordAffiliateClick(
   listingId: string,
   platform: string,
 ) {
-  const clickId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const res = await apiFetch(`${API_URL}/cashback/click`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({ listingId, platform, clickId, source: 'play_listing' }),
+    body: JSON.stringify({ listingId, platform, source: 'play_listing' }),
   });
-  if (res.ok) return clickId;
-  return null;
+  if (!res.ok) return null;
+  // The server makes the click id.
+  const body = await parseJson<{ clickId?: string } | undefined>(res).catch(() => undefined);
+  return body?.clickId ?? null;
 }
 
 /** MON-AFFILIATE-CLOSET — record Closet CTA affiliate clicks into cashback_events. */
@@ -1051,7 +1076,6 @@ export async function recordClosetAffiliateClick(
     platform: string;
     listingId?: string | null;
     url?: string;
-    clickId?: string;
   },
 ) {
   const res = await apiFetch(`${API_URL}/cashback/click`, {
@@ -2062,7 +2086,7 @@ export async function fetchReplaceTwins(accessToken: string, itemId: string, lim
 export async function recordReplaceTwinClick(
   accessToken: string,
   itemId: string,
-  body: { listingId: string; platform?: string; clickId?: string },
+  body: { listingId: string; platform?: string },
 ) {
   const res = await apiFetch(`${API_URL}/waste/${itemId}/replace-twins/click`, {
     method: 'POST',
@@ -2948,7 +2972,8 @@ export async function previewFitCustomization(accessToken: string, body: { templ
   });
   return parseJson<{ status: string; previewUrl: string | null; imageKey: string | null; selections: Record<string, string>; summary: string }>(res);
 }
-export async function createTailorReview(accessToken: string, sellerId: string, body: { orderId?: string | null; rating: number; comment?: string | null }) {
+/** Reviews a delivered order with this tailor (`orderId` is required; one review per order). */
+export async function createTailorReview(accessToken: string, sellerId: string, body: { orderId: string; rating: number; comment?: string | null }) {
   const res = await apiFetch(`${API_URL}/fit/tailors/${sellerId}/reviews`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },

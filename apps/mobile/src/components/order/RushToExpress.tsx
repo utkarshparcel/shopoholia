@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import type { OrderSummary } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
 import { isInsufficientCoinsError, useRushOrder } from '@/src/hooks/orders';
+import { confirmAsync, notify } from '@/src/lib/confirm';
 import { useSessionStore } from '@/src/stores/session';
 import { fontSans, fontSansMedium, fsCaption, space6, textMuted } from '@/src/theme/tokens';
 
@@ -16,25 +17,20 @@ export function RushToExpress({ order }: { order: OrderSummary }) {
   // The balance is refreshed when a rush is refused, so this is current after a 402.
   const deficit = Math.max(0, cost - coinBalance);
 
-  const confirmRush = () => {
-    Alert.alert(
+  const confirmRush = async () => {
+    const ok = await confirmAsync(
       'Rush to Express?',
       `Spend ${cost} coins to move this haul onto the Express schedule.`,
-      [
-        { text: 'Not now', style: 'cancel' },
-        {
-          text: 'Rush it',
-          onPress: () =>
-            rush.mutate(undefined, {
-              onError: (error) => {
-                if (!isInsufficientCoinsError(error)) {
-                  Alert.alert('Couldn’t rush', error.message);
-                }
-              },
-            }),
-        },
-      ],
+      { confirmLabel: 'Rush it', cancelLabel: 'Not now' },
     );
+    if (!ok) return;
+    rush.mutate(undefined, {
+      onError: (error) => {
+        if (!isInsufficientCoinsError(error)) {
+          notify('Couldn’t rush', error.message);
+        }
+      },
+    });
   };
 
   return (
@@ -44,7 +40,7 @@ export function RushToExpress({ order }: { order: OrderSummary }) {
         block
         disabled={rush.isPending}
         label={rush.isPending ? 'Rushing…' : `Rush to Express · ${cost} coins`}
-        onPress={confirmRush}
+        onPress={() => void confirmRush()}
         variant="secondary"
       />
       {isInsufficientCoinsError(rush.error) ? (

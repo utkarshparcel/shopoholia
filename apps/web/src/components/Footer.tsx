@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useReducedMotion } from 'framer-motion';
+import { useReducedMotionSafe } from '@/lib/motion';
 import { Mail } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
+import { CONTACT_EMAIL, closetHref } from '@/lib/site';
 
 const COLS = [
   {
@@ -18,17 +19,17 @@ const COLS = [
   {
     h: 'Closet',
     links: [
-      { label: 'Worn Closet, the next chapter', href: '/closet' },
-      { label: 'Plan the week', href: '/closet#today' },
-      { label: 'Catalog what you own', href: '/closet#wardrobe' },
-      { label: 'Found money', href: '/closet#vault' },
+      { label: 'Worn Closet, the next chapter', href: closetHref() },
+      { label: 'Plan the week', href: closetHref('#today') },
+      { label: 'Catalog what you own', href: closetHref('#wardrobe') },
+      { label: 'Found money', href: closetHref('#vault') },
     ],
   },
 ];
 
 export function Footer() {
   const wordRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   // giant wordmark drifts up as the footer enters
   useClientReveal(wordRef, !!reduced);
@@ -49,10 +50,10 @@ export function Footer() {
               coins, wait, unbox the renders. The itch, handled.
             </p>
             <a
-              href="mailto:hello@worn.app"
+              href={`mailto:${CONTACT_EMAIL}`}
               className="mt-6 inline-flex items-center gap-2 font-mono text-micro uppercase tracking-[0.2em] text-worn-gold"
             >
-              <Mail size={13} /> hello@worn.app
+              <Mail size={13} /> {CONTACT_EMAIL}
             </a>
           </div>
 

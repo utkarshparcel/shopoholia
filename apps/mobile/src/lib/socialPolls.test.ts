@@ -11,7 +11,7 @@ describe('familyFoundMoneyShareFromAccounts (N36)', () => {
       [{ merchant: 'Myntra', balanceCacheMinor: 50_000 }],
       'HOME99',
     );
-    expect(card.deepLink).toBe('https://worn.app/r/HOME99');
+    expect(card.deepLink).toBe('https://worncloset.app/r/HOME99');
     expect(card.shareText).toContain(card.deepLink);
     expect(card.shareText).not.toMatch(/Myntra/);
   });

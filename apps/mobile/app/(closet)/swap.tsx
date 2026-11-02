@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   Alert,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -24,6 +23,7 @@ import {
 import { useSessionUserId } from '@/src/hooks/closet/keys';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { shareText } from '@/src/lib/share';
 import { useSessionStore } from '@/src/stores/session';
 import {
   border,
@@ -87,7 +87,7 @@ export default function SwapCircleScreen() {
     setSharingId(circleId);
     try {
       const inv = await fetchSwapInvite(accessToken, circleId);
-      await Share.share({ message: `Join my WORN swap circle: ${inv.inviteUrl}` });
+      await shareText({ message: `Join my WORN swap circle: ${inv.inviteUrl}` });
     } catch (e) {
       Alert.alert('Could not share the invite', closetAlertText(e));
     } finally {

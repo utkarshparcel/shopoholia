@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, typ
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
+import { withNewReferralCode } from "../referral-code.js";
 import {
   avatars,
   budgets,
@@ -83,6 +84,8 @@ import {
 } from "@worn/db";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
+import { nextStreakDay, streakDay } from "../streak-day.js";
+import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -252,6 +255,16 @@ async function lockedCoinBalance(tx: Tx, userId: string): Promise<number> {
   return latest?.balanceAfter ?? user.coinBalanceCache;
 }
 
+/** Rolls back an unlock whose flipped renders cost more than the balance. */
+class UnlockShortfall extends Error {
+  constructor(
+    readonly coinsNeeded: number,
+    readonly balance: number,
+  ) {
+    super("Not enough coins to unlock these renders");
+  }
+}
+
 /** Appends a ledger entry and updates the balance cache. Call after lockedCoinBalance. */
 async function appendCoinLedger(tx: Tx, input: GrantCoinsInput, balanceAfter: number) {
   await tx.insert(coinLedger).values({
@@ -281,7 +294,7 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
       tier: input.tier,
       state: "PROCESSING",
       coinTotal: input.coinTotal,
-      placedAt: timestamp,
+      placedAt: input.placedAt ?? timestamp,
       stateEta: input.stateEta,
       revealReadyAt: null,
       idempotencyKey: input.idempotencyKey ?? null,
@@ -437,21 +450,6 @@ async function repointPurchaseRefs(tx: Tx, fromPurchaseId: string, toPurchaseId:
     .update(returnRequests)
     .set({ purchaseId: toPurchaseId, updatedAt: now() })
     .where(eq(returnRequests.purchaseId, fromPurchaseId));
-}
-
-function generateReferralCode(userId: string): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
-  }
-  let code = "";
-  let n = Math.abs(hash);
-  for (let i = 0; i < 6; i++) {
-    code += chars[n % chars.length]!;
-    n = Math.floor(n / chars.length);
-  }
-  return code;
 }
 
 function mapUser(row: UserRow): UserRecord {
@@ -656,6 +654,7 @@ function mapOrder(row: OrderRow): OrderRecord {
     placedAt: row.placedAt ?? row.createdAt,
     stateEta: row.stateEta,
     revealReadyAt: row.revealReadyAt,
+    revealRating: row.revealRating ?? null,
     idempotencyKey: row.idempotencyKey,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -682,6 +681,7 @@ function mapRender(row: RenderRow): RenderRecord {
     isFree: row.isFree,
     unlocked: row.unlocked,
     provider: row.provider,
+    combinedItemIds: row.combinedItemIds ?? null,
     status: row.status,
     costMicros: row.costMicros,
     createdAt: row.createdAt,
@@ -1019,6 +1019,7 @@ function mapReturnRequest(row: typeof returnRequests.$inferSelect): ReturnRecord
 }
 
 function mapEmiPlan(row: typeof emiPlans.$inferSelect): EmiPlanRecord {
+  const nextDueOn = String(row.nextDueOn);
   return {
     id: row.id,
     userId: row.userId,
@@ -1027,7 +1028,9 @@ function mapEmiPlan(row: typeof emiPlans.$inferSelect): EmiPlanRecord {
     principalMinor: row.principalMinor,
     remainingMinor: row.remainingMinor,
     installmentMinor: row.installmentMinor,
-    nextDueOn: String(row.nextDueOn),
+    nextDueOn,
+    // Rows from before due_day was backfilled: the day of the next due date.
+    dueDay: row.dueDay ?? Number(nextDueOn.slice(8, 10)),
     currency: row.currency,
     status: row.status as EmiPlanRecord["status"],
     createdAt: row.createdAt,
@@ -1193,6 +1196,22 @@ function mapDispositionListing(row: DispositionListingRow): DispositionListingRe
 }
 
 export function createPostgresRepositories(db: Db): Repositories {
+  /** Gives a user who has no referral code a new one, trying another code if one is taken. */
+  async function assignReferralCode(userId: string): Promise<UserRecord> {
+    const row = await withNewReferralCode((referralCode) =>
+      db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(users)
+          .set({ referralCode, updatedAt: now() })
+          .where(eq(users.id, userId))
+          .returning();
+        return updated;
+      }),
+    );
+    if (!row) throw new Error(`User not found: ${userId}`);
+    return mapUser(row);
+  }
+
   const repos: Repositories = {
     async findUserByPhone(phone) {
       const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
@@ -1218,42 +1237,42 @@ export function createPostgresRepositories(db: Db): Repositories {
       const existing = await repos.findUserByPhone(phone);
       if (existing) {
         if (!existing.referralCode) {
-          const code = generateReferralCode(existing.id);
-          const updated = await repos.updateUser(existing.id, { referralCode: code });
-          return { user: updated, isNew: false };
+          return { user: await assignReferralCode(existing.id), isNew: false };
         }
         return { user: existing, isNew: false };
       }
 
       const userId = randomUUID();
-      const referralCode = generateReferralCode(userId);
+      const row = await withNewReferralCode((referralCode) =>
+        // A savepoint per try: a taken code must not abort a surrounding transaction.
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone,
+              email: null,
+              googleSub: null,
+              displayName: null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
 
-      const [row] = await db
-        .insert(users)
-        .values({
-          id: userId,
-          phone,
-          email: null,
-          googleSub: null,
-          displayName: null,
-          avatarStatus: "NONE",
-          coinBalanceCache: 0,
-          consentFlags: {},
-          pushToken: null,
-          referralCode,
-        })
-        .returning();
-
-      return { user: mapUser(row!), isNew: true };
+      return { user: mapUser(row), isNew: true };
     },
 
     async findOrCreateGoogleUser({ googleSub, email, displayName }) {
       const existingGoogle = await repos.findUserByGoogleSub(googleSub);
       if (existingGoogle) {
         if (!existingGoogle.referralCode) {
-          const code = generateReferralCode(existingGoogle.id);
-          const updated = await repos.updateUser(existingGoogle.id, { referralCode: code });
-          return { user: updated, isNew: false };
+          return { user: await assignReferralCode(existingGoogle.id), isNew: false };
         }
         return { user: existingGoogle, isNew: false };
       }
@@ -1264,30 +1283,33 @@ export function createPostgresRepositories(db: Db): Repositories {
           googleSub,
           email: email.toLowerCase(),
           displayName: displayName ?? existingEmail.displayName,
-          referralCode: existingEmail.referralCode ?? generateReferralCode(existingEmail.id),
         });
-        return { user: updated, isNew: false };
+        return { user: updated.referralCode ? updated : await assignReferralCode(updated.id), isNew: false };
       }
 
       const userId = randomUUID();
-      const referralCode = generateReferralCode(userId);
-      const [row] = await db
-        .insert(users)
-        .values({
-          id: userId,
-          phone: null,
-          email: email.toLowerCase(),
-          googleSub,
-          displayName: displayName ?? null,
-          avatarStatus: "NONE",
-          coinBalanceCache: 0,
-          consentFlags: {},
-          pushToken: null,
-          referralCode,
-        })
-        .returning();
+      const row = await withNewReferralCode((referralCode) =>
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone: null,
+              email: email.toLowerCase(),
+              googleSub,
+              displayName: displayName ?? null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
 
-      return { user: mapUser(row!), isNew: true };
+      return { user: mapUser(row), isNew: true };
     },
 
     async updateUser(id, patch) {
@@ -1379,45 +1401,58 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async claimStreak(userId) {
-      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) throw new Error(`User not found: ${userId}`);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) {
-        last.setHours(0, 0, 0, 0);
-        if (last.getTime() === today.getTime()) {
-          return { streakCount: user.streakCount ?? 0, coinsGranted: 0, balanceAfter: user.coinBalanceCache };
+      return db.transaction(async (tx) => {
+        // The user's row lock, as every coin write takes, so parallel claims queue here and each
+        // re-reads the last claim after the one before it committed.
+        const balance = await lockedCoinBalance(tx, userId);
+        const [user] = await tx
+          .select({
+            streakCount: users.streakCount,
+            lastStreakClaimAt: users.lastStreakClaimAt,
+            timeZone: users.timeZone,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        if (!user) throw new Error(`User not found: ${userId}`);
+
+        const claimedAt = new Date();
+        const day = streakDay(user.lastStreakClaimAt ?? null, claimedAt, user.timeZone);
+        if (day.claimedToday) {
+          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: balance };
         }
-      }
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isConsecutive = last && last.getTime() === yesterday.getTime();
-      const newStreak = isConsecutive ? (user.streakCount ?? 0) + 1 : 1;
-      const coinsGranted = streakRewardForDay(newStreak);
-      const { balanceAfter } = await repos.grantCoins({
-        userId,
-        delta: coinsGranted,
-        type: "EARN_STREAK",
-        refType: "streak",
-        refId: `day-${newStreak}`,
+        const newStreak = nextStreakDay(user.streakCount, day);
+        const coinsGranted = streakRewardForDay(newStreak);
+        const balanceAfter = balance + coinsGranted;
+        await appendCoinLedger(
+          tx,
+          {
+            userId,
+            delta: coinsGranted,
+            type: "EARN_STREAK",
+            refType: "streak",
+            refId: streakLedgerRef(userId, day.todayKey),
+          },
+          balanceAfter,
+        );
+        await tx
+          .update(users)
+          .set({ streakCount: newStreak, lastStreakClaimAt: claimedAt, updatedAt: now() })
+          .where(eq(users.id, userId));
+        return { streakCount: newStreak, coinsGranted, balanceAfter };
       });
-      await db
-        .update(users)
-        .set({ streakCount: newStreak, lastStreakClaimAt: today, coinBalanceCache: balanceAfter, updatedAt: now() })
-        .where(eq(users.id, userId));
-      return { streakCount: newStreak, coinsGranted, balanceAfter };
     },
 
     async getStreakStatus(userId) {
       const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false };
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) last.setHours(0, 0, 0, 0);
-      const todayClaimed = last !== null && last.getTime() === today.getTime();
-      return { streakCount: user.streakCount ?? 0, lastClaimedAt: user.lastStreakClaimAt ?? null, todayClaimed };
+      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false, nextStreakDay: 1 };
+      const day = streakDay(user.lastStreakClaimAt ?? null, new Date(), user.timeZone);
+      return {
+        streakCount: user.streakCount,
+        lastClaimedAt: user.lastStreakClaimAt ?? null,
+        todayClaimed: day.claimedToday,
+        nextStreakDay: nextStreakDay(user.streakCount, day),
+      };
     },
 
     async saveStyleProfile(userId, profile) {
@@ -1476,31 +1511,41 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async confirmCashback(clickId, status) {
-      const [event] = await db
-        .select()
-        .from(cashbackEvents)
-        .where(eq(cashbackEvents.clickId, clickId))
-        .limit(1);
-      if (!event || event.status === "CONFIRMED" || event.status === "REJECTED") return;
+      const pending = and(eq(cashbackEvents.clickId, clickId), eq(cashbackEvents.status, "PENDING"));
+      if (status === "REJECTED") {
+        await db.update(cashbackEvents).set({ status: "REJECTED" }).where(pending);
+        return;
+      }
 
-      if (status === "CONFIRMED") {
-        await repos.grantCoins({
-          userId: event.userId,
-          delta: AFFILIATE_CASHBACK_COINS,
-          type: "EARN_CASHBACK",
-          refType: "cashback",
-          refId: clickId,
-        });
-        await db
+      // The event's owner, to take their row lock first, as every coin write does.
+      const [event] = await db
+        .select({ userId: cashbackEvents.userId })
+        .from(cashbackEvents)
+        .where(pending)
+        .limit(1);
+      if (!event) return;
+
+      await db.transaction(async (tx) => {
+        const balance = await lockedCoinBalance(tx, event.userId);
+        // Only one confirm moves the event off PENDING; the others get no row back and pay nothing.
+        const [confirmed] = await tx
           .update(cashbackEvents)
           .set({ status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS })
-          .where(eq(cashbackEvents.clickId, clickId));
-      } else {
-        await db
-          .update(cashbackEvents)
-          .set({ status: "REJECTED" })
-          .where(eq(cashbackEvents.clickId, clickId));
-      }
+          .where(and(pending, eq(cashbackEvents.userId, event.userId)))
+          .returning({ userId: cashbackEvents.userId });
+        if (!confirmed) return;
+        await appendCoinLedger(
+          tx,
+          {
+            userId: confirmed.userId,
+            delta: AFFILIATE_CASHBACK_COINS,
+            type: "EARN_CASHBACK",
+            refType: "cashback",
+            refId: cashbackLedgerRef(clickId),
+          },
+          balance + AFFILIATE_CASHBACK_COINS,
+        );
+      });
     },
 
     async findAvatarByUserId(userId) {
@@ -2436,6 +2481,33 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { claimed: false, preview: current };
     },
 
+    async claimTryonPreview({ userId, listingVariantId, provider, staleBefore }) {
+      const timestamp = now();
+      const [claimed] = await db
+        .insert(tryonPreviews)
+        .values({
+          userId,
+          listingVariantId,
+          wardrobeItemId: null,
+          imageKey: null,
+          status: "PROCESSING",
+          provider,
+          costMicros: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: [tryonPreviews.userId, tryonPreviews.listingVariantId],
+          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          setWhere: previewClaimable(tryonPreviews, staleBefore, timestamp),
+        })
+        .returning();
+      if (claimed) return { claimed: true, preview: mapTryonPreview(claimed) };
+      const current = await repos.findTryonPreview(userId, listingVariantId);
+      if (!current) throw new Error(`try-on preview vanished during claim: ${listingVariantId}`);
+      return { claimed: false, preview: current };
+    },
+
     async finishWardrobeTryon(userId, wardrobeItemId, result) {
       const [row] = await db
         .update(tryonPreviews)
@@ -2731,6 +2803,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             isFree: row.isFree,
             unlocked: row.unlocked,
             provider: row.provider,
+            combinedItemIds: row.combinedItemIds ?? null,
             status: row.status,
             costMicros: row.costMicros,
             createdAt: timestamp,
@@ -2798,20 +2871,143 @@ export function createPostgresRepositories(db: Db): Repositories {
       return mapRender(row!);
     },
 
+    async unlockOrderRenders(input) {
+      const ref = input.idempotencyKey
+        ? { refType: "reveal_unlock", refId: revealUnlockLedgerRef(input.orderId, input.idempotencyKey) }
+        : { refType: "order", refId: input.orderId };
+      try {
+        return await db.transaction(async (tx) => {
+          // The user's row first, as every coin write does: a retry of the same key waits here and
+          // then finds the first one's ledger entry.
+          const balance = await lockedCoinBalance(tx, input.userId);
+          if (input.idempotencyKey) {
+            const [prior] = await tx
+              .select({ delta: coinLedger.delta })
+              .from(coinLedger)
+              .where(
+                and(
+                  eq(coinLedger.userId, input.userId),
+                  eq(coinLedger.type, "SPEND_UNLOCK"),
+                  eq(coinLedger.refType, ref.refType),
+                  eq(coinLedger.refId, ref.refId),
+                ),
+              )
+              .limit(1);
+            if (prior) return { status: "replayed" as const, coinsSpent: Math.abs(prior.delta) };
+          }
+          if (input.renderIds.length === 0) return { status: "nothing_locked" as const };
+
+          const items = await tx
+            .select({ id: orderItems.id })
+            .from(orderItems)
+            .innerJoin(orders, eq(orderItems.orderId, orders.id))
+            .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
+          if (items.length === 0) return { status: "nothing_locked" as const };
+
+          // Only rows still locked flip, so a render another request already unlocked isn't charged again.
+          const flipped = await tx
+            .update(renders)
+            .set({ unlocked: true, updatedAt: now() })
+            .where(
+              and(
+                inArray(renders.id, [...new Set(input.renderIds)]),
+                inArray(
+                  renders.orderItemId,
+                  items.map((item) => item.id),
+                ),
+                eq(renders.isFree, false),
+                eq(renders.unlocked, false),
+              ),
+            )
+            .returning();
+          if (flipped.length === 0) return { status: "nothing_locked" as const };
+
+          const coinsSpent = flipped.length * input.costPerRender;
+          if (balance < coinsSpent) throw new UnlockShortfall(coinsSpent, balance);
+          const balanceAfter = balance - coinsSpent;
+          await appendCoinLedger(
+            tx,
+            { userId: input.userId, delta: -coinsSpent, type: "SPEND_UNLOCK", ...ref },
+            balanceAfter,
+          );
+          return { status: "unlocked" as const, renders: flipped.map(mapRender), coinsSpent, balanceAfter };
+        });
+      } catch (error) {
+        if (error instanceof UnlockShortfall) {
+          return { status: "insufficient_coins" as const, coinsNeeded: error.coinsNeeded, balance: error.balance };
+        }
+        throw error;
+      }
+    },
+
+    async purchaseRender(input) {
+      const key = input.idempotencyKey;
+      const renderId = key ? revealGenerateLedgerRef(input.orderId, key) : randomUUID();
+      const ref = key ? { refType: "reveal_generate", refId: renderId } : { refType: "order", refId: input.orderId };
+      return db.transaction(async (tx) => {
+        // The user's row first, as every coin write does: a repeat of the key waits here and
+        // then finds the first one's ledger entry and render, both committed together.
+        const balance = await lockedCoinBalance(tx, input.userId);
+        if (key) {
+          const [prior] = await tx
+            .select({ delta: coinLedger.delta, type: coinLedger.type })
+            .from(coinLedger)
+            .where(
+              and(
+                eq(coinLedger.userId, input.userId),
+                eq(coinLedger.refType, ref.refType),
+                eq(coinLedger.refId, ref.refId),
+              ),
+            )
+            .limit(1);
+          if (prior) {
+            const [row] = await tx.select().from(renders).where(eq(renders.id, renderId)).limit(1);
+            return {
+              status: "replayed" as const,
+              render: row ? mapRender(row) : null,
+              coinsSpent: Math.abs(prior.delta),
+              ledgerType: prior.type,
+            };
+          }
+        }
+
+        const [item] = await tx
+          .select({ id: orderItems.id })
+          .from(orderItems)
+          .innerJoin(orders, eq(orderItems.orderId, orders.id))
+          .where(
+            and(
+              eq(orderItems.id, input.render.orderItemId),
+              eq(orders.id, input.orderId),
+              eq(orders.userId, input.userId),
+            ),
+          )
+          .limit(1);
+        if (!item) return { status: "not_found" as const };
+        if (balance < input.cost) {
+          return { status: "insufficient_coins" as const, coinsNeeded: input.cost, balance };
+        }
+
+        const timestamp = now();
+        const [row] = await tx
+          .insert(renders)
+          .values({ ...input.render, id: renderId, createdAt: timestamp, updatedAt: timestamp })
+          .returning();
+        const balanceAfter = balance - input.cost;
+        await appendCoinLedger(
+          tx,
+          { userId: input.userId, delta: -input.cost, type: input.ledgerType, ...ref },
+          balanceAfter,
+        );
+        return { status: "created" as const, render: mapRender(row!), coinsSpent: input.cost, balanceAfter };
+      });
+    },
+
     async recordRevealRating(input) {
-      const [existing] = await db
-        .select()
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-      if (!existing) return;
       await db
         .update(orders)
-        .set({
-          stateEta: { ...existing.stateEta, rating: input.rating } as OrderRecord["stateEta"],
-          updatedAt: now(),
-        })
-        .where(eq(orders.id, input.orderId));
+        .set({ revealRating: input.rating, updatedAt: now() })
+        .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
     },
 
     async recordPushEvent(input) {
@@ -5140,7 +5336,11 @@ export function createPostgresRepositories(db: Db): Repositories {
           orderId: input.orderId ?? null,
           rating: input.rating,
           comment: input.comment ?? null,
-        }).returning();
+        })
+        // tailoring_reviews_order_idx: a second review of the same order inserts nothing.
+        .onConflictDoNothing({ target: tailoringReviews.orderId, where: sql`${tailoringReviews.orderId} IS NOT NULL` })
+        .returning();
+        if (!row) return null;
         return {
           id: row.id,
           sellerId: row.sellerId,
@@ -5996,24 +6196,12 @@ export function createPostgresRepositories(db: Db): Repositories {
           remainingMinor: input.remainingMinor,
           installmentMinor: input.installmentMinor,
           nextDueOn: input.nextDueOn,
+          dueDay: Number(input.nextDueOn.slice(8, 10)),
           currency: input.currency ?? "INR",
           status: "ACTIVE",
         })
         .returning();
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return mapEmiPlan(row!);
     },
     async listEmiPlans(userId, opts) {
       const rows = await db
@@ -6021,21 +6209,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(emiPlans)
         .where(and(eq(emiPlans.userId, userId), opts?.status ? eq(emiPlans.status, opts.status) : undefined))
         .orderBy(asc(emiPlans.nextDueOn));
-      return rows
-        .map((row) => ({
-          id: row.id,
-          userId: row.userId,
-          provider: row.provider,
-          merchant: row.merchant ?? null,
-          principalMinor: row.principalMinor,
-          remainingMinor: row.remainingMinor,
-          installmentMinor: row.installmentMinor,
-          nextDueOn: String(row.nextDueOn),
-          currency: row.currency,
-          status: row.status as EmiPlanRecord["status"],
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        }));
+      return rows.map(mapEmiPlan);
     },
     async findEmiPlan(id, userId) {
       const [row] = await db
@@ -6043,21 +6217,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(emiPlans)
         .where(and(eq(emiPlans.id, id), eq(emiPlans.userId, userId)))
         .limit(1);
-      if (!row) return null;
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return row ? mapEmiPlan(row) : null;
     },
     async updateEmiPlan(id, userId, patch) {
       const [row] = await db
@@ -6065,21 +6225,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .set({ ...patch, updatedAt: now() })
         .where(and(eq(emiPlans.id, id), eq(emiPlans.userId, userId)))
         .returning();
-      if (!row) return null;
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return row ? mapEmiPlan(row) : null;
     },
     async payEmiPlan(id, userId, input) {
       const { from, to, paymentKey } = input;

@@ -6,7 +6,6 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Switch,
   Text,
@@ -64,6 +63,7 @@ import { listUpcomingCalendarEvents } from '@/src/lib/deviceCalendar';
 import { delightHapticWoreIt } from '@/src/lib/delightHaptics';
 import { askFriendOptionsFromLooks } from '@/src/lib/socialPolls';
 import { trackEvent } from '@/src/lib/analytics';
+import { shareText } from '@/src/lib/share';
 import { emptyCtaTapProps, emptyStateCopy } from '@/src/lib/emptyDemo';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { useSessionStore } from '@/src/stores/session';
@@ -675,7 +675,9 @@ export default function ClosetTodayScreen() {
         options,
         plannedFor: primary.plannedFor ?? undefined,
       });
-      await Share.share({ message: poll.shareText });
+      // The poll exists now; a share that fails falls back to the clipboard rather than
+      // reporting "Could not create poll".
+      await shareText({ message: poll.shareText });
       trackEvent('ask_friend_poll_created', {
         pollId: poll.id,
         optionCount: options.length,

@@ -389,14 +389,14 @@ describe("withReturnDeadlineRichFields", () => {
         throw new Error("no sign");
       },
     );
-    expect(enriched.imageUrl).toBe("https://worn.app/brand/return-deadline.png");
+    expect(enriched.imageUrl).toBe("https://media.worncloset.app/brand/worn-return-deadline.png");
     const result = await scheduleReturnDeadlineReminder(enriched);
     expect(result).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(
       "return-deadline-reminder",
       expect.objectContaining({
         returnId: "r3",
-        imageUrl: "https://worn.app/brand/return-deadline.png",
+        imageUrl: "https://media.worncloset.app/brand/worn-return-deadline.png",
       }),
       expect.objectContaining({ jobId: returnJobId("r3", enriched.windowDeadline) }),
     );

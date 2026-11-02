@@ -775,9 +775,9 @@ Ranked for Closet aha (found-money screenshot), not brand awareness.
 ### 6. Cross-border $0 referral: watermarked found-money screenshot
 
 **Mechanic (“Share the vault”):**
-1. After non-zero vault, generate share card: **blurred merchant list + big currency total + days-to-deadline** + faint `worn.app` / QR watermark (currency auto-local: ₹ / $ / £ / S$ / RM / Rp).
+1. After non-zero vault, generate share card: **blurred merchant list + big currency total + days-to-deadline** + faint `worncloset.app` / QR watermark (currency auto-local: ₹ / $ / £ / S$ / RM / Rp).
 2. User posts to Reddit / TikTok / WA / Telegram / Buy Nothing-adjacent groups (where allowed) or DMs friends.
-3. Deep link: `worn.app/r/{code}` → waitlist or store → both sides get a **badge** (“Money finder”) + optional **extra reminder slots**, not paid credits (keeps $0 and avoids money-transmitter vibes).
+3. Deep link: `worncloset.app/r/{code}` → waitlist or store → both sides get a **badge** (“Money finder”) + optional **extra reminder slots**, not paid credits (keeps $0 and avoids money-transmitter vibes).
 4. Attribution: UTM on watermark QR; Sheet log `referrer_code, region, vault_nonzero`.
 
 **Why it travels borders:** Screenshot is the product demo; no shared payment rails; social proof is a **number** (“I found $187 / ₹2,400 / S$64”), which is language-light. Same asset as India WA forward success bar.

@@ -17,6 +17,7 @@ import Animated, {
 
 import { Button } from '@/src/components/ui';
 import type { RenderCard } from '@/src/api/client';
+import { isRenderInProgress } from '@/src/lib/reveal';
 import {
   accent,
   accentBg,
@@ -54,6 +55,8 @@ type RevealDeckProps = {
   renders: RenderCard[];
   onUnlock: (renderId: string) => void;
   unlockingId?: string | null;
+  /** A card to show — a look just generated, which the deck appends at the end. */
+  focusId?: string | null;
 };
 
 function RenderCardView({
@@ -66,7 +69,8 @@ function RenderCardView({
   unlocking: boolean;
 }) {
   const locked = !card.isFree && !card.unlocked;
-  const processing = card.status === 'QUEUED' || card.status === 'RUNNING';
+  // A locked look sits QUEUED until it's unlocked: it shows the lock, not "Rendering…".
+  const processing = isRenderInProgress(card);
 
   return (
     <View style={styles.card}>
@@ -114,8 +118,18 @@ function RenderCardView({
   );
 }
 
-export function RevealDeck({ renders, onUnlock, unlockingId }: RevealDeckProps) {
+export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDeckProps) {
   const [index, setIndex] = useState(0);
+
+  // Jump to a newly generated look once it is in the deck (once per focus, so later polls that
+  // reorder or grow the deck don't pull the user back to it).
+  const focusedRef = useRef<string | null>(null);
+  const focusIndex = focusId ? renders.findIndex((r) => r.id === focusId) : -1;
+  useEffect(() => {
+    if (!focusId || focusIndex < 0 || focusedRef.current === focusId) return;
+    focusedRef.current = focusId;
+    setIndex(focusIndex);
+  }, [focusId, focusIndex]);
   const translateX = useSharedValue(0);
   const startXRef = useRef(0);
 

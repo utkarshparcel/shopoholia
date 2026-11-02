@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { formatMinor } from '@worn/shared';
 import { useRouter } from 'expo-router';
 
@@ -38,6 +38,7 @@ import {
   wearChallengeProgress,
 } from '@/src/lib/wearChallenge';
 import { trackEvent } from '@/src/lib/analytics';
+import { shareText } from '@/src/lib/share';
 import { useClosetStore } from '@/src/stores/closet';
 import {
   accent,
@@ -187,10 +188,12 @@ export default function DispositionMarketplaceScreen() {
   async function shareDeclutterCard() {
     setSharingDeclutter(true);
     try {
-      await Share.share({
+      // Never throws; where sharing isn't supported it copies to the clipboard and says so.
+      const result = await shareText({
         message: declutterShare.shareText,
         title: declutterShare.headline,
       });
+      if (result === 'failed') return;
       trackEvent('declutter_share_card' as never);
       if (declutterChallenge.completed) {
         useClosetStore.getState().completeDeclutterChallenge();

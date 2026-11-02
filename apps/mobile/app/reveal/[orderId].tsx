@@ -2,15 +2,19 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import {
+  REVEAL_COMBINE_COST_COINS,
+  REVEAL_COMBINE_MAX_ITEMS,
+  REVEAL_GENERATE_COST_COINS,
+} from '@worn/shared';
 
 import { submitRevealRating } from '@/src/api/client';
 import { Button, Chip, SectionHeader } from '@/src/components/ui';
@@ -19,6 +23,8 @@ import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfac
 import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/reveal';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
+import { notify } from '@/src/lib/confirm';
+import { shareText } from '@/src/lib/share';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -62,6 +68,8 @@ export default function RevealScreen() {
   const [selectedScenario, setSelectedScenario] = useState('STUDIO');
   const [selectedCombineIds, setSelectedCombineIds] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
+  /** The look just generated: the deck appends it last, so it opens there. */
+  const [newRenderId, setNewRenderId] = useState<string | null>(null);
   const openedTracked = useRef(false);
 
   useEffect(() => {
@@ -79,7 +87,7 @@ export default function RevealScreen() {
       await unlockMutation.mutateAsync([renderId]);
       trackEvent('unlock', { orderId: orderId ?? '', renderId });
     } catch (error) {
-      Alert.alert('Unlock failed', error instanceof Error ? error.message : 'Try again');
+      notify('Unlock failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setUnlockingId(null);
     }
@@ -93,13 +101,14 @@ export default function RevealScreen() {
         orderItemIds: selectedCombineIds.length > 0 ? selectedCombineIds : [orderItemIds[0]!],
         scenario: selectedScenario,
       });
+      setNewRenderId(result.renders.at(-1)?.id ?? null);
       trackEvent('generate_render', {
         orderId,
         scenario: selectedScenario,
         isCombine: result.isCombine ?? false,
       });
     } catch (error) {
-      Alert.alert('Generate failed', error instanceof Error ? error.message : 'Try again');
+      notify('Generate failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setGenerating(false);
     }
@@ -108,26 +117,26 @@ export default function RevealScreen() {
   const handleShare = async () => {
     const ready = renders.find((r) => r.unlocked && r.imageUrl && r.status === 'DONE');
     trackEvent('share', { orderId: orderId ?? '', surface: 'reveal' });
-    try {
-      await Share.share({
-        message: ready?.imageUrl
-          ? `My WORN reveal — ${ready.imageUrl}`
-          : 'Just opened my WORN haul reveal.',
-      });
-    } catch {
-      // user dismissed share sheet
-    }
+    await shareText({
+      message: ready?.imageUrl
+        ? `My WORN reveal — ${ready.imageUrl}`
+        : 'Just opened my WORN haul reveal.',
+    });
   };
 
   const toggleCombineId = (id: string) => {
     setSelectedCombineIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : prev.length < REVEAL_COMBINE_MAX_ITEMS
+          ? [...prev, id]
+          : prev,
     );
   };
 
   const balance = balanceData?.balance ?? 0;
   const isCombine = selectedCombineIds.length > 1;
-  const generateCost = isCombine ? 75 : 50;
+  const generateCost = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
   const canGenerate = balance >= generateCost && !generating;
   const pendingRenders = hasRendersInProgress(renders);
 
@@ -166,6 +175,7 @@ export default function RevealScreen() {
       ) : (
         <>
           <RevealDeck
+            focusId={newRenderId}
             onUnlock={handleUnlock}
             renders={renders}
             unlockingId={unlockingId}
@@ -197,7 +207,7 @@ export default function RevealScreen() {
                 <Text style={styles.combineLabel}>
                   {selectedCombineIds.length > 0
                     ? `${selectedCombineIds.length} item${selectedCombineIds.length > 1 ? 's' : ''} selected (combine)`
-                    : 'Select items to combine'}
+                    : `Select up to ${REVEAL_COMBINE_MAX_ITEMS} items to combine`}
                 </Text>
                 <View style={styles.combineRow}>
                   {orderItemIds.map((id, i) => {

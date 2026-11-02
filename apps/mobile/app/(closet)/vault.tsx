@@ -5,7 +5,6 @@ import {
   AppState,
   type AppStateStatus,
   Linking,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -36,6 +35,7 @@ import {
   type WarrantyCategory,
 } from '@worn/shared';
 import { shareTextFile } from '@/src/lib/shareFile';
+import { shareText } from '@/src/lib/share';
 import { shareDataUrlFile } from '@/src/lib/shareDataUrlFile';
 
 import {
@@ -61,6 +61,7 @@ import {
   type QueuedVaultAdd,
 } from '@/src/lib/vaultAddQueue';
 import { useNetworkStatus } from '@/src/hooks/closet/useNetworkStatus';
+import { useSessionUserId } from '@/src/hooks/closet/keys';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
@@ -96,6 +97,7 @@ import {
   useUploadReceipt,
   useWarranties,
 } from '@/src/hooks/closet/useCloset';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
 import {
   RECEIPT_SNAP_HERO_HINT,
   RECEIPT_SNAP_HERO_LABEL,
@@ -103,6 +105,8 @@ import {
 } from '@/src/lib/receiptSnap';
 import { expiryBadge } from '@/src/lib/expiryBadge';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { alertClosetError } from '@/src/lib/closetAlert';
+import { notify } from '@/src/lib/confirm';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { warrantyBadge } from '@/src/lib/warrantyBadge';
 import {
@@ -111,6 +115,7 @@ import {
 } from '@/src/lib/confidenceBadge';
 import {
   VAULT_GIFT_EMPTY_BODY,
+  buildReferralDeepLink,
   familyFoundMoneyShareFromAccounts,
   familyShareViaLabel,
   foundMoneyCurrencySubtotalsLine,
@@ -170,6 +175,7 @@ import {
   fsBody,
   fsCaption,
   radiusMd,
+  space3,
   space4,
   space6,
   text,
@@ -293,18 +299,19 @@ export default function ClosetVaultScreen() {
   const demoAccount = useClosetStore((s) => s.demoAccount);
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const { isOffline } = useNetworkStatus();
   const [offlineQueuedCount, setOfflineQueuedCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    void readVaultAddQueue().then((snap) => {
+    void readVaultAddQueue(userId).then((snap) => {
       if (!cancelled) setOfflineQueuedCount(snap.items.length);
     });
     return () => {
       cancelled = true;
     };
-  }, [isOffline]);
+  }, [isOffline, userId]);
 
   const onSnapReceiptFromHero = useCallback(() => {
     trackEvent('receipt_snap_hero');
@@ -422,8 +429,8 @@ export default function ClosetVaultScreen() {
       }
       offlineQueuedCount={offlineQueuedCount}
       onOfflineRetry={async () => {
-        if (accessToken) {
-          const snap = await flushVaultAddQueue((body) => addCredit(accessToken, body));
+        if (accessToken && userId) {
+          const snap = await flushVaultAddQueue(userId, (body) => addCredit(accessToken, body));
           setOfflineQueuedCount(snap.items.length);
         }
         onRefresh();
@@ -515,7 +522,11 @@ function CreditsKindTab({
 }) {
   const meta = CREDIT_TAB[tab];
   /** Gift tab includes store credit so U013 type chips can filter. */
-  const { data, isLoading, isError } = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const gifts = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const { data, isLoading } = gifts;
+  // Without FINANCIAL the list isn't requested (the API would refuse it): same hint as a failure.
+  const consentMissing = useConsentGate('FINANCIAL').missingError !== null;
+  const isError = gifts.isError || consentMissing;
   const addGiftCard = useAddGiftCard();
   const captureGiftCard = useCaptureGiftCard();
   const spendGiftCard = useSpendGiftCard();
@@ -526,6 +537,7 @@ function CreditsKindTab({
   const confirmBalance = useConfirmBalance();
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const justConnected = useClosetStore((s) => s.justConnected);
   const celebrationSource = useClosetStore((s) => s.celebrationSource);
   const clearJustConnected = useClosetStore((s) => s.clearJustConnected);
@@ -572,7 +584,8 @@ function CreditsKindTab({
       .then((me) => {
         if (cancelled || !me.referralCode || me.referralCode === 'PENDING') return;
         setMyReferralCode(me.referralCode);
-        setShareViaLabel(familyShareViaLabel(`https://worn.app/r/${me.referralCode}`));
+        const link = buildReferralDeepLink(me.referralCode);
+        if (link) setShareViaLabel(familyShareViaLabel(link));
       })
       .catch(() => undefined);
     return () => {
@@ -588,7 +601,7 @@ function CreditsKindTab({
 
   useEffect(() => {
     let cancelled = false;
-    void readVaultAddQueue().then((snap) => {
+    void readVaultAddQueue(userId).then((snap) => {
       if (cancelled) return;
       setPendingQueue(snap.items);
       setFlushError(snap.lastFlushError);
@@ -596,12 +609,12 @@ function CreditsKindTab({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (isOffline || !accessToken || tab !== 'gift') return;
+    if (isOffline || !accessToken || !userId || tab !== 'gift') return;
     let cancelled = false;
-    void flushVaultAddQueue((body) => addCredit(accessToken, body)).then((snap) => {
+    void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
       if (cancelled) return;
       setPendingQueue(snap.items);
       setFlushError(snap.lastFlushError);
@@ -609,7 +622,7 @@ function CreditsKindTab({
     return () => {
       cancelled = true;
     };
-  }, [isOffline, accessToken, tab]);
+  }, [isOffline, accessToken, userId, tab]);
 
   useEffect(() => {
     if (!loyaltyJustAdded) return;
@@ -886,7 +899,12 @@ function CreditsKindTab({
     };
 
     if (tab === 'gift' && (isOffline || !accessToken)) {
-      void enqueueVaultAdd(payload).then((item) => {
+      // Queued adds belong to the signed-in user; with no session there's no one to save it for.
+      if (!userId) {
+        notify(`Could not add ${meta.noun}`, 'Sign in to add it.');
+        return;
+      }
+      void enqueueVaultAdd(userId, payload).then((item) => {
         setPendingQueue((prev) =>
           prev.some((p) => p.id === item.id) ? prev : [...prev, item],
         );
@@ -907,8 +925,8 @@ function CreditsKindTab({
           e.status < 500 &&
           e.status !== 408 &&
           e.status !== 429;
-        if (tab === 'gift' && !answered) {
-          void enqueueVaultAdd(payload).then((item) => {
+        if (tab === 'gift' && !answered && userId) {
+          void enqueueVaultAdd(userId, payload).then((item) => {
             setPendingQueue((prev) =>
               prev.some((p) => p.id === item.id) ? prev : [...prev, item],
             );
@@ -917,7 +935,8 @@ function CreditsKindTab({
           });
           return;
         }
-        Alert.alert(`Could not add ${meta.noun}`, closetAlertText(e));
+        // Without FINANCIAL this offers the consent screen (and comes back here); on web too.
+        alertClosetError(`Could not add ${meta.noun}`, e, undefined, '/(closet)/vault');
       },
     });
   }
@@ -1367,7 +1386,7 @@ function CreditsKindTab({
             text: 'WhatsApp',
             onPress: () => {
               void Linking.openURL(wa.whatsAppUrl).catch(() => {
-                void Share.share({ message: wa.shareText });
+                void shareText({ message: wa.shareText });
               });
               trackEvent('found_money_wa_share', {
                 totalMinor: wa.totalMinor,
@@ -1382,7 +1401,7 @@ function CreditsKindTab({
                 {
                   text: 'Reels (blur)',
                   onPress: () => {
-                    void Share.share({ message: reels.shareText, title: reels.headline });
+                    void shareText({ message: reels.shareText, title: reels.headline });
                     trackEvent('found_money_share_card', {
                       totalMinor: reels.totalMinor,
                       accountCount: reels.accountCount,
@@ -1393,7 +1412,7 @@ function CreditsKindTab({
                 {
                   text: 'WA Status',
                   onPress: () => {
-                    void Share.share({ message: status.shareText, title: status.headline });
+                    void shareText({ message: status.shareText, title: status.headline });
                     trackEvent('found_money_share_card', {
                       totalMinor: plain.totalMinor,
                       accountCount: shareAccounts.length,
@@ -1404,7 +1423,7 @@ function CreditsKindTab({
                 {
                   text: 'Share sheet',
                   onPress: () => {
-                    void Share.share({ message: plain.shareText });
+                    void shareText({ message: plain.shareText });
                     trackEvent('found_money_share_card', {
                       totalMinor: plain.totalMinor,
                       accountCount: plain.accountCount,
@@ -1473,8 +1492,8 @@ function CreditsKindTab({
             size="sm"
             variant="secondary"
             onPress={() => {
-              if (!accessToken) return;
-              void flushVaultAddQueue((body) => addCredit(accessToken, body)).then((snap) => {
+              if (!accessToken || !userId) return;
+              void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
                 setPendingQueue(snap.items);
                 setFlushError(snap.lastFlushError);
               });
@@ -2000,7 +2019,7 @@ function CreditsKindTab({
                     <Text style={styles.muted}>
                       {balanceRecheckNudgeCopy(account.merchant).body}
                     </Text>
-                    <View style={styles.row}>
+                    <View style={styles.actionRow}>
                       <Button
                         label={balanceRecheckNudgeCopy(account.merchant).recheckCta}
                         size="sm"
@@ -2023,7 +2042,7 @@ function CreditsKindTab({
                     </View>
                   </View>
                 ) : null}
-                <View style={styles.row}>
+                <View style={styles.actionRow}>
                   <Button
                     label={tab === 'loyalty' ? 'Use points' : 'Use it now'}
                     size="sm"
@@ -2600,10 +2619,10 @@ function WarrantiesTab() {
                           dialogTitle: 'Share claim packet',
                         });
                       } catch {
-                        await Share.share({
+                        await shareText({
                           message: res.packet.shareText,
                           title: res.packet.subject,
-                        }).catch(() => undefined);
+                        });
                       }
                       if (res.claimUrl) {
                         Linking.openURL(res.claimUrl).catch(() => {
@@ -2799,6 +2818,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: space4,
+  },
+  // A card's actions (up to four buttons) wrap onto a second line on a narrow phone instead of
+  // running past the card's right edge ("Re-check" was clipped at 390pt).
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space3,
   },
   sectionTitle: {
     color: text,

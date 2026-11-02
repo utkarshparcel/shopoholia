@@ -40,7 +40,7 @@ describe("waste share card + wear challenge", () => {
     };
     expect(body.neverWornCostMinor).toBe(2_500_00);
     expect(body.shareCard.neverWornCostMinor).toBe(2_500_00);
-    expect(body.shareCard.watermark).toBe("worn.app");
+    expect(body.shareCard.watermark).toBe("worncloset.app");
     expect(body.shareCard.headline).toMatch(/never worn/);
     expect(body.shareCard.blurredMerchants.some((m) => m.includes("•"))).toBe(true);
     expect(body.shareCard.shareText).not.toContain("Myntra");

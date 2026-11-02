@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   Pressable,
@@ -16,6 +15,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, Chip, CoinIcon } from '@/src/components/ui';
 import { useAddToCart, useListing, useTryon } from '@/src/hooks/catalog';
 import { trackEvent } from '@/src/lib/analytics';
+import { confirmAsync, notify } from '@/src/lib/confirm';
+import { listingTagLabels } from '@/src/lib/listingTags';
 import { recordAffiliateClick, type AffiliateLink } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -157,7 +158,7 @@ export default function ListingDetailScreen() {
           <View style={styles.body}>
             <View style={styles.categoryRow}>
               <Text style={styles.category}>{listing.data.category}</Text>
-              {listing.data.tags?.map((tag) => (
+              {listingTagLabels(listing.data.tags).map((tag) => (
                 <View key={tag} style={styles.tagPill}>
                   <Text style={styles.tagText}>{tag}</Text>
                 </View>
@@ -203,16 +204,16 @@ export default function ListingDetailScreen() {
                       const message =
                         error instanceof Error ? error.message : 'Try-on failed';
                       if (/avatar/i.test(message)) {
-                        Alert.alert('Avatar needed', 'Upload your avatar to try pieces on you.', [
-                          { text: 'Not now', style: 'cancel' },
-                          {
-                            text: 'Upload avatar',
-                            onPress: () => router.push('/(onboarding)/avatar'),
-                          },
-                        ]);
+                        void confirmAsync(
+                          'Avatar needed',
+                          'Upload your avatar to try pieces on you.',
+                          { confirmLabel: 'Upload avatar', cancelLabel: 'Not now' },
+                        ).then((ok) => {
+                          if (ok) router.push('/(onboarding)/avatar');
+                        });
                         return;
                       }
-                      Alert.alert('Try-on failed', message);
+                      notify('Try-on failed', message);
                     });
                 }}
                 variant="primary"
@@ -225,17 +226,16 @@ export default function ListingDetailScreen() {
                   if (!selectedVariant) return;
                   void addMutation
                     .mutateAsync({ variantId: selectedVariant.id })
-                    .then(() => {
-                      Alert.alert('Added to haul', listing.data?.title ?? 'Item saved', [
-                        { text: 'Keep browsing', style: 'cancel' },
-                        { text: 'View haul', onPress: () => router.push('/cart') },
-                      ]);
+                    .then(async () => {
+                      const viewHaul = await confirmAsync(
+                        'Added to haul',
+                        listing.data?.title ?? 'Item saved',
+                        { confirmLabel: 'View haul', cancelLabel: 'Keep browsing' },
+                      );
+                      if (viewHaul) router.push('/cart');
                     })
                     .catch((error: unknown) => {
-                      Alert.alert(
-                        'Couldn’t add',
-                        error instanceof Error ? error.message : 'Try again',
-                      );
+                      notify('Couldn’t add', error instanceof Error ? error.message : 'Try again');
                     });
                 }}
                 variant="secondary"

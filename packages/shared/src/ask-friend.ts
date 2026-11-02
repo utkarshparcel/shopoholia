@@ -1,3 +1,4 @@
+import { WEB_ORIGIN } from "./domains.js";
 import { WASTE_SHARE_WATERMARK } from "./waste.js";
 
 /** Default TTL for ask-a-friend outfit polls (N38). */
@@ -80,10 +81,10 @@ export type AskFriendShareCard = {
 
 /**
  * WhatsApp share for 2–3 outfit picks (N38).
- * Deep link: `worn.app/p/outfit/{pollId}`.
+ * Deep link: `worncloset.app/p/outfit/{pollId}`.
  */
 export function buildAskFriendShare(input: AskFriendShareInput): AskFriendShareCard {
-  const origin = (input.origin ?? "https://worn.app").replace(/\/+$/, "");
+  const origin = (input.origin ?? WEB_ORIGIN).replace(/\/+$/, "");
   const watermark = input.watermark ?? WASTE_SHARE_WATERMARK;
   const deepLink = `${origin}/p/outfit/${input.shareToken ?? input.pollId}`;
   const lines = input.options.slice(0, 3).map((o, i) => {

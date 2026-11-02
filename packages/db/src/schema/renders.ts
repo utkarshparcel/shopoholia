@@ -16,6 +16,12 @@ export const renders = pgTable("renders", {
   isFree: boolean("is_free").notNull().default(false),
   unlocked: boolean("unlocked").notNull().default(false),
   provider: text("provider").notNull(),
+  /**
+   * The order items a combined render dresses together, in order; null for a single item's
+   * render. Earlier builds kept these in `provider` as `combined:<ids>`, which the provider name
+   * overwrote once the render was done.
+   */
+  combinedItemIds: uuid("combined_item_ids").array(),
   status: renderStatusEnum("status").notNull().default("QUEUED"),
   costMicros: integer("cost_micros").notNull().default(0),
   ...timestamps,

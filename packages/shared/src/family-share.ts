@@ -3,12 +3,13 @@ import {
   type FoundMoneyShareCard,
   type FoundMoneyShareInput,
 } from "./found-money.js";
+import { WEB_ORIGIN } from "./domains.js";
 
 /** Public origin for family / referral deep links. */
-export const FAMILY_SHARE_ORIGIN = "https://worn.app";
+export const FAMILY_SHARE_ORIGIN = WEB_ORIGIN;
 
 /**
- * Build `worn.app/r/{code}` deep link for family found-money forwards (N36).
+ * Build `worncloset.app/r/{code}` deep link for family found-money forwards (N36).
  * Codes are uppercased; empty / invalid → null.
  */
 export function buildReferralDeepLink(
@@ -58,14 +59,14 @@ export function buildFamilyFoundMoneyShare(
   };
 }
 
-/** W024 — chrome line under vault share: “shared via worn.app/r/…”. */
+/** W024 — chrome line under vault share: “shared via worncloset.app/r/…”. */
 export function familyShareViaLabel(deepLink: string): string {
   const trimmed = deepLink.trim().replace(/^https?:\/\//i, "");
   return `shared via ${trimmed}`;
 }
 
 /**
- * Parse referral code from `worn.app/r/{code}`, `https://…/r/{code}`, or raw code.
+ * Parse referral code from `worncloset.app/r/{code}`, `https://…/r/{code}`, or raw code.
  */
 export function parseFamilyShareReferralCode(input: string): string | null {
   const raw = String(input ?? "").trim();

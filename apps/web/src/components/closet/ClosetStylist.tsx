@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AnimatePresence, motion, useInView, useReducedMotion, type Variants } from 'framer-motion';
+import { AnimatePresence, motion, useInView, type Variants } from 'framer-motion';
+import { useReducedMotionSafe, reveal } from '@/lib/motion';
 import { stepSpace, useScrollSteps } from './useScrollSteps';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -227,7 +228,7 @@ const AUTO_PATH: [number, number][] = [
 ];
 
 function SteamMirror({ src, alt, onClear }: { src: string; alt: string; onClear: () => void }) {
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [shown, setShown] = useState(src);
@@ -481,7 +482,7 @@ function PollCard() {
 type Line = { k: string; d: string; bx: number; by: number; sx: number; sy: number };
 
 export function ClosetStylist() {
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const [lookId, setLookId] = useState<Look['id']>('planned');
   const look = LOOKS.find((l) => l.id === lookId)!;
   // Threads show once the mirror has cleared for the look on the board.
@@ -495,10 +496,6 @@ export function ClosetStylist() {
   const inView = useInView(sceneRef, { amount: 0.5 });
   // Scrolling walks the looks in order; a chip just scrolls to its look.
   const { trackRef, stickRef, jumpTo } = useScrollSteps(LOOKS.length, (i) => setLookId(LOOKS[i].id));
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   // Threads from each piece on the board to where it sits on her.
   const measure = useCallback(() => {
@@ -565,7 +562,7 @@ export function ClosetStylist() {
       </div>
 
       <div className="section section-py relative">
-        <motion.div {...a} variants={rise} custom={0}>
+        <motion.div {...reveal} variants={rise} custom={0}>
           <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">
             Your stylist, in the mirror
           </p>
@@ -586,7 +583,7 @@ export function ClosetStylist() {
             className="step-stick sticky mx-auto max-w-[560px] lg:mx-0 lg:max-w-[calc((100svh_-_172px)_*_1.6)]"
           >
             {/* How’s today? */}
-            <motion.div {...a} variants={rise} custom={0.1} className="flex flex-wrap items-center gap-2">
+            <motion.div {...reveal} variants={rise} custom={0.1} className="flex flex-wrap items-center gap-2">
               <span className="mr-2 font-mono text-micro uppercase tracking-[0.22em] text-worn-muted">How’s today?</span>
               {LOOKS.map((l, i) => (
                 <button
@@ -605,7 +602,7 @@ export function ClosetStylist() {
               ))}
             </motion.div>
 
-            <motion.div {...a} variants={rise} custom={0.2}>
+            <motion.div {...reveal} variants={rise} custom={0.2}>
               <div
                 ref={sceneRef}
                 className="relative mt-5 flex items-center gap-3 lg:mt-6 lg:block lg:aspect-[1120/700]"

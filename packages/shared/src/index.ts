@@ -74,6 +74,7 @@ export {
   REVEAL_UNLOCK_COST_COINS,
   REVEAL_GENERATE_COST_COINS,
   REVEAL_COMBINE_COST_COINS,
+  REVEAL_COMBINE_MAX_ITEMS,
   RUSH_TO_EXPRESS_COST_COINS,
   COIN_PACKS,
   coinPackById,
@@ -1184,6 +1185,16 @@ export {
   type WhatsAppInFoundMoneyShare,
 } from "./found-money.js";
 export {
+  WEB_HOST,
+  WEB_ORIGIN,
+  CLOSET_URL,
+  API_ORIGIN,
+  MEDIA_ORIGIN,
+  WEB_PRIVACY_URL,
+  SUPPORT_EMAIL,
+  PRIVACY_EMAIL,
+} from "./domains.js";
+export {
   FAMILY_SHARE_ORIGIN,
   buildReferralDeepLink,
   buildFamilyFoundMoneyShare,
@@ -1952,6 +1963,8 @@ export {
   EMI_NUDGE_LEAD_MS,
   computeEmiNudgeDelayMs,
   emiDueJobId,
+  addEmiMonths,
+  emiDueDayOf,
   nextDueSchedule,
   remainingAfterPayment,
   emiDaysUntilDue,

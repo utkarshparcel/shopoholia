@@ -66,6 +66,15 @@ export function useListing(id: string) {
 const TRYON_POLL_MS = 2_000;
 const TRYON_POLL_LIMIT_MS = 60_000;
 
+/** A failed render isn't tried again before its retry time; say when to come back. */
+export function tryonFailedMessage(retryAfter: string | null | undefined, now = Date.now()): string {
+  const at = retryAfter ? Date.parse(retryAfter) : NaN;
+  const minutes = Number.isFinite(at) ? Math.ceil((at - now) / 60_000) : 0;
+  return minutes > 0
+    ? `This try-on didn't work. Try again in ${minutes} min.`
+    : "This try-on didn't work. Try again.";
+}
+
 /**
  * Requests a try-on and, while it's still processing, asks again every 2s for up to a minute.
  * Asking again is safe: the API reports on the job it already started instead of starting another.
@@ -115,6 +124,7 @@ export function useTryon(listingId: string, variantId: string | null) {
             throw error;
           }
         }
+        if (result.status === 'FAILED') throw new Error(tryonFailedMessage(result.retryAfter));
         return result;
       } finally {
         if (stopPolling.current === stop) stopPolling.current = null;

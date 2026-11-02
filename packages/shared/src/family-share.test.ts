@@ -10,7 +10,7 @@ import {
 import { FOUND_MONEY_SHARE_WATERMARK } from "./found-money.js";
 
 describe("buildReferralDeepLink (N36)", () => {
-  it("builds worn.app/r/{code}", () => {
+  it("builds worncloset.app/r/{code}", () => {
     expect(buildReferralDeepLink("abc123")).toBe(`${FAMILY_SHARE_ORIGIN}/r/ABC123`);
     expect(buildReferralDeepLink("  xy-z9  ")).toBe(`${FAMILY_SHARE_ORIGIN}/r/XYZ9`);
   });
@@ -22,8 +22,8 @@ describe("buildReferralDeepLink (N36)", () => {
   });
 
   it("respects custom origin without trailing slash", () => {
-    expect(buildReferralDeepLink("HOME01", "https://staging.worn.app/")).toBe(
-      "https://staging.worn.app/r/HOME01",
+    expect(buildReferralDeepLink("HOME01", "https://staging.worncloset.app/")).toBe(
+      "https://staging.worncloset.app/r/HOME01",
     );
   });
 });
@@ -48,10 +48,10 @@ describe("buildFamilyFoundMoneyShare", () => {
       totalMinor: 10_000,
       accountCount: 1,
       referralCode: "ab",
-      origin: "https://staging.worn.app/",
+      origin: "https://staging.worncloset.app/",
     });
     expect(card.referralCode).toBe("PENDING");
-    expect(card.deepLink).toBe("https://staging.worn.app/r/PENDING");
+    expect(card.deepLink).toBe("https://staging.worncloset.app/r/PENDING");
     expect(card.shareText).toContain(card.deepLink);
   });
 });
@@ -59,7 +59,7 @@ describe("buildFamilyFoundMoneyShare", () => {
 describe("W024 family share attribution UI", () => {
   it("builds shared-via label and parses code from deep link", () => {
     const link = `${FAMILY_SHARE_ORIGIN}/r/HOME99`;
-    expect(familyShareViaLabel(link)).toBe("shared via worn.app/r/HOME99");
+    expect(familyShareViaLabel(link)).toBe("shared via worncloset.app/r/HOME99");
     expect(parseFamilyShareReferralCode(link)).toBe("HOME99");
     expect(parseFamilyShareReferralCode("home99")).toBe("HOME99");
     expect(parseFamilyShareReferralCode("ab")).toBeNull();
@@ -67,7 +67,7 @@ describe("W024 family share attribution UI", () => {
 
   it("builds attribution confirm copy without PII merchants", () => {
     const confirm = buildFamilyShareAttributionConfirm("FAMILY1");
-    expect(confirm?.viaLabel).toContain("worn.app/r/FAMILY1");
+    expect(confirm?.viaLabel).toContain("worncloset.app/r/FAMILY1");
     expect(confirm?.headline).toMatch(/credited/i);
     expect(confirm?.body).not.toMatch(/Myntra|Amazon|\d{4}/);
     expect(buildFamilyShareAttributionConfirm("ab")).toBeNull();

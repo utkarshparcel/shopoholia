@@ -77,7 +77,7 @@ describe('W002-OFFLINE-VAULT-ADD', () => {
   });
 
   it('queues offline then flushes idempotently; surfaces flush error', async () => {
-    const item = await enqueueVaultAdd({
+    const item = await enqueueVaultAdd('user-1', {
       kind: 'GIFT_CARD',
       merchant: 'Amazon',
       currency: 'INR',
@@ -86,14 +86,14 @@ describe('W002-OFFLINE-VAULT-ADD', () => {
     });
     expect(item.body.idempotencyKey).toBe(item.id);
 
-    const fail = await flushVaultAddQueue(async () => {
+    const fail = await flushVaultAddQueue('user-1', async () => {
       throw new Error('offline sync failed');
     });
     expect(fail.items).toHaveLength(1);
     expect(fail.lastFlushError).toMatch(/offline sync failed/i);
 
     const addCredit = vi.fn(async () => ({ ok: true }));
-    const ok = await flushVaultAddQueue(addCredit);
+    const ok = await flushVaultAddQueue('user-1', addCredit);
     expect(addCredit).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: item.id }),
     );

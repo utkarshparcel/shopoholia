@@ -1,6 +1,6 @@
 import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, CoinWallet } from '@/src/components/ui';
@@ -8,6 +8,9 @@ import { fetchOrders } from '@/src/api/client';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { confirmAsync } from '@/src/lib/confirm';
+import { orderBadgeLabel, orderHref, profileOrderList, tierLabel } from '@/src/lib/order-tracking';
+import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -43,23 +46,6 @@ const MENU = [
   { label: 'Edit avatar', href: '/(onboarding)/avatar' },
 ] as const;
 
-/** Alert.alert does nothing on react-native-web, so the browser's confirm stands in there. */
-function confirmDestructive(
-  title: string,
-  message: string,
-  confirmLabel: string,
-  onConfirm: () => void,
-) {
-  if (Platform.OS === 'web') {
-    if (window.confirm(`${title}\n\n${message}`)) onConfirm();
-    return;
-  }
-  Alert.alert(title, message, [
-    { text: 'Cancel', style: 'cancel' },
-    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
-  ]);
-}
-
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -72,13 +58,15 @@ export default function ProfileScreen() {
   const deletePhotos = useDeletePhotos();
   const avatarUrl = avatar?.status === 'READY' ? avatar.referencePreviewUrl : null;
 
-  const confirmDeletePhotos = () =>
-    confirmDestructive(
+  // A browser dialog on web, where Alert.alert does nothing.
+  const confirmDeletePhotos = async () => {
+    const ok = await confirmAsync(
       'Delete your photos?',
       'This permanently deletes the photos you uploaded and your avatar. It can’t be undone, and try-on will need a new upload.',
-      'Delete',
-      () => deletePhotos.mutate(),
+      { confirmLabel: 'Delete', destructive: true },
     );
+    if (ok) deletePhotos.mutate();
+  };
 
   const { data: ordersData } = useQuery({
     queryKey: orderKeys.list(userId),
@@ -87,11 +75,8 @@ export default function ProfileScreen() {
   });
 
   const orders = ordersData?.orders ?? [];
-  const revealReady = orders.find((o) => o.state === 'REVEAL_READY');
-  const activeOrders = orders.filter((o) => o.state !== 'REVEAL_READY').slice(0, 5);
-  const listOrders = revealReady
-    ? [revealReady, ...activeOrders.filter((o) => o.id !== revealReady.id)].slice(0, 5)
-    : activeOrders;
+  // Every order is listed so each ready haul can be opened; the banner points at the newest one.
+  const { newestReady: revealReady, list: listOrders } = profileOrderList(orders);
 
   return (
     <FlatList
@@ -177,22 +162,18 @@ export default function ProfileScreen() {
       renderItem={({ item }) => (
         <Pressable
           accessibilityRole="button"
-          onPress={() =>
-            router.push(
-              item.state === 'REVEAL_READY' ? `/reveal/${item.id}` : `/order/${item.id}`,
-            )
-          }
+          onPress={() => router.push(orderHref(item))}
           style={({ pressed }) => [styles.orderCard, pressed && { opacity: 0.7 }]}
         >
           <View style={styles.orderCardTop}>
             <Text style={styles.orderId}>#{item.id.slice(0, 8)}</Text>
             <View style={[styles.stateBadge, item.state === 'REVEAL_READY' && styles.stateReady]}>
               <Text style={[styles.stateText, item.state === 'REVEAL_READY' && styles.stateReadyText]}>
-                {item.state === 'REVEAL_READY' ? 'Ready' : 'In transit'}
+                {orderBadgeLabel(item.state)}
               </Text>
             </View>
           </View>
-          <Text style={styles.orderTier}>{item.tier} delivery</Text>
+          <Text style={styles.orderTier}>{tierLabel(item.tier)} delivery</Text>
           <Text style={styles.orderTotal}>{item.coinTotal} coins</Text>
         </Pressable>
       )}
@@ -213,7 +194,7 @@ export default function ProfileScreen() {
           <Pressable
             accessibilityRole="button"
             disabled={deletePhotos.isPending}
-            onPress={confirmDeletePhotos}
+            onPress={() => void confirmDeletePhotos()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={[styles.menuItemText, styles.danger]}>
@@ -230,8 +211,8 @@ export default function ProfileScreen() {
           ) : null}
           <Pressable
             accessibilityRole="button"
-            // Clearing the session is enough: the root layout's auth gate goes to the login screen.
-            onPress={() => useSessionStore.getState().clear()}
+            // The root layout's auth gate goes to the login screen once the session is cleared.
+            onPress={signOut}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>

@@ -160,7 +160,7 @@ function makeConnector(
   return new GmailConnector({
     clientId: "fixture-client",
     clientSecret: "fixture-secret",
-    redirectUri: "https://api.shopoholia.app/ingestion/sources/oauth/callback",
+    redirectUri: "https://api.worncloset.app/ingestion/sources/oauth/callback",
     sourceId: "src-fixture-1",
     tokenStore: store,
     fetchImpl,

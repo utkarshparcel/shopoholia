@@ -1,7 +1,8 @@
 'use client';
 
 import type { ComponentType } from 'react';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import type { LucideIcon } from 'lucide-react';
 import {
   Sunrise,
@@ -165,8 +166,8 @@ const SECTIONS: ClosetSection[] = [
       },
       {
         icon: Flame,
-        title: 'Wear streaks, in coins',
-        copy: 'Keep a rewearing streak going and Worn pays you in gold coins. Small ritual, real dopamine, cheaper wardrobe.',
+        title: 'Wear streaks, counted',
+        copy: 'Rewear what you own and the streak counts every day, while each piece’s cost per wear keeps falling. Small ritual, real dopamine, cheaper wardrobe.',
       },
       {
         icon: ChartPie,
@@ -340,11 +341,6 @@ const SECTIONS: ClosetSection[] = [
 ];
 
 export function ClosetFeatures() {
-  const reduced = useReducedMotion();
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <div>
@@ -371,7 +367,7 @@ export function ClosetFeatures() {
                 {/* Heading: pain first, then the fix */}
                 <motion.div
                   key={`head-${s.id}`}
-                  {...a}
+                  {...reveal}
                   variants={rise}
                   custom={0}
                 >
@@ -402,7 +398,7 @@ export function ClosetFeatures() {
                 {s.visual ? (
                   <motion.div
                     key={`visual-${s.id}`}
-                    {...a}
+                    {...reveal}
                     variants={rise}
                     custom={0.12}
                     className="mt-10 max-w-[440px] lg:mt-0 lg:max-w-none"
@@ -424,7 +420,7 @@ export function ClosetFeatures() {
                     return (
                       <motion.article
                         key={`${s.id}-card-${i}`}
-                        {...a}
+                        {...reveal}
                         variants={rise}
                         custom={0.08 + i * 0.08}
                         className="rounded-2xl border border-worn-rule bg-worn-surface p-5 transition-shadow duration-300 hover:shadow-pop sm:p-6"
@@ -446,7 +442,7 @@ export function ClosetFeatures() {
               {s.comingSoon ? (
                 <motion.div
                   key={`soon-${s.id}`}
-                  {...a}
+                  {...reveal}
                   variants={rise}
                   custom={0.2}
                   className="mt-6 flex items-start gap-4 rounded-2xl border border-dashed border-worn-gold/70 bg-worn-gold-tint p-5 sm:mt-8 sm:items-center sm:gap-5 sm:p-6"
@@ -493,7 +489,7 @@ export function ClosetFeatures() {
               {s.chips ? (
                 <motion.div
                   key={`chips-${s.id}`}
-                  {...a}
+                  {...reveal}
                   variants={rise}
                   custom={0.2}
                   className="mt-8 flex flex-wrap items-center justify-center gap-2.5"

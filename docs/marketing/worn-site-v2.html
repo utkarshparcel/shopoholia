@@ -1,0 +1,915 @@
+<title>WORN</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the page is the shopping arc. Ink "stage" bands (hero, reveal, close) hold the moments of anticipation;
+   warm-paper bands between them explain, like the app itself. Tokens mirror docs/design-system/tokens.css. */
+:root {
+  --paper: #faf8f5;
+  --surface: #ffffff;
+  --warm: #f0ece4;
+  --ink: #0f0e0c;
+  --ink-soft: #2a2722;
+  --muted: #6f675f;
+  --rule: #e0dbd2;
+  --gold: #c8a87a;
+  --gold-deep: #9c7a4e;
+  --gold-tint: #fdf7ee;
+  --success: #3a7d5c;
+  --sale: #d64e2a;
+
+  /* the stage stays dark in both themes */
+  --stage: #0f0e0c;
+  --stage-2: #1b1915;
+  --stage-fg: #f3eee6;
+  --stage-muted: #a39a8f;
+  --stage-rule: rgba(243, 238, 230, 0.13);
+  --stage-gold: #d9bc8f;
+
+  /* the phone always shows the app's own light UI */
+  --app-bg: #faf8f5;
+  --app-card: #ffffff;
+  --app-warm: #f0ece4;
+  --app-ink: #0f0e0c;
+  --app-muted: #888078;
+  --app-rule: #e0dbd2;
+  --app-gold: #c8a87a;
+  --app-gold-deep: #9c7a4e;
+  --app-tint: #fdf7ee;
+  --app-success: #3a7d5c;
+
+  --f-display: "DM Serif Display", "Iowan Old Style", Georgia, serif;
+  --f-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --maxw: 1180px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12100e; --surface: #1a1815; --warm: #201d19; --ink: #f3eee6; --ink-soft: #d8d0c4;
+    --muted: #a39a8f; --rule: #2f2a24; --gold: #d9bc8f; --gold-deep: #d9bc8f; --gold-tint: #26211a;
+    --success: #6fb592; --sale: #ec7a59; --stage: #090807; --stage-2: #15130f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12100e; --surface: #1a1815; --warm: #201d19; --ink: #f3eee6; --ink-soft: #d8d0c4;
+  --muted: #a39a8f; --rule: #2f2a24; --gold: #d9bc8f; --gold-deep: #d9bc8f; --gold-tint: #26211a;
+  --success: #6fb592; --sale: #ec7a59; --stage: #090807; --stage-2: #15130f; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--f-sans); font-size: 17px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--stage); }
+.wrap {
+  max-width: var(--maxw); margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+@media (min-width: 700px) { .wrap { padding-left: max(40px, env(safe-area-inset-left, 0px)); padding-right: max(40px, env(safe-area-inset-right, 0px)); } }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 400; margin: 0; text-wrap: balance; letter-spacing: -0.015em; }
+p { margin: 0; }
+em { font-style: italic; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 4px; }
+.label {
+  font-family: var(--f-mono); font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold-deep);
+}
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── Nav ── */
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; background: color-mix(in srgb, var(--stage) 86%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--stage-rule); color: var(--stage-fg); }
+.nav .wrap { display: flex; align-items: center; gap: 28px; height: 60px; }
+.wordmark { font-family: var(--f-display); letter-spacing: 0.32em; font-size: 1.05rem; color: var(--stage-gold); text-decoration: none; }
+.nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 0.88rem; }
+.nav-links a { color: var(--stage-muted); text-decoration: none; transition: color .2s; }
+.nav-links a:hover { color: var(--stage-fg); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px;
+  border-radius: 999px; border: 0; cursor: pointer; font: 500 0.92rem/1 var(--f-sans); text-decoration: none; white-space: nowrap;
+  transition: transform .25s var(--spring), background .2s, box-shadow .25s;
+}
+.btn-gold { background: var(--stage-gold); color: #0f0e0c; box-shadow: 0 8px 30px -10px rgba(217, 188, 143, .6); }
+.btn-gold:hover { transform: translateY(-2px); background: #e6cda4; }
+.btn-ghost { background: transparent; color: var(--stage-fg); border: 1px solid var(--stage-rule); }
+.btn-ghost:hover { border-color: var(--stage-gold); }
+@media (max-width: 760px) { .nav-links { display: none; } .nav .btn { margin-left: auto; min-height: 38px; padding: 0 16px; } }
+
+/* ── Hero stage ── */
+.stage { background: var(--stage); color: var(--stage-fg); position: relative; overflow: hidden; }
+.hero { padding-block: clamp(48px, 8vw, 96px) clamp(56px, 8vw, 104px); }
+.hero::before {
+  content: ""; position: absolute; width: 900px; height: 900px; right: -260px; top: -240px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(217, 188, 143, .22), rgba(217, 188, 143, .06) 55%, transparent);
+}
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: clamp(32px, 6vw, 80px); align-items: center; position: relative; }
+.hero .eyebrow { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 8px; border: 1px solid var(--stage-rule); border-radius: 999px; font-family: var(--f-mono); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--stage-muted); }
+.hero .eyebrow i { width: 8px; height: 8px; border-radius: 50%; background: var(--stage-gold); box-shadow: 0 0 0 4px rgba(217, 188, 143, .18); animation: pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(217, 188, 143, 0); } }
+.hero h1 { font-size: clamp(3rem, 7.4vw, 6.4rem); line-height: 0.95; margin-top: 26px; }
+.hero h1 span { display: block; }
+.hero h1 .gold { color: var(--stage-gold); font-style: italic; }
+.hero .dek { margin-top: 28px; font-size: clamp(1.05rem, 1.6vw, 1.22rem); font-weight: 300; color: #d6cec2; max-width: 33rem; line-height: 1.55; }
+.hero .dek b { color: var(--stage-fg); font-weight: 500; }
+.hero-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+.hero-proof { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--stage-rule); font-family: var(--f-mono); font-size: 0.74rem; letter-spacing: 0.06em; color: var(--stage-muted); }
+.hero-proof b { color: var(--stage-fg); font-weight: 500; }
+.rise { animation: rise .9s var(--ease) both; }
+.r2 { animation-delay: .12s; } .r3 { animation-delay: .24s; } .r4 { animation-delay: .36s; } .r5 { animation-delay: .5s; }
+@keyframes rise { from { transform: translateY(18px); opacity: 0; } }
+
+/* ── Phone demo ── */
+.demo { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+.phone {
+  position: relative; width: min(318px, 100%); aspect-ratio: 318 / 652; border-radius: 48px; padding: 11px;
+  background: linear-gradient(145deg, #3a352e, #15130f 40%, #2a2620); max-width: 100%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .06) inset, 0 50px 100px -30px rgba(0, 0, 0, .8), 0 0 120px -20px rgba(217, 188, 143, .25);
+  transform: rotate(-2deg);
+}
+.screen { position: relative; height: 100%; border-radius: 38px; overflow: hidden; background: var(--app-bg); color: var(--app-ink); font-family: var(--f-sans); }
+.island { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 92px; height: 26px; border-radius: 20px; background: #0b0a09; z-index: 6; }
+.sbar { position: absolute; top: 0; left: 0; right: 0; height: 46px; display: flex; justify-content: space-between; align-items: center; padding: 6px 26px 0; font: 600 12px var(--f-sans); z-index: 5; }
+.view { position: absolute; inset: 46px 0 0; padding: 8px 16px 16px; opacity: 0; transform: translateX(24px) scale(.98); transition: opacity .5s var(--ease), transform .6s var(--ease); pointer-events: none; display: flex; flex-direction: column; }
+.phone[data-scene="feed"] .v-feed, .phone[data-scene="checkout"] .v-checkout, .phone[data-scene="track"] .v-track, .phone[data-scene="reveal"] .v-reveal { opacity: 1; transform: none; }
+.app-top { display: flex; justify-content: space-between; align-items: center; }
+.app-kicker { font-family: var(--f-mono); font-size: 8.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--app-muted); }
+.app-title { font-family: var(--f-display); font-size: 25px; line-height: 1.05; margin-top: 2px; }
+.coinpill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px 4px 5px; border-radius: 999px; background: var(--app-tint); border: 1px solid #ecdcc2; font: 500 11px var(--f-mono); color: var(--app-gold-deep); }
+.coin { width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #f3dfba, #c8a87a 55%, #9c7a4e); box-shadow: inset 0 0 0 1.5px rgba(156, 122, 78, .5); flex: none; }
+.chips-row { display: flex; gap: 6px; margin: 12px 0 10px; }
+.chip { font-size: 10.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--app-rule); background: var(--app-card); white-space: nowrap; }
+.chip.on { background: var(--app-ink); color: var(--app-bg); border-color: var(--app-ink); }
+.pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.pcard { background: var(--app-card); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(15, 14, 12, .06); position: relative; transition: transform .35s var(--spring); }
+.pcard .ph { aspect-ratio: 1 / 1.08; display: grid; place-items: center; position: relative; }
+.pcard .ph svg { width: 62%; height: 80%; filter: drop-shadow(0 6px 8px rgba(15, 14, 12, .18)); }
+.pcard .meta { padding: 6px 8px 8px; }
+.pcard .nm { font-size: 9.5px; line-height: 1.25; color: var(--app-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcard .pr { display: flex; align-items: center; gap: 4px; margin-top: 3px; font: 500 10px var(--f-mono); color: var(--app-gold-deep); }
+.pcard .pr .coin { width: 10px; height: 10px; }
+.pcard .add { position: absolute; top: 7px; right: 7px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255, 255, 255, .9); display: grid; place-items: center; font-size: 14px; line-height: 1; transition: background .3s, color .3s, transform .4s var(--spring); }
+.pcard.added { transform: scale(.96); }
+.pcard.added .add { background: var(--app-ink); color: #fff; transform: rotate(135deg) scale(1.08); }
+.pcard .tag { position: absolute; left: 7px; top: 7px; font: 500 7.5px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; background: var(--app-ink); color: #fff; padding: 3px 6px; border-radius: 4px; }
+.bag { position: relative; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--app-card); border: 1px solid var(--app-rule); }
+.bag svg { width: 15px; height: 15px; }
+.bag b { position: absolute; top: -4px; right: -4px; min-width: 17px; height: 17px; border-radius: 9px; background: var(--app-gold-deep); color: #fff; font: 600 9.5px/17px var(--f-mono); text-align: center; transform: scale(0); transition: transform .4s var(--spring); }
+.bag b.show { transform: scale(1); }
+.bag.bump { animation: bump .45s var(--spring); }
+@keyframes bump { 40% { transform: scale(1.18); } }
+
+/* checkout */
+.haul { margin-top: 12px; background: var(--app-card); border-radius: 14px; padding: 4px 12px; box-shadow: 0 2px 8px rgba(15, 14, 12, .05); }
+.hrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--app-rule); font-size: 11px; }
+.hrow:last-child { border-bottom: 0; }
+.hrow .sw { width: 34px; height: 38px; border-radius: 7px; display: grid; place-items: center; flex: none; }
+.hrow .sw svg { width: 70%; height: 80%; }
+.hrow .t { flex: 1; min-width: 0; line-height: 1.3; }
+.hrow .t small { display: block; color: var(--app-muted); font-size: 9.5px; }
+.hrow .c { font: 500 10.5px var(--f-mono); color: var(--app-gold-deep); }
+.tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 12px; }
+.tier { border: 1px solid var(--app-rule); border-radius: 10px; padding: 8px 7px; background: var(--app-card); font-size: 10px; line-height: 1.25; transition: all .35s var(--ease); }
+.tier small { display: block; color: var(--app-muted); font-size: 8.5px; margin-top: 2px; font-family: var(--f-mono); }
+.tier.on { border-color: var(--app-ink); box-shadow: 0 0 0 1px var(--app-ink) inset; }
+.totals { margin-top: auto; display: grid; gap: 6px; font-size: 11px; }
+.totals div { display: flex; justify-content: space-between; }
+.totals span:last-child { font-family: var(--f-mono); }
+.paybtn { margin-top: 10px; height: 44px; border-radius: 999px; background: var(--app-ink); color: #fff; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12.5px; font-weight: 500; transition: transform .2s, background .3s; }
+.paybtn.pressed { transform: scale(.95); background: var(--app-success); }
+
+/* tracking */
+.track-hd { display: flex; justify-content: space-between; align-items: end; }
+.eta { margin-top: 12px; padding: 14px; border-radius: 14px; background: var(--app-ink); color: #f3eee6; }
+.eta .k { font: 500 8.5px var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: #a39a8f; }
+.eta .v { font-family: var(--f-display); font-size: 28px; line-height: 1.1; margin-top: 3px; }
+.eta .v em { color: var(--app-gold); }
+.eta .tierline { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 10px; color: #c9c0b4; }
+.rush { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px 5px 6px; border-radius: 999px; background: var(--app-gold); color: #0f0e0c; font: 600 9.5px var(--f-sans); transition: transform .25s var(--spring), opacity .3s; }
+.rush .coin { width: 11px; height: 11px; }
+.rush.pressed { transform: scale(.9); }
+.rush.gone { opacity: 0; transform: scale(.6); }
+.ladder { list-style: none; margin: 14px 0 0; padding: 0; position: relative; }
+.ladder::before { content: ""; position: absolute; left: 9px; top: 10px; bottom: 10px; width: 2px; background: var(--app-rule); }
+.ladder .fill { position: absolute; left: 9px; top: 10px; width: 2px; background: var(--app-gold-deep); height: 0; transition: height .8s var(--ease); }
+.ladder li { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 11.5px; color: var(--app-muted); transition: color .4s; }
+.ladder li .dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--app-rule); background: var(--app-bg); display: grid; place-items: center; flex: none; z-index: 1; transition: all .45s var(--spring); }
+.ladder li .dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: transparent; transition: background .3s; }
+.ladder li.done { color: var(--app-ink); }
+.ladder li.done .dot { border-color: var(--app-gold-deep); background: var(--app-gold-deep); }
+.ladder li.done .dot::after { background: #fff; }
+.ladder li.now .dot { transform: scale(1.18); box-shadow: 0 0 0 5px rgba(200, 168, 122, .25); }
+.ladder li .when { margin-left: auto; font: 400 9.5px var(--f-mono); }
+.push {
+  position: absolute; left: 10px; right: 10px; top: 8px; z-index: 7; display: flex; gap: 10px; align-items: center;
+  padding: 10px 12px; border-radius: 18px; background: rgba(245, 241, 235, .82); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .35); transform: translateY(-140%); transition: transform .6s var(--spring); font-size: 10.5px; line-height: 1.35;
+}
+.push.show { transform: translateY(0); }
+.push .ic { width: 30px; height: 30px; border-radius: 8px; background: #0f0e0c; color: var(--app-gold); display: grid; place-items: center; font-family: var(--f-display); font-size: 15px; flex: none; }
+.push b { font-weight: 600; }
+.push small { color: var(--app-muted); font-size: 9px; margin-left: 4px; }
+
+/* reveal (in-phone) */
+.v-reveal { background: #0f0e0c; color: #f3eee6; inset: 0; padding-top: 54px; }
+.v-reveal .app-kicker { color: #a39a8f; }
+.v-reveal .app-title em { color: var(--app-gold); }
+.boxwrap { position: relative; flex: 1; display: grid; place-items: center; }
+.giftbox { position: absolute; width: 150px; height: 120px; bottom: 34%; transition: opacity .6s .5s, transform .8s var(--ease); }
+.giftbox .base { position: absolute; inset: 30px 0 0; background: linear-gradient(160deg, #2b2620, #17140f); border: 1px solid rgba(217, 188, 143, .35); border-radius: 6px; }
+.giftbox .lid { position: absolute; left: -8px; right: -8px; top: 12px; height: 26px; background: linear-gradient(160deg, #3a332a, #201c16); border: 1px solid rgba(217, 188, 143, .45); border-radius: 5px; transition: transform .9s var(--spring); transform-origin: 10% 100%; }
+.giftbox .ribbon { position: absolute; left: 50%; top: 12px; bottom: 0; width: 12px; transform: translateX(-50%); background: linear-gradient(#e6cda4, #9c7a4e); }
+.giftbox .glow { position: absolute; left: 50%; top: 20px; width: 10px; height: 10px; border-radius: 50%; transform: translate(-50%, 0); background: #f6e3bf; box-shadow: 0 0 60px 40px rgba(246, 227, 191, .0); transition: box-shadow .9s; }
+.v-reveal.open .lid { transform: translate(14px, -46px) rotate(-24deg); }
+.v-reveal.open .glow { box-shadow: 0 0 80px 60px rgba(246, 227, 191, .45); }
+.v-reveal.dealt .giftbox { opacity: 0; transform: translateY(40px) scale(.9); }
+.deck { position: absolute; inset: 6px 4px 0; }
+.rcard { position: absolute; left: 50%; top: 0; width: 72%; aspect-ratio: 3 / 4.3; border-radius: 16px; overflow: hidden; transform: translate(-50%, 40px) scale(.6); opacity: 0; transition: transform .9s var(--spring), opacity .5s; box-shadow: 0 20px 40px -12px rgba(0, 0, 0, .7); }
+.v-reveal.dealt .rcard { opacity: 1; }
+.v-reveal.dealt .rcard[data-pos="0"] { transform: translate(-50%, 0) rotate(0deg); z-index: 3; }
+.v-reveal.dealt .rcard[data-pos="1"] { transform: translate(-36%, 8px) rotate(7deg) scale(.94); z-index: 2; }
+.v-reveal.dealt .rcard[data-pos="2"] { transform: translate(-64%, 14px) rotate(-7deg) scale(.9); z-index: 1; }
+.rcard .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 11px 10px; background: linear-gradient(transparent, rgba(0, 0, 0, .55)); font-size: 9.5px; color: #fff; }
+.rcard .cap b { display: block; font-family: var(--f-display); font-weight: 400; font-size: 14px; }
+.reveal-actions { display: flex; gap: 6px; padding-top: 10px; }
+.reveal-actions span { flex: 1; text-align: center; padding: 9px 0; border-radius: 999px; font-size: 10.5px; border: 1px solid rgba(243, 238, 230, .2); }
+.reveal-actions span:first-child { background: var(--app-gold); color: #0f0e0c; border-color: transparent; font-weight: 600; }
+
+/* demo controls */
+.steps { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.step {
+  position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 14px;
+  border-radius: 999px; border: 1px solid var(--stage-rule); background: transparent; color: var(--stage-muted); cursor: pointer;
+  font: 500 0.78rem var(--f-sans);
+}
+.step .bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 0; background: var(--stage-gold); }
+.step.on { color: var(--stage-fg); border-color: rgba(217, 188, 143, .5); }
+.step .n { font-family: var(--f-mono); font-size: 0.68rem; color: var(--stage-gold); }
+.playpause { width: 36px; padding: 0; justify-content: center; }
+
+/* ── Marquee ── */
+.marquee { background: var(--stage-2); color: var(--stage-muted); border-block: 1px solid var(--stage-rule); overflow: hidden; }
+.marquee .track { display: flex; width: max-content; animation: slide 46s linear infinite; padding-block: 16px; }
+.marquee span { font-family: var(--f-display); font-size: 1.4rem; padding: 0 22px; white-space: nowrap; }
+.marquee span i { font-style: normal; color: var(--stage-gold); padding-left: 44px; font-size: .9rem; vertical-align: middle; }
+.marquee span.hl { color: var(--stage-fg); font-style: italic; }
+@keyframes slide { to { transform: translateX(-50%); } }
+
+/* ── Sections ── */
+section.band { padding-block: clamp(72px, 10vw, 128px); }
+.sec-head { max-width: 46rem; }
+.sec-head h2 { font-size: clamp(2.2rem, 4.8vw, 3.8rem); line-height: 1.02; margin-top: 14px; }
+.sec-head h2 em { color: var(--gold-deep); }
+.sec-head p { margin-top: 18px; color: var(--ink-soft); font-size: 1.08rem; max-width: 38rem; font-weight: 300; }
+
+/* the arc */
+.arc { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin-top: 56px; border-top: 1px solid var(--rule); }
+.arc-step { padding: 26px 22px 6px 0; position: relative; min-width: 0; }
+.arc-step::before { content: ""; position: absolute; top: -5px; left: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--paper); border: 2px solid var(--gold-deep); }
+.arc-step:last-child::before { background: var(--gold-deep); box-shadow: 0 0 0 5px color-mix(in srgb, var(--gold) 30%, transparent); }
+.arc-step .label { color: var(--muted); }
+.arc-step h3 { font-size: 1.5rem; line-height: 1.1; margin-top: 10px; }
+.arc-step p { margin-top: 10px; font-size: 0.94rem; color: var(--ink-soft); }
+@media (max-width: 900px) {
+  .arc { grid-template-columns: 1fr; border-top: 0; border-left: 1px solid var(--rule); margin-left: 4px; }
+  .arc-step { padding: 0 0 30px 26px; }
+  .arc-step::before { top: 6px; left: -5px; }
+}
+
+/* tier chart */
+.tiers-card { margin-top: 64px; background: var(--surface); border: 1px solid var(--rule); border-radius: 16px; padding: clamp(20px, 3vw, 34px); display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 2fr); gap: 32px; align-items: center; }
+.tiers-card h3 { font-size: 1.9rem; line-height: 1.08; }
+.tiers-card p { margin-top: 10px; color: var(--ink-soft); font-size: 0.95rem; }
+.chart-wrap { overflow-x: auto; min-width: 0; }
+.chart-wrap svg { width: 100%; min-width: 520px; height: auto; display: block; }
+.chart-wrap text { font-family: var(--f-mono); }
+@media (max-width: 900px) { .tiers-card { grid-template-columns: 1fr; } }
+
+/* reveal stage */
+.reveal-stage { padding-block: clamp(80px, 11vw, 140px); }
+.reveal-stage::before { content: ""; position: absolute; left: 50%; top: 58%; width: 1100px; height: 700px; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(217, 188, 143, .2), transparent); pointer-events: none; }
+.reveal-grid { position: relative; display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: clamp(36px, 6vw, 90px); align-items: center; }
+.reveal-stage h2 { font-size: clamp(2.6rem, 6vw, 5rem); line-height: 0.98; margin-top: 16px; }
+.reveal-stage h2 em { color: var(--stage-gold); }
+.reveal-stage .label { color: var(--stage-gold); }
+.reveal-stage .lede { margin-top: 22px; color: #d6cec2; font-weight: 300; font-size: 1.1rem; max-width: 30rem; }
+.price-list { margin-top: 30px; border-top: 1px solid var(--stage-rule); }
+.price-list div { display: flex; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--stage-rule); font-size: 0.95rem; }
+.price-list span:last-child { font-family: var(--f-mono); color: var(--stage-gold); white-space: nowrap; }
+.fan { position: relative; height: clamp(380px, 46vw, 520px); }
+.fcard { position: absolute; left: 50%; top: 50%; width: clamp(190px, 22vw, 270px); aspect-ratio: 3 / 4.2; border-radius: 20px; overflow: hidden; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 255, 255, .06); transition: transform .8s var(--spring); cursor: pointer; }
+.fcard .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 40px 18px 16px; background: linear-gradient(transparent, rgba(0, 0, 0, .6)); color: #fff; font-size: 0.8rem; }
+.fcard .cap b { display: block; font-family: var(--f-display); font-weight: 400; font-size: 1.35rem; line-height: 1.1; }
+.fcard .cap span { font-family: var(--f-mono); font-size: 0.68rem; letter-spacing: .12em; text-transform: uppercase; opacity: .8; }
+.fcard .free { position: absolute; top: 14px; left: 14px; font: 500 0.64rem var(--f-mono); letter-spacing: .14em; text-transform: uppercase; padding: 5px 9px; border-radius: 999px; background: rgba(15, 14, 12, .55); backdrop-filter: blur(6px); color: #f3eee6; }
+.fcard .free.lock { background: var(--stage-gold); color: #0f0e0c; }
+.fan .fcard[data-pos="0"] { transform: translate(-50%, -50%) rotate(-2deg); z-index: 3; }
+.fan .fcard[data-pos="1"] { transform: translate(-6%, -46%) rotate(9deg) scale(.9); z-index: 2; }
+.fan .fcard[data-pos="2"] { transform: translate(-94%, -46%) rotate(-12deg) scale(.86); z-index: 1; }
+.fan-hint { position: absolute; bottom: -6px; left: 0; right: 0; text-align: center; font-family: var(--f-mono); font-size: 0.7rem; letter-spacing: .14em; text-transform: uppercase; color: var(--stage-muted); }
+.grain { position: absolute; inset: 0; pointer-events: none; opacity: .22; mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+@media (max-width: 900px) { .reveal-grid { grid-template-columns: 1fr; } }
+
+/* coins */
+.coins-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 4vw, 48px); margin-top: 56px; align-items: start; }
+.ledger { background: var(--surface); border: 1px solid var(--rule); border-radius: 16px; padding: 8px clamp(18px, 2.4vw, 28px) 18px; }
+.ledger .hd { display: flex; justify-content: space-between; align-items: baseline; padding: 16px 0 12px; border-bottom: 1px solid var(--ink); }
+.ledger .hd h3 { font-size: 1.5rem; }
+.ledger .hd span { font-family: var(--f-mono); font-size: 0.72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 13px 0; border-bottom: 1px dashed var(--rule); }
+.lrow:last-child { border-bottom: 0; }
+.lrow b { font-weight: 500; }
+.lrow small { grid-column: 1; color: var(--muted); font-size: 0.84rem; }
+.lrow .amt { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-family: var(--f-mono); font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.amt.plus { color: var(--success); }
+.amt.minus { color: var(--ink-soft); }
+.streak { background: var(--warm); border-radius: 16px; padding: clamp(18px, 2.4vw, 28px); }
+.streak h3 { font-size: 1.5rem; }
+.streak p { color: var(--ink-soft); font-size: 0.94rem; margin-top: 6px; }
+.streak svg { width: 100%; height: auto; display: block; margin-top: 18px; }
+.streak text { font-family: var(--f-mono); }
+.packs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.pack { position: relative; background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; padding: 18px 16px 16px; }
+.pack.hot { border-color: var(--gold-deep); box-shadow: 0 0 0 1px var(--gold-deep) inset; }
+.pack .flag { position: absolute; top: -10px; left: 14px; font: 500 0.62rem var(--f-mono); letter-spacing: .14em; text-transform: uppercase; background: var(--gold-deep); color: var(--paper); padding: 3px 8px; border-radius: 999px; }
+.pack .c { display: flex; align-items: center; gap: 8px; font-family: var(--f-display); font-size: 1.9rem; line-height: 1; }
+.pack .c .coin { width: 20px; height: 20px; }
+.pack .n { margin-top: 10px; font-size: 0.86rem; color: var(--muted); }
+.pack .p { margin-top: 2px; font-family: var(--f-mono); font-size: 0.95rem; }
+.coin-big { width: 20px; height: 20px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #f3dfba, #c8a87a 55%, #9c7a4e); box-shadow: inset 0 0 0 2px rgba(156, 122, 78, .5); flex: none; }
+@media (max-width: 900px) { .coins-grid { grid-template-columns: 1fr; } .packs { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; } }
+
+/* features */
+.feat { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 18px; overflow: hidden; margin-top: 56px; }
+.fcell { background: var(--paper); padding: clamp(22px, 2.8vw, 34px); display: flex; flex-direction: column; gap: 10px; transition: background .3s; }
+.fcell:hover { background: var(--surface); }
+.fcell .ico { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--gold-tint); color: var(--gold-deep); }
+.fcell .ico svg { width: 20px; height: 20px; }
+.fcell h3 { font-size: 1.4rem; line-height: 1.12; margin-top: 6px; }
+.fcell p { color: var(--ink-soft); font-size: 0.95rem; }
+@media (max-width: 900px) { .feat { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .feat { grid-template-columns: 1fr; } }
+
+/* sellers */
+.seller { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 70px); align-items: center; background: var(--warm); border-radius: 22px; padding: clamp(26px, 5vw, 64px); }
+.seller h2 { font-size: clamp(2rem, 4vw, 3.1rem); line-height: 1.04; margin-top: 12px; }
+.seller h2 em { color: var(--gold-deep); }
+.seller p { margin-top: 16px; color: var(--ink-soft); }
+.seller ul { list-style: none; padding: 0; margin: 22px 0 0; display: grid; gap: 10px; }
+.seller li { display: flex; gap: 12px; align-items: baseline; font-size: 0.97rem; }
+.seller li::before { content: ""; width: 14px; height: 1px; background: var(--gold-deep); flex: none; transform: translateY(-4px); }
+.listing-form { background: var(--surface); border-radius: 16px; padding: 22px; box-shadow: 0 30px 60px -30px rgba(15, 14, 12, .3); border: 1px solid var(--rule); display: grid; gap: 14px; transform: rotate(1.5deg); }
+.listing-form .lf-top { display: flex; gap: 14px; }
+.listing-form .shot { width: 96px; aspect-ratio: 4 / 5; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.listing-form .shot svg { width: 66%; height: 80%; }
+.lf-field { border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+.lf-field small { display: block; font-family: var(--f-mono); font-size: 0.62rem; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.lf-field span { font-size: 0.95rem; }
+.lf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.lf-live { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; color: var(--success); font-weight: 500; }
+.lf-live i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); display: inline-block; margin-right: 8px; }
+@media (max-width: 900px) { .seller { grid-template-columns: 1fr; } .listing-form { transform: none; } }
+
+/* faq */
+.faq { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: clamp(28px, 5vw, 80px); }
+.faq details { border-bottom: 1px solid var(--rule); padding: 20px 0; }
+.faq details:first-child { border-top: 1px solid var(--rule); }
+.faq summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 16px; font-family: var(--f-display); font-size: 1.35rem; line-height: 1.2; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font-family: var(--f-sans); font-weight: 300; font-size: 1.5rem; line-height: 1; color: var(--gold-deep); transition: transform .3s var(--ease); }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq details p { margin-top: 12px; color: var(--ink-soft); max-width: 38rem; }
+@media (max-width: 900px) { .faq { grid-template-columns: 1fr; } }
+
+/* close */
+.close { padding-block: clamp(84px, 12vw, 150px); text-align: center; }
+.close::before { content: ""; position: absolute; left: 50%; top: 100%; width: 1200px; height: 800px; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(217, 188, 143, .28), transparent); pointer-events: none; }
+.close h2 { position: relative; font-size: clamp(2.8rem, 7vw, 6rem); line-height: 0.96; }
+.close h2 em { color: var(--stage-gold); }
+.close p { position: relative; margin: 22px auto 0; color: #d6cec2; max-width: 32rem; font-weight: 300; font-size: 1.1rem; }
+.wl { position: relative; display: flex; gap: 8px; max-width: 470px; margin: 34px auto 0; padding: 6px; border-radius: 999px; background: rgba(243, 238, 230, .06); border: 1px solid var(--stage-rule); }
+.wl input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--stage-fg); font: 400 1rem var(--f-sans); padding: 0 16px; outline: none; }
+.wl input::placeholder { color: var(--stage-muted); }
+.wl-note { position: relative; margin-top: 14px; min-height: 1.5em; font-size: 0.86rem; color: var(--stage-muted); }
+.stores { position: relative; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 30px; }
+.store { display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 12px; border: 1px solid var(--stage-rule); font-size: 0.82rem; color: var(--stage-muted); line-height: 1.2; text-align: left; }
+.store b { display: block; color: var(--stage-fg); font-weight: 500; font-size: 0.95rem; }
+.store svg { width: 20px; height: 20px; color: var(--stage-fg); }
+@media (max-width: 480px) { .wl { flex-direction: column; border-radius: 22px; } .wl input { padding: 12px 14px; } }
+
+footer { background: var(--stage); color: var(--stage-muted); border-top: 1px solid var(--stage-rule); font-size: 0.85rem; }
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; padding-block: 28px; }
+footer .wordmark { font-size: 0.9rem; }
+
+@media (max-width: 960px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .phone { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html { scroll-behavior: auto; }
+}
+</style>
+
+<!-- Garment shapes, shared by the phone, the reveal and the seller card -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".38"/>
+      <stop offset=".45" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".22"/>
+    </linearGradient>
+    <symbol id="g-dress" viewBox="0 0 100 120">
+      <path fill="currentColor" d="M36 24 L40 6 L42 6 L44 22 L56 22 L58 6 L60 6 L64 24 C67 40 61 50 64 60 L78 114 L22 114 L36 60 C39 50 33 40 36 24 Z"/>
+      <path fill="url(#sheen)" d="M36 24 L40 6 L42 6 L44 22 L56 22 L58 6 L60 6 L64 24 C67 40 61 50 64 60 L78 114 L22 114 L36 60 C39 50 33 40 36 24 Z"/>
+    </symbol>
+    <symbol id="g-blazer" viewBox="0 0 100 120">
+      <path fill="currentColor" d="M30 12 L44 8 L50 34 L56 8 L70 12 L86 24 L90 92 L78 94 L74 48 L73 106 L27 106 L26 48 L22 94 L10 92 L14 24 Z"/>
+      <path fill="url(#sheen)" d="M30 12 L44 8 L50 34 L56 8 L70 12 L86 24 L90 92 L78 94 L74 48 L73 106 L27 106 L26 48 L22 94 L10 92 L14 24 Z"/>
+      <path fill="none" stroke="#000" stroke-opacity=".28" stroke-width="1.6" d="M44 8 L40 40 L50 60 L60 40 L56 8 M50 60 L50 106"/>
+    </symbol>
+    <symbol id="g-trousers" viewBox="0 0 100 120">
+      <path fill="currentColor" d="M28 6 L72 6 L80 116 L56 116 L50 40 L44 116 L20 116 Z"/>
+      <path fill="url(#sheen)" d="M28 6 L72 6 L80 116 L56 116 L50 40 L44 116 L20 116 Z"/>
+      <path fill="none" stroke="#000" stroke-opacity=".2" stroke-width="1.4" d="M28 14 L72 14"/>
+    </symbol>
+    <symbol id="g-tank" viewBox="0 0 100 120">
+      <path fill="currentColor" d="M38 8 L44 8 C46 20 54 20 56 8 L62 8 C62 24 70 28 70 36 L70 104 L30 104 L30 36 C30 28 38 24 38 8 Z"/>
+      <path fill="url(#sheen)" d="M38 8 L44 8 C46 20 54 20 56 8 L62 8 C62 24 70 28 70 36 L70 104 L30 104 L30 36 C30 28 38 24 38 8 Z"/>
+    </symbol>
+    <symbol id="g-bag" viewBox="0 0 100 120">
+      <path fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" d="M36 56 C36 22 64 22 64 56"/>
+      <path fill="currentColor" d="M24 54 L76 54 L82 108 L18 108 Z"/>
+      <path fill="url(#sheen)" d="M24 54 L76 54 L82 108 L18 108 Z"/>
+      <rect x="46" y="66" width="8" height="6" rx="1.5" fill="#f3dfba"/>
+    </symbol>
+    <!-- a stylised figure the looks are rendered onto -->
+    <symbol id="fig" viewBox="0 0 100 200">
+      <path fill="#3b2a22" d="M41 20 C40 8 60 8 59 20 C61 30 60 40 56 44 L44 44 C40 40 39 30 41 20 Z"/>
+      <ellipse cx="50" cy="22" rx="8" ry="10" fill="#b98a6c"/>
+      <rect x="46" y="29" width="8" height="10" rx="3" fill="#a87a5d"/>
+      <path stroke="#a87a5d" stroke-width="6" stroke-linecap="round" fill="none" d="M37 44 L31 98 M63 44 L69 98"/>
+      <path stroke="#a87a5d" stroke-width="7" stroke-linecap="round" fill="none" d="M45 140 L44 190 M55 140 L56 190"/>
+      <path fill="#1d1a16" d="M38 188 L48 188 L48 194 L36 194 Z M52 188 L62 188 L64 194 L52 194 Z"/>
+    </symbol>
+  </defs>
+</svg>
+
+<nav class="nav" aria-label="Main">
+  <div class="wrap">
+    <a class="wordmark" href="#top">WORN</a>
+    <div class="nav-links">
+      <a href="#arc">How it works</a>
+      <a href="#reveal">The reveal</a>
+      <a href="#coins">Coins</a>
+      <a href="#sellers">Sellers</a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <a class="btn btn-gold" href="#join">Get early access</a>
+  </div>
+</nav>
+
+<main id="top">
+  <!-- ════════ HERO ════════ -->
+  <header class="stage hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow rise"><i></i>A shopping app where nothing ships</span>
+        <h1 class="rise r2">
+          <span>Buy the look.</span>
+          <span>Wait for it.</span>
+          <span class="gold">See it on you.</span>
+        </h1>
+        <p class="dek rise r3">WORN turns the whole shopping trip into the fun part. Browse real pieces, check out with coins and track your order to the door. Then you <b>unbox photos of yourself wearing everything you bought.</b> No delivery, no returns, and no card bill.</p>
+        <div class="hero-ctas rise r4">
+          <a class="btn btn-gold" href="#join">Get early access</a>
+          <a class="btn btn-ghost" href="#arc">See how it works</a>
+        </div>
+        <div class="hero-proof rise r5">
+          <span><b>500 coins</b> to start</span>
+          <span><b>Real pieces</b> from real stores</span>
+          <span><b>iOS + Android</b> beta soon</span>
+        </div>
+      </div>
+
+      <div class="demo rise r3">
+        <div class="phone" id="phone" data-scene="feed" aria-label="Animated preview of the WORN app" role="img">
+          <div class="screen">
+            <div class="island"></div>
+            <div class="sbar"><span>9:41</span><span>●●● ▮</span></div>
+            <div class="push" id="push"><div class="ic">W</div><div><b>Out for delivery</b><small>now</small><br>Your haul is on its way. Not long now.</div></div>
+
+            <!-- Feed -->
+            <div class="view v-feed">
+              <div class="app-top">
+                <div><div class="app-kicker">Curated for you</div><div class="app-title">Today's edit</div></div>
+                <div class="bag" id="bag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8h14l-1 12H6L5 8Z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg><b id="bagN">0</b></div>
+              </div>
+              <div class="chips-row"><span class="chip on">All</span><span class="chip">Dresses</span><span class="chip">Tops</span><span class="chip">Bags</span></div>
+              <div class="pgrid">
+                <div class="pcard" data-add="1"><div class="ph" style="background:linear-gradient(160deg,#f3e9da,#e6d6bd);color:#d4b88c"><span class="tag">Trending</span><svg><use href="#g-dress"/></svg><span class="add">+</span></div><div class="meta"><div class="nm">Bias-cut slip dress · Champagne</div><div class="pr"><span class="coin"></span>64</div></div></div>
+                <div class="pcard" data-add="2"><div class="ph" style="background:linear-gradient(160deg,#e9e6e1,#d6d1c9);color:#25221e"><svg><use href="#g-blazer"/></svg><span class="add">+</span></div><div class="meta"><div class="nm">Boxy cropped blazer · Ink</div><div class="pr"><span class="coin"></span>52</div></div></div>
+                <div class="pcard" data-add="3"><div class="ph" style="background:linear-gradient(160deg,#f1e0d3,#e3c8b4);color:#b4552f"><svg><use href="#g-trousers"/></svg><span class="add">+</span></div><div class="meta"><div class="nm">Wide-leg linen trouser · Rust</div><div class="pr"><span class="coin"></span>40</div></div></div>
+                <div class="pcard"><div class="ph" style="background:linear-gradient(160deg,#e5e9df,#cfd6c6);color:#7d8e70"><span class="tag">New</span><svg><use href="#g-tank"/></svg><span class="add">+</span></div><div class="meta"><div class="nm">Ribbed knit tank · Sage</div><div class="pr"><span class="coin"></span>31</div></div></div>
+              </div>
+            </div>
+
+            <!-- Checkout -->
+            <div class="view v-checkout">
+              <div class="app-kicker">Checkout</div><div class="app-title">Your haul</div>
+              <div class="haul">
+                <div class="hrow"><div class="sw" style="background:#efe3cf;color:#d4b88c"><svg><use href="#g-dress"/></svg></div><div class="t">Bias-cut slip dress<small>Champagne · S</small></div><div class="c">64</div></div>
+                <div class="hrow"><div class="sw" style="background:#e3dfd8;color:#25221e"><svg><use href="#g-blazer"/></svg></div><div class="t">Boxy cropped blazer<small>Ink · M</small></div><div class="c">52</div></div>
+                <div class="hrow"><div class="sw" style="background:#eed9ca;color:#b4552f"><svg><use href="#g-trousers"/></svg></div><div class="t">Wide-leg linen trouser<small>Rust · 28</small></div><div class="c">40</div></div>
+              </div>
+              <div class="app-kicker" style="margin-top:14px">Delivery pace</div>
+              <div class="tiers"><div class="tier">Express<small>~2 hrs</small></div><div class="tier on">Standard<small>~12 hrs</small></div><div class="tier">Slow burn<small>~48 hrs</small></div></div>
+              <div class="totals">
+                <div><span>Haul total</span><span class="num">156 coins</span></div>
+                <div><span>Balance after</span><span class="num" id="bal">500 → 344</span></div>
+              </div>
+              <div class="paybtn" id="pay"><span class="coin"></span><span id="payT">Pay 156 coins</span></div>
+            </div>
+
+            <!-- Tracking -->
+            <div class="view v-track">
+              <div class="track-hd"><div><div class="app-kicker">Order #W-2Q81</div><div class="app-title">Your haul</div></div></div>
+              <div class="eta">
+                <div class="k">Arriving</div>
+                <div class="v" id="etaV">in about <em>12 hours</em></div>
+                <div class="tierline"><span id="tierL">Standard delivery</span><span class="rush" id="rush"><span class="coin"></span>Rush to Express · 25</span></div>
+              </div>
+              <ul class="ladder" id="ladder">
+                <span class="fill" id="fill"></span>
+                <li><span class="dot"></span>Processing<span class="when">✓</span></li>
+                <li><span class="dot"></span>Packed<span class="when"></span></li>
+                <li><span class="dot"></span>Out for delivery<span class="when"></span></li>
+                <li><span class="dot"></span>Arriving soon<span class="when"></span></li>
+                <li><span class="dot"></span>Delivered<span class="when"></span></li>
+              </ul>
+            </div>
+
+            <!-- Reveal -->
+            <div class="view v-reveal" id="vReveal">
+              <div class="app-kicker">Reveal ready</div>
+              <div class="app-title">Your haul, <em>on you</em></div>
+              <div class="boxwrap">
+                <div class="giftbox"><div class="glow"></div><div class="base"></div><div class="ribbon"></div><div class="lid"></div></div>
+                <div class="deck" id="pdeck"></div>
+              </div>
+              <div class="reveal-actions"><span>Share look</span><span>Shop again</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="steps" id="steps" role="group" aria-label="Demo steps">
+          <button class="step" data-i="0"><span class="n">01</span>Browse<span class="bar"></span></button>
+          <button class="step" data-i="1"><span class="n">02</span>Check out<span class="bar"></span></button>
+          <button class="step" data-i="2"><span class="n">03</span>Track<span class="bar"></span></button>
+          <button class="step" data-i="3"><span class="n">04</span>Reveal<span class="bar"></span></button>
+          <button class="step playpause" id="pp" aria-label="Pause demo">❚❚</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="marquee" aria-hidden="true">
+    <div class="track" id="mq">
+      <span>Processing<i>◆</i></span><span>Packed<i>◆</i></span><span>Out for delivery<i>◆</i></span><span>Arriving soon<i>◆</i></span><span>Delivered<i>◆</i></span><span class="hl">Reveal ready<i>◆</i></span>
+      <span>Processing<i>◆</i></span><span>Packed<i>◆</i></span><span>Out for delivery<i>◆</i></span><span>Arriving soon<i>◆</i></span><span>Delivered<i>◆</i></span><span class="hl">Reveal ready<i>◆</i></span>
+    </div>
+  </div>
+
+  <!-- ════════ THE ARC ════════ -->
+  <section class="band" id="arc">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">How it works</span>
+        <h2>The best part of shopping was always <em>the wait.</em></h2>
+        <p>The scroll, the haul, the moment you hit pay, the notification that says it's nearly here. WORN keeps every one of those moments and swaps the parcel for photos of you in the clothes.</p>
+      </div>
+      <div class="arc">
+        <div class="arc-step"><span class="label">Step 1</span><h3>Make your avatar</h3><p>Upload one photo and WORN builds the model you'll be wearing everything on. You can skip it and add one later.</p></div>
+        <div class="arc-step"><span class="label">Step 2</span><h3>Browse today's edit</h3><p>Real pieces from real stores. Take the style quiz and your feed reorders around your taste. Filter by dresses, tops, bags and more.</p></div>
+        <div class="arc-step"><span class="label">Step 3</span><h3>Check out with coins</h3><p>Fill your haul and pay with coins. You get 500 when you join. Then pick how long you want to wait for it.</p></div>
+        <div class="arc-step"><span class="label">Step 4</span><h3>Track it home</h3><p>Watch it go from packed to out for delivery, with a notification at every step. Can't wait? Rush to Express for 25 coins.</p></div>
+        <div class="arc-step"><span class="label">Step 5</span><h3>Open your reveal</h3><p>Your haul lands as a deck of renders of you wearing it, in real-looking scenes. Swipe through, then share your favourite.</p></div>
+      </div>
+
+      <div class="tiers-card">
+        <div>
+          <span class="label">Pick your pace</span>
+          <h3>How long do you want to look forward to it?</h3>
+          <p>Every order moves through five real stages. Express gets there in about two hours. Slow burn takes two days, for people who like it that way.</p>
+        </div>
+        <div class="chart-wrap" id="tierChart" role="img" aria-label="Delivery timelines. Express: delivered in 2 hours. Standard: processing at 1 hour, packed at 3, out for delivery at 8, arriving soon at 10, delivered at 12. Slow burn: processing at 2 hours, packed at 12, out for delivery at 36, arriving soon at 44, delivered at 48."></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ REVEAL ════════ -->
+  <section class="stage reveal-stage" id="reveal">
+    <div class="wrap reveal-grid">
+      <div>
+        <span class="label">The reveal</span>
+        <h2>Your haul, <em>on you.</em></h2>
+        <p class="lede">When your order is delivered, the box opens on a deck of renders of you wearing what you bought, in places worth being seen. Every piece comes with two free looks.</p>
+        <div class="price-list">
+          <div><span>Two looks per piece</span><span>Free</span></div>
+          <div><span>Unlock more looks</span><span>50 coins</span></div>
+          <div><span>Render a new scene</span><span>50 coins</span></div>
+          <div><span>Combine pieces into one outfit</span><span>75 coins</span></div>
+        </div>
+      </div>
+      <div class="fan" id="fan" role="img" aria-label="A fanned deck of three example looks: a champagne slip dress on a rooftop at golden hour, an ink blazer with rust trousers in a gallery, and a sage tank with rust trousers on a street after rain. Illustrations, not real renders.">
+        <span class="fan-hint">Tap the deck · Illustrated example looks</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ COINS ════════ -->
+  <section class="band" id="coins">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Coins</span>
+        <h2>Shop all you like. <em>Earn it back daily.</em></h2>
+        <p>Everything in WORN is priced in coins. You start with 500 and earn more by showing up, bringing friends and buying the real thing.</p>
+      </div>
+      <div class="coins-grid">
+        <div class="ledger">
+          <div class="hd"><h3>Your coin ledger</h3><span>Earn · Spend</span></div>
+          <div class="lrow"><b>Welcome bonus</b><small>When you join</small><span class="amt plus">+500</span></div>
+          <div class="lrow"><b>Daily streak</b><small>Open the app, claim your reward</small><span class="amt plus">+10 to +100</span></div>
+          <div class="lrow"><b>Refer a friend</b><small>When they place their first order</small><span class="amt plus">+100</span></div>
+          <div class="lrow"><b>Buy it for real</b><small>Cashback through our store links</small><span class="amt plus">+25</span></div>
+          <div class="lrow"><b>A piece in your haul</b><small>Typical price in today's edit</small><span class="amt minus">−28 to −76</span></div>
+          <div class="lrow"><b>Rush to Express</b><small>Speed up an order on the way</small><span class="amt minus">−25</span></div>
+        </div>
+        <div class="streak">
+          <span class="label">Daily streak</span>
+          <h3>The longer you keep it, the more it pays.</h3>
+          <p>Claim once a day. Rewards step up at days 3, 7, 14 and 30.</p>
+          <svg id="streakChart" viewBox="0 0 420 210" role="img" aria-label="Streak rewards: day 1, 10 coins; day 3, 25; day 7, 50; day 14, 75; day 30, 100."></svg>
+        </div>
+      </div>
+      <div class="packs">
+        <div class="pack"><div class="c"><span class="coin-big"></span>100</div><div class="n">Starter Pack</div><div class="p">₹99</div></div>
+        <div class="pack"><div class="c"><span class="coin-big"></span>350</div><div class="n">Style Pack</div><div class="p">₹299</div></div>
+        <div class="pack hot"><span class="flag">Most popular</span><div class="c"><span class="coin-big"></span>650</div><div class="n">Premium Pack</div><div class="p">₹499</div></div>
+        <div class="pack"><span class="flag">Best value</span><div class="c"><span class="coin-big"></span>1,500</div><div class="n">Ultimate Pack</div><div class="p">₹999</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ FEATURES ════════ -->
+  <section class="band" style="padding-top:0">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Also in the app</span>
+        <h2>Small things that make it <em>yours.</em></h2>
+      </div>
+      <div class="feat">
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M7 12h10M10 18h4"/></svg></span><h3>A feed that learns your taste</h3><p>Answer a short style quiz and today's edit reorders around what you like. Filter by category whenever you want.</p></div>
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l2.5 5.5L20 9.5l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-1Z"/></svg></span><h3>Try it on first</h3><p>See a piece on you right from its page before it goes in your haul.</p></div>
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 3h12v18l-6-4-6 4Z"/></svg></span><h3>Your lookbook</h3><p>Save the pieces you love. Your lookbook stays with your account, on any phone you sign in on.</p></div>
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4Z"/><path d="M10 21h4"/></svg></span><h3>Every step, on your lock screen</h3><p>Packed, out for delivery, arriving soon. Tap a notification and you're straight back on your order.</p></div>
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/></svg></span><h3>Buy it for real</h3><p>Love it too much? Every piece links to the store that sells it, and buying through WORN earns you 25 coins.</p></div>
+        <div class="fcell"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6Z"/><path d="M9 12l2 2 4-4"/></svg></span><h3>Your photos, your call</h3><p>Sign in with Google, no phone number needed. One tap on "Delete my photos" removes your photo and avatar.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ SELLERS ════════ -->
+  <section class="band" id="sellers" style="padding-top:0">
+    <div class="wrap">
+      <div class="seller">
+        <div>
+          <span class="label">For sellers</span>
+          <h2>Put your pieces <em>on people.</em></h2>
+          <p>Open a shop on WORN and your listings show up in the feed beside everything else. Shoppers see your pieces on themselves before they decide.</p>
+          <ul>
+            <li>Register your shop in a minute</li>
+            <li>Upload product photos, sizes and colours</li>
+            <li>Set a coin price and add a link to buy it for real</li>
+          </ul>
+        </div>
+        <div class="listing-form" aria-label="Example seller listing">
+          <div class="lf-top">
+            <div class="shot" style="background:linear-gradient(160deg,#ede7dd,#d9cfbf);color:#c8a87a"><svg><use href="#g-bag"/></svg></div>
+            <div style="display:grid;gap:10px;flex:1;min-width:0">
+              <div class="lf-field"><small>Title</small><span>Mini shoulder bag · Gold</span></div>
+              <div class="lf-field"><small>Category</small><span>Bags</span></div>
+            </div>
+          </div>
+          <div class="lf-row">
+            <div class="lf-field"><small>Coin price</small><span class="num">48 coins</span></div>
+            <div class="lf-field"><small>Colour · Size</small><span>Gold · One size</span></div>
+          </div>
+          <div class="lf-field"><small>Buy it for real</small><span>yourstore.in/mini-shoulder-bag</span></div>
+          <div class="lf-live"><span><i></i>Live in today's edit</span><span class="label" style="color:var(--muted)">Example</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ FAQ ════════ -->
+  <section class="band" id="faq" style="padding-top:0">
+    <div class="wrap faq">
+      <div class="sec-head">
+        <span class="label">Questions</span>
+        <h2>The things people <em>ask first.</em></h2>
+      </div>
+      <div>
+        <details open><summary>Does anything actually arrive?</summary><p>No, and that's the point. You get the whole thrill of shopping, from the haul to the wait to the unboxing, and what arrives is renders of you wearing it. Nothing to pay off, store or send back.</p></details>
+        <details><summary>Can I buy the real thing?</summary><p>Yes. Every piece links to a store that sells it. Buying through WORN's link earns you 25 coins of cashback.</p></details>
+        <details><summary>What are coins, and do I have to pay?</summary><p>Coins are WORN's currency. You get 500 when you join and earn more every day from streaks and referrals. If you want more, coin packs start at ₹99.</p></details>
+        <details><summary>What happens to my photo?</summary><p>It's used to build your avatar so the renders look like you. You can delete your photo and avatar any time with one tap in your profile.</p></details>
+        <details><summary>When can I get it?</summary><p>WORN is heading into beta on iOS and Android. Join the list and we'll tell you when your invite is ready.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ CLOSE ════════ -->
+  <section class="stage close" id="join">
+    <div class="wrap">
+      <span class="label" style="color:var(--stage-gold);position:relative">Early access</span>
+      <h2 style="margin-top:18px">Your first haul is <em>almost here.</em></h2>
+      <p>Join the waitlist and we'll send your invite when the beta opens.</p>
+      <form class="wl" id="wl" novalidate>
+        <label for="wl-email" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Email address</label>
+        <input id="wl-email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required>
+        <button class="btn btn-gold" type="submit">Join the waitlist</button>
+      </form>
+      <div class="wl-note" id="wlNote" role="status" aria-live="polite"></div>
+      <div class="stores">
+        <div class="store"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.6-1-2.6-3.9ZM14 5.4c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1 .1 2.1-.6 2.8-1.4Z"/></svg><span>Coming soon<b>iPhone</b></span></div>
+        <div class="store"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 3.5v17c0 .4.4.7.8.5l9.4-9.3L4.8 3c-.4-.2-.8.1-.8.5Zm11.3 9.3-2.2 2.2-7.3 6 9.5-5.5Zm0-1.6L5.8 5.7l7.3 6Zm1.5.9 3.1-1.8c.6-.4.6-1.2 0-1.6L17 7l-2.5 2.6Z"/></svg><span>Coming soon<b>Android</b></span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="wordmark">WORN</span>
+    <span>The shopping arc is the product.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ── Example looks (illustrations of what a reveal holds) ── */
+  var LOOKS = [
+    { title: 'Rooftop, golden hour', piece: 'Bias-cut slip dress', scene: 'linear-gradient(170deg,#f6cf93 0%,#e39a6b 45%,#6b3a33 100%)',
+      layers: [['g-dress', 22, 34, 56, 128, '#e4cc9f']], tag: 'Free look' },
+    { title: 'Gallery, white walls', piece: 'Blazer + linen trouser', scene: 'linear-gradient(175deg,#f3f0ea 0%,#ddd6ca 60%,#bfb6a8 100%)',
+      layers: [['g-trousers', 30, 96, 40, 96, '#b4552f'], ['g-blazer', 17, 34, 66, 76, '#26231f']], tag: 'Free look' },
+    { title: 'Street, after rain', piece: 'Knit tank + linen trouser', scene: 'linear-gradient(170deg,#7d8ea0 0%,#3e4b5a 55%,#151b22 100%)',
+      layers: [['g-trousers', 30, 96, 40, 96, '#b4552f'], ['g-tank', 30, 36, 40, 66, '#8fa27f']], tag: 'Unlock · 50' }
+  ];
+  function lookSVG(l) {
+    var s = '<svg viewBox="0 0 100 200" preserveAspectRatio="xMidYMax meet" style="position:absolute;left:0;right:0;bottom:-2%;width:100%;height:92%"><use href="#fig"/>';
+    l.layers.forEach(function (g) { s += '<svg x="' + g[1] + '" y="' + g[2] + '" width="' + g[3] + '" height="' + g[4] + '" style="color:' + g[5] + '"><use href="#' + g[0] + '"/></svg>'; });
+    return s + '</svg>';
+  }
+  function card(cls, l, i, big) {
+    var d = document.createElement('div');
+    d.className = cls; d.dataset.pos = String(i);
+    d.style.background = l.scene;
+    d.innerHTML = '<div style="position:absolute;inset:0;background:radial-gradient(120% 60% at 50% 0%,rgba(255,255,255,.35),transparent 60%)"></div>' + lookSVG(l) + '<div class="grain"></div>' +
+      (big ? '<span class="free' + (l.tag.indexOf('Unlock') === 0 ? ' lock' : '') + '">' + l.tag + '</span>' : '') +
+      '<div class="cap">' + (big ? '<span>Look 0' + (i + 1) + '</span>' : '') + '<b>' + l.title + '</b>' + (big ? l.piece : '') + '</div>';
+    return d;
+  }
+  var pdeck = document.getElementById('pdeck'), fan = document.getElementById('fan');
+  var pcards = LOOKS.map(function (l, i) { var c = card('rcard', l, i, false); pdeck.appendChild(c); return c; });
+  var fcards = LOOKS.map(function (l, i) { var c = card('fcard', l, i, true); fan.insertBefore(c, fan.firstChild); return c; });
+  function rotate(cards) { cards.forEach(function (c) { c.dataset.pos = String((+c.dataset.pos + 2) % 3); }); }
+  fan.addEventListener('click', function () { rotate(fcards); });
+  if (!reduce) setInterval(function () { if (!document.hidden) rotate(fcards); }, 4200);
+
+  /* ── Hero phone: the arc on a loop ── */
+  var phone = document.getElementById('phone');
+  var SCENES = [{ id: 'feed', dur: 4200 }, { id: 'checkout', dur: 3600 }, { id: 'track', dur: 6600 }, { id: 'reveal', dur: 6400 }];
+  var steps = [].slice.call(document.querySelectorAll('#steps .step[data-i]'));
+  var adds = [].slice.call(document.querySelectorAll('.pcard[data-add]'));
+  var bag = document.getElementById('bag'), bagN = document.getElementById('bagN');
+  var pay = document.getElementById('pay'), payT = document.getElementById('payT'), bal = document.getElementById('bal');
+  var ladder = [].slice.call(document.querySelectorAll('#ladder li')), fill = document.getElementById('fill');
+  var rush = document.getElementById('rush'), etaV = document.getElementById('etaV'), tierL = document.getElementById('tierL');
+  var push = document.getElementById('push'), vReveal = document.getElementById('vReveal');
+  var whenStd = ['✓', 'in 3h', 'in 8h', 'in 10h', 'in 12h'], whenExp = ['✓', '✓', 'in 1h 25m', 'in 1h 55m', 'in 2h'];
+  var idx = 0, t = 0, playing = !reduce, lastBag = -1;
+
+  function render() {
+    var sc = SCENES[idx].id;
+    phone.dataset.scene = sc;
+    steps.forEach(function (s, i) {
+      s.classList.toggle('on', i === idx);
+      s.querySelector('.bar').style.width = i < idx ? '100%' : i === idx ? Math.min(100, t / SCENES[idx].dur * 100) + '%' : '0%';
+    });
+    // feed: three pieces go into the haul
+    var n = sc === 'feed' ? (t > 900) + (t > 1900) + (t > 2900) : 3;
+    adds.forEach(function (c, i) { c.classList.toggle('added', i < n); });
+    bagN.textContent = n; bagN.classList.toggle('show', n > 0);
+    if (n !== lastBag && n > 0 && sc === 'feed') { bag.classList.remove('bump'); void bag.offsetWidth; bag.classList.add('bump'); }
+    lastBag = n;
+    // checkout: pay
+    var paid = sc !== 'checkout' || t > 2300;
+    pay.classList.toggle('pressed', sc === 'checkout' && paid);
+    payT.textContent = sc === 'checkout' && paid ? 'Paid · order placed' : 'Pay 156 coins';
+    bal.textContent = '500 → 344';
+    // tracking: ladder climbs, rush pressed, push lands
+    var stage = sc === 'track' ? Math.min(5, 1 + Math.floor(t / 1250)) : (sc === 'reveal' ? 5 : 1);
+    var rushed = sc === 'track' ? t > 1700 : sc === 'reveal';
+    rush.classList.toggle('pressed', sc === 'track' && t > 1500 && t < 1700);
+    rush.classList.toggle('gone', rushed);
+    tierL.textContent = rushed ? 'Rushed to Express' : 'Standard delivery';
+    var w = rushed ? whenExp : whenStd;
+    ladder.forEach(function (li, i) {
+      li.classList.toggle('done', i < stage);
+      li.classList.toggle('now', i === stage - 1);
+      li.querySelector('.when').textContent = i < stage ? '✓' : w[i];
+    });
+    var left = { 1: rushed ? '2 hours' : '12 hours', 2: rushed ? '1h 35m' : '9 hours', 3: '35 minutes', 4: '5 minutes', 5: 'now' }[stage];
+    etaV.innerHTML = stage === 5 ? '<em>Delivered</em>' : 'in about <em>' + left + '</em>';
+    fill.style.height = ((stage - 1) / 4 * (ladder.length ? (ladder[4].offsetTop - ladder[0].offsetTop) : 0)) + 'px';
+    push.classList.toggle('show', sc === 'track' && stage >= 3 && stage <= 4);
+    // reveal: box opens, deck is dealt, cards cycle
+    vReveal.classList.toggle('open', sc === 'reveal' && (t > 500 || !playing));
+    vReveal.classList.toggle('dealt', sc === 'reveal' && (t > 1500 || !playing));
+    var spin = sc === 'reveal' && playing ? Math.max(0, Math.floor((t - 3200) / 1300)) : 0;
+    pcards.forEach(function (c, i) { c.dataset.pos = String((i + spin * 2) % 3); });
+  }
+  function go(i, at) { idx = i; t = at; render(); }
+  function settle() { t = SCENES[idx].dur - 1; render(); }
+  steps.forEach(function (s, i) { s.addEventListener('click', function () { go(i, 0); if (!playing) settle(); }); });
+  var pp = document.getElementById('pp');
+  function setPlaying(p) { playing = p; pp.textContent = p ? '❚❚' : '▶'; pp.setAttribute('aria-label', p ? 'Pause demo' : 'Play demo'); if (!p) settle(); }
+  pp.addEventListener('click', function () { setPlaying(!playing); });
+  var prev = performance.now();
+  function frame(now) {
+    var dt = Math.min(100, now - prev); prev = now;
+    if (playing && !document.hidden) {
+      t += dt;
+      if (t >= SCENES[idx].dur) { idx = (idx + 1) % SCENES.length; t = 0; }
+      render();
+    }
+    requestAnimationFrame(frame);
+  }
+  if (reduce) { setPlaying(false); go(3, 0); settle(); } else { render(); requestAnimationFrame(frame); }
+
+  /* ── Delivery tier chart, drawn to scale (hours) ── */
+  (function () {
+    var W = 640, L = 96, R = 20, X = function (h) { return L + h / 48 * (W - L - R); };
+    var rows = [['Express', [0.083, 0.42, 1.42, 1.92, 2]], ['Standard', [1, 3, 8, 10, 12]], ['Slow burn', [2, 12, 36, 44, 48]]];
+    var s = '';
+    [0, 12, 24, 36, 48].forEach(function (h) {
+      s += '<line x1="' + X(h) + '" y1="14" x2="' + X(h) + '" y2="190" stroke="var(--rule)" stroke-width="1"/>' +
+           '<text x="' + X(h) + '" y="210" text-anchor="middle" font-size="11" fill="var(--muted)">' + h + 'h</text>';
+    });
+    rows.forEach(function (r, i) {
+      var y = 40 + i * 62, end = r[1][4];
+      s += '<text x="0" y="' + (y + 4) + '" font-size="12" fill="var(--ink)">' + r[0] + '</text>';
+      s += '<line x1="' + X(0) + '" y1="' + y + '" x2="' + X(48) + '" y2="' + y + '" stroke="var(--warm)" stroke-width="10" stroke-linecap="round"/>';
+      s += '<line x1="' + X(0) + '" y1="' + y + '" x2="' + Math.max(X(end), X(0) + 6) + '" y2="' + y + '" stroke="var(--gold-deep)" stroke-width="10" stroke-linecap="round"/>';
+      r[1].slice(0, 4).forEach(function (h) { if (end > 4) s += '<circle cx="' + X(h) + '" cy="' + y + '" r="2.4" fill="var(--paper)"/>'; });
+      s += '<circle cx="' + X(end) + '" cy="' + y + '" r="7" fill="var(--paper)" stroke="var(--gold-deep)" stroke-width="2.5"/>';
+      var lbl = end === 2 ? 'Delivered · 2h' : 'Delivered · ' + end + 'h';
+      var anchor = end === 48 ? 'end' : 'start', lx = end === 48 ? X(end) - 4 : X(end) + 14;
+      s += '<text x="' + lx + '" y="' + (y - 14) + '" text-anchor="' + anchor + '" font-size="11" fill="var(--ink-soft)">' + lbl + '</text>';
+    });
+    document.getElementById('tierChart').innerHTML = '<svg viewBox="0 0 ' + W + ' 220" aria-hidden="true">' + s + '</svg>';
+  })();
+
+  /* ── Streak chart, drawn to scale (coins) ── */
+  (function () {
+    var data = [[1, 10], [3, 25], [7, 50], [14, 75], [30, 100]], s = '', base = 170, H = 140, bw = 52, gap = 28, x0 = 20;
+    [0, 50, 100].forEach(function (v) { var y = base - v / 100 * H; s += '<line x1="0" y1="' + y + '" x2="420" y2="' + y + '" stroke="var(--rule)" stroke-dasharray="' + (v ? '3 5' : '0') + '"/>'; });
+    data.forEach(function (d, i) {
+      var x = x0 + i * (bw + gap), h = d[1] / 100 * H;
+      s += '<rect x="' + x + '" y="' + (base - h) + '" width="' + bw + '" height="' + h + '" rx="6" fill="' + (i === 4 ? 'var(--gold-deep)' : 'var(--gold)') + '" opacity="' + (0.55 + i * 0.11) + '"/>';
+      s += '<text x="' + (x + bw / 2) + '" y="' + (base - h - 8) + '" text-anchor="middle" font-size="12" fill="var(--ink)">+' + d[1] + '</text>';
+      s += '<text x="' + (x + bw / 2) + '" y="' + (base + 20) + '" text-anchor="middle" font-size="11" fill="var(--muted)">Day ' + d[0] + '</text>';
+    });
+    document.getElementById('streakChart').innerHTML = s;
+  })();
+
+  /* ── Waitlist form (not connected to a list yet) ── */
+  document.getElementById('wl').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var input = document.getElementById('wl-email'), note = document.getElementById('wlNote');
+    if (!input.value || !input.checkValidity()) { note.textContent = 'Enter an email address like name@example.com.'; input.focus(); return; }
+    note.textContent = 'Sign-ups aren\'t open in this preview yet. Connect this form to your waitlist before launch.';
+  });
+})();
+</script>

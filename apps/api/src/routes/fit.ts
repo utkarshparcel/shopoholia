@@ -318,7 +318,13 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["fit"],
         params: z.object({ sellerId: z.string().uuid() }),
         body: CreateTailorReviewBodySchema,
-        response: { 201: TailorReviewSchema, 401: ErrorSchema, 404: ErrorSchema },
+        response: {
+          201: TailorReviewSchema,
+          401: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
       },
     },
     async (request, reply) => {
@@ -329,19 +335,27 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!seller || seller.sellerType !== "TAILOR") {
         return reply.code(404).send({ error: "Not Found", message: "Tailor not found" });
       }
-      if (body.orderId) {
-        const order = await app.deps.repos.findTailoringOrder(body.orderId, userId);
-        if (!order) {
-          return reply.code(404).send({ error: "Not Found", message: "Order not found" });
-        }
+      // Only a customer can review: the caller's own order, stitched by this tailor and delivered.
+      const order = await app.deps.repos.findTailoringOrder(body.orderId, userId);
+      if (!order) {
+        return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (order.tailorSellerId !== sellerId) {
+        return reply.code(403).send({ error: "Forbidden", message: "This order is with another tailor" });
+      }
+      if (order.state !== "DELIVERED") {
+        return reply.code(409).send({ error: "Conflict", message: "Review an order once it is delivered" });
       }
       const review = await app.deps.repos.createTailoringReview({
         sellerId,
         userId,
-        orderId: body.orderId ?? null,
+        orderId: order.id,
         rating: body.rating,
         comment: body.comment ?? null,
       });
+      if (!review) {
+        return reply.code(409).send({ error: "Conflict", message: "This order is already reviewed" });
+      }
       trackServerEvent("tailor_reviewed", { userId, sellerId, rating: body.rating });
       return reply.code(201).send(toReviewJson(review));
     },

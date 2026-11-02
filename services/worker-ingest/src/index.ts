@@ -13,6 +13,7 @@ import {
   initNodeSentry,
 } from "@worn/shared/node-sentry";
 import {
+  API_ORIGIN,
   DEFAULT_JOB_ATTEMPTS,
   DEFAULT_JOB_BACKOFF,
   DeferJobError,
@@ -468,7 +469,7 @@ export function createGmailConnectorForSource(
   return new GmailConnector({
     clientId,
     clientSecret,
-    redirectUri: `${process.env.API_PUBLIC_URL ?? "https://api.shopoholia.app"}/ingestion/sources/oauth/callback`,
+    redirectUri: `${process.env.API_PUBLIC_URL ?? API_ORIGIN}/ingestion/sources/oauth/callback`,
     sourceId: source.id,
     tokenStore,
   });

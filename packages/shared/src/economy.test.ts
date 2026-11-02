@@ -32,7 +32,25 @@ describe("economy constants", () => {
   it("defines prod and beta tier timings for all tiers", () => {
     for (const tier of DeliveryTier.options) {
       expect(TIER_TIMINGS_PROD[tier].DELIVERED).toBeGreaterThan(0);
-      expect(TIER_TIMINGS_BETA[tier].DELIVERED).toBe(300_000);
+      expect(TIER_TIMINGS_BETA[tier].DELIVERED).toBeGreaterThan(0);
+    }
+    // Standard keeps the ~5 min beta arc.
+    expect(TIER_TIMINGS_BETA.STANDARD.DELIVERED).toBe(300_000);
+  });
+
+  it.each([
+    ["prod", TIER_TIMINGS_PROD],
+    ["beta", TIER_TIMINGS_BETA],
+  ] as const)("%s timings run each tier's steps in order, every step sooner on a faster tier", (_, timings) => {
+    const steps = ["PROCESSING", "PACKED", "OUT_FOR_DELIVERY", "ARRIVING_SOON", "DELIVERED"] as const;
+    for (const tier of DeliveryTier.options) {
+      for (let i = 1; i < steps.length; i++) {
+        expect(timings[tier][steps[i]!]).toBeGreaterThan(timings[tier][steps[i - 1]!]);
+      }
+    }
+    for (const step of steps) {
+      expect(timings.EXPRESS[step]).toBeLessThan(timings.STANDARD[step]);
+      expect(timings.STANDARD[step]).toBeLessThan(timings.SLOW_BURN[step]);
     }
   });
 });

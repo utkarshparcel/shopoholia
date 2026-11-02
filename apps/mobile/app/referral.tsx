@@ -1,19 +1,21 @@
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WEB_ORIGIN } from '@worn/shared';
 
 import { applyReferral, getMyReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
+import { shareText } from '@/src/lib/share';
 import { useSessionStore } from '@/src/stores/session';
 import {
   accent,
@@ -49,6 +51,15 @@ export default function ReferralScreen() {
   const [applyCode, setApplyCode] = useState('');
   const [applyMsg, setApplyMsg] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!accessToken) {
@@ -86,16 +97,30 @@ export default function ReferralScreen() {
     );
   }
 
+  // Never throws: where sharing isn't supported (web without navigator.share) it copies instead.
   const shareCode = async () => {
-    await Share.share({
-      message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. https://shopoholia.app/r/${code}`,
+    await shareText({
+      message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. ${WEB_ORIGIN}/r/${code}`,
     });
   };
 
+  // Copy puts the code on the clipboard (Share is the separate button); "Copied!" only once it's there.
   const copyCode = async () => {
-    await Share.share({ message: code });
+    setCopyError(null);
+    let ok = false;
+    try {
+      ok = await Clipboard.setStringAsync(code);
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      setCopied(false);
+      setCopyError('Could not copy the code. Use Share instead.');
+      return;
+    }
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   const handleApply = async () => {
@@ -157,6 +182,11 @@ export default function ReferralScreen() {
                 disabled={!code || code === 'PENDING'}
               />
             </View>
+            {copyError ? (
+              <Text accessibilityRole="alert" style={styles.copyError}>
+                {copyError}
+              </Text>
+            ) : null}
           </View>
 
           <View style={styles.statsRow}>
@@ -234,6 +264,13 @@ const styles = StyleSheet.create({
     gap: space3,
     justifyContent: 'center',
     marginTop: space4,
+  },
+  copyError: {
+    color: wornPaper,
+    fontFamily: fontSansMedium,
+    fontSize: fsCaption,
+    marginTop: space3,
+    textAlign: 'center',
   },
   codeCard: {
     alignItems: 'center',

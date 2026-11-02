@@ -83,54 +83,36 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      if (request.body.idempotencyKey) {
-        const existingSpend = await app.deps.repos.findCoinSpendByRef(
-          request.user.sub,
-          "reveal_unlock",
-          request.body.idempotencyKey,
+      const result = await app.deps.repos.unlockOrderRenders({
+        userId: request.user.sub,
+        orderId: order.id,
+        renderIds: request.body.renderIds,
+        costPerRender: REVEAL_UNLOCK_COST_COINS,
+        idempotencyKey: request.body.idempotencyKey,
+      });
+
+      if (result.status === "replayed") {
+        // Only this order's renders: the ids in a replayed body are not trusted.
+        const orderRenders = await app.deps.repos.findRendersByOrderId(order.id);
+        const requested = new Set(request.body.renderIds);
+        const cards = await Promise.all(
+          orderRenders
+            .filter((render) => requested.has(render.id))
+            .map((render) => renderCardDto(render, app.deps.storage)),
         );
-        if (existingSpend) {
-          const refreshed = await app.deps.repos.findRendersByIds(request.body.renderIds);
-          const cards = await Promise.all(
-            refreshed.map((render) => renderCardDto(render, app.deps.storage)),
-          );
-          return { renders: cards, coinsSpent: Math.abs(existingSpend.delta) };
-        }
+        return { renders: cards, coinsSpent: result.coinsSpent };
       }
-
-      const renders = await app.deps.repos.findRendersByIds(request.body.renderIds);
-      const orderRenders = await app.deps.repos.findRendersByOrderId(order.id);
-      const orderRenderIds = new Set(orderRenders.map((r) => r.id));
-
-      const toUnlock = renders.filter(
-        (r) => orderRenderIds.has(r.id) && !r.isFree && !r.unlocked,
-      );
-      if (toUnlock.length === 0) {
+      if (result.status === "nothing_locked") {
         return reply.code(404).send({ error: "Not Found", message: "No locked renders found" });
       }
-
-      const coinsSpent = toUnlock.length * REVEAL_UNLOCK_COST_COINS;
-      const balance = await app.deps.repos.getCoinBalance(request.user.sub);
-      if (balance < coinsSpent) {
+      if (result.status === "insufficient_coins") {
         return reply.code(402).send({
           error: "INSUFFICIENT_COINS",
           message: "Not enough coins to unlock these renders",
         });
       }
 
-      await app.deps.repos.spendCoins({
-        userId: request.user.sub,
-        delta: coinsSpent,
-        type: "SPEND_UNLOCK",
-        refType: request.body.idempotencyKey ? "reveal_unlock" : "order",
-        refId: request.body.idempotencyKey ?? order.id,
-      });
-
-      const unlocked: typeof renders = [];
-      for (const render of toUnlock) {
-        const updated = await app.deps.repos.updateRender(render.id, { unlocked: true });
-        if (updated) unlocked.push(updated);
-      }
+      const { renders: unlocked, coinsSpent } = result;
 
       for (const render of unlocked) {
         if (render.status === "QUEUED") {
@@ -196,21 +178,10 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const isCombine = request.body.orderItemIds.length > 1;
-      const coinsPerRender = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
-      const totalCost = coinsPerRender;
-
-      const balance = await app.deps.repos.getCoinBalance(request.user.sub);
-      if (balance < totalCost) {
-        return reply.code(402).send({
-          error: "INSUFFICIENT_COINS",
-          message: `Need ${totalCost} coins for this render. You have ${balance}.`,
-        });
-      }
-
+      const orderItemIds = [...new Set(request.body.orderItemIds)];
       const items = await app.deps.repos.listOrderItemsByOrderId(order.id);
       const validItemIds = new Set(items.map((i) => i.id));
-      const invalidItemIds = request.body.orderItemIds.filter((id) => !validItemIds.has(id));
+      const invalidItemIds = orderItemIds.filter((id) => !validItemIds.has(id));
       if (invalidItemIds.length > 0) {
         return reply.code(400).send({
           error: "Bad Request",
@@ -218,28 +189,51 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      await app.deps.repos.spendCoins({
+      // One render either way: a single item's, or one combined render of all of them.
+      const isCombine = orderItemIds.length > 1;
+      const totalCost = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
+
+      // The debit and the render are one step, so a retried or double-tapped request with the
+      // same key gets the first one's render back and is not charged again.
+      const result = await app.deps.repos.purchaseRender({
         userId: request.user.sub,
-        delta: totalCost,
-        type: "SPEND_UNLOCK",
-        refType: "order",
-        refId: order.id,
+        orderId: order.id,
+        render: {
+          orderItemId: orderItemIds[0]!,
+          scenario: request.body.scenario,
+          imageKey: null,
+          isFree: false,
+          unlocked: true,
+          provider: "user-generated",
+          combinedItemIds: isCombine ? orderItemIds : null,
+          status: "QUEUED",
+          costMicros: 0,
+        },
+        cost: totalCost,
+        ledgerType: isCombine ? "SPEND_COMBINE" : "SPEND_RENDER",
+        idempotencyKey: request.body.idempotencyKey,
       });
 
-      const creates = request.body.orderItemIds.map((orderItemId) => ({
-        orderItemId,
-        scenario: request.body.scenario,
-        imageKey: null,
-        isFree: false,
-        unlocked: true,
-        provider: isCombine
-          ? `combined:${request.body.orderItemIds.join(",")}`
-          : "user-generated",
-        status: "QUEUED" as const,
-        costMicros: 0,
-      }));
+      if (result.status === "not_found") {
+        return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (result.status === "insufficient_coins") {
+        return reply.code(402).send({
+          error: "INSUFFICIENT_COINS",
+          message: `Need ${totalCost} coins for this render. You have ${result.balance}.`,
+        });
+      }
+      if (result.status === "replayed") {
+        // The first call's render, whatever this body asked for; it was queued by that call.
+        const cards = result.render ? [await renderCardDto(result.render, app.deps.storage)] : [];
+        return {
+          renders: cards,
+          coinsSpent: result.coinsSpent,
+          isCombine: result.ledgerType === "SPEND_COMBINE",
+        };
+      }
 
-      const newRenders = await app.deps.repos.createRenders(creates);
+      const newRenders = [result.render];
 
       for (const render of newRenders) {
         if (app.deps.jobQueue.enqueueRender) {
@@ -279,6 +273,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           200: RevealRatingResponseSchema,
           401: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
       preHandler: requireAuth,
@@ -287,6 +282,12 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
       const order = await app.deps.repos.findOrderById(request.params.id);
       if (!order || order.userId !== request.user.sub) {
         return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (!REVEAL_OPEN_STATES.has(order.state)) {
+        return reply.code(409).send({
+          error: "Conflict",
+          message: "You can rate the reveal once your order is delivered",
+        });
       }
 
       await app.deps.repos.recordRevealRating({

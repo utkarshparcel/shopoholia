@@ -1,4 +1,4 @@
-import { Share } from 'react-native';
+import { shareText } from '@/src/lib/share';
 import {
   buildNeverWornShareCard,
   formatNeverWornAmount,
@@ -60,17 +60,13 @@ export function neverWornShareFromMetrics(
 /** @deprecated alias — prefer neverWornShareFromMetrics */
 export const buildNeverWornShareFromMetrics = neverWornShareFromMetrics;
 
-/** Open the system share sheet with watermarked never-worn copy. */
+/**
+ * Open the system share sheet with watermarked never-worn copy. Never throws: where sharing isn't
+ * supported (web) the copy goes to the clipboard instead, which counts as shared.
+ */
 export async function shareNeverWornCard(
   card: NeverWornShareCard,
 ): Promise<{ shared: boolean }> {
-  const result = await Share.share({
-    message: card.shareText,
-    title: card.headline,
-  });
-  const shared =
-    result.action === Share.sharedAction ||
-    // iOS may omit action on dismiss; treat successful sheet open as shared when available.
-    (typeof result.action === 'undefined' && Boolean(card.shareText));
-  return { shared: Boolean(shared) };
+  const result = await shareText({ message: card.shareText, title: card.headline });
+  return { shared: result === 'shared' || result === 'copied' };
 }

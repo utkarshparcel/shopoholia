@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
+import { requireAdminSecret } from "../lib/auth/admin.js";
 import { requireAuth } from "../lib/auth/guard.js";
 import {
   exportSettlementsCsv,
@@ -31,11 +32,15 @@ const SettleBodySchema = z.object({
   applyGst: z.boolean().optional(),
 });
 
+/**
+ * Every seller's payouts across the marketplace: ops only (X-Admin-Secret on top of a session).
+ * No app screen reads them, so there is no seller-scoped view.
+ */
 export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     "/marketplace/settlements",
     {
-      preHandler: requireAuth,
+      preHandler: [requireAuth, requireAdminSecret],
       schema: {
         tags: ["marketplace"],
         body: SettleBodySchema,
@@ -43,6 +48,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
           200: SettlementSchema,
           400: ErrorSchema,
           401: ErrorSchema,
+          403: ErrorSchema,
         },
       },
     },
@@ -68,7 +74,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
   app.get(
     "/marketplace/settlements",
     {
-      preHandler: requireAuth,
+      preHandler: [requireAuth, requireAdminSecret],
       schema: {
         tags: ["marketplace"],
         querystring: z.object({
@@ -78,6 +84,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
         response: {
           200: z.object({ settlements: z.array(SettlementSchema) }),
           401: ErrorSchema,
+          403: ErrorSchema,
         },
       },
     },
@@ -92,7 +99,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
   app.get(
     "/marketplace/settlements/export.csv",
     {
-      preHandler: requireAuth,
+      preHandler: [requireAuth, requireAdminSecret],
       schema: {
         tags: ["marketplace"],
         querystring: z.object({
@@ -102,6 +109,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
         response: {
           200: z.string(),
           401: ErrorSchema,
+          403: ErrorSchema,
         },
       },
     },

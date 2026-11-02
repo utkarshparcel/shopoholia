@@ -113,6 +113,41 @@
       "when": 1793110293169,
       "tag": "0015_closet_backfill_consent_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793594729160,
+      "tag": "0016_emi_due_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793595109910,
+      "tag": "0017_tailoring_review_per_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793602929195,
+      "tag": "0018_reveal_rating",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793609865236,
+      "tag": "0019_coin_ledger_render_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793610486861,
+      "tag": "0020_render_combined_items",
+      "breakpoints": true
     }
   ]
 }

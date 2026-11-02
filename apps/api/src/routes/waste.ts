@@ -281,7 +281,6 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       const body = request.body as {
         listingId: string;
         platform?: string;
-        clickId?: string;
       };
       const item = await app.deps.repos.findWardrobeItem(itemId, userId);
       if (!item) {
@@ -291,7 +290,8 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!listing) {
         return reply.code(404).send({ error: "Not Found", message: "Listing not found" });
       }
-      const clickId = body.clickId ?? `replace-twin:${itemId}:${body.listingId}:${randomUUID()}`;
+      // Always ours: a client-chosen click id could collide with, or claim, someone else's.
+      const clickId = `replace-twin:${itemId}:${body.listingId}:${randomUUID()}`;
       const platform = body.platform ?? "other";
       await app.deps.repos.recordCashbackEvent({
         userId,

@@ -41,7 +41,7 @@ describe('declutterChallenge progress', () => {
 
   it('builds share card without brands', () => {
     const card = buildDeclutterShareCard({ progress: 2, target: 5, modes: ['SELL', 'DONATE'] });
-    expect(card.shareText).toContain('worn.app');
+    expect(card.shareText).toContain('worncloset.app');
     expect(card.modeLine).toMatch(/sell/);
     expect(card.shareText).not.toMatch(/Myntra|Zara/);
     expect(declutterChallengeNudgeCopy(declutterChallengeProgress(2, { started: true }))).toBe(

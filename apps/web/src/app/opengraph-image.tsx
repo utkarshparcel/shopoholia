@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ImageResponse } from 'next/og';
 
-export const alt = 'Worn: the shopping app where nothing ships';
+export const alt = 'Worn Play: shop the haul, skip the bill';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -35,11 +35,11 @@ export default async function OpengraphImage() {
         <div style={{ display: 'flex', flexDirection: 'column', maxWidth: 640 }}>
           <div style={{ display: 'flex', fontSize: 26, letterSpacing: 9, color: '#c8a87a' }}>WORN</div>
           <div style={{ display: 'flex', flexDirection: 'column', marginTop: 34, fontSize: 92, lineHeight: 1.02 }}>
-            <span>Stop shopping.</span>
-            <span style={{ fontStyle: 'italic', color: '#c8a87a' }}>Start wearing.</span>
+            <span>Shop the haul.</span>
+            <span style={{ fontStyle: 'italic', color: '#c8a87a' }}>Skip the bill.</span>
           </div>
           <div style={{ display: 'flex', marginTop: 30, fontSize: 32, lineHeight: 1.3, color: 'rgba(250,248,245,0.78)' }}>
-            The shopping app where nothing ships. Try it on, haul it with coins, unbox AI renders of you in it.
+            A free fashion app where you pay with coins, not money. Try it on, check out, unbox photos of you in it.
           </div>
         </div>
         <div

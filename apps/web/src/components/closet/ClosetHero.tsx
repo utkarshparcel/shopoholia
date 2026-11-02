@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import { ArrowDown, ArrowRight } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -27,11 +28,6 @@ const TICKER = [
 ];
 
 export function ClosetHero() {
-  const reduced = useReducedMotion();
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <section
@@ -60,7 +56,7 @@ export function ClosetHero() {
       <div className="relative section">
         <motion.div
           key="hero-kicker"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0}
           className="flex justify-center"
@@ -72,7 +68,7 @@ export function ClosetHero() {
 
         <motion.h1
           key="hero-title"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.1}
           className="mx-auto mt-6 max-w-[13ch] text-center font-display text-[clamp(44px,7.5vw,96px)] leading-[0.98] tracking-[-0.02em] text-worn-ink text-balance"
@@ -82,7 +78,7 @@ export function ClosetHero() {
 
         <motion.p
           key="hero-sub"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.2}
           className="mx-auto mt-6 max-w-[62ch] text-center text-body-l text-worn-muted sm:text-lg sm:leading-[1.65]"
@@ -95,12 +91,12 @@ export function ClosetHero() {
 
         <motion.div
           key="hero-ctas"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.3}
           className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
         >
-          <Link href="/#download" className="btn-primary btn-lg w-full sm:w-auto">
+          <Link href="#early-access" className="btn-primary btn-lg w-full sm:w-auto">
             Request early access <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
           <Link href="#week" className="btn-ghost btn-lg w-full sm:w-auto">
@@ -110,7 +106,7 @@ export function ClosetHero() {
 
         <motion.p
           key="hero-note"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.38}
           className="mt-5 text-center font-mono text-micro uppercase tracking-[0.2em] text-worn-muted"
@@ -121,7 +117,7 @@ export function ClosetHero() {
         {/* Floating glass receipts (sample UI) */}
         <motion.div
           key="hero-chip-left"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.45}
           className="animate-float pointer-events-none absolute left-0 top-[54%] hidden xl:block"
@@ -134,7 +130,7 @@ export function ClosetHero() {
         </motion.div>
         <motion.div
           key="hero-chip-right"
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.55}
           className="animate-float pointer-events-none absolute right-0 top-[38%] hidden xl:block"
@@ -151,7 +147,7 @@ export function ClosetHero() {
       {/* Mono ticker marquee */}
       <motion.div
         key="hero-ticker"
-        {...a}
+        {...reveal}
         variants={rise}
         custom={0.6}
         className="fade-x relative mt-16 border-y border-worn-rule py-4 sm:mt-24"

@@ -67,7 +67,7 @@ export default function ClosetPaywallScreen() {
   return (
     <ClosetScreen
       title="Closet Premium"
-      subtitle="Accountant + Outfits — 7-day trial."
+      subtitle="Money + Outfits — 7-day trial."
       onRefresh={premium.reload}
       hasContent
     >

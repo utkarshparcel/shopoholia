@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SurfaceEduSheet } from '@/src/components/SurfaceEduSheet';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { shouldShowSurfaceToggle, surfaceForSegments, surfaceToggleCopy } from '@/src/lib/surfaceRoute';
 import { useClosetStore } from '@/src/stores/closet';
 import { useSessionStore, type Surface } from '@/src/stores/session';
 import { fontSansSemiBold, surface, textMuted, wornInk, space1, space3, radiusPill } from '@/src/theme/tokens';
@@ -24,8 +25,9 @@ function closetLandingHref(): '/(closet)/onboarding' | '/(closet)/today' {
 
 export function SurfaceToggle() {
   const router = useRouter();
+  const segments = useSegments();
   const insets = useSafeAreaInsets();
-  const activeSurface = useSessionStore((s) => s.activeSurface);
+  const signedIn = useSessionStore((s) => Boolean(s.accessToken));
   const setActiveSurface = useSessionStore((s) => s.setActiveSurface);
   const surfaceEduSeen = useClosetPrefsStore((s) => s.surfaceEduSeen);
   const markSurfaceEduSeen = useClosetPrefsStore((s) => s.markSurfaceEduSeen);
@@ -50,8 +52,11 @@ export function SurfaceToggle() {
     if (next) applySwitch(next);
   };
 
+  // The side on screen, not the stored one: it is what the pill switches away from.
+  const current = surfaceForSegments(segments);
+
   const switchTo = (surface: Surface) => {
-    if (surface === activeSurface) return;
+    if (surface === current) return;
     if (!surfaceEduSeen) {
       setPendingSurface(surface);
       setEduVisible(true);
@@ -60,19 +65,20 @@ export function SurfaceToggle() {
     applySwitch(surface);
   };
 
-  const target: Surface = activeSurface === 'play' ? 'closet' : 'play';
+  if (!signedIn || !current || !shouldShowSurfaceToggle(segments)) return null;
+  const { target, label, accessibilityLabel } = surfaceToggleCopy(current);
 
   return (
     // Below the status bar: there it covered the clock or battery and taps never reached it.
     <View style={[styles.wrap, { paddingTop: insets.top }]}>
       <Pressable
-        accessibilityLabel={`Switch to ${target} surface`}
+        accessibilityLabel={accessibilityLabel}
         accessibilityRole="button"
         onPress={() => switchTo(target)}
         style={styles.pill}
       >
         <Text style={styles.dot} />
-        <Text style={styles.label}>{activeSurface === 'play' ? 'Play' : 'Closet'}</Text>
+        <Text style={styles.label}>{label}</Text>
       </Pressable>
       <SurfaceEduSheet
         visible={eduVisible}

@@ -7,6 +7,7 @@ const deleteMutate = vi.fn();
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => '/vault',
 }));
 
 vi.mock('@/src/stores/session', () => ({

@@ -312,6 +312,13 @@ const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // ── The tests ────────────────────────────────────────────────────────────────
 
+/**
+ * Wall-clock budgets run only under `pnpm test:perf` (vitest.perf.config.ts), alone on the machine;
+ * PERF_BUDGET_SCALE stretches them on hardware slower than the laptop they were set on.
+ */
+const perfRun = process.env.WORN_PERF_BUDGETS === "1";
+const budgetScale = Number(process.env.PERF_BUDGET_SCALE) || 1;
+
 describe("the style engine in the composer", () => {
   it("site parity fixture lines unchanged", () => {
     const w = ok(composeWeek(siteWeekInput()));
@@ -491,7 +498,7 @@ describe("the style engine in the composer", () => {
     expect(shown).toBeGreaterThan(0);
   });
 
-  it("budget", () => {
+  it.runIf(perfRun)("budget", () => {
     const i = input(lcg(42), 300, 9, { styleProfile: { ...TAPE_AND_PHOTO, likes: LIKES.likes, learned: LIKES.learned } });
     const time = (style: boolean): number => {
       for (let n = 0; n < 3; n++) ok(composeWeekWith(i, { style }));
@@ -506,8 +513,8 @@ describe("the style engine in the composer", () => {
     const off = time(false);
     const on = time(true);
     console.info(`style budget, 300 pieces: off ${off.toFixed(2)} ms, on ${on.toFixed(2)} ms`);
-    expect(on).toBeLessThan(350);
-    expect(on - off).toBeLessThan(50);
+    expect(on).toBeLessThan(350 * budgetScale);
+    expect(on - off).toBeLessThan(50 * budgetScale);
   });
 
   it("countLooksWith counts the new looks a candidate makes", () => {

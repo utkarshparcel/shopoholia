@@ -10,6 +10,7 @@ import {
   restorePersistedQueries,
   startQueryPersistence,
 } from '@/src/api/queryPersistence';
+import { useActiveSurfaceSync } from '@/src/hooks/useActiveSurfaceSync';
 import { usePushNotifications } from '@/src/hooks/push-notifications';
 import { useTimeZoneSync } from '@/src/hooks/useTimeZoneSync';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
@@ -17,8 +18,10 @@ import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { initAnalyticsFromEnv, trackInstallOnce } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
+import { isServerRendering } from '@/src/lib/ssr';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
+import { clearVaultAddQueue } from '@/src/lib/vaultAddQueue';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { SurfaceToggle } from '@/src/components/SurfaceToggle';
 import { PurchasesRoot } from '@/src/lib/purchases/PurchasesRoot';
@@ -31,7 +34,9 @@ export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBo
 // At import, not in an effect: a render error replaces this layout before its effects run.
 initSentry();
 // Read the stored session as early as possible; the layout waits for it (`tokensHydrated`).
-void startSessionTokenPersistence();
+// Not in web static rendering, which has no storage (writing the session there crashed the
+// export with "window is not defined"): the browser starts it when it loads this module.
+if (!isServerRendering()) void startSessionTokenPersistence();
 wireOnlineManager();
 
 function subscribeStoreHydration(onChange: () => void) {
@@ -104,6 +109,7 @@ export default function RootLayout() {
         queryClient.clear();
         void clearPersistedQueries();
         useClosetStore.getState().clear();
+        void clearVaultAddQueue();
         if (segmentsRef.current[0] !== '(auth)') router.replace('/(auth)/login' as never);
       }),
     [queryClient, router],
@@ -176,6 +182,9 @@ export default function RootLayout() {
 
     restore();
   }, [ready, router]);
+
+  // After the restore above: the stored side follows the screen from here on.
+  useActiveSurfaceSync(FEATURE_CLOSET && ready);
 
   // Same providers either way, so the theme (and its font loading) stays mounted.
   if (!ready) {

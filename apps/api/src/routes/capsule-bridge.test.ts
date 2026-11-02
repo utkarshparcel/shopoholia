@@ -109,15 +109,15 @@ describe("N51 replace twin", () => {
     expect(click.statusCode).toBe(200);
     expect(click.json()).toMatchObject({
       recorded: true,
-      clickId: "click-twin-1",
       listingId: listing.id,
       wardrobeItemId: itemId,
     });
+    // The server makes the click id; the client's is ignored.
+    const { clickId } = click.json() as { clickId: string };
+    expect(clickId.startsWith(`replace-twin:${itemId}:${listing.id}:`)).toBe(true);
 
     const events = await app.deps.repos.listCashbackEvents(userId);
-    expect(events.some((e) => e.clickId === "click-twin-1" && e.listingId === listing.id)).toBe(
-      true,
-    );
+    expect(events.some((e) => e.clickId === clickId && e.listingId === listing.id)).toBe(true);
   });
 });
 

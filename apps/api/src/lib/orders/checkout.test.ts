@@ -117,6 +117,21 @@ describe("checkoutOrder", () => {
     expect(scheduleOrderLadder).toHaveBeenCalledExactlyOnceWith(order.id);
   });
 
+  it("places the order at the instant its ETAs are built from", async () => {
+    const { repos, user, deps } = await setup({ balance: 500, price: 120 });
+    // A slow insert: the order row is written a few ms after checkout built its ETAs.
+    const place = repos.placeOrder.bind(repos);
+    repos.placeOrder = async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return place(input);
+    };
+
+    const { order } = await checkoutOrder(deps, { userId: user.id, tier: "STANDARD" });
+
+    expect(order.stateEta.PROCESSING).toBe(order.placedAt.toISOString());
+    expect((await repos.findOrderById(order.id))!.placedAt.toISOString()).toBe(order.stateEta.PROCESSING);
+  });
+
   it("rejects an order the balance cannot cover without creating it", async () => {
     const { repos, user, deps, scheduleOrderLadder } = await setup({ balance: 50, price: 120 });
 

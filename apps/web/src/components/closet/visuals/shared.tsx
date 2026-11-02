@@ -7,8 +7,8 @@ const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 /* Visuals never set initial/animate themselves: every motion child inherits
    hidden → visible from its section's wrapper in ClosetFeatures, so the
-   scroll trigger, the once-only entrance and the reduced-motion fallback
-   (initial: 'visible', the finished screen) all live in one place. */
+   scroll trigger and the once-only entrance live in one place. Reduced motion
+   is handled app-wide by MotionConfig (movement becomes instant). */
 
 export const lift: Variants = {
   hidden: { opacity: 0, y: 14 },

@@ -4,7 +4,10 @@ import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
+import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
+import { nextStreakDay, streakDay } from "../streak-day.js";
+import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -128,21 +131,6 @@ function memoryPreviewResult(result: PreviewResult) {
     : { status: "FAILED" as const, error: result.error, retryAfter: result.retryAfter, updatedAt: now() };
 }
 
-function generateReferralCode(userId: string): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
-  }
-  let code = "";
-  let n = Math.abs(hash);
-  for (let i = 0; i < 6; i++) {
-    code += chars[n % chars.length]!;
-    n = Math.floor(n / chars.length);
-  }
-  return code;
-}
-
 function appendLedger(
   ledger: CoinLedgerRecord[],
   input: GrantCoinsInput,
@@ -172,6 +160,19 @@ export function createMemoryRepositories(): Repositories {
   const ledger: CoinLedgerRecord[] = [];
   const coinLocks = new Map<string, Promise<void>>();
   const moneyLocks = new Map<string, Promise<void>>();
+
+  /** A new random referral code; a taken one is a unique violation, as on users.referral_code. */
+  const freshReferralCode = () =>
+    withNewReferralCode(async (code) => {
+      for (const user of users.values()) {
+        if (user.referralCode === code) {
+          throw Object.assign(new Error('duplicate key value violates unique constraint "users_referral_code_unique"'), {
+            code: "23505",
+          });
+        }
+      }
+      return code;
+    });
 
   async function withMoneyLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
     const previous = moneyLocks.get(userId) ?? Promise.resolve();
@@ -430,7 +431,7 @@ export function createMemoryRepositories(): Repositories {
       if (existingId) {
         const existing = users.get(existingId)!;
         if (!existing.referralCode) {
-          const code = generateReferralCode(existing.id);
+          const code = await freshReferralCode();
           const updated = { ...existing, referralCode: code, updatedAt: now() };
           users.set(existingId, updated);
           return { user: updated, isNew: false };
@@ -459,8 +460,7 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
 
-      const code = generateReferralCode(user.id);
-      user.referralCode = code;
+      user.referralCode = await freshReferralCode();
 
       users.set(user.id, user);
       usersByPhone.set(phone, user.id);
@@ -471,7 +471,7 @@ export function createMemoryRepositories(): Repositories {
       const byGoogle = await this.findUserByGoogleSub(googleSub);
       if (byGoogle) {
         if (!byGoogle.referralCode) {
-          const code = generateReferralCode(byGoogle.id);
+          const code = await freshReferralCode();
           const updated = { ...byGoogle, referralCode: code, updatedAt: now() };
           users.set(byGoogle.id, updated);
           return { user: updated, isNew: false };
@@ -488,7 +488,7 @@ export function createMemoryRepositories(): Repositories {
           displayName: displayName ?? byEmail.displayName,
           updatedAt: now(),
         };
-        if (!linked.referralCode) linked.referralCode = generateReferralCode(linked.id);
+        if (!linked.referralCode) linked.referralCode = await freshReferralCode();
         users.set(byEmail.id, linked);
         return { user: linked, isNew: false };
       }
@@ -513,7 +513,7 @@ export function createMemoryRepositories(): Repositories {
         createdAt: now(),
         updatedAt: now(),
       };
-      user.referralCode = generateReferralCode(user.id);
+      user.referralCode = await freshReferralCode();
       users.set(user.id, user);
       return { user, isNew: true };
     },
@@ -544,44 +544,51 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async claimStreak(userId) {
-      const user = users.get(userId);
-      if (!user) throw new Error(`User not found: ${userId}`);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) {
-        last.setHours(0, 0, 0, 0);
-        const diffDays = Math.round((today.getTime() - last.getTime()) / 86_400_000);
-        if (diffDays === 0) {
-          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: user.coinBalanceCache };
+      if (!users.has(userId)) throw new Error(`User not found: ${userId}`);
+      return withCoinLock(userId, async () => {
+        const balance = await this.getCoinBalance(userId);
+        // No await from reading the last claim to recording this one, so a day pays once.
+        const user = users.get(userId)!;
+        const claimedAt = new Date();
+        const day = streakDay(user.lastStreakClaimAt, claimedAt, user.timeZone);
+        if (day.claimedToday) {
+          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: balance };
         }
-      }
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isConsecutive = last && yesterday.getTime() === last.getTime();
-      const newStreak = isConsecutive ? user.streakCount + 1 : 1;
-      const coinsGranted = streakRewardForDay(newStreak);
-      const { balanceAfter } = await this.grantCoins({
-        userId,
-        delta: coinsGranted,
-        type: "EARN_STREAK",
-        refType: "streak",
-        refId: `day-${newStreak}`,
+        const newStreak = nextStreakDay(user.streakCount, day);
+        const coinsGranted = streakRewardForDay(newStreak);
+        const balanceAfter = balance + coinsGranted;
+        appendLedger(
+          ledger,
+          {
+            userId,
+            delta: coinsGranted,
+            type: "EARN_STREAK",
+            refType: "streak",
+            refId: streakLedgerRef(userId, day.todayKey),
+          },
+          balanceAfter,
+        );
+        users.set(userId, {
+          ...user,
+          streakCount: newStreak,
+          lastStreakClaimAt: claimedAt,
+          coinBalanceCache: balanceAfter,
+          updatedAt: now(),
+        });
+        return { streakCount: newStreak, coinsGranted, balanceAfter };
       });
-      const updated = { ...user, streakCount: newStreak, lastStreakClaimAt: today, coinBalanceCache: balanceAfter, updatedAt: now() };
-      users.set(userId, updated);
-      return { streakCount: newStreak, coinsGranted, balanceAfter };
     },
 
     async getStreakStatus(userId) {
       const user = users.get(userId);
-      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false };
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) last.setHours(0, 0, 0, 0);
-      const todayClaimed = last !== null && last.getTime() === today.getTime();
-      return { streakCount: user.streakCount, lastClaimedAt: user.lastStreakClaimAt, todayClaimed };
+      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false, nextStreakDay: 1 };
+      const day = streakDay(user.lastStreakClaimAt, new Date(), user.timeZone);
+      return {
+        streakCount: user.streakCount,
+        lastClaimedAt: user.lastStreakClaimAt,
+        todayClaimed: day.claimedToday,
+        nextStreakDay: nextStreakDay(user.streakCount, day),
+      };
     },
 
     async saveStyleProfile(userId, profile) {
@@ -610,6 +617,8 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async recordCashbackEvent(input) {
+      // As Postgres's ON CONFLICT DO NOTHING: a repeated click id keeps the event it has.
+      if (cashbackEvents.has(input.clickId)) return;
       cashbackEvents.set(input.clickId, {
         id: randomUUID(),
         userId: input.userId,
@@ -630,21 +639,32 @@ export function createMemoryRepositories(): Repositories {
 
     async confirmCashback(clickId, status) {
       const event = cashbackEvents.get(clickId);
-      if (!event || event.status === "CONFIRMED" || event.status === "REJECTED") return;
-      if (status === "CONFIRMED") {
-        await this.grantCoins({
-          userId: event.userId,
-          delta: AFFILIATE_CASHBACK_COINS,
-          type: "EARN_CASHBACK",
-          refType: "cashback",
-          refId: clickId,
-        });
-        event.coinsEarned = AFFILIATE_CASHBACK_COINS;
-        event.status = "CONFIRMED";
-      } else {
-        event.status = "REJECTED";
+      if (!event || event.status !== "PENDING") return;
+      if (status === "REJECTED") {
+        cashbackEvents.set(clickId, { ...event, status: "REJECTED" });
+        return;
       }
-      cashbackEvents.set(clickId, event);
+      await withCoinLock(event.userId, async () => {
+        const balance = await this.getCoinBalance(event.userId);
+        // No await from the status check to the ledger entry: one click pays once.
+        const current = cashbackEvents.get(clickId);
+        if (!current || current.status !== "PENDING") return;
+        cashbackEvents.set(clickId, { ...current, status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS });
+        const balanceAfter = balance + AFFILIATE_CASHBACK_COINS;
+        appendLedger(
+          ledger,
+          {
+            userId: event.userId,
+            delta: AFFILIATE_CASHBACK_COINS,
+            type: "EARN_CASHBACK",
+            refType: "cashback",
+            refId: cashbackLedgerRef(clickId),
+          },
+          balanceAfter,
+        );
+        const user = users.get(event.userId);
+        if (user) users.set(event.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+      });
     },
 
     async updateUser(id, patch) {
@@ -1327,6 +1347,31 @@ export function createMemoryRepositories(): Repositories {
       return { claimed: true, preview };
     },
 
+    async claimTryonPreview({ userId, listingVariantId, provider, staleBefore }) {
+      const key = tryonPreviewKey(userId, listingVariantId);
+      const existing = tryonPreviews.get(key);
+      const timestamp = now();
+      if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
+        return { claimed: false, preview: existing };
+      }
+      const preview: TryonPreviewRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId,
+        listingVariantId,
+        wardrobeItemId: null,
+        imageKey: null,
+        status: "PROCESSING",
+        error: null,
+        retryAfter: null,
+        provider,
+        costMicros: existing?.costMicros ?? 0,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      tryonPreviews.set(key, preview);
+      return { claimed: true, preview };
+    },
+
     async finishWardrobeTryon(userId, wardrobeItemId, result) {
       const key = wardrobeTryonPreviewKey(userId, wardrobeItemId);
       const existing = tryonPreviews.get(key);
@@ -1454,9 +1499,10 @@ export function createMemoryRepositories(): Repositories {
         tier: input.tier,
         state: "PROCESSING",
         coinTotal: input.coinTotal,
-        placedAt: timestamp,
+        placedAt: input.placedAt ?? timestamp,
         stateEta: input.stateEta,
         revealReadyAt: null,
+        revealRating: null,
         idempotencyKey: input.idempotencyKey ?? null,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1618,6 +1664,7 @@ export function createMemoryRepositories(): Repositories {
           isFree: row.isFree,
           unlocked: row.unlocked,
           provider: row.provider,
+          combinedItemIds: row.combinedItemIds ?? null,
           status: row.status,
           costMicros: row.costMicros,
           createdAt: timestamp,
@@ -1672,14 +1719,105 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
 
+    async unlockOrderRenders(input) {
+      const ref = input.idempotencyKey
+        ? { refType: "reveal_unlock", refId: revealUnlockLedgerRef(input.orderId, input.idempotencyKey) }
+        : { refType: "order", refId: input.orderId };
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+        // No await from here to the ledger entry: the replay check, the flips and the debit are one step.
+        if (input.idempotencyKey) {
+          const prior = ledger.find(
+            (e) =>
+              e.userId === input.userId &&
+              e.type === "SPEND_UNLOCK" &&
+              e.refType === ref.refType &&
+              e.refId === ref.refId,
+          );
+          if (prior) return { status: "replayed" as const, coinsSpent: Math.abs(prior.delta) };
+        }
+        const order = orders.get(input.orderId);
+        const itemIds = new Set(order?.userId === input.userId ? (orderItemsByOrder.get(order.id) ?? []) : []);
+        const toUnlock = [...new Set(input.renderIds)]
+          .map((id) => renders.get(id))
+          .filter((r): r is RenderRecord => !!r && itemIds.has(r.orderItemId) && !r.isFree && !r.unlocked);
+        if (toUnlock.length === 0) return { status: "nothing_locked" as const };
+
+        const coinsSpent = toUnlock.length * input.costPerRender;
+        if (balance < coinsSpent) {
+          return { status: "insufficient_coins" as const, coinsNeeded: coinsSpent, balance };
+        }
+        const unlocked = toUnlock.map((render) => {
+          const updated: RenderRecord = { ...render, unlocked: true, updatedAt: now() };
+          renders.set(render.id, updated);
+          return updated;
+        });
+        const balanceAfter = balance - coinsSpent;
+        appendLedger(
+          ledger,
+          { userId: input.userId, delta: -coinsSpent, type: "SPEND_UNLOCK", ...ref },
+          balanceAfter,
+        );
+        const user = users.get(input.userId);
+        if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { status: "unlocked" as const, renders: unlocked, coinsSpent, balanceAfter };
+      });
+    },
+
+    async purchaseRender(input) {
+      const key = input.idempotencyKey;
+      const renderId = key ? revealGenerateLedgerRef(input.orderId, key) : randomUUID();
+      const ref = key ? { refType: "reveal_generate", refId: renderId } : { refType: "order", refId: input.orderId };
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+        // No await from here to the ledger entry: the replay check, the insert and the debit are one step.
+        if (key) {
+          const prior = ledger.find(
+            (e) => e.userId === input.userId && e.refType === ref.refType && e.refId === ref.refId,
+          );
+          if (prior) {
+            return {
+              status: "replayed" as const,
+              render: renders.get(renderId) ?? null,
+              coinsSpent: Math.abs(prior.delta),
+              ledgerType: prior.type,
+            };
+          }
+        }
+        const order = orders.get(input.orderId);
+        const item = orderItems.get(input.render.orderItemId);
+        if (!order || order.userId !== input.userId || item?.orderId !== order.id) {
+          return { status: "not_found" as const };
+        }
+        if (balance < input.cost) {
+          return { status: "insufficient_coins" as const, coinsNeeded: input.cost, balance };
+        }
+        const timestamp = now();
+        const render: RenderRecord = {
+          ...input.render,
+          combinedItemIds: input.render.combinedItemIds ?? null,
+          id: renderId,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        renders.set(render.id, render);
+        rendersByOrderItem.set(render.orderItemId, [...(rendersByOrderItem.get(render.orderItemId) ?? []), render.id]);
+        const balanceAfter = balance - input.cost;
+        appendLedger(
+          ledger,
+          { userId: input.userId, delta: -input.cost, type: input.ledgerType, ...ref },
+          balanceAfter,
+        );
+        const user = users.get(input.userId);
+        if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { status: "created" as const, render, coinsSpent: input.cost, balanceAfter };
+      });
+    },
+
     async recordRevealRating(input) {
       const order = orders.get(input.orderId);
-      if (!order) return;
-      orders.set(input.orderId, {
-        ...order,
-        stateEta: { ...order.stateEta, rating: input.rating } as OrderRecord["stateEta"],
-        updatedAt: now(),
-      });
+      if (!order || order.userId !== input.userId) return;
+      orders.set(input.orderId, { ...order, revealRating: input.rating, updatedAt: now() });
     },
 
     async findVariantsByIds(ids) {
@@ -4164,6 +4302,7 @@ export function createMemoryRepositories(): Repositories {
         remainingMinor: input.remainingMinor,
         installmentMinor: input.installmentMinor,
         nextDueOn: input.nextDueOn,
+        dueDay: Number(input.nextDueOn.slice(8, 10)),
         currency: input.currency ?? "INR",
         status: "ACTIVE",
         createdAt: now(),
@@ -4674,6 +4813,9 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
     async createTailoringReview(input) {
+      if (input.orderId && [...tailoringReviewsStore.values()].some((r) => r.orderId === input.orderId)) {
+        return null;
+      }
       const rec: TailoringReviewRecord = {
         id: randomUUID(),
         sellerId: input.sellerId,

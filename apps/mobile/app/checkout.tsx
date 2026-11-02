@@ -10,7 +10,8 @@ import type { OrderSummary } from '@/src/api/client';
 import { fetchCredits, fetchPrebuyFit } from '@/src/api/client';
 import { Button, CoinIcon, CoinWallet, SectionHeader } from '@/src/components/ui';
 import { useCart } from '@/src/hooks/catalog';
-import { useCheckout, useCoinBalance } from '@/src/hooks/orders';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
+import { haulKeyOf, useCheckout, useCoinBalance } from '@/src/hooks/orders';
 import {
   BUDGET_NUDGE_SOFT_FOOTER,
   closetBudgetSoftGateCopy,
@@ -19,6 +20,7 @@ import {
   TRACK_BUY_VAULT_HREF,
 } from '@/src/lib/bridgeWow';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { TIER_LABELS } from '@/src/lib/order-tracking';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -45,9 +47,9 @@ const TIERS: Array<{
   detail: string;
   icon: string;
 }> = [
-  { id: 'EXPRESS', label: 'Express', detail: 'Fastest arc — ~5 min in beta', icon: '▸' },
-  { id: 'STANDARD', label: 'Standard', detail: 'Balanced pace — beta ~5 min', icon: '→' },
-  { id: 'SLOW_BURN', label: 'Slow burn', detail: 'Maximum anticipation — beta ~5 min', icon: '⟳' },
+  { id: 'EXPRESS', label: TIER_LABELS.EXPRESS, detail: 'Fastest arc — ~2 min in beta', icon: '▸' },
+  { id: 'STANDARD', label: TIER_LABELS.STANDARD, detail: 'Balanced pace — beta ~5 min', icon: '→' },
+  { id: 'SLOW_BURN', label: TIER_LABELS.SLOW_BURN, detail: 'Maximum anticipation — beta ~8 min', icon: '⟳' },
 ];
 
 export default function CheckoutScreen() {
@@ -55,7 +57,10 @@ export default function CheckoutScreen() {
   const insets = useSafeAreaInsets();
   const { query: cartQuery } = useCart();
   const { data: balanceData } = useCoinBalance();
-  const checkout = useCheckout();
+  const items = cartQuery.data?.items ?? [];
+  const coinTotal = cartQuery.data?.coinTotal ?? 0;
+  // Retries of this haul reuse one idempotency key, so a lost response can't place it twice.
+  const checkout = useCheckout(haulKeyOf(items, coinTotal));
   const [tier, setTier] = useState<OrderSummary['tier']>('EXPRESS');
   const [closetOpen, setClosetOpen] = useState(false);
   const [coolingHold, setCoolingHold] = useState<{
@@ -64,8 +69,6 @@ export default function CheckoutScreen() {
   } | null>(null);
   const accessToken = useSessionStore((s) => s.accessToken);
 
-  const items = cartQuery.data?.items ?? [];
-  const coinTotal = cartQuery.data?.coinTotal ?? 0;
   const itemCount = items.length;
   const balance = balanceData?.balance ?? 0;
   const canPay = coinTotal > 0 && balance >= coinTotal && !checkout.isPending;
@@ -84,14 +87,29 @@ export default function CheckoutScreen() {
     enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
   });
 
+  // Vault credits need FINANCIAL consent (the API refuses them with a 403 otherwise). The hint
+  // is optional, so without it checkout just doesn't ask.
+  const financialConsent = useConsentGate('FINANCIAL');
   const creditsQuery = useQuery({
     queryKey: ['credits', 'checkout-hint', accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error('Sign in');
       return fetchCredits(accessToken);
     },
-    enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
+    enabled: Boolean(
+      accessToken && FEATURE_CLOSET && itemCount > 0 && financialConsent.allowed,
+    ),
   });
+
+  /**
+   * The order opens on top of the app, not in place of this modal: replacing checkout left the
+   * cart modal (now an empty haul) underneath, which is where Back from the order went.
+   */
+  const openPlacedOrder = (orderId: string) => {
+    setCoolingHold(null);
+    if (router.canDismiss()) router.dismissAll();
+    router.push(`/order/${orderId}`);
+  };
 
   const prebuy = prebuyQuery.data;
   const budgetNudge = prebuy?.primaryBudgetNudge;
@@ -342,10 +360,7 @@ export default function CheckoutScreen() {
               onPress={() => {
                 void checkout
                   .mutateAsync(tier)
-                  .then((order) => {
-                    setCoolingHold(null);
-                    router.replace(`/order/${order.id}`);
-                  })
+                  .then((order) => openPlacedOrder(order.id))
                   .catch((err: Error & { code?: string; coolingOff?: { releaseAt: string } | null }) => {
                     if (err.code === 'COOLING_OFF') {
                       setCoolingHold({
@@ -365,10 +380,7 @@ export default function CheckoutScreen() {
                 onPress={() => {
                   void checkout
                     .mutateAsync({ tier, coolingOffOverride: true })
-                    .then((order) => {
-                      setCoolingHold(null);
-                      router.replace(`/order/${order.id}`);
-                    });
+                    .then((order) => openPlacedOrder(order.id));
                 }}
                 variant="secondary"
               />

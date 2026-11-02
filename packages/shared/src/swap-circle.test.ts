@@ -12,12 +12,12 @@ import {
 } from "./swap-circle.js";
 
 describe("N37 swap circle invite link", () => {
-  it("builds worn.app invite URL and deep link", () => {
-    expect(buildSwapInviteUrl("ab12cd34")).toBe("https://worn.app/c/AB12CD34");
+  it("builds worncloset.app invite URL and deep link", () => {
+    expect(buildSwapInviteUrl("ab12cd34")).toBe("https://worncloset.app/c/AB12CD34");
     expect(buildSwapInviteDeepLink("ab12cd34")).toBe("worn://swap-circle/AB12CD34");
     const payload = buildSwapInvitePayload("xy99zz");
     expect(payload.inviteCode).toBe("XY99ZZ");
-    expect(payload.inviteUrl).toContain("worn.app/c/XY99ZZ");
+    expect(payload.inviteUrl).toContain("worncloset.app/c/XY99ZZ");
     expect(payload.deepLink).toContain("worn://swap-circle/XY99ZZ");
   });
 

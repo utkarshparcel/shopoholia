@@ -15,19 +15,19 @@ describe('deleteConfirm (W078-DELETE-CONFIRM-POLISH)', () => {
   });
 
   it('accepts account email case-insensitively', () => {
-    expect(isDeleteConfirmValid('user@worn.app', 'user@worn.app')).toBe(true);
-    expect(isDeleteConfirmValid('User@Worn.App', 'user@worn.app')).toBe(true);
+    expect(isDeleteConfirmValid('user@worncloset.app', 'user@worncloset.app')).toBe(true);
+    expect(isDeleteConfirmValid('User@WornCloset.App', 'user@worncloset.app')).toBe(true);
   });
 
   it('rejects typos and empty input', () => {
     expect(isDeleteConfirmValid('', 'a@b.c')).toBe(false);
     expect(isDeleteConfirmValid('DELET', null)).toBe(false);
-    expect(isDeleteConfirmValid('other@worn.app', 'user@worn.app')).toBe(false);
+    expect(isDeleteConfirmValid('other@worncloset.app', 'user@worncloset.app')).toBe(false);
   });
 
   it('ignores blank email — only DELETE works', () => {
-    expect(isDeleteConfirmValid('user@worn.app', null)).toBe(false);
-    expect(isDeleteConfirmValid('user@worn.app', '  ')).toBe(false);
+    expect(isDeleteConfirmValid('user@worncloset.app', null)).toBe(false);
+    expect(isDeleteConfirmValid('user@worncloset.app', '  ')).toBe(false);
     expect(isDeleteConfirmValid(DELETE_CONFIRM_PHRASE, '')).toBe(true);
   });
 

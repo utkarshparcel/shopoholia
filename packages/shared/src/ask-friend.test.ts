@@ -65,7 +65,7 @@ describe("resolveAskFriendWinner", () => {
 describe("buildAskFriendShare", () => {
   it("lists 2–3 looks with deep link", () => {
     const card = buildAskFriendShare({ pollId: "p1", options });
-    expect(card.deepLink).toBe("https://worn.app/p/outfit/p1");
+    expect(card.deepLink).toBe("https://worncloset.app/p/outfit/p1");
     expect(card.shareText).toContain("A) Look A");
     expect(card.shareText).toContain("C) Look C");
     expect(card.shareText).toContain(card.deepLink);

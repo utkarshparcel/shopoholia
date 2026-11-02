@@ -1,14 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { motion, useMotionValue, useSpring, useReducedMotion } from 'framer-motion';
+import { motion, useMotionValue, useSpring } from 'framer-motion';
+import { useReducedMotionSafe } from '@/lib/motion';
 import { ArrowRight, Heart } from 'lucide-react';
 import { Magnetic } from './Magnetic';
 import { GoldParticles } from './GoldParticles';
 import { gsap } from '@/lib/gsap';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
-const WORDS = ['Stop', 'shopping.', 'Start', 'wearing.'];
+const WORDS = ['Shop', 'the', 'haul.', 'Skip', 'the', 'bill.'];
+// Words from here on are the gold italic half of the headline.
+const GOLD_FROM = 3;
 
 /* entrance delay for the CSS-only .hero-rise / .hero-word keyframes (globals.css):
    they run on first paint, so the headline never waits for hydration */
@@ -45,7 +48,7 @@ const NAV = [
   ['○', 'Profile'],
 ];
 
-const TRUST = ['Pay in coins', 'AI try-on', 'Timed delivery', 'The reveal'];
+const TRUST = ['Free to play', 'No card needed', '500 coins to start', 'Delete your photos any time'];
 
 function Coin() {
   return (
@@ -74,7 +77,7 @@ function FeedScreen({ reduced }: { reduced: boolean }) {
       <div className="mt-3 flex items-end justify-between px-5">
         <div>
           <p className="font-mono text-[8px] uppercase tracking-[0.2em] text-worn-muted">Curated for you</p>
-          <p className="mt-1 font-display text-[22px] leading-none">Today&apos;s edit</p>
+          <p className="mt-1 font-display text-[22px] leading-none">Tonight&apos;s edit</p>
         </div>
         <span className="font-display text-[11px] tracking-[0.3em] text-worn-gold">WORN</span>
       </div>
@@ -168,7 +171,7 @@ export function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const phoneRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const [tiltOK, setTiltOK] = useState(false);
 
   // mouse tilt
@@ -224,7 +227,7 @@ export function Hero() {
     <section
       ref={sectionRef}
       id="hero"
-      aria-label="Stop shopping. Start wearing."
+      aria-label="Shop the haul. Skip the bill."
       onMouseMove={onMove}
       onMouseLeave={onLeave}
       className="relative flex min-h-[100svh] flex-col justify-center overflow-hidden pb-20 pt-32 sm:pt-36"
@@ -250,21 +253,21 @@ export function Hero() {
               className="hero-rise ornament font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep"
               style={delay(0)}
             >
-              Worn Play · The haul without the parcel
+              Worn Play · Free · Coming to iPhone and Android
             </p>
 
             {/* split-text headline */}
             <h1 className="mt-6 font-display leading-[0.98] tracking-tight text-worn-ink">
-              <span className="sr-only">Stop shopping. Start wearing.</span>
+              <span className="sr-only">Shop the haul. Skip the bill.</span>
               <span aria-hidden="true" className="block">
                 {WORDS.map((w, i) => (
                   <span
-                    key={w}
+                    key={`${w}-${i}`}
                     className="inline-block overflow-hidden pb-[0.12em] align-bottom"
                   >
                     <span
                       className={`hero-word inline-block will-change-transform ${
-                        i >= 2 ? 'grad-text italic pr-[0.06em]' : ''
+                        i >= GOLD_FROM ? 'grad-text italic pr-[0.06em]' : ''
                       }`}
                       style={{
                         ...delay(0.25 + i * 0.09),
@@ -280,26 +283,26 @@ export function Hero() {
             </h1>
 
             <p className="hero-rise mt-7 max-w-[52ch] text-body-l text-worn-ink-soft" style={delay(0.55)}>
-              Browse real pieces and try them on your AI avatar. Haul them with
-              coins, pick a delivery speed and wait for it like it is real. Then
-              unbox AI renders of you wearing them. All of the buying high. None of
-              the parcel, the bill, or the pile of clothes you never wear.
+              Worn is a fashion shopping app where you pay with free coins, not
+              money. Browse real pieces, try them on your own AI avatar, check out
+              and track the delivery, then unbox photos of you wearing it all. The
+              rush of a new haul, without spending a rupee or adding to the pile.
             </p>
 
             {/* CTAs */}
             <div className="hero-rise mt-9 flex flex-wrap items-center gap-4" style={delay(0.7)}>
               <Magnetic strength={0.3}>
                 <a href="#download" className="btn btn-primary px-8 py-4 text-[15px] shadow-pop">
-                  Request early access
+                  Get early access
                   <ArrowRight size={17} strokeWidth={2.2} />
                 </a>
               </Magnetic>
               <Magnetic strength={0.25}>
                 <a
-                  href="#grwm"
+                  href="#loop"
                   className="group inline-flex items-center gap-2.5 rounded-full border border-worn-rule bg-worn-surface/70 px-6 py-4 font-sans text-[15px] font-semibold text-worn-ink backdrop-blur transition-colors hover:border-worn-gold"
                 >
-                  See the drop
+                  See how it works
                   <span className="grid h-6 w-6 place-items-center rounded-full bg-worn-gold-tint text-worn-gold-deep transition-transform duration-300 group-hover:translate-x-0.5">
                     <ArrowRight size={13} />
                   </span>

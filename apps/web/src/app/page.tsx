@@ -9,32 +9,69 @@ import { HowItWorks } from '@/components/HowItWorks';
 import { DownloadCTA } from '@/components/DownloadCTA';
 import { Footer } from '@/components/Footer';
 import { Navigation } from '@/components/Navigation';
+import { FAQ, FAQS } from '@/components/FAQ';
+import { SITE_URL } from '@/lib/site';
 
+const TITLE = 'Worn Play — the fashion haul without the bill';
 const DESCRIPTION =
-  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox AI renders of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
+  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
 
 export const metadata: Metadata = {
-  title: { absolute: 'Worn — Stop Shopping. Start Wearing.' },
+  title: { absolute: TITLE },
   description: DESCRIPTION,
+  alternates: { canonical: '/' },
   openGraph: {
-    title: 'Worn: the shopping app where nothing ships',
+    type: 'website',
+    siteName: 'Worn',
+    title: TITLE,
     description: DESCRIPTION,
+    url: SITE_URL,
   },
+  twitter: { card: 'summary_large_image', title: TITLE, description: DESCRIPTION },
 };
+
+const STRUCTURED_DATA = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'MobileApplication',
+    name: 'Worn',
+    description: DESCRIPTION,
+    operatingSystem: 'iOS, Android',
+    applicationCategory: 'LifestyleApplication',
+    // No `offers` until it is on a store: an Offer says it can be had now, and it can't yet. At launch
+    // add { '@type': 'Offer', price: '0', priceCurrency: 'INR' } (free, priced for the Indian market).
+    publisher: { '@type': 'Organization', name: 'Worn', url: SITE_URL },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: FAQS.map((f) => ({
+      '@type': 'Question',
+      name: f.q,
+      acceptedAnswer: { '@type': 'Answer', text: f.a },
+    })),
+  },
+];
 
 export default function HomePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(STRUCTURED_DATA) }}
+      />
       <Navigation />
       <main id="main-content" className="flex-1">
+        {/* What it is, the problem, how it works; then the proof, the money, the doubts, the ask. */}
         <Hero />
-        <DropStage />
-        <DopamineLoop />
         <GhostWardrobe />
-        <TwoSides />
+        <DopamineLoop />
+        <DropStage />
         <Features />
         <HowItWorks />
+        <FAQ />
         <DownloadCTA />
+        <TwoSides />
       </main>
       <Footer />
     </>

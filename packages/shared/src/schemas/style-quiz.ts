@@ -83,7 +83,7 @@ export const STYLE_QUIZ_QUESTIONS: StyleQuizQuestion[] = [
       { id: "slim", label: "Slim & tailored", tags: ["slim", "fitted"] },
       { id: "regular", label: "Regular & relaxed", tags: ["regular"] },
       { id: "oversized", label: "Oversized & baggy", tags: ["oversized"] },
-      { id: "cropped", label: "Cropped & cropped", tags: ["cropped"] },
+      { id: "cropped", label: "Cropped & boxy", tags: ["cropped"] },
     ],
   },
 ];

@@ -15,7 +15,12 @@ import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js"
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
 import { closeQueues } from "./lib/queues/enqueue.js";
 import { captureException, initSentry } from "./lib/sentry.js";
-import { bootConfigProblems, resolveJwtSecret, resolveListenAddress } from "./lib/server-env.js";
+import {
+  bootConfigProblems,
+  resolveCorsOrigin,
+  resolveJwtSecret,
+  resolveListenAddress,
+} from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
 import { apiRoutes } from "./routes/index.js";
@@ -60,11 +65,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     });
   });
 
-  await app.register(cors, {
-    origin: process.env.NODE_ENV === "production"
-      ? (process.env.CORS_ORIGIN ?? "https://shopoholia.app")
-      : true,
-  });
+  await app.register(cors, { origin: resolveCorsOrigin() });
   await app.register(multipart, {
     // Uploads take one photo (avatar: a few); anything past these limits is a 413.
     limits: {

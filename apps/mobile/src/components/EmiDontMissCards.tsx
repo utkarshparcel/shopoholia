@@ -5,6 +5,7 @@
 
 import { useMemo, useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { usePathname } from 'expo-router';
 
 import { Button } from '@/src/components/ui';
 import {
@@ -15,6 +16,7 @@ import {
 import { emiDontMissCardsFromPlans } from '@/src/lib/emiDontMiss';
 import { trackEvent } from '@/src/lib/analytics';
 import { alertClosetError } from '@/src/lib/closetAlert';
+import { consentReturnHref } from '@/src/lib/consentReturn';
 import { formatMinor, nextDueSchedule } from '@worn/shared';
 import {
   border,
@@ -40,6 +42,8 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
   const plans = useEmiPlans('ACTIVE');
   const pay = usePayEmi();
   const createFromSms = useCreateEmiFromSms();
+  // A missing-consent alert's consent screen comes back here (Vault or Accountant).
+  const consentReturnTo = consentReturnHref(usePathname());
   const [smsBody, setSmsBody] = useState('');
   const [smsFrom, setSmsFrom] = useState('');
 
@@ -58,6 +62,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
           remainingMinor: p.remainingMinor,
           installmentMinor: p.installmentMinor,
           nextDueOn: p.nextDueOn,
+          dueDay: p.dueDay,
           maxInstallments: 3,
         });
         return { plan: p, schedule };
@@ -83,7 +88,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
           );
         },
         onError: (e) =>
-          alertClosetError('Could not add EMI', e),
+          alertClosetError('Could not add EMI', e, undefined, consentReturnTo),
       },
     );
   }
@@ -165,7 +170,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                         );
                       },
                       onError: (e) =>
-                        alertClosetError('Could not mark paid', e),
+                        alertClosetError('Could not mark paid', e, undefined, consentReturnTo),
                     },
                   )
                 }
@@ -203,7 +208,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
                       Alert.alert('Marked paid', 'EMI installment recorded.');
                     },
                     onError: (e) =>
-                      alertClosetError('Could not mark paid', e),
+                      alertClosetError('Could not mark paid', e, undefined, consentReturnTo),
                   },
                 )
               }

@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const secure = vi.hoisted(() => {
   const items = new Map<string, string>();
@@ -27,6 +27,13 @@ async function load() {
   const session = await import('./session');
   return { ...tokens, ...session };
 }
+
+// The first import transforms the whole session module graph; on a busy machine that alone can
+// pass the 5 s test timeout, so it happens once here and each test only re-evaluates the modules.
+beforeAll(async () => {
+  await import('./sessionTokens');
+  await import('./session');
+}, 60_000);
 
 beforeEach(async () => {
   secure.items.clear();

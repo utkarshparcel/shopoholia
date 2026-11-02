@@ -91,11 +91,12 @@ describe("planRushToExpress", () => {
     },
   );
 
-  it("refuses when every tier runs on the same beta timings", () => {
+  it.each(["STANDARD", "SLOW_BURN"] as const)("speeds up a %s order on beta timings too", (tier) => {
     vi.stubEnv("WORN_ECONOMY_MODE", "beta");
-    expect(planRushToExpress(standardOrder("PROCESSING"), placedAt.getTime())).toEqual({
-      ok: false,
-      reason: "NO_SPEEDUP",
+    const order = { tier, state: "PROCESSING" as const, placedAt, stateEta: buildStateEta(placedAt, tier) };
+    expect(planRushToExpress(order, placedAt.getTime())).toEqual({
+      ok: true,
+      stateEta: buildStateEta(placedAt, "EXPRESS"),
     });
   });
 

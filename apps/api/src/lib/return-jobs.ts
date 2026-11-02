@@ -4,6 +4,7 @@ import {
   computeReturnWindowDeadline,
   computeExchangeWindowDeadline,
   merchantWindowsDiffer,
+  MEDIA_ORIGIN,
 } from "@worn/shared";
 import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
@@ -16,9 +17,9 @@ export const RETURN_LEAD_MS = 3 * 86_400_000;
 /** Storage key for brand placeholder when item has no image (W042). */
 export const RETURN_DEADLINE_PLACEHOLDER_IMAGE_KEY = "brand/worn-return-deadline.png";
 
-/** Public brand asset fallback when signing placeholder fails. */
+/** Public brand asset fallback when signing placeholder fails: the same key on the public media bucket. */
 export const RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL_DEFAULT =
-  "https://worn.app/brand/return-deadline.png";
+  `${MEDIA_ORIGIN}/${RETURN_DEADLINE_PLACEHOLDER_IMAGE_KEY}`;
 
 export type ReturnDeadlinePayload = {
   returnId: string;

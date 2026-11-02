@@ -2,9 +2,11 @@ import { Tabs, usePathname, useRouter } from 'expo-router';
 import { View } from 'react-native';
 
 import { BottomNav, type BottomNavItem } from '@/src/components/ui';
+import type { PlayTabKey } from '@/src/lib/surfaceRoute';
 import { bg } from '@/src/theme/tokens';
 
-const NAV_ITEMS: BottomNavItem[] = [
+// Typed to the keys the surface pill shows on (src/lib/surfaceRoute.ts).
+const NAV_ITEMS: (BottomNavItem & { key: PlayTabKey })[] = [
   { key: 'feed', label: 'Feed', icon: '▦' },
   { key: 'lookbook', label: 'Lookbook', icon: '◈' },
   { key: 'profile', label: 'Profile', icon: '○' },
