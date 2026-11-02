@@ -281,9 +281,18 @@
 
   /* ── Luxury kit ──────────────────────────────────────── */
 
-  /* Gold gradient display text */
+  /* Gold gradient display text, for the light sections. Every stop is at least 3:1 (large text)
+     on paper, warm and white: #7a5c36 5.2+, #8f6d42 4.0+, #9e7a47 3.3+, #806440 4.7+. */
   .grad-text {
-    background: linear-gradient(105deg, #8a6a42 0%, #c8a87a 38%, #ecd6ac 55%, #9c7a4e 78%);
+    background: linear-gradient(105deg, #7a5c36 0%, #8f6d42 38%, #9e7a47 55%, #806440 78%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* The same gold for the ink sections: brighter stops, each 4.8:1 or more on #0f0e0c and 3.8:1 under the glow */
+  .grad-text-ink {
+    background: linear-gradient(105deg, #9c7a4e 0%, #c8a87a 38%, #ecd6ac 55%, #a8834c 78%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;

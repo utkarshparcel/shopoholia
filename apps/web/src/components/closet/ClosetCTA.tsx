@@ -44,7 +44,7 @@ export function ClosetCTA() {
           custom={0.08}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(40px,6vw,88px)] leading-[1] tracking-tight text-balance"
         >
-          Run the closet <em className="grad-text font-display">you already own.</em>
+          Run the closet <em className="grad-text-ink font-display">you already own.</em>
         </motion.h2>
         <motion.p {...reveal} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
           Worn Closet is the next chapter of Worn. Join the Closet list and you’ll hear first when it

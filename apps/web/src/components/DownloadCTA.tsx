@@ -91,7 +91,7 @@ export function DownloadCTA() {
           {...redAnim}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
         >
-          The high, <em className="grad-text">without the pile.</em>
+          The high, <em className="grad-text-ink">without the pile.</em>
         </motion.h2>
 
         <motion.p
