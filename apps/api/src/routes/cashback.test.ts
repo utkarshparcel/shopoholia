@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AFFILIATE_CASHBACK_COINS,
   type CashbackClickResponse,
@@ -7,6 +8,38 @@ import {
 import { buildTestServer, login } from "../test-utils.js";
 
 describe("MON-AFFILIATE-CLOSET cashback events", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("makes a fresh click id for every play click, whatever the client sends", async () => {
+    const { app } = await buildTestServer();
+    const alice = await login(app, "919800000001");
+    const bob = await login(app, "919800000002");
+    const listingId = randomUUID();
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-10T10:00:00Z"));
+    const click = (accessToken: string, clickId?: string) =>
+      app.inject({
+        method: "POST",
+        url: "/cashback/click",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { listingId, platform: "myntra", ...(clickId ? { clickId } : {}) },
+      });
+
+    const a = (await click(alice.accessToken)).json() as CashbackClickResponse;
+    // Same listing, same millisecond.
+    const b = (await click(bob.accessToken)).json() as CashbackClickResponse;
+    // A client-chosen id, such as someone else's.
+    const squat = (await click(bob.accessToken, a.clickId)).json() as CashbackClickResponse;
+
+    expect(a.clickId.startsWith(`play:${listingId}:`)).toBe(true);
+    expect(new Set([a.clickId, b.clickId, squat.clickId]).size).toBe(3);
+    expect((await app.deps.repos.listCashbackEvents(alice.userId)).map((e) => e.clickId)).toEqual([a.clickId]);
+    expect((await app.deps.repos.listCashbackEvents(bob.userId)).map((e) => e.clickId).sort()).toEqual(
+      [b.clickId, squat.clickId].sort(),
+    );
+  });
+
   it("records Closet vault Use it now click without listingId", async () => {
     const { app } = await buildTestServer();
     const { accessToken, userId } = await login(app);
@@ -26,16 +59,17 @@ describe("MON-AFFILIATE-CLOSET cashback events", () => {
     const body = res.json() as CashbackClickResponse;
     expect(body).toMatchObject({
       recorded: true,
-      clickId: "closet-vault-amazon-1",
       source: "vault_use_it_now",
       platform: "amazon",
       listingId: null,
     });
+    // The server makes the click id; one the client sends is ignored.
+    expect(body.clickId).toMatch(/^closet:vault_use_it_now:amazon:/);
 
     const events = await app.deps.repos.listCashbackEvents(userId);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      clickId: "closet-vault-amazon-1",
+      clickId: body.clickId,
       platform: "amazon",
       listingId: null,
       status: "PENDING",

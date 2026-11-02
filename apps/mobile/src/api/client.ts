@@ -1028,14 +1028,15 @@ export async function recordAffiliateClick(
   listingId: string,
   platform: string,
 ) {
-  const clickId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const res = await apiFetch(`${API_URL}/cashback/click`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({ listingId, platform, clickId, source: 'play_listing' }),
+    body: JSON.stringify({ listingId, platform, source: 'play_listing' }),
   });
-  if (res.ok) return clickId;
-  return null;
+  if (!res.ok) return null;
+  // The server makes the click id.
+  const body = await parseJson<{ clickId?: string } | undefined>(res).catch(() => undefined);
+  return body?.clickId ?? null;
 }
 
 /** MON-AFFILIATE-CLOSET — record Closet CTA affiliate clicks into cashback_events. */
@@ -1051,7 +1052,6 @@ export async function recordClosetAffiliateClick(
     platform: string;
     listingId?: string | null;
     url?: string;
-    clickId?: string;
   },
 ) {
   const res = await apiFetch(`${API_URL}/cashback/click`, {
@@ -2062,7 +2062,7 @@ export async function fetchReplaceTwins(accessToken: string, itemId: string, lim
 export async function recordReplaceTwinClick(
   accessToken: string,
   itemId: string,
-  body: { listingId: string; platform?: string; clickId?: string },
+  body: { listingId: string; platform?: string },
 ) {
   const res = await apiFetch(`${API_URL}/waste/${itemId}/replace-twins/click`, {
     method: 'POST',

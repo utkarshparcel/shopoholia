@@ -38,6 +38,7 @@ export const CashbackClickBodySchema = z
   .object({
     listingId: z.string().uuid().nullable().optional(),
     platform: z.string().min(1),
+    /** Ignored: the server makes every click id. Accepted so older clients still validate. */
     clickId: z.string().min(1).optional(),
     source: z.union([z.literal("play_listing"), ClosetAffiliateSourceSchema]).optional(),
     url: z.string().url().optional(),

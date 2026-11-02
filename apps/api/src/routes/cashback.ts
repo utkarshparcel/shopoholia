@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CashbackClickBodySchema,
   CashbackClickResponseSchema,
@@ -36,7 +37,6 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
       const body = request.body as {
         listingId?: string | null;
         platform: string;
-        clickId?: string;
         source?: string;
         url?: string;
       };
@@ -47,16 +47,11 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
         platform = platformFromAffiliateUrl(body.url);
       }
 
-      let clickId = body.clickId;
-      if (!clickId) {
-        if (isClosetAffiliateSource(source)) {
-          clickId = buildClosetAffiliateClickId(source as ClosetAffiliateSource, platform, {
-            listingId,
-          });
-        } else {
-          clickId = `play:${listingId}:${Date.now()}`;
-        }
-      }
+      // Always ours, never the client's: a click id decides who the network's webhook pays, and
+      // each one is unique (a UUID), so two clicks can't share an event.
+      const clickId = isClosetAffiliateSource(source)
+        ? buildClosetAffiliateClickId(source as ClosetAffiliateSource, platform, { listingId })
+        : `play:${listingId}:${randomUUID()}`;
 
       await app.deps.repos.recordCashbackEvent({
         userId: request.user.sub,

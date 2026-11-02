@@ -826,6 +826,7 @@ export type ReplaceTwinsResponse = z.infer<typeof ReplaceTwinsResponseSchema>;
 export const ReplaceTwinClickBodySchema = z.object({
   listingId: z.string().uuid(),
   platform: z.string().min(1).optional(),
+  /** Ignored: the server makes every click id. Accepted so older clients still validate. */
   clickId: z.string().min(1).optional(),
 });
 export type ReplaceTwinClickBody = z.infer<typeof ReplaceTwinClickBodySchema>;

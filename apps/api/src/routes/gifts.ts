@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CreateGiftOrderBodySchema,
   CreateGroupContributeBodySchema,
@@ -295,7 +296,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
               return "other";
             }
           })();
-          const clickId = `gift-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const clickId = `gift:${randomUUID()}`;
           await app.deps.repos.recordCashbackEvent({ userId, listingId, platform, clickId });
         }
       }
