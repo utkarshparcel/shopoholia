@@ -1,6 +1,6 @@
 import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, CoinWallet } from '@/src/components/ui';
@@ -8,6 +8,7 @@ import { fetchOrders } from '@/src/api/client';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { confirmAsync } from '@/src/lib/confirm';
 import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -44,23 +45,6 @@ const MENU = [
   { label: 'Edit avatar', href: '/(onboarding)/avatar' },
 ] as const;
 
-/** Alert.alert does nothing on react-native-web, so the browser's confirm stands in there. */
-function confirmDestructive(
-  title: string,
-  message: string,
-  confirmLabel: string,
-  onConfirm: () => void,
-) {
-  if (Platform.OS === 'web') {
-    if (window.confirm(`${title}\n\n${message}`)) onConfirm();
-    return;
-  }
-  Alert.alert(title, message, [
-    { text: 'Cancel', style: 'cancel' },
-    { text: confirmLabel, style: 'destructive', onPress: onConfirm },
-  ]);
-}
-
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -73,13 +57,15 @@ export default function ProfileScreen() {
   const deletePhotos = useDeletePhotos();
   const avatarUrl = avatar?.status === 'READY' ? avatar.referencePreviewUrl : null;
 
-  const confirmDeletePhotos = () =>
-    confirmDestructive(
+  // A browser dialog on web, where Alert.alert does nothing.
+  const confirmDeletePhotos = async () => {
+    const ok = await confirmAsync(
       'Delete your photos?',
       'This permanently deletes the photos you uploaded and your avatar. It can’t be undone, and try-on will need a new upload.',
-      'Delete',
-      () => deletePhotos.mutate(),
+      { confirmLabel: 'Delete', destructive: true },
     );
+    if (ok) deletePhotos.mutate();
+  };
 
   const { data: ordersData } = useQuery({
     queryKey: orderKeys.list(userId),
@@ -214,7 +200,7 @@ export default function ProfileScreen() {
           <Pressable
             accessibilityRole="button"
             disabled={deletePhotos.isPending}
-            onPress={confirmDeletePhotos}
+            onPress={() => void confirmDeletePhotos()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={[styles.menuItemText, styles.danger]}>

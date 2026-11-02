@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   Share,
@@ -25,6 +24,7 @@ import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfac
 import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/reveal';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
+import { notify } from '@/src/lib/confirm';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -87,7 +87,7 @@ export default function RevealScreen() {
       await unlockMutation.mutateAsync([renderId]);
       trackEvent('unlock', { orderId: orderId ?? '', renderId });
     } catch (error) {
-      Alert.alert('Unlock failed', error instanceof Error ? error.message : 'Try again');
+      notify('Unlock failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setUnlockingId(null);
     }
@@ -108,7 +108,7 @@ export default function RevealScreen() {
         isCombine: result.isCombine ?? false,
       });
     } catch (error) {
-      Alert.alert('Generate failed', error instanceof Error ? error.message : 'Try again');
+      notify('Generate failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setGenerating(false);
     }

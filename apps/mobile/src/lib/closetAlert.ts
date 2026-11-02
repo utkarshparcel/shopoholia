@@ -1,7 +1,7 @@
-import { Alert } from 'react-native';
 import { router } from 'expo-router';
 
 import { closetAlertText, missingConsentScope } from './closetScreenState';
+import { confirmAsync, notify } from './confirm';
 import { CONSENT_FALLBACK_RETURN, consentHref } from './consentReturn';
 
 /**
@@ -16,11 +16,13 @@ export function alertClosetError(
 ): void {
   const message = closetAlertText(error, fallback);
   if (!missingConsentScope(error)) {
-    Alert.alert(title, message);
+    notify(title, message);
     return;
   }
-  Alert.alert(title, message, [
-    { text: 'Not now', style: 'cancel' },
-    { text: 'Open Privacy & consent', onPress: () => router.push(consentHref(returnTo) as never) },
-  ]);
+  void confirmAsync(title, message, {
+    confirmLabel: 'Open Privacy & consent',
+    cancelLabel: 'Not now',
+  }).then((open) => {
+    if (open) router.push(consentHref(returnTo) as never);
+  });
 }

@@ -125,7 +125,9 @@ describe('ProfileScreen: delete my photos', () => {
     expect(message).toMatch(/permanently deletes the photos you uploaded and your avatar/);
     expect(message).toMatch(/try-on will need a new upload/);
     expect(buttons.map((b) => b.style)).toEqual(['cancel', 'destructive']);
-    expect(buttons[0]!.onPress).toBeUndefined();
+    await act(async () => {
+      buttons[0]!.onPress?.();
+    });
     expect(deleteAvatar).not.toHaveBeenCalled();
   });
 

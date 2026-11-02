@@ -105,6 +105,8 @@ import {
 } from '@/src/lib/receiptSnap';
 import { expiryBadge } from '@/src/lib/expiryBadge';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { alertClosetError } from '@/src/lib/closetAlert';
+import { notify } from '@/src/lib/confirm';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { warrantyBadge } from '@/src/lib/warrantyBadge';
 import {
@@ -899,7 +901,7 @@ function CreditsKindTab({
     if (tab === 'gift' && (isOffline || !accessToken)) {
       // Queued adds belong to the signed-in user; with no session there's no one to save it for.
       if (!userId) {
-        Alert.alert(`Could not add ${meta.noun}`, 'Sign in to add it.');
+        notify(`Could not add ${meta.noun}`, 'Sign in to add it.');
         return;
       }
       void enqueueVaultAdd(userId, payload).then((item) => {
@@ -933,7 +935,8 @@ function CreditsKindTab({
           });
           return;
         }
-        Alert.alert(`Could not add ${meta.noun}`, closetAlertText(e));
+        // Without FINANCIAL this offers the consent screen (and comes back here); on web too.
+        alertClosetError(`Could not add ${meta.noun}`, e, undefined, '/(closet)/vault');
       },
     });
   }
