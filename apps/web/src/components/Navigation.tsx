@@ -121,8 +121,9 @@ export function Navigation() {
             Worn
           </Link>
 
-          {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-8">
+          {/* Desktop nav: from lg only. Four links, the product switch and the button need ~880px; at md
+              they wrapped and pushed into the logo, so tablets get the menu button instead. */}
+          <div className="hidden lg:flex items-center gap-8">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
@@ -142,8 +143,8 @@ export function Navigation() {
             </Link>
           </div>
 
-          {/* Mobile: the product switch stays visible beside the menu */}
-          <div className="flex items-center gap-2 md:hidden">
+          {/* Phones and tablets: the product switch stays visible beside the menu */}
+          <div className="flex items-center gap-2 lg:hidden">
             <SiteSwitch current="play" />
             <button
               ref={menuButtonRef}
@@ -169,7 +170,7 @@ export function Navigation() {
               exit={{ opacity: 0, height: 0 }}
               // framer-motion durations are in seconds
               transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeOut' }}
-              className="md:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
+              className="lg:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
             >
               <div className="flex flex-col gap-4">
                 {navLinks.map((link) => (
