@@ -18,6 +18,7 @@ import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { initAnalyticsFromEnv, trackInstallOnce } from '@/src/lib/analytics';
 import { initSentry } from '@/src/lib/sentry';
+import { isServerRendering } from '@/src/lib/ssr';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
 import { clearVaultAddQueue } from '@/src/lib/vaultAddQueue';
@@ -33,7 +34,9 @@ export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBo
 // At import, not in an effect: a render error replaces this layout before its effects run.
 initSentry();
 // Read the stored session as early as possible; the layout waits for it (`tokensHydrated`).
-void startSessionTokenPersistence();
+// Not in web static rendering, which has no storage (writing the session there crashed the
+// export with "window is not defined"): the browser starts it when it loads this module.
+if (!isServerRendering()) void startSessionTokenPersistence();
 wireOnlineManager();
 
 function subscribeStoreHydration(onChange: () => void) {
