@@ -86,7 +86,7 @@ function purchase(
       costMicros: 0,
     },
     cost: 50,
-    ledgerType: "SPEND_UNLOCK",
+    ledgerType: "SPEND_RENDER",
     ...patch,
   };
 }
@@ -101,6 +101,27 @@ function purchaseRenderCases(getRepos: () => Repositories) {
     expect(result).toMatchObject({ status: "created", coinsSpent: 50, balanceAfter: 450 });
     expect(await repos.getCoinBalance(user.id)).toBe(450);
     expect((await repos.findRendersByOrderId(order.id)).map((r) => r.orderItemId)).toEqual([items[0]!.id]);
+  });
+
+  it("records a generate and a combine under their own ledger types", async () => {
+    const repos = getRepos();
+    const { user, order, items } = await setup(repos);
+    const key = randomUUID();
+
+    await repos.purchaseRender(purchase(user.id, order.id, items[0]!.id));
+    await repos.purchaseRender(
+      purchase(user.id, order.id, items[0]!.id, { cost: 75, ledgerType: "SPEND_COMBINE", idempotencyKey: key }),
+    );
+    const replay = await repos.purchaseRender(purchase(user.id, order.id, items[0]!.id, { idempotencyKey: key }));
+
+    expect(replay).toMatchObject({ status: "replayed", coinsSpent: 75, ledgerType: "SPEND_COMBINE" });
+    const { transactions } = await repos.listCoinTransactions({ userId: user.id, limit: 5 });
+    // Same-millisecond entries can list in either order on memory.
+    expect(transactions.map((t) => [t.type, t.delta]).sort()).toEqual([
+      ["GRANT", 500],
+      ["SPEND_COMBINE", -75],
+      ["SPEND_RENDER", -50],
+    ]);
   });
 
   it("parallel purchases with one key charge once and make one render", async () => {

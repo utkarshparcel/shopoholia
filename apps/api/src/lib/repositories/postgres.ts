@@ -2948,7 +2948,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         const balance = await lockedCoinBalance(tx, input.userId);
         if (key) {
           const [prior] = await tx
-            .select({ delta: coinLedger.delta })
+            .select({ delta: coinLedger.delta, type: coinLedger.type })
             .from(coinLedger)
             .where(
               and(
@@ -2964,6 +2964,7 @@ export function createPostgresRepositories(db: Db): Repositories {
               status: "replayed" as const,
               render: row ? mapRender(row) : null,
               coinsSpent: Math.abs(prior.delta),
+              ledgerType: prior.type,
             };
           }
         }

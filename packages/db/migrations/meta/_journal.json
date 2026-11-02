@@ -134,6 +134,13 @@
       "when": 1793602929195,
       "tag": "0018_reveal_rating",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793609865236,
+      "tag": "0019_coin_ledger_render_types",
+      "breakpoints": true
     }
   ]
 }

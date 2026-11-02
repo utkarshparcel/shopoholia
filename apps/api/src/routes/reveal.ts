@@ -209,7 +209,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           costMicros: 0,
         },
         cost: totalCost,
-        ledgerType: "SPEND_UNLOCK",
+        ledgerType: isCombine ? "SPEND_COMBINE" : "SPEND_RENDER",
         idempotencyKey: request.body.idempotencyKey,
       });
 
@@ -228,7 +228,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         return {
           renders: cards,
           coinsSpent: result.coinsSpent,
-          isCombine: result.coinsSpent === REVEAL_COMBINE_COST_COINS,
+          isCombine: result.ledgerType === "SPEND_COMBINE",
         };
       }
 

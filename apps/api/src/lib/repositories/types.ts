@@ -171,7 +171,7 @@ export type PurchaseRenderResult =
    * The key was already spent on this order: nothing was created or charged. `render` is the one
    * the first call made (null if it has since been deleted), whatever this call asked for.
    */
-  | { status: "replayed"; render: RenderRecord | null; coinsSpent: number }
+  | { status: "replayed"; render: RenderRecord | null; coinsSpent: number; ledgerType: string }
   | { status: "not_found" }
   | { status: "insufficient_coins"; coinsNeeded: number; balance: number };
 

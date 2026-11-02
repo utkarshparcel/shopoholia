@@ -1775,7 +1775,12 @@ export function createMemoryRepositories(): Repositories {
             (e) => e.userId === input.userId && e.refType === ref.refType && e.refId === ref.refId,
           );
           if (prior) {
-            return { status: "replayed" as const, render: renders.get(renderId) ?? null, coinsSpent: Math.abs(prior.delta) };
+            return {
+              status: "replayed" as const,
+              render: renders.get(renderId) ?? null,
+              coinsSpent: Math.abs(prior.delta),
+              ledgerType: prior.type,
+            };
           }
         }
         const order = orders.get(input.orderId);

@@ -261,6 +261,29 @@ describe("reveal generate", () => {
   });
 });
 
+describe("reveal generate ledger", () => {
+  it("records a generate as SPEND_RENDER and a combine as SPEND_COMBINE, and lists them", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId, 2);
+    expect((await generate(app, bob.accessToken, order.id, [items[0]!.id])).statusCode).toBe(200);
+    expect((await generate(app, bob.accessToken, order.id, items.map((i) => i.id))).statusCode).toBe(200);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/coins/transactions",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const { transactions } = res.json() as { transactions: Array<{ type: string; delta: number }> };
+    // Same-millisecond entries can list in either order on memory.
+    expect(transactions.filter((t) => t.type !== "GRANT").map((t) => [t.type, t.delta]).sort()).toEqual([
+      ["SPEND_COMBINE", -REVEAL_COMBINE_COST_COINS],
+      ["SPEND_RENDER", -REVEAL_GENERATE_COST_COINS],
+    ]);
+    await app.close();
+  });
+});
+
 describe("reveal generate idempotency", () => {
   it("a retried key returns the first render and charges once", async () => {
     const { app, repos, bob } = await setup();

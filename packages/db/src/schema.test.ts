@@ -63,6 +63,13 @@ describe("migrations", () => {
     expect(sql).toContain(`SET "state_eta" = "state_eta" - 'rating'`);
     expect(schema.orders.revealRating.notNull).toBe(false);
   });
+
+  it("adds the paid reveal render ledger types to the enum", () => {
+    const sql = readFileSync(join(root, "../migrations/0019_coin_ledger_render_types.sql"), "utf8");
+    expect(sql).toContain(`ALTER TYPE "public"."coin_ledger_type" ADD VALUE 'SPEND_RENDER'`);
+    expect(sql).toContain(`ALTER TYPE "public"."coin_ledger_type" ADD VALUE 'SPEND_COMBINE'`);
+    expect(coinLedgerTypeEnum.enumValues).toEqual(expect.arrayContaining(["SPEND_RENDER", "SPEND_COMBINE"]));
+  });
 });
 
 describe("grantCoins", () => {
