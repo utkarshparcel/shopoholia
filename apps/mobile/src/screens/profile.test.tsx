@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProfileScreen from '@/app/(tabs)/profile';
-import { deleteAvatar, getAvatar } from '@/src/api/client';
+import { deleteAvatar, getAvatar, logout } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 
 type AlertButton = { text: string; style?: string; onPress?: () => void };
@@ -76,6 +76,7 @@ vi.mock('@/src/hooks/orders', () => ({
 }));
 
 vi.mock('@/src/api/client', () => ({
+  logout: vi.fn(async () => undefined),
   fetchOrders: vi.fn(async () => ({ orders: [] })),
   getAvatar: vi.fn(),
   deleteAvatar: vi.fn(),
@@ -169,5 +170,17 @@ describe('ProfileScreen: delete my photos', () => {
     expect(confirm.mock.calls[0]![0]).toMatch(/^Delete your photos\?/);
     expect(rn.alert).not.toHaveBeenCalled();
     confirm.mockRestore();
+  });
+});
+
+describe('ProfileScreen: sign out', () => {
+  it('ends the session on the device and revokes the refresh token on the server', async () => {
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    fireEvent.click(screen.getByText('Sign out'));
+
+    expect(useSessionStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    expect(logout).toHaveBeenCalledWith('refresh');
   });
 });

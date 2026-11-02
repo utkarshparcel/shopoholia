@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useSessionStore } from '@/src/stores/session';
 
-import { fetchCart, fetchCoinBalance, verifyOtp } from './client';
+import { fetchCart, fetchCoinBalance, logout, refreshSession, verifyOtp } from './client';
 
 vi.mock('expo-constants', () => ({
   default: { expoConfig: { extra: { apiUrl: 'https://api.worn.test' } } },
@@ -17,6 +17,7 @@ type Handler = (url: string, init: RequestInit) => Response | Promise<Response>;
 function stubApi({ validToken, refresh }: { validToken: string; refresh: Handler }) {
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
     if (url.endsWith('/auth/refresh')) return refresh(url, init);
+    if (url.endsWith('/auth/logout')) return new Response(null, { status: 204 });
     const auth = new Headers(init.headers).get('Authorization');
     if (auth !== `Bearer ${validToken}`) return unauthorized();
     if (url.endsWith('/cart')) return json({ items: [], coinTotal: 0 });
@@ -29,6 +30,8 @@ function stubApi({ validToken, refresh }: { validToken: string; refresh: Handler
 
 const refreshCalls = (fetchMock: ReturnType<typeof stubApi>) =>
   fetchMock.mock.calls.filter(([url]) => url.endsWith('/auth/refresh'));
+const logoutCalls = (fetchMock: ReturnType<typeof stubApi>) =>
+  fetchMock.mock.calls.filter(([url]) => url.endsWith('/auth/logout'));
 
 beforeEach(() => {
   useSessionStore.getState().setSession({ accessToken: 'old', refreshToken: 'r1', phone: '919876543210' });
@@ -82,11 +85,13 @@ describe('expired access tokens', () => {
   });
 
   it('signs out when the refresh token is rejected', async () => {
-    stubApi({ validToken: 'new', refresh: () => unauthorized() });
+    const fetchMock = stubApi({ validToken: 'new', refresh: () => unauthorized() });
 
     await expect(fetchCart('old')).rejects.toThrow('Token expired');
 
     expect(useSessionStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    // A forced sign-out has nothing to revoke: the server already refused the token.
+    expect(logoutCalls(fetchMock)).toHaveLength(0);
   });
 
   it('keeps the session when the API is unreachable for the renewal', async () => {
@@ -110,6 +115,24 @@ describe('expired access tokens', () => {
     expect(useSessionStore.getState()).toMatchObject({ accessToken: 'old', refreshToken: 'r1' });
   });
 
+  it('revokes the pair a renewal brings back after the user signed out', async () => {
+    let answer!: (res: Response) => void;
+    const fetchMock = stubApi({
+      validToken: 'new',
+      refresh: () => new Promise<Response>((resolve) => (answer = resolve)),
+    });
+
+    const renewal = refreshSession();
+    await vi.waitFor(() => expect(refreshCalls(fetchMock)).toHaveLength(1));
+    useSessionStore.getState().clear();
+    answer(json({ accessToken: 'new', refreshToken: 'r2' }));
+
+    await expect(renewal).resolves.toBeNull();
+    await vi.waitFor(() => expect(logoutCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String(logoutCalls(fetchMock)[0]![1]!.body))).toEqual({ refreshToken: 'r2' });
+    expect(useSessionStore.getState().refreshToken).toBeNull();
+  });
+
   it("doesn't touch the session for requests sent without a token", async () => {
     const fetchMock = stubApi({ validToken: 'new', refresh: () => json({}) });
 
@@ -117,5 +140,18 @@ describe('expired access tokens', () => {
 
     expect(refreshCalls(fetchMock)).toHaveLength(0);
     expect(useSessionStore.getState().accessToken).toBe('old');
+  });
+});
+
+describe('logout', () => {
+  it('sends the refresh token to /auth/logout without an access token', async () => {
+    const fetchMock = stubApi({ validToken: 'new', refresh: () => unauthorized() });
+
+    await expect(logout('r1')).resolves.toBeUndefined();
+
+    const init = logoutCalls(fetchMock)[0]![1]!;
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ refreshToken: 'r1' });
+    expect(new Headers(init.headers).get('Authorization')).toBeNull();
   });
 });

@@ -188,6 +188,30 @@ describe("auth", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().accessToken).toBeTruthy();
   });
+
+  it("logs out: the refresh token stops working, and logging out again is still 204", async () => {
+    await app.inject({ method: "POST", url: "/auth/otp", payload: { phone: "919876543210" } });
+    const verify = await app.inject({
+      method: "POST",
+      url: "/auth/verify",
+      payload: { phone: "919876543210", otp: "123456" },
+    });
+    const { refreshToken } = verify.json();
+
+    const logout = await app.inject({ method: "POST", url: "/auth/logout", payload: { refreshToken } });
+    expect(logout.statusCode).toBe(204);
+    expect(logout.body).toBe("");
+
+    const refresh = await app.inject({ method: "POST", url: "/auth/refresh", payload: { refreshToken } });
+    expect(refresh.statusCode).toBe(401);
+
+    const again = await app.inject({ method: "POST", url: "/auth/logout", payload: { refreshToken } });
+    expect(again.statusCode).toBe(204);
+    const unknown = await app.inject({ method: "POST", url: "/auth/logout", payload: { refreshToken: "never-issued" } });
+    expect(unknown.statusCode).toBe(204);
+    const missing = await app.inject({ method: "POST", url: "/auth/logout", payload: {} });
+    expect(missing.statusCode).toBe(400);
+  });
 });
 
 describe("avatar", () => {

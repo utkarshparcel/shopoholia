@@ -146,8 +146,15 @@ async function renewSession(): Promise<string | null> {
     return null;
   }
 
-  // Signed out (or in as someone else) while this was in flight.
-  if (useSessionStore.getState().refreshToken !== refreshToken) return null;
+  // Signed out (or in as someone else) while this was in flight: the pair the server just issued
+  // belongs to the ended session, so it's revoked rather than left valid.
+  if (useSessionStore.getState().refreshToken !== refreshToken) {
+    if (res.ok) {
+      const renewed = (await res.json().catch(() => null)) as { refreshToken?: unknown } | null;
+      if (typeof renewed?.refreshToken === 'string') void logout(renewed.refreshToken).catch(() => undefined);
+    }
+    return null;
+  }
 
   if (!res.ok) {
     // Only a rejected token ends the session; a server error might be temporary.
@@ -163,6 +170,20 @@ async function renewSession(): Promise<string | null> {
   if (typeof tokens?.accessToken !== 'string' || typeof tokens.refreshToken !== 'string') return null;
   useSessionStore.getState().setTokens(tokens);
   return tokens.accessToken;
+}
+
+/**
+ * Ends the session on the server: the refresh token can't renew it any more. The API answers 204
+ * also for a token it doesn't know, so this is safe to repeat. No access token is sent (it may
+ * have expired).
+ */
+export async function logout(refreshToken: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_URL}/auth/logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken }),
+  });
+  await parseJson<void>(res);
 }
 
 /**
