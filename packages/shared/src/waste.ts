@@ -1,9 +1,10 @@
+import { WEB_HOST } from "./domains.js";
 import { DEFAULT_CURRENCY, formatMinor } from "./money.js";
 
 /** Target wears for the “Wear it 3×” challenge. */
 export const WEAR_CHALLENGE_TARGET = 3;
 
-export const WASTE_SHARE_WATERMARK = "worn.app";
+export const WASTE_SHARE_WATERMARK = WEB_HOST;
 
 /** Strip digits / PAN-like runs so share cards never leak card numbers. */
 export function redactCardDigits(value: string): string {

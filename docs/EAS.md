@@ -9,6 +9,8 @@
 | `production` | `store` | `production` | Store-signed bundle for TestFlight / Play (autoIncrement). |
 | `testflight` / `play-internal` | extends preview | `beta` | Convenience aliases used by `README.md`. |
 
+Every release profile (`preview`, `production`, `testflight`, `play-internal`) sets `EXPO_PUBLIC_API_URL=https://api.worncloset.app` in its `env`; `development` leaves it unset and falls back to `http://localhost:3000`. `app.config.js` refuses a release build whose URL is missing, not https, or a local host.
+
 `apps/mobile/app.json` sets `runtimeVersion.policy: "appVersion"` so EAS Update OTA binaries match the native app version.
 
 ## Preview build (closed testing / GTM)

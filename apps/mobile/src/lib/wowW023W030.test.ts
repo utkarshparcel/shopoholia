@@ -24,9 +24,9 @@ describe('W023–W030 acceptance smoke', () => {
     expect(wa.whatsAppUrl).toContain('wa.me');
   });
 
-  it('W024 attribution confirm shows shared via worn.app/r/', () => {
+  it('W024 attribution confirm shows shared via worncloset.app/r/', () => {
     const confirm = buildFamilyShareAttributionConfirm('HOME99');
-    expect(confirm?.viaLabel).toBe('shared via worn.app/r/HOME99');
+    expect(confirm?.viaLabel).toBe('shared via worncloset.app/r/HOME99');
     expect(confirm?.body).not.toMatch(/Myntra|\d{4}/);
   });
 

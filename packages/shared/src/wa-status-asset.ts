@@ -53,7 +53,7 @@ function escapeXml(value: string): string {
 
 /**
  * Build a 9:16 WhatsApp Status asset from found-money totals.
- * Always uses Reels blur preset — no merchants, digit-blurred amount, worn.app watermark.
+ * Always uses Reels blur preset — no merchants, digit-blurred amount, worncloset.app watermark.
  */
 export function buildWhatsAppStatusAsset(
   input: WhatsAppStatusAssetInput,

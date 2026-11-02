@@ -326,7 +326,7 @@ describe("N36 family share attribution", () => {
     expect(attr.json()).toMatchObject({
       attributed: true,
       referralCode: "FAM123",
-      deepLink: "https://worn.app/r/FAM123",
+      deepLink: "https://worncloset.app/r/FAM123",
       landing: {
         headline: expect.stringMatching(/gift card|forgotten/i),
         installCta: expect.stringMatching(/Install/i),

@@ -81,7 +81,7 @@ When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledge
 | `R2_ACCESS_KEY_ID` | For real R2 | R2 API token access key |
 | `R2_SECRET_ACCESS_KEY` | For real R2 | R2 API token secret |
 | `R2_BUCKET_NAME` | For real R2 | Target bucket |
-| `R2_PUBLIC_URL` | Optional | Public bucket URL; skips presigned URLs when set |
+| `R2_PUBLIC_URL` | Optional | Public bucket URL (production: `https://media.worncloset.app`); skips presigned URLs when set |
 
 When all four required `R2_*` vars are set, uploads use the S3-compatible R2 client. Otherwise the API uses an in-memory mock store.
 
@@ -148,6 +148,29 @@ The spike calls `tryon-max` (2k, balanced), polls until complete, saves the resu
 | **fashn (live)** | Key set | Real HTTP to `api.fashn.ai`; try-on only (scenario pass still mocked until ComfyUI spike) |
 
 CI tests mock `fetch` — no live API calls in `pnpm test`.
+
+## Domains
+
+Production runs on `worncloset.app`. The hosts below are exported from `packages/shared/src/domains.ts` (`WEB_ORIGIN`, `CLOSET_URL`, `API_ORIGIN`, `MEDIA_ORIGIN`); share links, watermarks and contact addresses are built from them.
+
+| Host | Serves | App |
+|------|--------|-----|
+| `https://worncloset.app` | The website: Worn Play at `/`, Worn Closet at `/closet`, and every share link: `/r/<code>` referrals, `/c/<code>` swap circles, `/h/<code>` households, `/p/outfit/<id>`, `/p/return/<id>`, `/privacy` | `apps/web` |
+| `https://www.worncloset.app` | Redirects to `https://worncloset.app` (set at the hosting provider) | — |
+| `https://api.worncloset.app` | Fastify API (`EXPO_PUBLIC_API_URL` in the release EAS profiles, `API_PUBLIC_URL`) | `apps/api` |
+| `https://media.worncloset.app` | Public R2 bucket: catalog images, renders, brand assets (`R2_PUBLIC_URL`) | Cloudflare R2 |
+
+Email: `hello@worncloset.app` (general), `privacy@worncloset.app` (privacy contact).
+
+DNS records to create:
+
+- `worncloset.app` (apex) and `www`: point at the website host (A/ALIAS or CNAME, as the host specifies).
+- `api`: CNAME (or A) to the API host.
+- `media`: add as a custom domain on the R2 bucket (Cloudflare creates the record).
+
+API settings for production: `CORS_ORIGIN=https://worncloset.app` (the default when unset; a comma-separated list also works), `R2_PUBLIC_URL=https://media.worncloset.app`, and `https://api.worncloset.app/ingestion/sources/oauth/callback` as an authorized redirect URI on the Google OAuth web client.
+
+Universal links (iOS associated domains, Android app links) are not set up yet. `apple-app-site-association` and `assetlinks.json` can only be published once the Apple Team ID and the Android signing certificate SHA-256 fingerprint are known; the app config adds `associatedDomains` / `intentFilters` at the same time.
 
 ## Beta deploy (TestFlight + Play internal)
 

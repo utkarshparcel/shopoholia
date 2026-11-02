@@ -8,6 +8,7 @@ import {
   IngestSmsBodySchema,
   IngestSmsResponseSchema,
   PatchIngestionSourceBodySchema,
+  API_ORIGIN,
   mapAccountHealth,
 } from "@worn/shared";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -61,7 +62,7 @@ import {
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 function gmailRedirectUri(): string {
-  const base = process.env.API_PUBLIC_URL ?? "https://api.shopoholia.app";
+  const base = process.env.API_PUBLIC_URL ?? API_ORIGIN;
   return `${base.replace(/\/$/, "")}/ingestion/sources/oauth/callback`;
 }
 

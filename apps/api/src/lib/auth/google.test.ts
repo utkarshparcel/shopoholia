@@ -3,10 +3,10 @@ import { verifyGoogleIdToken, verifyTestGoogleToken } from "./google.js";
 
 describe("verifyTestGoogleToken", () => {
   it("parses deterministic test tokens", () => {
-    const profile = verifyTestGoogleToken("test-google:abc:me@worn.app:Name");
+    const profile = verifyTestGoogleToken("test-google:abc:me@worncloset.app:Name");
     expect(profile).toEqual({
       sub: "abc",
-      email: "me@worn.app",
+      email: "me@worncloset.app",
       emailVerified: true,
       name: "Name",
       aud: "test-client",

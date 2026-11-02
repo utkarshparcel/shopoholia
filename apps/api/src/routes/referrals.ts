@@ -76,7 +76,7 @@ export const referralRoutes: FastifyPluginAsyncZod = async (app) => {
     },
   );
 
-  /** N36 — attribution when family share deep link `worn.app/r/{code}` is opened. */
+  /** N36 — attribution when family share deep link `worncloset.app/r/{code}` is opened. */
   app.post(
     "/referrals/attribute",
     {

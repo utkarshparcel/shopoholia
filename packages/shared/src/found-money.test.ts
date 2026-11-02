@@ -94,7 +94,7 @@ describe("found-money share card", () => {
       totalMinor: 12_34_00,
       accountCount: 2,
       currency: "INR",
-      deepLink: "https://worn.app/r/HOME01",
+      deepLink: "https://worncloset.app/r/HOME01",
     });
     expect(wa.amountLabel).toContain("1,234");
     expect(wa.blurredAmountLabel).toBe(blurFoundMoneyTotalLabel(wa.amountLabel));
@@ -102,7 +102,7 @@ describe("found-money share card", () => {
     expect(wa.shareText).toContain(wa.blurredAmountLabel);
     expect(wa.shareText).not.toMatch(/Myntra|Amazon/);
     expect(wa.whatsAppUrl).toMatch(/^https:\/\/wa\.me\/\?text=/);
-    expect(decodeURIComponent(wa.whatsAppUrl)).toContain("worn.app/r/HOME01");
+    expect(decodeURIComponent(wa.whatsAppUrl)).toContain("worncloset.app/r/HOME01");
 
     const empty = buildWhatsAppInFoundMoneyShare({ totalMinor: 0, accountCount: 0 });
     expect(empty.shareText).toContain("Checking my forgotten credit");

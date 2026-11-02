@@ -1,3 +1,4 @@
+import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
 import { hasR2Config } from "./storage/r2.js";
 
@@ -28,6 +29,22 @@ export function resolveListenAddress(env: Env = process.env): { port: number; ho
     port: Number(env.PORT || env.API_PORT || 3000),
     host: env.HOST || env.API_HOST || "0.0.0.0",
   };
+}
+
+/**
+ * Browser origins allowed to call the API. Outside production every origin is allowed. In
+ * production CORS_ORIGIN is one origin or a comma-separated list (`*` allows all); unset means
+ * the website (Worn Play and Worn Closet share one origin).
+ */
+export function resolveCorsOrigin(env: Env = process.env): true | string | string[] {
+  if (env.NODE_ENV !== "production") return true;
+  const origins = (env.CORS_ORIGIN ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length === 0) return WEB_ORIGIN;
+  if (origins.includes("*")) return "*";
+  return origins.length === 1 ? origins[0]! : origins;
 }
 
 /**

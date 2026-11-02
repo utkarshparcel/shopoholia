@@ -714,7 +714,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 - [x] **GROW-FOUND-SHARE** · P2 · [Growth] Shareable found-money card (watermark)
   - Why: GTM success bar — unprompted forwards
-  - Status: SHIPPED (2026-08-26) — vault Share builds redacted card (blur merchants + total + days-to-deadline + worn.app); Share.share + `found_money_share_card`; vault banner always visible on empty (no Connect-email full-screen)
+  - Status: SHIPPED (2026-08-26) — vault Share builds redacted card (blur merchants + total + days-to-deadline + worncloset.app); Share.share + `found_money_share_card`; vault banner always visible on empty (no Connect-email full-screen)
   - Depends: ONB-60S-AHA
   - Files: `packages/shared/src/found-money.ts`, `apps/mobile/src/lib/foundMoney.ts`, `apps/mobile/app/(closet)/vault.tsx`
   - Acceptance: met — vitest found-money redact + mobile delight share + Gmail-optional empty copy; no raw merchants/card digits
@@ -816,7 +816,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 - [x] **N36-FAMILY-SHARE** · P3 · [Social] Family found-money share to WhatsApp
   - Why: household forwards = India K-factor
-  - Status: SHIPPED (2026-08-26) — family share card + `worn.app/r/{code}`; `POST /referrals/attribute` + `GET /r/:code` log attribution; vault Share uses referral
+  - Status: SHIPPED (2026-08-26) — family share card + `worncloset.app/r/{code}`; `POST /referrals/attribute` + `GET /r/:code` log attribution; vault Share uses referral
   - Depends: GROW-FOUND-SHARE
   - Files: `packages/shared/src/family-share.ts`, referrals routes, vault.tsx
   - Acceptance: met — share includes referral code; attribution logged; vitest: link builder
@@ -824,7 +824,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 - [x] **N37-SWAP-CIRCLE** · P3 · [Social] Invite-only closet swap circle
   - Why: barter among friends ≠ public marketplace
-  - Status: SHIPPED (2026-08-26) — `swap_circles`/`members`/`listings`; invite `worn.app/c/{code}`; list→private BARTER disposition; borrow/return; authz deny outsider
+  - Status: SHIPPED (2026-08-26) — `swap_circles`/`members`/`listings`; invite `worncloset.app/c/{code}`; list→private BARTER disposition; borrow/return; authz deny outsider
   - Depends: disposition modes
   - Files: packages/db schema+migration 0023, shared swap-circle authz, API `/swap-circles*`, mobile `(closet)/swap`
   - Acceptance: met — invite link; list item to circle; accept/borrow; vitest: membership authz
@@ -856,7 +856,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 - [x] **N26-HOUSEHOLD** · P3 · [Wardrobe] Household / shared closet
   - Why: couples & roommates share inventory + laundry
-  - Status: SHIPPED (2026-08-26) — `households`/`members`; invite `worn.app/h/{code}`; shared wardrobe ACL + partner laundry PATCH; mobile household screen
+  - Status: SHIPPED (2026-08-26) — `households`/`members`; invite `worncloset.app/h/{code}`; shared wardrobe ACL + partner laundry PATCH; mobile household screen
   - Depends: N04-LAUNDRY-BASKET
   - Files: `household.ts`, `routes/households.ts`, migration `0024_*`, mobile household.tsx
   - Acceptance: met — invite partner; shared wardrobe ACL; vitest authz deny outsider

@@ -2,9 +2,11 @@
  * N37 — Invite-only closet swap circle (private barter among friends).
  */
 
+import { WEB_ORIGIN } from "./domains.js";
+
 const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export const SWAP_INVITE_WEB_BASE = "https://worn.app/c";
+export const SWAP_INVITE_WEB_BASE = `${WEB_ORIGIN}/c`;
 export const SWAP_INVITE_DEEP_PREFIX = "worn://swap-circle";
 
 /** Generate an invite code (default 8 chars, Crockford-ish alphabet). */

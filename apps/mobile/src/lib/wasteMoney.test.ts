@@ -52,8 +52,8 @@ describe('wasteMoney formatters + redact', () => {
       { currency: 'INR' },
     );
     expect(card.headline).toMatch(/never worn/);
-    expect(card.watermark).toBe('worn.app');
-    expect(card.shareText).toContain('worn.app');
+    expect(card.watermark).toBe('worncloset.app');
+    expect(card.shareText).toContain('worncloset.app');
     expect(card.shareText).not.toMatch(/Myntra|Zara/);
     expect(card.blurredMerchants.every((m) => m.includes('•'))).toBe(true);
   });

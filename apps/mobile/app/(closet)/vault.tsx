@@ -111,6 +111,7 @@ import {
 } from '@/src/lib/confidenceBadge';
 import {
   VAULT_GIFT_EMPTY_BODY,
+  buildReferralDeepLink,
   familyFoundMoneyShareFromAccounts,
   familyShareViaLabel,
   foundMoneyCurrencySubtotalsLine,
@@ -572,7 +573,8 @@ function CreditsKindTab({
       .then((me) => {
         if (cancelled || !me.referralCode || me.referralCode === 'PENDING') return;
         setMyReferralCode(me.referralCode);
-        setShareViaLabel(familyShareViaLabel(`https://worn.app/r/${me.referralCode}`));
+        const link = buildReferralDeepLink(me.referralCode);
+        if (link) setShareViaLabel(familyShareViaLabel(link));
       })
       .catch(() => undefined);
     return () => {

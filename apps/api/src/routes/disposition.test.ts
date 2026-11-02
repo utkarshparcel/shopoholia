@@ -175,8 +175,8 @@ describe("disposition", () => {
       started: true,
       completed: false,
     });
-    expect(started.declutterShareCard.watermark).toBe("worn.app");
-    expect(started.declutterShareCard.shareText).toContain("worn.app");
+    expect(started.declutterShareCard.watermark).toBe("worncloset.app");
+    expect(started.declutterShareCard.shareText).toContain("worncloset.app");
     expect(started.pushQueued).toBe(true);
 
     const events = await app.deps.push.listEvents(userId);
@@ -218,7 +218,7 @@ describe("disposition", () => {
       started: true,
     });
     expect(body.declutterShareCard?.completed).toBe(true);
-    expect(body.declutterShareCard?.shareText).toContain("worn.app");
+    expect(body.declutterShareCard?.shareText).toContain("worncloset.app");
 
     const waste = await app.inject({
       method: "GET",
@@ -231,7 +231,7 @@ describe("disposition", () => {
       declutterShareCard?: { watermark: string };
     };
     expect(wasteBody.declutterChallenge?.completed).toBe(true);
-    expect(wasteBody.declutterShareCard?.watermark).toBe("worn.app");
+    expect(wasteBody.declutterShareCard?.watermark).toBe("worncloset.app");
 
     const again = await app.inject({
       method: "POST",

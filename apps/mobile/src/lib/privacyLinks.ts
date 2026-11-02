@@ -4,6 +4,8 @@
  * the draft lives at docs/legal/PRIVACY_POLICY_DRAFT.md.
  */
 
+import { WEB_PRIVACY_URL } from '@worn/shared';
+
 export const PRIVACY_POLICY_DRAFT_PATH =
   'docs/legal/PRIVACY_POLICY_DRAFT.md' as const;
 
@@ -11,7 +13,7 @@ export const DPDP_GDPR_CHECKLIST_PATH = 'docs/TRUST_DPDP_GDPR.md' as const;
 export const PENTEST_READINESS_PATH = 'docs/PENTEST_READINESS.md' as const;
 
 /** Suggested public URL once hosted (store listings + OAuth). */
-export const PRIVACY_POLICY_DEFAULT_URL = 'https://worn.app/privacy' as const;
+export const PRIVACY_POLICY_DEFAULT_URL = WEB_PRIVACY_URL;
 
 /** In-app privacy reader route (W081-PRIVACY-IN-APP) — no store submit required. */
 export const PRIVACY_IN_APP_HREF = '/(closet)/privacy' as const;

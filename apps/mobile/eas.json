@@ -19,7 +19,8 @@
       "distribution": "internal",
       "environment": "preview",
       "env": {
-        "WORN_RELEASE_BUILD": "1"
+        "WORN_RELEASE_BUILD": "1",
+        "EXPO_PUBLIC_API_URL": "https://api.worncloset.app"
       },
       "android": {
         "buildType": "apk"
@@ -31,7 +32,8 @@
       "autoIncrement": true,
       "environment": "production",
       "env": {
-        "WORN_RELEASE_BUILD": "1"
+        "WORN_RELEASE_BUILD": "1",
+        "EXPO_PUBLIC_API_URL": "https://api.worncloset.app"
       },
       "channel": "production"
     },
@@ -39,7 +41,8 @@
       "extends": "preview",
       "distribution": "store",
       "env": {
-        "WORN_RELEASE_BUILD": "1"
+        "WORN_RELEASE_BUILD": "1",
+        "EXPO_PUBLIC_API_URL": "https://api.worncloset.app"
       },
       "ios": {
         "simulator": false
@@ -50,7 +53,8 @@
       "extends": "preview",
       "distribution": "internal",
       "env": {
-        "WORN_RELEASE_BUILD": "1"
+        "WORN_RELEASE_BUILD": "1",
+        "EXPO_PUBLIC_API_URL": "https://api.worncloset.app"
       },
       "android": {
         "buildType": "app-bundle"

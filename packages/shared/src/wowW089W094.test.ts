@@ -23,7 +23,7 @@ import {
 import { buildReferralLandingCopy } from "./referral-landing.js";
 
 describe("W089–W094 growth/share/regional", () => {
-  it("W089 Reels blur preset digit-blurs total, omits merchants, watermarks worn.app", () => {
+  it("W089 Reels blur preset digit-blurs total, omits merchants, watermarks worncloset.app", () => {
     const card = buildFoundMoneyShareCard({
       totalMinor: 12_34_00,
       accountCount: 2,
@@ -84,13 +84,13 @@ describe("W089–W094 growth/share/regional", () => {
       accountCount: 2,
       merchants: ["Myntra", "secret@email.com"],
       currency: "INR",
-      deepLink: "https://worn.app/r/HOME01",
+      deepLink: "https://worncloset.app/r/HOME01",
     });
     expect(asset.width).toBe(WA_STATUS_WIDTH);
     expect(asset.height).toBe(WA_STATUS_HEIGHT);
     expect(asset.aspectRatio).toBe(WA_STATUS_ASPECT);
     expect(asset.height / asset.width).toBeCloseTo(16 / 9, 5);
-    expect(asset.watermark).toBe("worn.app");
+    expect(asset.watermark).toBe("worncloset.app");
     expect(asset.shareText).not.toMatch(/Myntra|secret@|email/i);
     expect(asset.shareText).not.toMatch(/\d{4}/);
     expect(asset.svg).toContain('width="1080"');

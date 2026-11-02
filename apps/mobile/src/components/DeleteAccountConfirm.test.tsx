@@ -30,7 +30,7 @@ describe('DeleteAccountConfirm (W078)', () => {
     render(
       <DeleteAccountConfirm
         visible
-        email="user@worn.app"
+        email="user@worncloset.app"
         deleting
         onCancel={onCancel}
         onConfirm={vi.fn()}

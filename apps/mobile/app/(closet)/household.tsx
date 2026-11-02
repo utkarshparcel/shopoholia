@@ -10,6 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import {
   activeHouseholdSwitcherLabel,
+  buildHouseholdInviteUrl,
   formatMinor,
   friendlyHouseholdAclCopy,
   friendlyHouseholdVaultAclCopy,
@@ -245,7 +246,7 @@ export default function HouseholdScreen() {
                 variant="ghost"
                 onPress={() => {
                   void Share.share({
-                    message: `Join our WORN household: https://worn.app/h/${h.inviteCode}`,
+                    message: `Join our WORN household: ${buildHouseholdInviteUrl(h.inviteCode)}`,
                   });
                 }}
               />

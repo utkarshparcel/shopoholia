@@ -224,10 +224,10 @@
 
 - [x] **W024-FAMILY-SHARE-UI** · P1 · [Social] Family share attribution UI polish
   - Why: household money finds need clear credit
-  - Status: SHIPPED (2026-08-26) — `shared via worn.app/r/…` under vault share + `/(closet)/family-share` confirm
+  - Status: SHIPPED (2026-08-26) — `shared via worncloset.app/r/…` under vault share + `/(closet)/family-share` confirm
   - Depends: N36-FAMILY-SHARE
   - Files: vault share + referrals
-  - Acceptance: met — “shared via worn.app/r/…”; attribution confirm screen
+  - Acceptance: met — “shared via worncloset.app/r/…”; attribution confirm screen
   - Est: S
 
 - [x] **W025-QUIET-HOURS-PREVIEW** · P1 · [Notif] Quiet-hours preview (“next send at …”)
@@ -768,10 +768,10 @@
 
 - [x] **W089-REELS-BLUR-PRESET** · P1 · [Growth] Found-money Reels-safe blur preset
   - Why: shareable without PII
-  - Status: SHIPPED (2026-08-26) — `blurPreset: "reels"` digit-blurs total, omits merchants, 9:16 aspect, worn.app watermark; vault Share → Reels
+  - Status: SHIPPED (2026-08-26) — `blurPreset: "reels"` digit-blurs total, omits merchants, 9:16 aspect, worncloset.app watermark; vault Share → Reels
   - Depends: GROW-FOUND-SHARE
   - Files: `packages/shared/src/found-money.ts`, vault share
-  - Acceptance: Extra blur preset; watermark worn.app
+  - Acceptance: Extra blur preset; watermark worncloset.app
   - Est: S
 
 - [x] **W090-NEVER-WORN-SHARE** · P1 · [Growth] Never-worn share polish
@@ -807,7 +807,7 @@
   - Est: M
 
 - [x] **W094-REFERRAL-LANDING-COPY** · P1 · [Growth] Referral deep-link landing microcopy
-  - Why: worn.app/r/{code} usable
+  - Why: worncloset.app/r/{code} usable
   - Status: SHIPPED (2026-08-26) — GET /r/:code + attribute return `landing`; family-share lander shows found-money + install CTA
   - Depends: N36
   - Files: `referral-landing.ts`, referral schema/routes, family-share.tsx

@@ -1,7 +1,7 @@
 import { DEFAULT_CURRENCY, formatMinor } from "./money.js";
 import { redactBrandLabel, WASTE_SHARE_WATERMARK } from "./waste.js";
 
-/** Watermark for found-money share cards (same as waste: worn.app). */
+/** Watermark for found-money share cards (same as waste: worncloset.app). */
 export const FOUND_MONEY_SHARE_WATERMARK = WASTE_SHARE_WATERMARK;
 
 export type FoundMoneyShareAccount = {
@@ -87,7 +87,7 @@ export function redactBrandLabelReels(_brand: string | null | undefined): string
 
 /**
  * Build a shareable found-money card:
- * big total + blurred merchants + worn.app watermark (no card numbers / raw brands).
+ * big total + blurred merchants + worncloset.app watermark (no card numbers / raw brands).
  * Pass `blurPreset: "reels"` for Reels-safe extra blur (W089).
  */
 export function buildFoundMoneyShareCard(input: FoundMoneyShareInput): FoundMoneyShareCard {
