@@ -10,9 +10,14 @@ export const OTP_SEND_LIMIT: OtpSendLimit = { max: 5, windowMs: 3600_000 };
 /** Guesses per code before it stops working. */
 export const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
+/** Too many codes were sent to this phone. `retryAt` is when the next one may be sent. */
 export class OtpRateLimitError extends Error {
-  constructor(readonly retryAt: Date) {
-    super(`Try again after ${retryAt.toISOString()}`);
+  constructor(
+    readonly retryAt: Date,
+    now = Date.now(),
+  ) {
+    const minutes = Math.max(1, Math.ceil((retryAt.getTime() - now) / 60_000));
+    super(`Too many codes sent. Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`);
   }
 }
 
@@ -37,18 +42,18 @@ function hashOtp(phone: string, code: string): string {
  * Dev OTP: every code is DEV_OTP_CODE (default 123456) and is shown in the response.
  * There is no SMS provider yet, so in production phone sign-in reports itself unavailable
  * instead of accepting a fixed code.
+ *
+ * Outside production nothing is texted and the code is public, so the per-phone send limit
+ * only locked testers out ("Dev continue" after a few reloads); it is skipped there unless
+ * `sendLimit` is passed. Production (which refuses to send above) keeps OTP_SEND_LIMIT.
  */
 export function createDevOtpService(
   repos: Repositories,
   options: { sendLimit?: OtpSendLimit | null } = {},
 ): OtpService {
-  const sendLimit =
-    options.sendLimit !== undefined
-      ? options.sendLimit
-      : process.env.NODE_ENV === "test"
-        ? null
-        : OTP_SEND_LIMIT;
   const isProduction = () => process.env.NODE_ENV === "production";
+  const sendLimit = () =>
+    options.sendLimit !== undefined ? options.sendLimit : isProduction() ? OTP_SEND_LIMIT : null;
 
   return {
     async sendOtp(phone) {
@@ -57,7 +62,7 @@ export function createDevOtpService(
         phone,
         hashOtp(phone, DEV_OTP),
         new Date(Date.now() + OTP_TTL_MS),
-        sendLimit ?? undefined,
+        sendLimit() ?? undefined,
       );
       if (!result.saved) throw new OtpRateLimitError(result.retryAt);
       return { message: `OTP sent (dev code: ${DEV_OTP})` };
