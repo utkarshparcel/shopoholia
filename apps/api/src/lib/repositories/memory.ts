@@ -4189,6 +4189,7 @@ export function createMemoryRepositories(): Repositories {
         remainingMinor: input.remainingMinor,
         installmentMinor: input.installmentMinor,
         nextDueOn: input.nextDueOn,
+        dueDay: Number(input.nextDueOn.slice(8, 10)),
         currency: input.currency ?? "INR",
         status: "ACTIVE",
         createdAt: now(),

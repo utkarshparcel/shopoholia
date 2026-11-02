@@ -2517,6 +2517,8 @@ export type EmiPlanRecord = {
   remainingMinor: number;
   installmentMinor: number;
   nextDueOn: string;
+  /** Day of the month installments fall on (1–31); a short month clamps (see addEmiMonths). */
+  dueDay: number;
   currency: string;
   status: "ACTIVE" | "PAID" | "DEFAULTED";
   createdAt: Date;

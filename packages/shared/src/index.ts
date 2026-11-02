@@ -1962,6 +1962,8 @@ export {
   EMI_NUDGE_LEAD_MS,
   computeEmiNudgeDelayMs,
   emiDueJobId,
+  addEmiMonths,
+  emiDueDayOf,
   nextDueSchedule,
   remainingAfterPayment,
   emiDaysUntilDue,

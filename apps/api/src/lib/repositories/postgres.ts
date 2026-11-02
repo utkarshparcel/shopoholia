@@ -1019,6 +1019,7 @@ function mapReturnRequest(row: typeof returnRequests.$inferSelect): ReturnRecord
 }
 
 function mapEmiPlan(row: typeof emiPlans.$inferSelect): EmiPlanRecord {
+  const nextDueOn = String(row.nextDueOn);
   return {
     id: row.id,
     userId: row.userId,
@@ -1027,7 +1028,9 @@ function mapEmiPlan(row: typeof emiPlans.$inferSelect): EmiPlanRecord {
     principalMinor: row.principalMinor,
     remainingMinor: row.remainingMinor,
     installmentMinor: row.installmentMinor,
-    nextDueOn: String(row.nextDueOn),
+    nextDueOn,
+    // Rows from before due_day was backfilled: the day of the next due date.
+    dueDay: row.dueDay ?? Number(nextDueOn.slice(8, 10)),
     currency: row.currency,
     status: row.status as EmiPlanRecord["status"],
     createdAt: row.createdAt,
@@ -6023,24 +6026,12 @@ export function createPostgresRepositories(db: Db): Repositories {
           remainingMinor: input.remainingMinor,
           installmentMinor: input.installmentMinor,
           nextDueOn: input.nextDueOn,
+          dueDay: Number(input.nextDueOn.slice(8, 10)),
           currency: input.currency ?? "INR",
           status: "ACTIVE",
         })
         .returning();
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return mapEmiPlan(row!);
     },
     async listEmiPlans(userId, opts) {
       const rows = await db
@@ -6048,21 +6039,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(emiPlans)
         .where(and(eq(emiPlans.userId, userId), opts?.status ? eq(emiPlans.status, opts.status) : undefined))
         .orderBy(asc(emiPlans.nextDueOn));
-      return rows
-        .map((row) => ({
-          id: row.id,
-          userId: row.userId,
-          provider: row.provider,
-          merchant: row.merchant ?? null,
-          principalMinor: row.principalMinor,
-          remainingMinor: row.remainingMinor,
-          installmentMinor: row.installmentMinor,
-          nextDueOn: String(row.nextDueOn),
-          currency: row.currency,
-          status: row.status as EmiPlanRecord["status"],
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        }));
+      return rows.map(mapEmiPlan);
     },
     async findEmiPlan(id, userId) {
       const [row] = await db
@@ -6070,21 +6047,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(emiPlans)
         .where(and(eq(emiPlans.id, id), eq(emiPlans.userId, userId)))
         .limit(1);
-      if (!row) return null;
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return row ? mapEmiPlan(row) : null;
     },
     async updateEmiPlan(id, userId, patch) {
       const [row] = await db
@@ -6092,21 +6055,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         .set({ ...patch, updatedAt: now() })
         .where(and(eq(emiPlans.id, id), eq(emiPlans.userId, userId)))
         .returning();
-      if (!row) return null;
-      return {
-        id: row.id,
-        userId: row.userId,
-        provider: row.provider,
-        merchant: row.merchant ?? null,
-        principalMinor: row.principalMinor,
-        remainingMinor: row.remainingMinor,
-        installmentMinor: row.installmentMinor,
-        nextDueOn: String(row.nextDueOn),
-        currency: row.currency,
-        status: row.status as EmiPlanRecord["status"],
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      };
+      return row ? mapEmiPlan(row) : null;
     },
     async payEmiPlan(id, userId, input) {
       const { from, to, paymentKey } = input;

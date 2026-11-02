@@ -58,6 +58,7 @@ export function EmiDontMissCards({ now = new Date(), highlightPlanId }: Props) {
           remainingMinor: p.remainingMinor,
           installmentMinor: p.installmentMinor,
           nextDueOn: p.nextDueOn,
+          dueDay: p.dueDay,
           maxInstallments: 3,
         });
         return { plan: p, schedule };

@@ -17,14 +17,37 @@ export type EmiInstallment = {
   amountMinor: number;
 };
 
+/** The day of the month a YYYY-MM-DD date falls on (1–31). */
+export function emiDueDayOf(ymd: string): number {
+  return parseYmd(ymd).getUTCDate();
+}
+
+/**
+ * `ymd` moved by `months` calendar months, landing on `dueDay` (default: `ymd`'s own day) or the
+ * last day of a shorter month. Anchoring to the plan's due day keeps the dates from drifting:
+ * a 31st plan goes Jan 31 → Feb 28 (29 in a leap year) → Mar 31 → Apr 30, never Mar 3 or Mar 28.
+ */
+export function addEmiMonths(ymd: string, months: number, dueDay?: number | null): string {
+  const start = parseYmd(ymd);
+  const day = dueDay && dueDay >= 1 && dueDay <= 31 ? Math.floor(dueDay) : start.getUTCDate();
+  const monthIndex = start.getUTCFullYear() * 12 + start.getUTCMonth() + months;
+  const year = Math.floor(monthIndex / 12);
+  const month = monthIndex - year * 12;
+  // Day 0 of the next month is the last day of this one.
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return formatYmd(new Date(Date.UTC(year, month, Math.min(day, lastDay))));
+}
+
 /**
  * Build upcoming installment schedule from remaining + installment size + next due.
+ * Installments fall on `dueDay` (default: the next due date's day), clamped in short months.
  * Caps at 48 installments.
  */
 export function nextDueSchedule(input: {
   remainingMinor: number;
   installmentMinor: number;
   nextDueOn: string;
+  dueDay?: number | null;
   maxInstallments?: number;
 }): EmiInstallment[] {
   const installment = Math.max(1, Math.floor(input.installmentMinor));
@@ -32,16 +55,16 @@ export function nextDueSchedule(input: {
   if (remaining === 0) return [];
   const max = Math.min(48, input.maxInstallments ?? 48);
   const out: EmiInstallment[] = [];
-  let due = parseYmd(input.nextDueOn);
+  const dueDay = input.dueDay ?? emiDueDayOf(input.nextDueOn);
   for (let i = 0; i < max && remaining > 0; i++) {
     const amount = Math.min(installment, remaining);
     out.push({
       index: i + 1,
-      dueOn: formatYmd(due),
+      // The first installment is the stored next due date as it is.
+      dueOn: i === 0 ? formatYmd(parseYmd(input.nextDueOn)) : addEmiMonths(input.nextDueOn, i, dueDay),
       amountMinor: amount,
     });
     remaining -= amount;
-    due = addMonths(due, 1);
   }
   return out;
 }
@@ -160,8 +183,3 @@ function formatYmd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function addMonths(d: Date, months: number): Date {
-  const next = new Date(d.getTime());
-  next.setUTCMonth(next.getUTCMonth() + months);
-  return next;
-}

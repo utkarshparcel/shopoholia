@@ -4,6 +4,7 @@ import {
   EmiPlanSchema,
   EmiScheduleResponseSchema,
   PayEmiBodySchema,
+  addEmiMonths,
   detectEmiSignal,
   nextDueSchedule,
   remainingAfterPayment,
@@ -37,21 +38,12 @@ function toEmiJson(p: EmiPlanRecord) {
     remainingMinor: p.remainingMinor,
     installmentMinor: p.installmentMinor,
     nextDueOn: p.nextDueOn,
+    dueDay: p.dueDay,
     currency: p.currency,
     status: p.status,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
   };
-}
-
-function advanceDueOn(ymd: string): string {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const next = new Date(Date.UTC(y!, (m ?? 1) - 1, d ?? 1));
-  next.setUTCMonth(next.getUTCMonth() + 1);
-  const yy = next.getUTCFullYear();
-  const mm = String(next.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(next.getUTCDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
 }
 
 export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
@@ -175,6 +167,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
         remainingMinor: plan.remainingMinor,
         installmentMinor: plan.installmentMinor,
         nextDueOn: plan.nextDueOn,
+        dueDay: plan.dueDay,
       });
       return {
         planId: plan.id,
@@ -206,7 +199,8 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       const payment = body.amountMinor ?? plan.installmentMinor;
       const remaining = remainingAfterPayment(plan.remainingMinor, payment);
       const status = remaining === 0 ? ("PAID" as const) : plan.status;
-      const nextDueOn = remaining === 0 ? plan.nextDueOn : advanceDueOn(plan.nextDueOn);
+      // On the plan's own due day, clamped in short months: Jan 31 → Feb 28 → Mar 31.
+      const nextDueOn = remaining === 0 ? plan.nextDueOn : addEmiMonths(plan.nextDueOn, 1, plan.dueDay);
       // Compare-and-set on the plan as read: a concurrent second tap gets 409, and a retry with
       // the same idempotencyKey gets the plan back without recording the installment again.
       const paid = await app.deps.repos.payEmiPlan(id, userId, {
