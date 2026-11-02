@@ -255,6 +255,7 @@ Transparency: consent scopes (`EMAIL`/`SMS`/`FINANCIAL`/`LIKENESS`/`CONCIERGE`),
 
 ## Docs
 
+- [Deploying Worn](docs/DEPLOY.md)
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [Universe Architecture](docs/UNIVERSE_ARCHITECTURE.md)
 - [Universe Dev Plan](docs/UNIVERSE_DEV_PLAN.md)
