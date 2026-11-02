@@ -100,7 +100,7 @@ export function ClosetHero() {
           custom={0.3}
           className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4"
         >
-          <Link href="/#download" className="btn-primary btn-lg w-full sm:w-auto">
+          <Link href="#early-access" className="btn-primary btn-lg w-full sm:w-auto">
             Request early access <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
           <Link href="#week" className="btn-ghost btn-lg w-full sm:w-auto">

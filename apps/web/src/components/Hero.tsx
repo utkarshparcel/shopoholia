@@ -283,7 +283,7 @@ export function Hero() {
               Browse real pieces and try them on your AI avatar. Haul them with
               coins, pick a delivery speed and wait for it like it is real. Then
               unbox AI renders of you wearing them. All of the buying high. None of
-              the parcel, the bill, or the pile of clothes you never wear.
+              the parcel, the bill or the pile.
             </p>
 
             {/* CTAs */}

@@ -68,11 +68,11 @@ export function GhostWardrobe() {
             The ghost wardrobe
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            Huge wardrobe. <em className="grad-text">Nothing to wear.</em>
+            You loved the buying. <em className="grad-text">Not the pile.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[54ch] text-body-l text-worn-ink-soft">
             Every piece in there was the same purchase: the buying high, bought
-            again. Worn keeps the high and drops the pile.
+            again. Worn Play keeps the high and drops the pile.
           </p>
         </motion.div>
 

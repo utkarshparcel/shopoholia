@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
 import { gsap, ScrollTrigger } from '@/lib/gsap';
+import { closetHref } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -1142,7 +1143,7 @@ export function DropStage() {
               </ul>
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
                 <a
-                  href="/closet"
+                  href={closetHref()}
                   className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
                 >
                   Explore Worn Closet <ArrowRight size={14} />

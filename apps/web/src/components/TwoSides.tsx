@@ -2,6 +2,7 @@
 
 import { motion, useReducedMotion } from 'framer-motion';
 import { ArrowRight, Sparkles, Shirt } from 'lucide-react';
+import { closetHref } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -80,7 +81,7 @@ export function TwoSides() {
               money sleeping in your wardrobe.
             </p>
             <a
-              href="/closet"
+              href={closetHref()}
               className="mt-6 inline-flex min-h-[44px] items-center gap-2 font-sans text-[15px] font-semibold text-worn-gold"
             >
               Explore Worn Closet

@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { SiteSwitch } from '@/components/SiteSwitch';
+import { CLOSET_URL } from '@/lib/site';
 
 const NAV = [
   { label: 'Week', href: '#week' },
@@ -38,13 +40,13 @@ export function ClosetHeader() {
         <div className="glass flex h-[60px] items-center justify-between gap-3 rounded-2xl px-4 sm:px-5">
           {/* Wordmark */}
           <Link
-            href="/closet"
+            href={`${CLOSET_URL}/`}
             className="flex shrink-0 items-center gap-2"
             aria-label="Worn Closet — home"
           >
             <TagGlyph />
             <span className="font-display text-[19px] leading-none tracking-[-0.01em] text-worn-ink">
-              Worn Closet
+              <span className="max-[420px]:hidden">Worn </span>Closet
             </span>
           </Link>
 
@@ -64,15 +66,11 @@ export function ClosetHeader() {
           </nav>
 
           {/* Right side */}
-          <div className="flex shrink-0 items-center gap-3 sm:gap-4">
-            <Link
-              href="/"
-              className="hidden text-caption font-medium text-worn-muted transition-colors duration-200 hover:text-worn-gold-deep sm:block"
-            >
-              ← Worn Play
-            </Link>
-            <Link href="/#download" className="btn-primary btn-md !min-h-[44px] !px-4 !py-2 text-caption sm:!min-h-[40px]">
-              Request early access
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <SiteSwitch current="closet" />
+            <Link href="#early-access" className="btn-primary btn-md !min-h-[44px] !px-4 !py-2 text-caption sm:!min-h-[40px]">
+              <span className="sm:hidden">Join</span>
+              <span className="hidden sm:inline">Request early access</span>
             </Link>
           </div>
         </div>

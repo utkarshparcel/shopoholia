@@ -10,6 +10,7 @@ import {
 import { ArrowRight, Mail } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
 import { Magnetic } from './Magnetic';
+import { CONTACT_EMAIL } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -107,7 +108,7 @@ export function DownloadCTA() {
         <motion.div {...redAnim} className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <Magnetic strength={0.25}>
             <a
-              href="mailto:hello@worn.app?subject=Worn%20early%20access"
+              href={`mailto:${CONTACT_EMAIL}?subject=Worn%20Play%20early%20access`}
               className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-7 py-3.5 font-sans text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
             >
               <Mail size={15} />

@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Mail } from 'lucide-react';
+import { CONTACT_EMAIL, PLAY_URL } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -38,7 +39,7 @@ export function ClosetCTA() {
           custom={0}
           className="mx-auto w-fit ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold"
         >
-          Coming after Worn Play
+          Worn Closet · early access
         </motion.p>
         <motion.h2
           {...a}
@@ -46,24 +47,24 @@ export function ClosetCTA() {
           custom={0.08}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(40px,6vw,88px)] leading-[1] tracking-tight text-balance"
         >
-          Stop shopping. <em className="grad-text font-display">Start wearing.</em>
+          Run the closet <em className="grad-text font-display">you already own.</em>
         </motion.h2>
         <motion.p {...a} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
-          Worn Play is in early access now, through TestFlight and Play internal testing. Closet is the
-          next chapter, and early access members hear about it first.
+          Worn Closet is the next chapter of Worn. Join the Closet list and you’ll hear first when it
+          opens. Want the haul in the meantime? Worn Play is in early access now on iOS and Android.
         </motion.p>
         <motion.div {...a} variants={rise} custom={0.24} className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            href="/#download"
+          <a
+            href={`mailto:${CONTACT_EMAIL}?subject=Worn%20Closet%20early%20access`}
             className="inline-flex min-h-[48px] items-center gap-2 rounded-pill bg-worn-paper px-7 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
           >
-            Request early access <ArrowRight className="h-4 w-4" aria-hidden="true" />
-          </Link>
+            <Mail className="h-4 w-4" aria-hidden="true" /> Join the Closet list
+          </a>
           <Link
-            href="/"
+            href={`${PLAY_URL}/`}
             className="inline-flex min-h-[48px] items-center gap-2 rounded-pill border border-worn-paper/25 bg-worn-paper/10 px-7 text-[15px] font-semibold transition-colors hover:border-worn-gold hover:text-worn-gold focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
           >
-            See Worn Play
+            See Worn Play <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         </motion.div>
       </div>

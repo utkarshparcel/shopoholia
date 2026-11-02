@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Menu, X, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { SiteSwitch } from './SiteSwitch';
 
 export function Navigation() {
   const [scrolled, setScrolled] = useState(false);
@@ -28,7 +29,6 @@ export function Navigation() {
     { href: '#grwm', label: 'The Drop' },
     { href: '#loop', label: 'The Loop' },
     { href: '#how-it-works', label: 'Coins' },
-    { href: '/closet', label: 'Closet', external: true },
   ];
 
   return (
@@ -69,6 +69,7 @@ export function Navigation() {
                 {link.label}
               </Link>
             ))}
+            <SiteSwitch current="play" />
             <Link
               href="#download"
               className="btn-primary btn-md"
@@ -78,16 +79,19 @@ export function Navigation() {
             </Link>
           </div>
 
-          {/* Mobile menu button */}
-          <button
-            className="md:hidden p-2 rounded-md text-worn-ink hover:bg-worn-warm transition-colors"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            aria-expanded={mobileOpen}
-            aria-controls="mobile-menu"
-            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-          >
-            {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
+          {/* Mobile: the product switch stays visible beside the menu */}
+          <div className="flex items-center gap-2 md:hidden">
+            <SiteSwitch current="play" />
+            <button
+              className="p-2 rounded-md text-worn-ink hover:bg-worn-warm transition-colors"
+              onClick={() => setMobileOpen(!mobileOpen)}
+              aria-expanded={mobileOpen}
+              aria-controls="mobile-menu"
+              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+            >
+              {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
         </div>
 
         {/* Mobile menu */}
