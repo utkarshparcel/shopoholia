@@ -5,6 +5,7 @@ import {
   VAULT_TRUST_STRIP_LABEL,
   getVaultTrustStripLinks,
 } from '@/src/lib/vaultTrustStrip';
+import { CONSENT_HREF, consentHref } from '@/src/lib/consentReturn';
 import {
   closet,
   fontSans,
@@ -39,11 +40,12 @@ export function VaultTrustStrip() {
             accessibilityRole="link"
             accessibilityLabel={link.label}
             onPress={() => {
-              if (link.focus) {
-                router.push({
-                  pathname: link.href,
-                  params: { focus: link.focus },
-                } as never);
+              const params: Record<string, string> = link.focus ? { focus: link.focus } : {};
+              if (link.href === CONSENT_HREF) {
+                // Consent comes back to the Vault this strip sits on.
+                router.push(consentHref('/(closet)/vault', params) as never);
+              } else if (link.focus) {
+                router.push({ pathname: link.href, params } as never);
               } else {
                 router.push(link.href as never);
               }

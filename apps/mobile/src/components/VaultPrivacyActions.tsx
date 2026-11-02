@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 
 import { usePrompt } from '@/src/components/PromptSheet';
 import { Button } from '@/src/components/ui';
@@ -25,6 +25,7 @@ import {
   getPrivacyPolicyUrl,
 } from '@/src/lib/privacyLinks';
 import { closetAlertText } from '@/src/lib/closetScreenState';
+import { consentReturnHref, consentHref } from '@/src/lib/consentReturn';
 import { useSessionStore } from '@/src/stores/session';
 import {
   border,
@@ -46,6 +47,8 @@ import {
  */
 export function VaultPrivacyActions() {
   const router = useRouter();
+  // Consent comes back to the screen showing these actions (the Vault, unless it is consent).
+  const returnTo = consentReturnHref(usePathname());
   const accessToken = useSessionStore((s) => s.accessToken);
   const exportVault = useExportVault();
   const deleteVaultMut = useDeleteVault();
@@ -130,7 +133,7 @@ export function VaultPrivacyActions() {
       </Pressable>
       <Pressable
         accessibilityRole="button"
-        onPress={() => router.push('/(closet)/consent' as never)}
+        onPress={() => router.push(consentHref(returnTo) as never)}
         style={styles.linkRow}
       >
         <Text style={styles.link}>Consent & connected sources</Text>

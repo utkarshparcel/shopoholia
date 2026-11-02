@@ -28,6 +28,8 @@ vi.mock('@/src/lib/analytics', () => ({
   trackEvent: vi.fn(),
 }));
 
+vi.mock('expo-router', () => ({ usePathname: () => '/accountant' }));
+
 vi.mock('@/src/lib/closetAlert', () => ({
   alertClosetError: vi.fn(),
 }));

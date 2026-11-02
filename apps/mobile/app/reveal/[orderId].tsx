@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   Share,
@@ -25,6 +24,7 @@ import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfac
 import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/reveal';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
+import { notify } from '@/src/lib/confirm';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -68,6 +68,8 @@ export default function RevealScreen() {
   const [selectedScenario, setSelectedScenario] = useState('STUDIO');
   const [selectedCombineIds, setSelectedCombineIds] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
+  /** The look just generated: the deck appends it last, so it opens there. */
+  const [newRenderId, setNewRenderId] = useState<string | null>(null);
   const openedTracked = useRef(false);
 
   useEffect(() => {
@@ -85,7 +87,7 @@ export default function RevealScreen() {
       await unlockMutation.mutateAsync([renderId]);
       trackEvent('unlock', { orderId: orderId ?? '', renderId });
     } catch (error) {
-      Alert.alert('Unlock failed', error instanceof Error ? error.message : 'Try again');
+      notify('Unlock failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setUnlockingId(null);
     }
@@ -99,13 +101,14 @@ export default function RevealScreen() {
         orderItemIds: selectedCombineIds.length > 0 ? selectedCombineIds : [orderItemIds[0]!],
         scenario: selectedScenario,
       });
+      setNewRenderId(result.renders.at(-1)?.id ?? null);
       trackEvent('generate_render', {
         orderId,
         scenario: selectedScenario,
         isCombine: result.isCombine ?? false,
       });
     } catch (error) {
-      Alert.alert('Generate failed', error instanceof Error ? error.message : 'Try again');
+      notify('Generate failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setGenerating(false);
     }
@@ -176,6 +179,7 @@ export default function RevealScreen() {
       ) : (
         <>
           <RevealDeck
+            focusId={newRenderId}
             onUnlock={handleUnlock}
             renders={renders}
             unlockingId={unlockingId}

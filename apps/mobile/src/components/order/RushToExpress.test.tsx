@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -155,5 +155,43 @@ describe('RushToExpress', () => {
     );
     expect(client.getQueryState(ORDER_KEY)?.isInvalidated).toBe(true);
     expect(screen.queryByText(/more coins/)).toBeNull();
+  });
+
+  describe('on web, where Alert.alert does nothing', () => {
+    const realOS = Platform.OS;
+    // Only the dialog is under test: the rest of the screen renders as on native.
+    const asWeb = () => {
+      (Platform as { OS: string }).OS = 'web';
+    };
+    afterEach(() => {
+      (Platform as { OS: string }).OS = realOS;
+    });
+
+    it('confirms with the browser dialog and rushes', async () => {
+      vi.mocked(rushOrder).mockResolvedValueOnce({
+        order: { ...ORDER, tier: 'EXPRESS', rushAvailable: false },
+        balanceAfter: 75,
+      });
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+      renderRush();
+      asWeb();
+
+      pressRush();
+
+      await waitFor(() => expect(rushOrder).toHaveBeenCalledWith(TOKEN, ORDER.id));
+      expect(confirm.mock.calls[0]![0]).toMatch(/^Rush to Express\?/);
+      expect(Alert.alert).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the browser dialog is cancelled', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+      renderRush();
+      asWeb();
+
+      pressRush();
+
+      await Promise.resolve();
+      expect(rushOrder).not.toHaveBeenCalled();
+    });
   });
 });

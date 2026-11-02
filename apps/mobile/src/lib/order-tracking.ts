@@ -51,16 +51,17 @@ export function nextEtaLabel(order: OrderSummary, now = Date.now()): string {
   return formatCountdown(order.stateEta?.[next], now);
 }
 
-export function buildTrackerSteps(order: OrderSummary) {
+/** Pass `now` from a ticking clock (`useNow`) so the labels count down between polls. */
+export function buildTrackerSteps(order: OrderSummary, now = Date.now()) {
   return TRACKER_STEPS.map((step) => ({
     id: step.id,
     label: step.label,
     state: stepStateForOrder(step.id, order.state),
     detail:
       step.id === order.state
-        ? nextEtaLabel(order)
+        ? nextEtaLabel(order, now)
         : stepStateForOrder(step.id, order.state) === 'todo'
-          ? formatCountdown(order.stateEta?.[step.id])
+          ? formatCountdown(order.stateEta?.[step.id], now)
           : undefined,
   }));
 }

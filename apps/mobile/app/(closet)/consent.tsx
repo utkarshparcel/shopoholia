@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -30,6 +30,7 @@ import {
   formatLastSync,
   type ConsentScopeId,
 } from '@/src/lib/consentCenter';
+import { consentReturnHref } from '@/src/lib/consentReturn';
 import { toAccountHealthRow } from '@/src/lib/accountHealth';
 import { reconnectButtonLabel, startGmailReconnect } from '@/src/lib/healthReconnect';
 import { getLimitedUseDisclosure } from '@/src/lib/limitedUse';
@@ -82,6 +83,10 @@ function sourceLabel(provider: string, kind: string): string {
 
 export default function ConsentScreen() {
   const router = useRouter();
+  // Consent is a tab screen, so `router.back()` would land on the first tab (Today): go back to
+  // the screen that opened it instead (Vault when it didn't say).
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
+  const returnHref = consentReturnHref(returnTo);
   const accessToken = useSessionStore((s) => s.accessToken);
   const consents = useConsents();
   const sources = useConsentSources();
@@ -239,10 +244,8 @@ export default function ConsentScreen() {
       // Email goes on to connecting an inbox; anything else returns to where the user came from.
       if (selected.has('EMAIL')) {
         router.replace('/(closet)/connect-email' as never);
-      } else if (router.canGoBack()) {
-        router.back();
       } else {
-        router.replace('/(closet)/vault' as never);
+        router.replace(returnHref as never);
       }
     } catch (e) {
       setError(closetAlertText(e));
@@ -281,7 +284,7 @@ export default function ConsentScreen() {
   }
 
   function cancel() {
-    router.replace('/(closet)/vault' as never);
+    router.replace(returnHref as never);
   }
 
   const loadError =

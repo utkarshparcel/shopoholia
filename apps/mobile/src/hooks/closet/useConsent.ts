@@ -1,5 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import {
+  ApiRequestError,
   disconnectIngestionSource,
   fetchConsents,
   fetchIngestionSources,
@@ -14,7 +16,46 @@ export function useConsents() {
     queryKey: ['vault-consents', accessToken],
     queryFn: () => fetchConsents(accessToken!),
     enabled: Boolean(accessToken),
+    // The key holds the token, which renews every 15 minutes: keep the known grants meanwhile,
+    // so the queries gated on them (useConsentGate) don't pause on every renewal.
+    placeholderData: keepPreviousData,
   });
+}
+
+export type ConsentGate = {
+  /**
+   * Whether queries behind this scope may run: the scope is granted, or the grants couldn't be
+   * read (then the server decides, as before). False while the grants are still loading.
+   */
+  allowed: boolean;
+  /**
+   * The API's own "missing consent" 403, when the grants are known and this scope isn't among
+   * them. Screens show it where they showed that request's error, so the consent prompt stays.
+   */
+  missingError: ApiRequestError | null;
+};
+
+/**
+ * Gate for queries the API refuses (403) without a consent scope, so they don't fire — and fail —
+ * until the user has granted it. Granting or revoking invalidates the grants, which reopens or
+ * closes the gate.
+ */
+export function useConsentGate(scope: string): ConsentGate {
+  const consents = useConsents();
+  const grants = consents.data?.grants;
+  const granted = grants?.some((g) => g.scope === scope && !g.revokedAt) ?? false;
+  const known = grants !== undefined;
+  const unreadable = !known && consents.isError;
+  return useMemo(
+    () => ({
+      allowed: granted || unreadable,
+      missingError:
+        known && !granted
+          ? new ApiRequestError(403, `Missing active consent for scope: ${scope}`, 'consent_required')
+          : null,
+    }),
+    [granted, known, unreadable, scope],
+  );
 }
 
 export function useConsentSources() {

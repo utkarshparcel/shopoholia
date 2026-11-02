@@ -13,6 +13,7 @@ import {
   useCreateBudget,
   useExportAccountantCsv,
 } from '@/src/hooks/closet/useCloset';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
 import { trackEvent } from '@/src/lib/analytics';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
@@ -61,6 +62,10 @@ export default function ClosetAccountantScreen() {
   >('ALL');
   // The gated surface's data loads only once the server's entitlements open it.
   const { allowed } = usePremiumAccess('accountant');
+  // Without FINANCIAL the queries below don't run (the API would refuse them); the screen still
+  // says what to allow, as it did with the refusal.
+  const financial = useConsentGate('FINANCIAL');
+  const consentMissing = allowed ? financial.missingError : null;
   const {
     data: summary,
     isLoading: summaryLoading,
@@ -138,8 +143,8 @@ export default function ClosetAccountantScreen() {
   }
 
   const isLoading = summaryLoading || ledgerLoading;
-  const isError = summaryError || ledgerError;
-  const errorMessage = closetAlertText(summaryErr ?? ledgerErr);
+  const isError = summaryError || ledgerError || consentMissing !== null;
+  const errorMessage = closetAlertText(summaryErr ?? ledgerErr ?? consentMissing);
   const hasSpend = (summary?.totalSpendMinor ?? 0) > 0 || (summary?.spendByCategory?.length ?? 0) > 0;
   const hasLedger = (ledger?.entries?.length ?? 0) > 0;
   const hasBudgets = (budgetsData?.budgets?.length ?? 0) > 0 || (summary?.budgets?.length ?? 0) > 0;

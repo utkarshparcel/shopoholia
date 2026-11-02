@@ -27,7 +27,7 @@ describe('VaultTrustStrip', () => {
     const arg = push.mock.calls[0]?.[0];
     expect(arg).toMatchObject({
       pathname: '/(closet)/consent',
-      params: { focus: 'revoke' },
+      params: { focus: 'revoke', returnTo: '/(closet)/vault' },
     });
   });
 });

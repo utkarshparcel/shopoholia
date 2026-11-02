@@ -97,6 +97,7 @@ import {
   useUploadReceipt,
   useWarranties,
 } from '@/src/hooks/closet/useCloset';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
 import {
   RECEIPT_SNAP_HERO_HINT,
   RECEIPT_SNAP_HERO_LABEL,
@@ -104,6 +105,8 @@ import {
 } from '@/src/lib/receiptSnap';
 import { expiryBadge } from '@/src/lib/expiryBadge';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { alertClosetError } from '@/src/lib/closetAlert';
+import { notify } from '@/src/lib/confirm';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { warrantyBadge } from '@/src/lib/warrantyBadge';
 import {
@@ -172,6 +175,7 @@ import {
   fsBody,
   fsCaption,
   radiusMd,
+  space3,
   space4,
   space6,
   text,
@@ -518,7 +522,11 @@ function CreditsKindTab({
 }) {
   const meta = CREDIT_TAB[tab];
   /** Gift tab includes store credit so U013 type chips can filter. */
-  const { data, isLoading, isError } = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const gifts = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const { data, isLoading } = gifts;
+  // Without FINANCIAL the list isn't requested (the API would refuse it): same hint as a failure.
+  const consentMissing = useConsentGate('FINANCIAL').missingError !== null;
+  const isError = gifts.isError || consentMissing;
   const addGiftCard = useAddGiftCard();
   const captureGiftCard = useCaptureGiftCard();
   const spendGiftCard = useSpendGiftCard();
@@ -893,7 +901,7 @@ function CreditsKindTab({
     if (tab === 'gift' && (isOffline || !accessToken)) {
       // Queued adds belong to the signed-in user; with no session there's no one to save it for.
       if (!userId) {
-        Alert.alert(`Could not add ${meta.noun}`, 'Sign in to add it.');
+        notify(`Could not add ${meta.noun}`, 'Sign in to add it.');
         return;
       }
       void enqueueVaultAdd(userId, payload).then((item) => {
@@ -927,7 +935,8 @@ function CreditsKindTab({
           });
           return;
         }
-        Alert.alert(`Could not add ${meta.noun}`, closetAlertText(e));
+        // Without FINANCIAL this offers the consent screen (and comes back here); on web too.
+        alertClosetError(`Could not add ${meta.noun}`, e, undefined, '/(closet)/vault');
       },
     });
   }
@@ -2010,7 +2019,7 @@ function CreditsKindTab({
                     <Text style={styles.muted}>
                       {balanceRecheckNudgeCopy(account.merchant).body}
                     </Text>
-                    <View style={styles.row}>
+                    <View style={styles.actionRow}>
                       <Button
                         label={balanceRecheckNudgeCopy(account.merchant).recheckCta}
                         size="sm"
@@ -2033,7 +2042,7 @@ function CreditsKindTab({
                     </View>
                   </View>
                 ) : null}
-                <View style={styles.row}>
+                <View style={styles.actionRow}>
                   <Button
                     label={tab === 'loyalty' ? 'Use points' : 'Use it now'}
                     size="sm"
@@ -2809,6 +2818,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: space4,
+  },
+  // A card's actions (up to four buttons) wrap onto a second line on a narrow phone instead of
+  // running past the card's right edge ("Re-check" was clipped at 390pt).
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space3,
   },
   sectionTitle: {
     color: text,

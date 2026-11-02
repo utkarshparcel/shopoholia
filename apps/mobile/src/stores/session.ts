@@ -77,12 +77,21 @@ function createSafeSessionStorage() {
   };
 }
 
+/**
+ * Whether the safe storage wrapper repaired a corrupt payload (it leaves a flag). Storage that
+ * can't be read has no flag — a rejection here went unhandled, and in web static rendering,
+ * where there is no storage at all, it crashed the export.
+ */
 export async function consumeRestoreFallbackFlag(): Promise<boolean> {
   const key = `${SESSION_STORAGE_KEY}:restore-fallback`;
-  const flag = await AsyncStorage.getItem(key);
-  if (!flag) return false;
-  await AsyncStorage.removeItem(key);
-  return true;
+  try {
+    const flag = await AsyncStorage.getItem(key);
+    if (!flag) return false;
+    await AsyncStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export const useSessionStore = create<SessionState>()(

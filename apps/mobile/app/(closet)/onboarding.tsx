@@ -16,6 +16,7 @@ import { addCredit, fetchConsents, fetchCredits, fetchWardrobe } from '@/src/api
 import { trackEvent } from '@/src/lib/analytics';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
+import { consentHref } from '@/src/lib/consentReturn';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import {
@@ -71,11 +72,15 @@ export default function ClosetOnboardingScreen() {
   const preferredFitRegion = useClosetPrefsStore((s) => s.preferredFitRegion);
   const setPreferredFitRegion = useClosetPrefsStore((s) => s.setPreferredFitRegion);
 
+  const setGiftCardDraft = useClosetStore((s) => s.setGiftCardDraft);
+  // A card typed before the consent detour comes back filled in, on the gift-card step.
+  const [draft] = useState(() => useClosetStore.getState().giftCardDraft);
+
   const [checking, setChecking] = useState(true);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(draft !== null);
   const [busy, setBusy] = useState(false);
-  const [merchant, setMerchant] = useState('');
-  const [balance, setBalance] = useState('');
+  const [merchant, setMerchant] = useState(draft?.merchant ?? '');
+  const [balance, setBalance] = useState(draft?.balance ?? '');
   const [error, setError] = useState<string | null>(null);
   /** One key per card, so a retried save never adds it twice. */
   const addKeyRef = useRef<string | null>(null);
@@ -174,7 +179,9 @@ export default function ClosetOnboardingScreen() {
     const consents = await fetchConsents(accessToken);
     if (consents.grants.some((g) => g.scope === 'FINANCIAL')) return true;
     setError('Allow "Money in your Vault" first, then save the card again.');
-    router.push('/(closet)/consent' as never);
+    // Consent comes back here, and the card the user typed is kept for when it does.
+    setGiftCardDraft({ merchant, balance });
+    router.push(consentHref('/(closet)/onboarding') as never);
     return false;
   }
 
@@ -201,6 +208,7 @@ export default function ClosetOnboardingScreen() {
       };
       await addCredit(accessToken, payload);
       addKeyRef.current = null;
+      setGiftCardDraft(null);
       landVault('manual');
     } catch (e) {
       setError(closetAlertText(e));
@@ -379,7 +387,10 @@ export default function ClosetOnboardingScreen() {
             variant="ghost"
             block
             disabled={busy}
-            onPress={() => setAdding(false)}
+            onPress={() => {
+              setGiftCardDraft(null);
+              setAdding(false);
+            }}
           />
         </View>
       )}
