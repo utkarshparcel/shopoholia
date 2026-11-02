@@ -10,6 +10,7 @@ import type { OrderSummary } from '@/src/api/client';
 import { fetchCredits, fetchPrebuyFit } from '@/src/api/client';
 import { Button, CoinIcon, CoinWallet, SectionHeader } from '@/src/components/ui';
 import { useCart } from '@/src/hooks/catalog';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
 import { haulKeyOf, useCheckout, useCoinBalance } from '@/src/hooks/orders';
 import {
   BUDGET_NUDGE_SOFT_FOOTER,
@@ -85,13 +86,18 @@ export default function CheckoutScreen() {
     enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
   });
 
+  // Vault credits need FINANCIAL consent (the API refuses them with a 403 otherwise). The hint
+  // is optional, so without it checkout just doesn't ask.
+  const financialConsent = useConsentGate('FINANCIAL');
   const creditsQuery = useQuery({
     queryKey: ['credits', 'checkout-hint', accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error('Sign in');
       return fetchCredits(accessToken);
     },
-    enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
+    enabled: Boolean(
+      accessToken && FEATURE_CLOSET && itemCount > 0 && financialConsent.allowed,
+    ),
   });
 
   /**

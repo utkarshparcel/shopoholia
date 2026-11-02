@@ -104,4 +104,20 @@ describe('CheckoutScreen', () => {
     expect(mocks.calls).toEqual(['dismissAll', 'push /order/order-1']);
     expect(mocks.router.replace).not.toHaveBeenCalled();
   });
+
+  it('does not ask for Vault credits (a 403) without FINANCIAL consent', async () => {
+    mocks.fetchConsents.mockResolvedValue(grants('EMAIL'));
+    renderCheckout();
+    await waitFor(() => expect(mocks.fetchConsents).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(mocks.fetchCredits).not.toHaveBeenCalled();
+  });
+
+  it('asks for Vault credits once FINANCIAL is granted', async () => {
+    mocks.fetchConsents.mockResolvedValue(grants('FINANCIAL'));
+    renderCheckout();
+    await waitFor(() => expect(mocks.fetchCredits).toHaveBeenCalledTimes(1));
+  });
 });

@@ -97,6 +97,7 @@ import {
   useUploadReceipt,
   useWarranties,
 } from '@/src/hooks/closet/useCloset';
+import { useConsentGate } from '@/src/hooks/closet/useConsent';
 import {
   RECEIPT_SNAP_HERO_HINT,
   RECEIPT_SNAP_HERO_LABEL,
@@ -518,7 +519,11 @@ function CreditsKindTab({
 }) {
   const meta = CREDIT_TAB[tab];
   /** Gift tab includes store credit so U013 type chips can filter. */
-  const { data, isLoading, isError } = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const gifts = useGiftCards(tab === 'gift' ? undefined : meta.kind);
+  const { data, isLoading } = gifts;
+  // Without FINANCIAL the list isn't requested (the API would refuse it): same hint as a failure.
+  const consentMissing = useConsentGate('FINANCIAL').missingError !== null;
+  const isError = gifts.isError || consentMissing;
   const addGiftCard = useAddGiftCard();
   const captureGiftCard = useCaptureGiftCard();
   const spendGiftCard = useSpendGiftCard();
