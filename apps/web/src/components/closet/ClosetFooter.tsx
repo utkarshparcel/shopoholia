@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { CLOSET_URL, PLAY_URL } from '@/lib/site';
 
 function TagGlyph() {
   return (
@@ -39,7 +38,7 @@ export function ClosetFooter() {
         <div className="flex flex-col gap-12 lg:flex-row lg:items-start lg:justify-between">
           {/* Wordmark + description */}
           <div className="max-w-[36ch]">
-            <Link href={`${CLOSET_URL}/`} className="flex items-center gap-2" aria-label="Worn Closet — home">
+            <Link href="/closet" className="flex items-center gap-2" aria-label="Worn Closet — home">
               <TagGlyph />
               <span className="font-display text-[22px] leading-none tracking-[-0.01em]">
                 Worn Closet
@@ -50,7 +49,7 @@ export function ClosetFooter() {
               let go of.
             </p>
             <Link
-              href={`${PLAY_URL}/`}
+              href="/"
               className="mt-6 inline-block text-caption font-medium tracking-wide text-worn-gold transition-colors duration-200 hover:text-worn-paper"
             >
               See Worn Play →

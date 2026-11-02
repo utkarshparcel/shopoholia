@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { SiteSwitch } from '@/components/SiteSwitch';
-import { CLOSET_URL } from '@/lib/site';
 
 const NAV = [
   { label: 'Week', href: '#week' },
@@ -40,7 +39,7 @@ export function ClosetHeader() {
         <div className="glass flex h-[60px] items-center justify-between gap-3 rounded-2xl px-4 sm:px-5">
           {/* Wordmark */}
           <Link
-            href={`${CLOSET_URL}/`}
+            href="/closet"
             className="flex shrink-0 items-center gap-2"
             aria-label="Worn Closet — home"
           >

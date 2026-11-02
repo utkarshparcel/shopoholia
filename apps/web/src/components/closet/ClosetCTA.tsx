@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { ArrowRight, Mail } from 'lucide-react';
-import { CONTACT_EMAIL, PLAY_URL } from '@/lib/site';
+import { CONTACT_EMAIL } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -61,7 +61,7 @@ export function ClosetCTA() {
             <Mail className="h-4 w-4" aria-hidden="true" /> Join the Closet list
           </a>
           <Link
-            href={`${PLAY_URL}/`}
+            href="/"
             className="inline-flex min-h-[48px] items-center gap-2 rounded-pill border border-worn-paper/25 bg-worn-paper/10 px-7 text-[15px] font-semibold transition-colors hover:border-worn-gold hover:text-worn-gold focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
           >
             See Worn Play <ArrowRight className="h-4 w-4" aria-hidden="true" />

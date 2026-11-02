@@ -1,13 +1,11 @@
-import { CLOSET_URL, PLAY_URL } from '@/lib/site';
-
 const SITES = [
-  { key: 'play', label: 'Play', href: `${PLAY_URL}/`, name: 'Worn Play' },
-  { key: 'closet', label: 'Closet', href: `${CLOSET_URL}/`, name: 'Worn Closet' },
+  { key: 'play', label: 'Play', href: '/', name: 'Worn Play' },
+  { key: 'closet', label: 'Closet', href: '/closet', name: 'Worn Closet' },
 ] as const;
 
 /**
  * Which half of Worn you're looking at, and the way to the other one. Lives in both headers at every
- * width, so the two sites always read as two products under one name.
+ * width, so the two pages always read as two products under one name.
  */
 export function SiteSwitch({ current, className = '' }: { current: 'play' | 'closet'; className?: string }) {
   return (
