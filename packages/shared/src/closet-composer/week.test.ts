@@ -538,8 +538,15 @@ const coverage =
   (globalThis as { __vitest_worker__?: { config?: { coverage?: { enabled?: boolean } } } }).__vitest_worker__?.config
     ?.coverage?.enabled === true;
 
+/**
+ * Wall-clock budgets run only under `pnpm test:perf` (vitest.perf.config.ts), alone on the machine;
+ * PERF_BUDGET_SCALE stretches them on hardware slower than the laptop they were set on.
+ */
+const perfRun = process.env.WORN_PERF_BUDGETS === "1";
+const budgetScale = Number(process.env.PERF_BUDGET_SCALE) || 1;
+
 describe("composeWeek: speed", () => {
-  it.skipIf(coverage)("composes a week from 1,000 items in under 50 ms", () => {
+  it.runIf(perfRun && !coverage)("composes a week from 1,000 items in under 50 ms", () => {
     const r = rng(42);
     const { items, metrics } = randomCloset(r, 1000);
     const input = week(items, { metrics, days: randomDays(r) });
@@ -552,6 +559,6 @@ describe("composeWeek: speed", () => {
       ok(composeWeek(input));
       fastest = Math.min(fastest, performance.now() - start);
     }
-    expect(fastest).toBeLessThan(50);
+    expect(fastest).toBeLessThan(50 * budgetScale);
   });
 });

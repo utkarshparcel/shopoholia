@@ -587,6 +587,7 @@ const byId = (a: { id: string }, b: { id: string }): number => (a.id < b.id ? -1
 const WEIGHT_SUM = STYLE_WEIGHTS.likes + STYLE_WEIGHTS.proportion + STYLE_WEIGHTS.palette + STYLE_WEIGHTS.fabric;
 
 describe("properties", () => {
+  // A correctness property over 200 random looks, not a timing check: about 3 s alone, so 30 s, not the 5 s default.
   it("rank never remove", () => {
     expect(WEIGHT_SUM).toBeCloseTo(2.6, 10);
     const r = lcg(20261026);
@@ -636,11 +637,18 @@ describe("properties", () => {
     expect(JSON.stringify({ pool, looks })).toBe(before);
     // The profile changes scores, never membership.
     expect(totals[1]!.some((s, i) => s !== totals[0]![i])).toBe(true);
-  });
+  }, 30_000);
 });
 
+/**
+ * Wall-clock budgets run only under `pnpm test:perf` (vitest.perf.config.ts), alone on the machine;
+ * PERF_BUDGET_SCALE stretches them on hardware slower than the laptop they were set on.
+ */
+const perfRun = process.env.WORN_PERF_BUDGETS === "1";
+const budgetScale = Number(process.env.PERF_BUDGET_SCALE) || 1;
+
 describe("budget", () => {
-  it("score budget", () => {
+  it.runIf(perfRun)("score budget", () => {
     const r = lcg(300);
     const pool = Array.from({ length: 300 }, (_, i) => randomItem(r, i));
     const metrics: StyleMetric[] = pool.map((it) => ({ itemId: it.id, wears180: Math.floor(r() * 12) }));
@@ -664,13 +672,14 @@ describe("budget", () => {
     };
 
     expect(Number.isFinite(run())).toBe(true);
+    // Other work on the machine only ever adds time, so the fastest of seven runs is the scorer's own cost.
     let best = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 7; i++) {
       const start = performance.now();
       run();
       best = Math.min(best, performance.now() - start);
     }
     console.info(`score budget: 300 pieces, 7 days x 2000 looks in ${best.toFixed(1)} ms`);
-    expect(best).toBeLessThan(50);
+    expect(best).toBeLessThan(50 * budgetScale);
   });
 });

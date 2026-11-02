@@ -67,6 +67,13 @@ jobs:
       - name: Test
         run: pnpm turbo run test --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
 
+      # The wall-clock budgets, alone on the runner (in the step above every package's tests share the
+      # CPU). The budgets were set on a laptop; GitHub's shared runners are about three times slower.
+      - name: Performance budgets (isolated)
+        run: pnpm --filter @worn/shared test:perf
+        env:
+          PERF_BUDGET_SCALE: "3"
+
       # Outside turbo: its strict env mode would drop TEST_REDIS_URL, and these must not be cached.
       - name: Queue tests against Redis 7
         run: |
