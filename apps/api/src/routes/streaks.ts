@@ -21,9 +21,7 @@ export const streaksRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const status = await app.deps.repos.getStreakStatus(request.user.sub);
-      const nextDay = status.todayClaimed
-        ? status.streakCount + 1
-        : status.streakCount + 1;
+      const nextDay = status.nextStreakDay;
       return {
         currentStreak: status.streakCount,
         lastClaimedAt: status.lastClaimedAt?.toISOString() ?? null,

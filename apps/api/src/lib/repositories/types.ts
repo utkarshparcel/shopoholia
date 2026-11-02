@@ -741,8 +741,19 @@ export interface Repositories {
   applyReferralCode(userId: string, referralCode: string): Promise<UserRecord | null>;
   countReferrals(referrerId: string): Promise<number>;
 
+  /**
+   * Pays today's streak reward once per local day (the user's `timeZone`, UTC when invalid):
+   * the already-claimed check, the grant and the streak update happen under the user's coin lock.
+   * `coinsGranted` is 0 when today was already claimed.
+   */
   claimStreak(userId: string): Promise<{ streakCount: number; coinsGranted: number; balanceAfter: number }>;
-  getStreakStatus(userId: string): Promise<{ streakCount: number; lastClaimedAt: Date | null; todayClaimed: boolean }>;
+  /** `nextStreakDay` is the streak day the next paid claim lands on (1 once a day was missed). */
+  getStreakStatus(userId: string): Promise<{
+    streakCount: number;
+    lastClaimedAt: Date | null;
+    todayClaimed: boolean;
+    nextStreakDay: number;
+  }>;
 
   saveStyleProfile(userId: string, profile: { tags: string[]; answers: Record<string, string> }): Promise<void>;
 

@@ -83,6 +83,8 @@ import {
 } from "@worn/db";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
+import { nextStreakDay, streakDay } from "../streak-day.js";
+import { streakLedgerRef } from "./ledger-refs.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -1379,45 +1381,58 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async claimStreak(userId) {
-      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) throw new Error(`User not found: ${userId}`);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) {
-        last.setHours(0, 0, 0, 0);
-        if (last.getTime() === today.getTime()) {
-          return { streakCount: user.streakCount ?? 0, coinsGranted: 0, balanceAfter: user.coinBalanceCache };
+      return db.transaction(async (tx) => {
+        // The user's row lock, as every coin write takes, so parallel claims queue here and each
+        // re-reads the last claim after the one before it committed.
+        const balance = await lockedCoinBalance(tx, userId);
+        const [user] = await tx
+          .select({
+            streakCount: users.streakCount,
+            lastStreakClaimAt: users.lastStreakClaimAt,
+            timeZone: users.timeZone,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        if (!user) throw new Error(`User not found: ${userId}`);
+
+        const claimedAt = new Date();
+        const day = streakDay(user.lastStreakClaimAt ?? null, claimedAt, user.timeZone);
+        if (day.claimedToday) {
+          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: balance };
         }
-      }
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isConsecutive = last && last.getTime() === yesterday.getTime();
-      const newStreak = isConsecutive ? (user.streakCount ?? 0) + 1 : 1;
-      const coinsGranted = streakRewardForDay(newStreak);
-      const { balanceAfter } = await repos.grantCoins({
-        userId,
-        delta: coinsGranted,
-        type: "EARN_STREAK",
-        refType: "streak",
-        refId: `day-${newStreak}`,
+        const newStreak = nextStreakDay(user.streakCount, day);
+        const coinsGranted = streakRewardForDay(newStreak);
+        const balanceAfter = balance + coinsGranted;
+        await appendCoinLedger(
+          tx,
+          {
+            userId,
+            delta: coinsGranted,
+            type: "EARN_STREAK",
+            refType: "streak",
+            refId: streakLedgerRef(userId, day.todayKey),
+          },
+          balanceAfter,
+        );
+        await tx
+          .update(users)
+          .set({ streakCount: newStreak, lastStreakClaimAt: claimedAt, updatedAt: now() })
+          .where(eq(users.id, userId));
+        return { streakCount: newStreak, coinsGranted, balanceAfter };
       });
-      await db
-        .update(users)
-        .set({ streakCount: newStreak, lastStreakClaimAt: today, coinBalanceCache: balanceAfter, updatedAt: now() })
-        .where(eq(users.id, userId));
-      return { streakCount: newStreak, coinsGranted, balanceAfter };
     },
 
     async getStreakStatus(userId) {
       const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false };
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) last.setHours(0, 0, 0, 0);
-      const todayClaimed = last !== null && last.getTime() === today.getTime();
-      return { streakCount: user.streakCount ?? 0, lastClaimedAt: user.lastStreakClaimAt ?? null, todayClaimed };
+      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false, nextStreakDay: 1 };
+      const day = streakDay(user.lastStreakClaimAt ?? null, new Date(), user.timeZone);
+      return {
+        streakCount: user.streakCount,
+        lastClaimedAt: user.lastStreakClaimAt ?? null,
+        todayClaimed: day.claimedToday,
+        nextStreakDay: nextStreakDay(user.streakCount, day),
+      };
     },
 
     async saveStyleProfile(userId, profile) {

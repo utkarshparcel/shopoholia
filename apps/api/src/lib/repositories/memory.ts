@@ -5,6 +5,8 @@ import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
+import { nextStreakDay, streakDay } from "../streak-day.js";
+import { streakLedgerRef } from "./ledger-refs.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -544,44 +546,51 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async claimStreak(userId) {
-      const user = users.get(userId);
-      if (!user) throw new Error(`User not found: ${userId}`);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) {
-        last.setHours(0, 0, 0, 0);
-        const diffDays = Math.round((today.getTime() - last.getTime()) / 86_400_000);
-        if (diffDays === 0) {
-          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: user.coinBalanceCache };
+      if (!users.has(userId)) throw new Error(`User not found: ${userId}`);
+      return withCoinLock(userId, async () => {
+        const balance = await this.getCoinBalance(userId);
+        // No await from reading the last claim to recording this one, so a day pays once.
+        const user = users.get(userId)!;
+        const claimedAt = new Date();
+        const day = streakDay(user.lastStreakClaimAt, claimedAt, user.timeZone);
+        if (day.claimedToday) {
+          return { streakCount: user.streakCount, coinsGranted: 0, balanceAfter: balance };
         }
-      }
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isConsecutive = last && yesterday.getTime() === last.getTime();
-      const newStreak = isConsecutive ? user.streakCount + 1 : 1;
-      const coinsGranted = streakRewardForDay(newStreak);
-      const { balanceAfter } = await this.grantCoins({
-        userId,
-        delta: coinsGranted,
-        type: "EARN_STREAK",
-        refType: "streak",
-        refId: `day-${newStreak}`,
+        const newStreak = nextStreakDay(user.streakCount, day);
+        const coinsGranted = streakRewardForDay(newStreak);
+        const balanceAfter = balance + coinsGranted;
+        appendLedger(
+          ledger,
+          {
+            userId,
+            delta: coinsGranted,
+            type: "EARN_STREAK",
+            refType: "streak",
+            refId: streakLedgerRef(userId, day.todayKey),
+          },
+          balanceAfter,
+        );
+        users.set(userId, {
+          ...user,
+          streakCount: newStreak,
+          lastStreakClaimAt: claimedAt,
+          coinBalanceCache: balanceAfter,
+          updatedAt: now(),
+        });
+        return { streakCount: newStreak, coinsGranted, balanceAfter };
       });
-      const updated = { ...user, streakCount: newStreak, lastStreakClaimAt: today, coinBalanceCache: balanceAfter, updatedAt: now() };
-      users.set(userId, updated);
-      return { streakCount: newStreak, coinsGranted, balanceAfter };
     },
 
     async getStreakStatus(userId) {
       const user = users.get(userId);
-      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false };
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const last = user.lastStreakClaimAt ? new Date(user.lastStreakClaimAt) : null;
-      if (last) last.setHours(0, 0, 0, 0);
-      const todayClaimed = last !== null && last.getTime() === today.getTime();
-      return { streakCount: user.streakCount, lastClaimedAt: user.lastStreakClaimAt, todayClaimed };
+      if (!user) return { streakCount: 0, lastClaimedAt: null, todayClaimed: false, nextStreakDay: 1 };
+      const day = streakDay(user.lastStreakClaimAt, new Date(), user.timeZone);
+      return {
+        streakCount: user.streakCount,
+        lastClaimedAt: user.lastStreakClaimAt,
+        todayClaimed: day.claimedToday,
+        nextStreakDay: nextStreakDay(user.streakCount, day),
+      };
     },
 
     async saveStyleProfile(userId, profile) {
