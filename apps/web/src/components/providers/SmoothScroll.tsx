@@ -34,14 +34,43 @@ function anchorY(el: HTMLElement) {
 /* While a jump runs <html> carries this, and a data-autohide header keeps itself hidden. */
 const JUMP = 'data-anchor-jump';
 let jumpTimer: ReturnType<typeof setTimeout> | undefined;
+let jumpGen = 0;
+/* scrollY as the last scroll event reported it; differs from window.scrollY while one is still due */
+let seenY = 0;
+/* The jump's time is up but its last move hasn't been reported yet: end it on that scroll event */
+let endOnScroll = false;
 function jumpStart(ms: number) {
   document.documentElement.setAttribute(JUMP, '');
+  jumpGen++;
+  endOnScroll = false;
   clearTimeout(jumpTimer);
-  jumpTimer = setTimeout(jumpEnd, ms); // never outlives the glide, even if it is cut short
+  jumpTimer = setTimeout(jumpSettle, ms); // never outlives the glide, even if it is cut short
+}
+/**
+ * Scroll events go out with the next rendered frame, and on a busy page that frame can come after the
+ * timer: the header then read the glide's last step (often tens of px upward) as the reader scrolling
+ * up, and slid back in over the section it had just landed on. If a scroll event is still due, the
+ * jump ends right after it (a backstop timer covers one that never comes).
+ */
+function jumpSettle() {
+  if (window.scrollY !== seenY) {
+    endOnScroll = true;
+    jumpTimer = setTimeout(jumpEnd, 500);
+    return;
+  }
+  jumpEnd();
 }
 function jumpEnd() {
   clearTimeout(jumpTimer);
+  endOnScroll = false;
   document.documentElement.removeAttribute(JUMP);
+}
+function onScrollSeen() {
+  seenY = window.scrollY;
+  if (!endOnScroll) return;
+  // after every other listener (the header's) has handled this event as part of the jump
+  const gen = jumpGen;
+  setTimeout(() => gen === jumpGen && endOnScroll && jumpEnd(), 0);
 }
 
 /** Moves keyboard focus to the target without scrolling, as a fragment jump should. */
@@ -150,6 +179,8 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
       focusTarget(el);
     };
     window.addEventListener('click', onClick, true);
+    seenY = window.scrollY;
+    window.addEventListener('scroll', onScrollSeen, { passive: true });
 
     // A hash typed into the address bar, or Back/Forward between anchors: the browser has already
     // jumped by scroll-margin; settle it on the same mark a click would.
@@ -193,6 +224,7 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     return () => {
       clearTimeout(t);
       window.removeEventListener('click', onClick, true);
+      window.removeEventListener('scroll', onScrollSeen);
       window.removeEventListener('hashchange', onHashChange);
       window.removeEventListener('wheel', takeOver);
       window.removeEventListener('touchstart', takeOver);
