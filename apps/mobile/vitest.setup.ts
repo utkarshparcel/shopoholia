@@ -287,6 +287,10 @@ vi.mock('react-native', () => ({
     },
     request: async () => 'denied',
   },
+  AppState: {
+    currentState: 'active',
+    addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+  },
   AccessibilityInfo: {
     isReduceMotionEnabled: async () => false,
     addEventListener: () => ({ remove: () => {} }),

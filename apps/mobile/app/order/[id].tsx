@@ -9,6 +9,7 @@ import { trackPlayBuyInCloset } from '@/src/api/client';
 import { TrackBuySuccessSheet } from '@/src/components/TrackBuySuccessSheet';
 import { Button, OrderTracker, SectionHeader } from '@/src/components/ui';
 import { useOrder } from '@/src/hooks/orders';
+import { useNow } from '@/src/hooks/useNow';
 import { trackEvent } from '@/src/lib/analytics';
 import {
   TRACK_BUY_VAULT_HREF,
@@ -34,6 +35,9 @@ export default function OrderTrackingScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const orderQuery = useOrder(id ?? '');
+  // The 5 s poll returns the same order between state changes, which doesn't re-render: the
+  // countdown needs its own clock to keep moving.
+  const now = useNow(1_000);
   const waitTracked = useRef(false);
   const accessToken = useSessionStore((s) => s.accessToken);
   const queryClient = useQueryClient();
@@ -98,9 +102,9 @@ export default function OrderTrackingScreen() {
       ) : (
         <>
           <OrderTracker
-            eta={nextEtaLabel(orderQuery.data)}
+            eta={nextEtaLabel(orderQuery.data, now)}
             orderId={`#${orderQuery.data.id.slice(0, 8)}`}
-            steps={buildTrackerSteps(orderQuery.data)}
+            steps={buildTrackerSteps(orderQuery.data, now)}
           />
 
           {orderQuery.data.rushAvailable ? <RushToExpress order={orderQuery.data} /> : null}
