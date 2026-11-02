@@ -10,7 +10,7 @@ import type { OrderSummary } from '@/src/api/client';
 import { fetchCredits, fetchPrebuyFit } from '@/src/api/client';
 import { Button, CoinIcon, CoinWallet, SectionHeader } from '@/src/components/ui';
 import { useCart } from '@/src/hooks/catalog';
-import { useCheckout, useCoinBalance } from '@/src/hooks/orders';
+import { haulKeyOf, useCheckout, useCoinBalance } from '@/src/hooks/orders';
 import {
   BUDGET_NUDGE_SOFT_FOOTER,
   closetBudgetSoftGateCopy,
@@ -55,7 +55,10 @@ export default function CheckoutScreen() {
   const insets = useSafeAreaInsets();
   const { query: cartQuery } = useCart();
   const { data: balanceData } = useCoinBalance();
-  const checkout = useCheckout();
+  const items = cartQuery.data?.items ?? [];
+  const coinTotal = cartQuery.data?.coinTotal ?? 0;
+  // Retries of this haul reuse one idempotency key, so a lost response can't place it twice.
+  const checkout = useCheckout(haulKeyOf(items, coinTotal));
   const [tier, setTier] = useState<OrderSummary['tier']>('EXPRESS');
   const [closetOpen, setClosetOpen] = useState(false);
   const [coolingHold, setCoolingHold] = useState<{
@@ -64,8 +67,6 @@ export default function CheckoutScreen() {
   } | null>(null);
   const accessToken = useSessionStore((s) => s.accessToken);
 
-  const items = cartQuery.data?.items ?? [];
-  const coinTotal = cartQuery.data?.coinTotal ?? 0;
   const itemCount = items.length;
   const balance = balanceData?.balance ?? 0;
   const canPay = coinTotal > 0 && balance >= coinTotal && !checkout.isPending;

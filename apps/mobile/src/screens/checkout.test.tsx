@@ -87,6 +87,7 @@ vi.mock('@/src/hooks/catalog', () => ({
 vi.mock('@/src/hooks/orders', () => ({
   useCoinBalance: () => ({ data: { balance: 500 } }),
   useCheckout: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  haulKeyOf: () => 'haul',
 }));
 
 describe('CheckoutScreen', () => {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 
 import {
   ApiRequestError,
@@ -38,20 +39,36 @@ export function useCoinBalance() {
   });
 }
 
-export function useCheckout() {
+/** What's in the haul, for `useCheckout`: a different haul is a different checkout. */
+export function haulKeyOf(items: ReadonlyArray<{ variantId: string; quantity: number }>, coinTotal: number) {
+  return `${items.map((i) => `${i.variantId}x${i.quantity}`).join(',')}=${coinTotal}`;
+}
+
+/**
+ * Places the order for the haul `haulKey` describes. Every try for that haul, including a retry
+ * after a timeout or a dropped response, sends the same idempotency key, so the server places the
+ * order once and answers a retry with it. The key is new once an order is placed or the haul
+ * changes.
+ */
+export function useCheckout(haulKey = '') {
   const accessToken = useSessionStore((s) => s.accessToken);
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
+  const attempt = useRef<{ haulKey: string; idempotencyKey: string } | null>(null);
 
   return useMutation({
     mutationFn: (input: OrderSummary['tier'] | { tier: OrderSummary['tier']; coolingOffOverride?: boolean }) => {
       if (!accessToken) throw new Error('Sign in to checkout');
       const tier = typeof input === 'string' ? input : input.tier;
       const coolingOffOverride = typeof input === 'string' ? undefined : input.coolingOffOverride;
-      return createOrder(accessToken, tier, newIdempotencyKey(), coolingOffOverride);
+      if (attempt.current?.haulKey !== haulKey) {
+        attempt.current = { haulKey, idempotencyKey: newIdempotencyKey() };
+      }
+      return createOrder(accessToken, tier, attempt.current.idempotencyKey, coolingOffOverride);
     },
     onSuccess: async (order) => {
+      attempt.current = null;
       trackEvent('checkout', { orderId: order.id, tier: order.tier, coinTotal: order.coinTotal });
       if (accessToken) {
         const balance = await fetchCoinBalance(accessToken);
