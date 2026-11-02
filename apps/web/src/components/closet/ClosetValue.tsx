@@ -8,9 +8,9 @@ import {
   useInView,
   useMotionValue,
   useMotionValueEvent,
-  useReducedMotion,
   type Variants,
 } from 'framer-motion';
+import { useReducedMotionSafe, reveal } from '@/lib/motion';
 import { Plus, Repeat, RotateCcw, Sunrise, TrendingDown, Umbrella } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -27,8 +27,13 @@ const rise: Variants = {
 const START = 2600;
 const MAX = 999999;
 const GOAL = 100;
+/** Wears the tag logs on its own when it scrolls in untouched. */
+const AUTO_WEARS = 8;
 
 const rupees = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+const describe = (wears: number, price: number) =>
+  `Worn ${wears === 1 ? 'once' : `${wears} times`}: ${rupees(price / wears)} a wear.`;
 
 const TILES = [
   {
@@ -123,22 +128,21 @@ function PriceTag({ price, wears, reduced }: { price: number; wears: number; red
 }
 
 export function ClosetValue() {
-  const reduced = !!useReducedMotion();
+  const reduced = !!useReducedMotionSafe();
   const [wears, setWears] = useState(1);
   const [draft, setDraft] = useState(String(START));
   const [bump, setBump] = useState(0);
   const touched = useRef(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const inView = useInView(stageRef, { amount: 0.5 });
+  // What the live region says. It only takes settled values: the reader's own changes, and the
+  // count where the automatic run stops, so screen readers hear one update instead of seven.
+  const [said, setSaid] = useState(() => describe(1, START));
 
   const parsed = parseInt(draft, 10);
   const price = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX) : START;
   const goalWears = Math.max(1, Math.ceil(price / GOAL));
   const progress = Math.min(1, wears / goalWears);
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   const wear = () => {
     setWears((w) => Math.min(w + 1, 999));
@@ -147,17 +151,21 @@ export function ClosetValue() {
 
   // Untouched, it logs a few wears on its own so the drop is visible.
   useEffect(() => {
-    if (!inView || touched.current || reduced || wears >= 8) return;
+    if (!inView || touched.current || reduced || wears >= AUTO_WEARS) return;
     const t = setTimeout(() => {
       if (!touched.current) wear();
     }, wears === 1 ? 900 : 650);
     return () => clearTimeout(t);
   }, [inView, wears, reduced]);
 
+  useEffect(() => {
+    if (touched.current || reduced || wears >= AUTO_WEARS) setSaid(describe(wears, price));
+  }, [wears, price, reduced]);
+
   return (
     <section id="value" className="relative scroll-mt-24 overflow-hidden">
       <div className="section section-py">
-        <motion.div {...a} variants={rise} custom={0}>
+        <motion.div {...reveal} variants={rise} custom={0}>
           <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">What it adds up to</p>
           <h2 className="mt-6 max-w-[20ch] font-display text-[clamp(32px,4.5vw,56px)] leading-[1.04] tracking-[-0.015em] text-worn-ink text-balance">
             Every wear makes it <em className="grad-text font-display">cheaper.</em>
@@ -171,7 +179,7 @@ export function ClosetValue() {
         <div className="mt-12 grid gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center lg:gap-16">
           {/* The tag and its controls */}
           <motion.div
-            {...a}
+            {...reveal}
             variants={rise}
             custom={0.1}
             ref={stageRef}
@@ -179,7 +187,7 @@ export function ClosetValue() {
           >
             <PriceTag price={price} wears={wears} reduced={reduced} />
             <p className="sr-only" aria-live="polite">
-              {`Worn ${wears === 1 ? 'once' : `${wears} times`}: ${rupees(price / wears)} a wear.`}
+              {said}
             </p>
 
             <div className="mt-2 flex flex-wrap items-end justify-center gap-3">
@@ -262,7 +270,7 @@ export function ClosetValue() {
             {TILES.map((t, i) => (
               <motion.div
                 key={t.title}
-                {...a}
+                {...reveal}
                 variants={rise}
                 custom={0.15 + i * 0.08}
                 className="rounded-[22px] border border-worn-rule bg-worn-surface p-6 shadow-card"

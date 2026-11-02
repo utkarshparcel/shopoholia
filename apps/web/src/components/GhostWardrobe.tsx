@@ -1,6 +1,7 @@
 'use client';
 
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import { Tag } from 'lucide-react';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -55,15 +56,11 @@ const GHOSTS = [
 ];
 
 export function GhostWardrobe() {
-  const reduced = useReducedMotion();
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <section id="manifesto" aria-label="The ghost wardrobe" className="section-py relative overflow-hidden bg-worn-paper">
       <div className="section">
-        <motion.div {...a} variants={rise} custom={0} className="mx-auto max-w-[780px] text-center">
+        <motion.div {...reveal} variants={rise} custom={0} className="mx-auto max-w-[780px] text-center">
           <p className="ornament ml-auto mr-auto w-fit font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
             The ghost wardrobe
           </p>
@@ -81,7 +78,7 @@ export function GhostWardrobe() {
           {RECEIPTS.map((r, i) => (
             <motion.div
               key={r.label}
-              {...a}
+              {...reveal}
               variants={rise}
               custom={0.05 * i}
               className="border-t border-worn-rule pt-5"
@@ -101,7 +98,7 @@ export function GhostWardrobe() {
           {GHOSTS.map((g, i) => (
             <motion.figure
               key={g.tag + i}
-              {...a}
+              {...reveal}
               variants={rise}
               custom={0.04 * i}
               className="relative w-[124px] overflow-hidden rounded-card border border-worn-rule bg-worn-warm shadow-sm sm:w-[140px]"
@@ -119,7 +116,7 @@ export function GhostWardrobe() {
         </div>
 
         <motion.p
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.2}
           className="mx-auto mt-14 max-w-[46ch] text-center font-display text-[clamp(22px,3vw,32px)] italic leading-snug text-worn-ink-soft"

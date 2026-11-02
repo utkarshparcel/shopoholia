@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion, type Transition, type Variants } from 'framer-motion';
+import { AnimatePresence, motion, type Transition, type Variants } from 'framer-motion';
+import { useReducedMotionSafe, reveal } from '@/lib/motion';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import { stepSpace, useScrollSteps } from './useScrollSteps';
 
@@ -222,14 +223,10 @@ function Frame({
 /* ── Section ────────────────────────────────────────────────────────── */
 
 export function ClosetBackups() {
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const [idx, setIdx] = useState(0);
   // Scrolling walks the four checks in order; a row just scrolls to its check.
   const { trackRef, stickRef, jumpTo } = useScrollSteps(REASONS.length, setIdx);
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
   const move: Transition = reduced ? { duration: 0 } : { duration: 0.75, ease: EASE };
 
   const r = REASONS[idx];
@@ -237,7 +234,7 @@ export function ClosetBackups() {
   return (
     <section id="backups" className="relative scroll-mt-24 border-t border-worn-rule">
       <div className="section section-py">
-        <motion.div {...a} variants={rise} custom={0}>
+        <motion.div {...reveal} variants={rise} custom={0}>
           <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">Just in case</p>
           <h2 className="mt-6 max-w-[14ch] font-display text-[clamp(32px,4.5vw,56px)] leading-[1.04] tracking-[-0.015em] text-worn-ink text-balance">
             Planned sleeveless. <em className="grad-text font-display">Didn’t wax.</em>
@@ -256,7 +253,7 @@ export function ClosetBackups() {
             className="step-stick sticky grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-x-16"
           >
             {/* Phones: which check is on */}
-            <motion.ol {...a} variants={rise} custom={0.1} className="flex flex-wrap gap-2 lg:hidden">
+            <motion.ol {...reveal} variants={rise} custom={0.1} className="flex flex-wrap gap-2 lg:hidden">
               {REASONS.map((x, i) => (
                 <li key={x.id}>
                   <button
@@ -275,7 +272,7 @@ export function ClosetBackups() {
             </motion.ol>
 
             {/* Plan and backup, side by side, with the detail under a loupe */}
-            <motion.div {...a} variants={rise} custom={0.15} className="lg:col-start-2 lg:row-start-1">
+            <motion.div {...reveal} variants={rise} custom={0.15} className="lg:col-start-2 lg:row-start-1">
               <div className="mx-auto max-w-[640px] rounded-[28px] border border-worn-rule bg-[#f7f1e7] p-4 sm:p-6 lg:max-w-[calc((100svh_-_318px)_*_1.1_+_120px)]">
                 <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-4">
                   <Frame
@@ -319,7 +316,7 @@ export function ClosetBackups() {
             </motion.div>
 
             {/* The four checks */}
-            <motion.div {...a} variants={rise} custom={0.25} className="hidden lg:col-start-1 lg:row-start-1 lg:block">
+            <motion.div {...reveal} variants={rise} custom={0.25} className="hidden lg:col-start-1 lg:row-start-1 lg:block">
               <ol className="divide-y divide-worn-rule border-y border-worn-rule">
                 {REASONS.map((x, i) => {
                   const on = i === idx;

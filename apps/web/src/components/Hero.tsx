@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { motion, useMotionValue, useSpring, useReducedMotion } from 'framer-motion';
+import { motion, useMotionValue, useSpring } from 'framer-motion';
+import { useReducedMotionSafe } from '@/lib/motion';
 import { ArrowRight, Heart } from 'lucide-react';
 import { Magnetic } from './Magnetic';
 import { GoldParticles } from './GoldParticles';
@@ -168,7 +169,7 @@ export function Hero() {
   const sectionRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const phoneRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const [tiltOK, setTiltOK] = useState(false);
 
   // mouse tilt

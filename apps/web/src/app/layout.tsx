@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { DM_Sans, DM_Serif_Display, DM_Mono } from 'next/font/google';
 import './globals.css';
 import { SmoothScroll } from '@/components/providers/SmoothScroll';
+import { MotionProvider } from '@/components/providers/MotionProvider';
 import { ScrollProgress } from '@/components/ScrollProgress';
 import { GrainOverlay } from '@/components/GrainOverlay';
 import { SITE_URL } from '@/lib/site';
@@ -104,11 +105,13 @@ export default function RootLayout({
         <GrainOverlay />
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 z-50 btn-primary"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:px-5 focus:py-3 z-[60] btn-primary"
         >
           Skip to main content
         </a>
-        <SmoothScroll>{children}</SmoothScroll>
+        <MotionProvider>
+          <SmoothScroll>{children}</SmoothScroll>
+        </MotionProvider>
       </body>
     </html>
   );

@@ -1,6 +1,7 @@
 'use client';
 
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -42,15 +43,11 @@ const STEPS = [
 ];
 
 export function DopamineLoop() {
-  const reduced = useReducedMotion();
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <section id="loop" aria-label="The dopamine loop" className="section-py bg-warm">
       <div className="section">
-        <motion.div {...a} variants={rise} custom={0} className="mx-auto max-w-[760px] text-center">
+        <motion.div {...reveal} variants={rise} custom={0} className="mx-auto max-w-[760px] text-center">
           <p className="ornament ml-auto mr-auto w-fit font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
             The mechanic
           </p>
@@ -67,7 +64,7 @@ export function DopamineLoop() {
           {STEPS.map((s, i) => (
             <motion.div
               key={s.n}
-              {...a}
+              {...reveal}
               variants={rise}
               custom={0.1 + i * 0.08}
               className={`relative rounded-lg bg-worn-surface p-5 shadow-card md:p-6 ${
@@ -83,7 +80,7 @@ export function DopamineLoop() {
           ))}
         </div>
 
-        <motion.p {...a} variants={rise} custom={0.4} className="mt-10 text-center font-mono text-micro uppercase tracking-[0.22em] text-worn-muted">
+        <motion.p {...reveal} variants={rise} custom={0.4} className="mt-10 text-center font-mono text-micro uppercase tracking-[0.22em] text-worn-muted">
           see → desire → commit → wait → reveal
         </motion.p>
       </div>

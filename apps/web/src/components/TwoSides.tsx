@@ -1,22 +1,20 @@
 'use client';
 
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { ArrowRight, Sparkles, Shirt } from 'lucide-react';
 import { closetHref } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export function TwoSides() {
-  const reduced = useReducedMotion();
-  const reveal = (d: number) =>
-    reduced
-      ? { initial: { opacity: 1, y: 0 } as const }
-      : {
-          initial: { opacity: 0, y: 36 } as const,
-          whileInView: { opacity: 1, y: 0 } as const,
-          viewport: { once: true, margin: '-80px' } as const,
-          transition: { duration: 0.9, ease: EASE, delay: d },
-        };
+  // Same props in every mode (MotionConfig makes the rise instant for reduced motion), so the
+  // server HTML and the hydrating render match.
+  const reveal = (d: number) => ({
+    initial: { opacity: 0, y: 36 } as const,
+    whileInView: { opacity: 1, y: 0 } as const,
+    viewport: { once: true, margin: '-80px' } as const,
+    transition: { duration: 0.9, ease: EASE, delay: d },
+  });
 
   return (
     <section id="two-sides" aria-label="Two sides of Worn" className="relative py-24 sm:py-32">

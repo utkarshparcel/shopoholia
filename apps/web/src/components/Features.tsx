@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { useReducedMotionSafe, reveal } from '@/lib/motion';
 import {
   ShoppingBag,
   ScanFace,
@@ -113,7 +114,7 @@ const FEATURES: Feature[] = [
 
 export function Features() {
   const sectionRef = useRef<HTMLElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   // As each card arrives, the stack below it recedes
   useEffect(() => {
@@ -140,10 +141,6 @@ export function Features() {
     return () => ctx.revert();
   }, [reduced]);
 
-  const reducedAnim = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
-
   return (
     <section
       ref={sectionRef}
@@ -152,7 +149,7 @@ export function Features() {
       className="relative bg-warm py-24 lg:py-36"
     >
       <div className="section">
-        <motion.div {...reducedAnim} variants={rise} custom={0} className="max-w-[760px]">
+        <motion.div {...reveal} variants={rise} custom={0} className="max-w-[760px]">
           <p className="ornament font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
             The play
           </p>
