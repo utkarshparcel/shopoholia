@@ -16,6 +16,7 @@ import { Button, Chip, CoinIcon } from '@/src/components/ui';
 import { useAddToCart, useListing, useTryon } from '@/src/hooks/catalog';
 import { trackEvent } from '@/src/lib/analytics';
 import { confirmAsync, notify } from '@/src/lib/confirm';
+import { listingTagLabels } from '@/src/lib/listingTags';
 import { recordAffiliateClick, type AffiliateLink } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -157,7 +158,7 @@ export default function ListingDetailScreen() {
           <View style={styles.body}>
             <View style={styles.categoryRow}>
               <Text style={styles.category}>{listing.data.category}</Text>
-              {listing.data.tags?.map((tag) => (
+              {listingTagLabels(listing.data.tags).map((tag) => (
                 <View key={tag} style={styles.tagPill}>
                   <Text style={styles.tagText}>{tag}</Text>
                 </View>

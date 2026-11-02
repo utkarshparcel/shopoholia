@@ -7,7 +7,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import type { AddCreditBody } from '@worn/shared';
 
 import { Button } from '@/src/components/ui';
@@ -51,6 +51,8 @@ import {
   wornInk,
 } from '@/src/theme/tokens';
 
+const CONSENT_FIRST_ERROR = 'Allow "Money in your Vault" first, then save the card again.';
+
 /**
  * Compact <60s Closet onboarding: Add card OR Connect email (skip-friendly).
  * Play surface never routes here.
@@ -84,6 +86,13 @@ export default function ClosetOnboardingScreen() {
   const [error, setError] = useState<string | null>(null);
   /** One key per card, so a retried save never adds it twice. */
   const addKeyRef = useRef<string | null>(null);
+
+  // This is a tab screen, so it stays mounted while the user is on consent: coming back, the
+  // "allow it first" prompt is stale (they've just answered it), so it goes. Saving again re-checks.
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (isFocused) setError((current) => (current === CONSENT_FIRST_ERROR ? null : current));
+  }, [isFocused]);
 
   const landVault = useCallback(
     (source: 'manual' | 'oauth' | 'demo') => {
@@ -178,7 +187,7 @@ export default function ClosetOnboardingScreen() {
     if (!accessToken) throw new Error('Sign in to add a card.');
     const consents = await fetchConsents(accessToken);
     if (consents.grants.some((g) => g.scope === 'FINANCIAL')) return true;
-    setError('Allow "Money in your Vault" first, then save the card again.');
+    setError(CONSENT_FIRST_ERROR);
     // Consent comes back here, and the card the user typed is kept for when it does.
     setGiftCardDraft({ merchant, balance });
     router.push(consentHref('/(closet)/onboarding') as never);

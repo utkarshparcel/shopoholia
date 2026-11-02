@@ -136,7 +136,7 @@ export default function ClosetAccountantScreen() {
   if (!FEATURE_CLOSET) {
     return (
       <ClosetScreen
-        title="Accountant"
+        title="Money"
         subtitle={CLOSET_OFF_SUBTITLE}
       />
     );
@@ -217,7 +217,7 @@ export default function ClosetAccountantScreen() {
 
   return (
     <ClosetScreen
-      title="Accountant"
+      title="Money"
       subtitle="True cost per wear, resale value, and the lifetime of every item."
       loading={isLoading}
       loadingLabel="Loading your spend…"

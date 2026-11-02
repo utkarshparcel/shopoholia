@@ -62,7 +62,7 @@ export type PaywallCopy = {
 export function paywallCopyFor(surface: ClosetEntitlement): PaywallCopy {
   if (surface === 'accountant') {
     return {
-      title: 'Accountant Premium',
+      title: 'Money Premium',
       subtitle: 'Budgets, ROI seasons, and CSV export with a 7-day trial.',
       cta: 'Start free trial',
       trialDays: 7,

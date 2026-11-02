@@ -6,10 +6,12 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   fetchConsents: vi.fn(),
   addCredit: vi.fn(),
+  focused: true,
 }));
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
+  useIsFocused: () => mocks.focused,
 }));
 
 vi.mock('@/src/lib/features', async (importOriginal) => ({
@@ -48,6 +50,7 @@ describe('Closet onboarding gift card → consent', () => {
     mocks.addCredit.mockReset();
     mocks.fetchConsents.mockReset();
     mocks.fetchConsents.mockResolvedValue({ grants: [] });
+    mocks.focused = true;
     useClosetStore.getState().clear();
   });
 
@@ -81,5 +84,32 @@ describe('Closet onboarding gift card → consent', () => {
     });
     expect(mocks.addCredit).toHaveBeenCalledTimes(1);
     expect(useClosetStore.getState().giftCardDraft).toBeNull();
+  });
+
+  it('drops the stale "allow it first" error when the user comes back from consent', async () => {
+    const view = render(<ClosetOnboardingScreen />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText('Add a gift card'));
+    fireEvent.change(screen.getByPlaceholderText('Merchant (e.g. Amazon)'), {
+      target: { value: 'Amazon' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/^Balance/), { target: { value: '500' } });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save & see found money'));
+    });
+    const prompt = /Allow "Money in your Vault" first/;
+    expect(screen.getByText(prompt)).toBeTruthy();
+
+    // Off to consent (the tab stays mounted), then back with consent granted.
+    mocks.focused = false;
+    view.rerender(<ClosetOnboardingScreen />);
+    expect(screen.getByText(prompt)).toBeTruthy();
+    mocks.focused = true;
+    view.rerender(<ClosetOnboardingScreen />);
+    expect(screen.queryByText(prompt)).toBeNull();
+    // The typed card is still there to save.
+    expect(screen.getByPlaceholderText('Merchant (e.g. Amazon)')).toHaveValue('Amazon');
   });
 });

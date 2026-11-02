@@ -61,6 +61,9 @@ import ClosetAccountantScreen from '@/app/(closet)/accountant';
 describe('Accountant without FINANCIAL consent', () => {
   it('still tells the user what to allow, though nothing was requested', () => {
     render(<ClosetAccountantScreen />);
+    // Titled like its tab, not "Accountant".
+    expect(screen.getByText('Money')).toBeTruthy();
+    expect(screen.queryByText('Accountant')).toBeNull();
     expect(screen.getByText(/Allow "Money in your Vault" in Privacy & consent first/)).toBeTruthy();
     expect(screen.queryByText('No spend yet')).toBeNull();
   });
