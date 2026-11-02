@@ -25,6 +25,7 @@ export function Navigation() {
   const [reducedMotion, setReducedMotion] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   // Whether closing the menu should hand focus back to its button (not after following a link)
   const returnFocus = useRef(false);
 
@@ -70,6 +71,8 @@ export function Navigation() {
   }, []);
 
   // Open: focus the first link. Closed by Escape or the button: focus goes back to the button.
+  // Tabbing (or clicking) out of the header into the page closes it too, leaving focus where it
+  // went, so the open menu never sits over the content a keyboard user is now in.
   useEffect(() => {
     if (mobileOpen) {
       menuRef.current?.querySelector<HTMLElement>('a, button')?.focus();
@@ -79,8 +82,15 @@ export function Navigation() {
           closeMenu(true);
         }
       };
+      const onFocusIn = (e: FocusEvent) => {
+        if (e.target instanceof Node && !headerRef.current?.contains(e.target)) closeMenu(false);
+      };
       document.addEventListener('keydown', onKey);
-      return () => document.removeEventListener('keydown', onKey);
+      document.addEventListener('focusin', onFocusIn);
+      return () => {
+        document.removeEventListener('keydown', onKey);
+        document.removeEventListener('focusin', onFocusIn);
+      };
     }
     if (returnFocus.current) {
       returnFocus.current = false;
@@ -92,6 +102,7 @@ export function Navigation() {
 
   return (
     <motion.header
+      ref={headerRef}
       initial={{ y: 0 }}
       // its own full height (border included), not a fixed 100px: the header is taller than that when
       // its bar wraps or the menu is open, and a fixed offset left a strip of it showing

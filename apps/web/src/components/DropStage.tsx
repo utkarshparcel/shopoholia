@@ -752,6 +752,12 @@ export function DropStage() {
   }, [step, geom, reduced]);
 
   const dwellSec = STEPS[step].dwell / 1000;
+  const last = step === STEPS.length - 1;
+  // What the Play/Pause button reports: whether anything is moving right now, not just the toggle.
+  // The ring only turns on the feed, and past it only autoplay moves the stage (it stops for good on
+  // the reader's own scrolling, and holds on the last step), so "playing" alone said Pause while
+  // nothing played.
+  const running = !reduced && playing && (step === 0 || (auto && !last));
   const ringW = geom.R * 2 + geom.w;
   const ringH = geom.h + 40;
   const drift = scene % 2 ? 1.5 : -1.5;
@@ -1292,6 +1298,8 @@ export function DropStage() {
                 type="button"
                 onClick={() => steer(STEP_BEAT[i])}
                 aria-pressed={i === step}
+                // the step name only shows from lg; below that the button would be named just "01"
+                aria-label={`${s.n} ${s.label}`}
                 className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
                   i === step ? 'bg-worn-paper/10 text-worn-paper' : 'text-worn-paper/70 hover:text-worn-paper'
                 }`}
@@ -1319,18 +1327,28 @@ export function DropStage() {
           >
             <ChevronRight size={16} />
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              // Play is working the stage: it arms autoplay. Pause stops the ring and autoplay.
-              setAuto(!playing);
-              setPlaying(!playing);
-            }}
-            aria-label={playing ? 'Pause' : 'Play'}
-            className="ml-1 grid h-11 w-11 place-items-center rounded-full bg-worn-gold text-worn-ink transition-transform active:scale-95 sm:h-9 sm:w-9"
-          >
-            {playing ? <Pause size={14} /> : <Play size={14} />}
-          </button>
+          {/* With reduced motion nothing ever plays (no ring, no autoplay), so there is nothing to pause */}
+          {reduced ? null : (
+            <button
+              type="button"
+              onClick={() => {
+                if (running) {
+                  // Pause stops the ring and autoplay.
+                  setPlaying(false);
+                  setAuto(false);
+                } else {
+                  // Play is working the stage: it arms autoplay (from the top if it had run out).
+                  setPlaying(true);
+                  if (last) steer(0);
+                  else setAuto(true);
+                }
+              }}
+              aria-label={running ? 'Pause' : 'Play'}
+              className="ml-1 grid h-11 w-11 place-items-center rounded-full bg-worn-gold text-worn-ink transition-transform active:scale-95 sm:h-9 sm:w-9"
+            >
+              {running ? <Pause size={14} /> : <Play size={14} />}
+            </button>
+          )}
           <span className="hidden items-center gap-1.5 whitespace-nowrap pl-2 pr-3 font-mono text-[12px] uppercase tracking-[0.18em] text-worn-paper/70 xl:inline-flex">
             <Mouse size={13} /> Scroll to step through
           </span>
