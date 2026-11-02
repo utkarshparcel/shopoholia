@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatMinor, merchantReturnUrl, sizeMapTipForBrand, REFUND_DESTINATION_LABELS, buildPortalFieldChecklist, needsRefundChase, REFUND_CHASE_STEPS, SIZE_RETURN_REASONS, type RefundDestination } from '@worn/shared';
 import { useRouter } from 'expo-router';
 
@@ -41,6 +41,7 @@ import { returnStatusTimeline } from '@/src/lib/returnTimeline';
 import { returnPollItemLabel } from '@/src/lib/socialPolls';
 import { trackEvent } from '@/src/lib/analytics';
 import { closetAlertText } from '@/src/lib/closetScreenState';
+import { shareText } from '@/src/lib/share';
 import { ProgressivePermPrompt } from '@/src/components/ProgressivePermPrompt';
 import { useClosetStore } from '@/src/stores/closet';
 import { useSessionStore } from '@/src/stores/session';
@@ -393,7 +394,7 @@ function ReturnDetail({
         }),
         returnRequestId: r.id,
       });
-      await Share.share({ message: poll.shareText });
+      await shareText({ message: poll.shareText });
       trackEvent('return_poll_created', { pollId: poll.id });
     } catch (e) {
       Alert.alert('Could not create poll', closetAlertText(e));
@@ -415,14 +416,10 @@ function ReturnDetail({
   }
 
   async function copyPortalField(label: string, value: string) {
-    try {
-      await Share.share({ message: value });
-      trackEvent('return_portal_field_copy', { returnId: r.id, field: label });
-      setPortalReady(true);
-    } catch {
-      Alert.alert(label, value);
-      setPortalReady(true);
-    }
+    // Never throws; without a share sheet (web) the value lands on the clipboard instead.
+    await shareText({ message: value, title: label });
+    trackEvent('return_portal_field_copy', { returnId: r.id, field: label });
+    setPortalReady(true);
   }
 
   return (
@@ -604,7 +601,7 @@ function ReturnDetail({
                   if (res.packet.requestUrl) {
                     await Linking.openURL(res.packet.requestUrl).catch(() => undefined);
                   } else {
-                    await Share.share({ message: res.packet.shareText });
+                    await shareText({ message: res.packet.shareText });
                   }
                   if (res.request.invoiceVaultHref) {
                     router.push(res.request.invoiceVaultHref as never);

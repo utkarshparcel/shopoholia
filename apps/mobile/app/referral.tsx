@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +15,7 @@ import { WEB_ORIGIN } from '@worn/shared';
 
 import { applyReferral, getMyReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
+import { shareText } from '@/src/lib/share';
 import { useSessionStore } from '@/src/stores/session';
 import {
   accent,
@@ -97,8 +97,9 @@ export default function ReferralScreen() {
     );
   }
 
+  // Never throws: where sharing isn't supported (web without navigator.share) it copies instead.
   const shareCode = async () => {
-    await Share.share({
+    await shareText({
       message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. ${WEB_ORIGIN}/r/${code}`,
     });
   };

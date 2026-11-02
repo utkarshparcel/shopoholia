@@ -67,4 +67,18 @@ describe('ReferralScreen copy', () => {
       message: expect.stringContaining('/r/WORN42'),
     });
   });
+
+  it('copies the invite instead of throwing where sharing is unsupported (web)', async () => {
+    vi.mocked(Share.share).mockRejectedValueOnce(
+      new Error('Share is not supported in this browser'),
+    );
+    mocks.setStringAsync.mockResolvedValue(true);
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    await renderLoaded();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Share'));
+    });
+    expect(mocks.setStringAsync).toHaveBeenCalledWith(expect.stringContaining('/r/WORN42'));
+    alert.mockRestore();
+  });
 });

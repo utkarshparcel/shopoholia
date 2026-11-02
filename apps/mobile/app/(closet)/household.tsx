@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   Alert,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -33,6 +32,7 @@ import { parseAmountInput } from '@/src/lib/amountInput';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { shareText } from '@/src/lib/share';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import {
   border,
@@ -245,7 +245,7 @@ export default function HouseholdScreen() {
                 size="sm"
                 variant="ghost"
                 onPress={() => {
-                  void Share.share({
+                  void shareText({
                     message: `Join our WORN household: ${buildHouseholdInviteUrl(h.inviteCode)}`,
                   });
                 }}

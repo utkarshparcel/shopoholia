@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   View,
@@ -25,6 +24,7 @@ import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/rev
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
 import { notify } from '@/src/lib/confirm';
+import { shareText } from '@/src/lib/share';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -117,15 +117,11 @@ export default function RevealScreen() {
   const handleShare = async () => {
     const ready = renders.find((r) => r.unlocked && r.imageUrl && r.status === 'DONE');
     trackEvent('share', { orderId: orderId ?? '', surface: 'reveal' });
-    try {
-      await Share.share({
-        message: ready?.imageUrl
-          ? `My WORN reveal — ${ready.imageUrl}`
-          : 'Just opened my WORN haul reveal.',
-      });
-    } catch {
-      // user dismissed share sheet
-    }
+    await shareText({
+      message: ready?.imageUrl
+        ? `My WORN reveal — ${ready.imageUrl}`
+        : 'Just opened my WORN haul reveal.',
+    });
   };
 
   const toggleCombineId = (id: string) => {

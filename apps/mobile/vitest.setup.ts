@@ -53,6 +53,11 @@ vi.mock('expo-sharing', () => ({
   shareAsync: vi.fn(async () => undefined),
 }));
 
+/** src/lib/share.ts falls back to the clipboard; the real module needs the native runtime. */
+vi.mock('expo-clipboard', () => ({
+  setStringAsync: vi.fn(async () => true),
+}));
+
 vi.mock('expo-haptics', () => ({
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },

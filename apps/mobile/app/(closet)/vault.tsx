@@ -5,7 +5,6 @@ import {
   AppState,
   type AppStateStatus,
   Linking,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -36,6 +35,7 @@ import {
   type WarrantyCategory,
 } from '@worn/shared';
 import { shareTextFile } from '@/src/lib/shareFile';
+import { shareText } from '@/src/lib/share';
 import { shareDataUrlFile } from '@/src/lib/shareDataUrlFile';
 
 import {
@@ -1386,7 +1386,7 @@ function CreditsKindTab({
             text: 'WhatsApp',
             onPress: () => {
               void Linking.openURL(wa.whatsAppUrl).catch(() => {
-                void Share.share({ message: wa.shareText });
+                void shareText({ message: wa.shareText });
               });
               trackEvent('found_money_wa_share', {
                 totalMinor: wa.totalMinor,
@@ -1401,7 +1401,7 @@ function CreditsKindTab({
                 {
                   text: 'Reels (blur)',
                   onPress: () => {
-                    void Share.share({ message: reels.shareText, title: reels.headline });
+                    void shareText({ message: reels.shareText, title: reels.headline });
                     trackEvent('found_money_share_card', {
                       totalMinor: reels.totalMinor,
                       accountCount: reels.accountCount,
@@ -1412,7 +1412,7 @@ function CreditsKindTab({
                 {
                   text: 'WA Status',
                   onPress: () => {
-                    void Share.share({ message: status.shareText, title: status.headline });
+                    void shareText({ message: status.shareText, title: status.headline });
                     trackEvent('found_money_share_card', {
                       totalMinor: plain.totalMinor,
                       accountCount: shareAccounts.length,
@@ -1423,7 +1423,7 @@ function CreditsKindTab({
                 {
                   text: 'Share sheet',
                   onPress: () => {
-                    void Share.share({ message: plain.shareText });
+                    void shareText({ message: plain.shareText });
                     trackEvent('found_money_share_card', {
                       totalMinor: plain.totalMinor,
                       accountCount: plain.accountCount,
@@ -2619,10 +2619,10 @@ function WarrantiesTab() {
                           dialogTitle: 'Share claim packet',
                         });
                       } catch {
-                        await Share.share({
+                        await shareText({
                           message: res.packet.shareText,
                           title: res.packet.subject,
-                        }).catch(() => undefined);
+                        });
                       }
                       if (res.claimUrl) {
                         Linking.openURL(res.claimUrl).catch(() => {
