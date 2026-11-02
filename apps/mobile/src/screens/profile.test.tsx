@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProfileScreen from '@/app/(tabs)/profile';
-import { deleteAvatar, getAvatar, logout } from '@/src/api/client';
+import { deleteAvatar, fetchOrders, getAvatar, logout, type OrderSummary } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 
 type AlertButton = { text: string; style?: string; onPress?: () => void };
@@ -12,6 +12,7 @@ type AlertButton = { text: string; style?: string; onPress?: () => void };
 const rn = vi.hoisted(() => ({
   alert: vi.fn<(title: string, message: string, buttons: AlertButton[]) => void>(),
   platform: { OS: 'ios' as 'ios' | 'web' },
+  push: vi.fn(),
 }));
 
 // The shared react-native mock has no FlatList or Alert, which this screen needs.
@@ -36,11 +37,15 @@ vi.mock('react-native', () => ({
   ),
   FlatList: ({
     data,
+    keyExtractor,
+    renderItem,
     ListEmptyComponent,
     ListFooterComponent,
     ListHeaderComponent,
   }: {
-    data: unknown[];
+    data: Array<{ id: string }>;
+    keyExtractor: (item: { id: string }) => string;
+    renderItem: (info: { item: { id: string }; index: number }) => ReactNode;
     ListEmptyComponent?: ReactNode;
     ListFooterComponent?: ReactNode;
     ListHeaderComponent?: ReactNode;
@@ -48,6 +53,11 @@ vi.mock('react-native', () => ({
     <div>
       {ListHeaderComponent}
       {data.length === 0 ? ListEmptyComponent : null}
+      {data.map((item, index) => (
+        <div data-testid="order-row" key={keyExtractor(item)}>
+          {renderItem({ item, index })}
+        </div>
+      ))}
       {ListFooterComponent}
     </div>
   ),
@@ -58,7 +68,7 @@ vi.mock('react-native', () => ({
 
 vi.mock('expo-router', () => ({
   useIsFocused: () => true,
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: rn.push, replace: vi.fn() }),
 }));
 
 vi.mock('@/src/components/ui', () => ({
@@ -104,6 +114,8 @@ function pressDeleteMyPhotos() {
 
 beforeEach(() => {
   rn.alert.mockReset();
+  rn.push.mockReset();
+  vi.mocked(fetchOrders).mockReset().mockResolvedValue({ orders: [] });
   rn.platform.OS = 'ios';
   vi.mocked(getAvatar).mockReset().mockResolvedValueOnce(READY).mockResolvedValue(NONE);
   vi.mocked(deleteAvatar).mockReset().mockResolvedValue(undefined);
@@ -184,5 +196,49 @@ describe('ProfileScreen: sign out', () => {
 
     expect(useSessionStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
     expect(logout).toHaveBeenCalledWith('refresh');
+  });
+});
+
+describe('ProfileScreen: orders', () => {
+  const order = (
+    id: string,
+    state: OrderSummary['state'],
+    placedAt: string,
+    tier: OrderSummary['tier'] = 'STANDARD',
+  ): OrderSummary => ({
+    id,
+    tier,
+    state,
+    coinTotal: 40,
+    placedAt,
+    rushAvailable: false,
+    rushCostCoins: 0,
+  });
+
+  it('lists every reveal-ready haul so each can be opened, with tier names in words', async () => {
+    vi.mocked(fetchOrders).mockResolvedValue({
+      orders: [
+        order('aaaaaaaa-transit', 'PACKED', '2026-06-18T12:05:00.000Z', 'SLOW_BURN'),
+        order('bbbbbbbb-ready-old', 'REVEAL_READY', '2026-06-18T12:00:00.000Z', 'EXPRESS'),
+        order('cccccccc-ready-new', 'REVEAL_READY', '2026-06-18T12:03:00.000Z'),
+      ],
+    });
+    renderProfile();
+
+    await waitFor(() => expect(screen.getAllByTestId('order-row')).toHaveLength(3));
+    expect(screen.getAllByText('Ready')).toHaveLength(2);
+    expect(screen.getByText('Slow burn delivery')).toBeTruthy();
+    expect(screen.getByText('Express delivery')).toBeTruthy();
+    expect(screen.queryByText(/SLOW_BURN/)).toBeNull();
+
+    // The older ready haul has its own row that opens its reveal.
+    fireEvent.click(screen.getByText('#bbbbbbbb'));
+    expect(rn.push).toHaveBeenLastCalledWith('/reveal/bbbbbbbb-ready-old');
+    fireEvent.click(screen.getByText('#aaaaaaaa'));
+    expect(rn.push).toHaveBeenLastCalledWith('/order/aaaaaaaa-transit');
+
+    // The banner opens the newest ready one.
+    fireEvent.click(screen.getByText('Open reveal →'));
+    expect(rn.push).toHaveBeenLastCalledWith('/reveal/cccccccc-ready-new');
   });
 });

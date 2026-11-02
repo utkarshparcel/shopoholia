@@ -20,6 +20,7 @@ import {
   TRACK_BUY_VAULT_HREF,
 } from '@/src/lib/bridgeWow';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { TIER_LABELS } from '@/src/lib/order-tracking';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -46,9 +47,9 @@ const TIERS: Array<{
   detail: string;
   icon: string;
 }> = [
-  { id: 'EXPRESS', label: 'Express', detail: 'Fastest arc — ~2 min in beta', icon: '▸' },
-  { id: 'STANDARD', label: 'Standard', detail: 'Balanced pace — beta ~5 min', icon: '→' },
-  { id: 'SLOW_BURN', label: 'Slow burn', detail: 'Maximum anticipation — beta ~8 min', icon: '⟳' },
+  { id: 'EXPRESS', label: TIER_LABELS.EXPRESS, detail: 'Fastest arc — ~2 min in beta', icon: '▸' },
+  { id: 'STANDARD', label: TIER_LABELS.STANDARD, detail: 'Balanced pace — beta ~5 min', icon: '→' },
+  { id: 'SLOW_BURN', label: TIER_LABELS.SLOW_BURN, detail: 'Maximum anticipation — beta ~8 min', icon: '⟳' },
 ];
 
 export default function CheckoutScreen() {

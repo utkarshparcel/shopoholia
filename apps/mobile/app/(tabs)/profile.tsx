@@ -9,6 +9,7 @@ import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { confirmAsync } from '@/src/lib/confirm';
+import { orderBadgeLabel, orderHref, profileOrderList, tierLabel } from '@/src/lib/order-tracking';
 import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -74,11 +75,8 @@ export default function ProfileScreen() {
   });
 
   const orders = ordersData?.orders ?? [];
-  const revealReady = orders.find((o) => o.state === 'REVEAL_READY');
-  const activeOrders = orders.filter((o) => o.state !== 'REVEAL_READY').slice(0, 5);
-  const listOrders = revealReady
-    ? [revealReady, ...activeOrders.filter((o) => o.id !== revealReady.id)].slice(0, 5)
-    : activeOrders;
+  // Every order is listed so each ready haul can be opened; the banner points at the newest one.
+  const { newestReady: revealReady, list: listOrders } = profileOrderList(orders);
 
   return (
     <FlatList
@@ -164,22 +162,18 @@ export default function ProfileScreen() {
       renderItem={({ item }) => (
         <Pressable
           accessibilityRole="button"
-          onPress={() =>
-            router.push(
-              item.state === 'REVEAL_READY' ? `/reveal/${item.id}` : `/order/${item.id}`,
-            )
-          }
+          onPress={() => router.push(orderHref(item))}
           style={({ pressed }) => [styles.orderCard, pressed && { opacity: 0.7 }]}
         >
           <View style={styles.orderCardTop}>
             <Text style={styles.orderId}>#{item.id.slice(0, 8)}</Text>
             <View style={[styles.stateBadge, item.state === 'REVEAL_READY' && styles.stateReady]}>
               <Text style={[styles.stateText, item.state === 'REVEAL_READY' && styles.stateReadyText]}>
-                {item.state === 'REVEAL_READY' ? 'Ready' : 'In transit'}
+                {orderBadgeLabel(item.state)}
               </Text>
             </View>
           </View>
-          <Text style={styles.orderTier}>{item.tier} delivery</Text>
+          <Text style={styles.orderTier}>{tierLabel(item.tier)} delivery</Text>
           <Text style={styles.orderTotal}>{item.coinTotal} coins</Text>
         </Pressable>
       )}
