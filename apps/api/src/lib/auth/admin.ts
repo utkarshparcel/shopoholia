@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-function secretsEqual(provided: string, expected: string): boolean {
+/** Compares a shared secret in constant time, so the comparison doesn't leak how much matched. */
+export function secretsEqual(provided: string, expected: string): boolean {
   const a = Buffer.from(provided, "utf8");
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length) return false;
