@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion, useInView, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useInView } from 'framer-motion';
+import { useReducedMotionSafe } from '@/lib/motion';
 import {
   ArrowRight,
   Bookmark,
@@ -226,7 +227,7 @@ const SHIMMER_FROM = { xPercent: -140, skewX: -18, autoAlpha: 0.95 };
 const SHIMMER_TO = { xPercent: 180, skewX: -18, autoAlpha: 0, duration: 0.85, ease: 'power2.out' };
 
 export function DropStage() {
-  const reduced = !!useReducedMotion();
+  const reduced = !!useReducedMotionSafe();
   const sectionRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const ringWrapRef = useRef<HTMLDivElement>(null);

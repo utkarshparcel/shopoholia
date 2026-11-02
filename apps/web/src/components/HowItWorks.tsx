@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { useReducedMotionSafe, reveal } from '@/lib/motion';
 import { Gift, Flame, ShoppingBag, Sparkles } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
 
@@ -59,7 +60,7 @@ export function HowItWorks() {
   const sectionRef = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   useEffect(() => {
     if (reduced) return;
@@ -122,10 +123,6 @@ export function HowItWorks() {
     return () => mm.revert();
   }, [reduced]);
 
-  const reducedAnim = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
-
   return (
     <section
       ref={sectionRef}
@@ -135,7 +132,7 @@ export function HowItWorks() {
     >
       <div className="flex min-h-screen flex-col justify-center py-20 lg:h-screen lg:py-0">
         <div className="section w-full">
-          <motion.div {...reducedAnim} variants={rise} custom={0} className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <motion.div {...reveal} variants={rise} custom={0} className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-[640px]">
               <p className="ornament font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
                 Coins, not cash

@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { motion, useReducedMotion, type Variants } from 'framer-motion';
+import { motion, type Variants } from 'framer-motion';
+import { reveal } from '@/lib/motion';
 import { ArrowRight, Mail } from 'lucide-react';
 import { CONTACT_EMAIL } from '@/lib/site';
 
@@ -17,10 +18,6 @@ const rise: Variants = {
 };
 
 export function ClosetCTA() {
-  const reduced = useReducedMotion();
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   return (
     <section id="early-access" className="relative scroll-mt-24 overflow-hidden bg-worn-ink text-worn-paper">
@@ -34,7 +31,7 @@ export function ClosetCTA() {
       />
       <div className="section section-py relative text-center">
         <motion.p
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0}
           className="mx-auto w-fit ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold"
@@ -42,18 +39,18 @@ export function ClosetCTA() {
           Worn Closet · early access
         </motion.p>
         <motion.h2
-          {...a}
+          {...reveal}
           variants={rise}
           custom={0.08}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(40px,6vw,88px)] leading-[1] tracking-tight text-balance"
         >
           Run the closet <em className="grad-text font-display">you already own.</em>
         </motion.h2>
-        <motion.p {...a} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
+        <motion.p {...reveal} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
           Worn Closet is the next chapter of Worn. Join the Closet list and you’ll hear first when it
           opens. Want the haul in the meantime? Worn Play is in early access now on iOS and Android.
         </motion.p>
-        <motion.div {...a} variants={rise} custom={0.24} className="mt-10 flex flex-wrap items-center justify-center gap-3">
+        <motion.div {...reveal} variants={rise} custom={0.24} className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <a
             href={`mailto:${CONTACT_EMAIL}?subject=Worn%20Closet%20early%20access`}
             className="inline-flex min-h-[48px] items-center gap-2 rounded-pill bg-worn-paper px-7 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"

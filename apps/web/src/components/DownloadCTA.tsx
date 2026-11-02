@@ -5,7 +5,6 @@ import {
   motion,
   useMotionTemplate,
   useMotionValue,
-  useReducedMotion,
 } from 'framer-motion';
 import { ArrowRight, Mail } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
@@ -32,7 +31,6 @@ function PlayIcon() {
 
 export function DownloadCTA() {
   const sectionRef = useRef<HTMLElement>(null);
-  const reduced = useReducedMotion();
 
   // cursor glow
   const gx = useMotionValue(50);
@@ -46,9 +44,9 @@ export function DownloadCTA() {
     gy.set(((e.clientY - r.top) / r.height) * 100);
   };
 
-  const redAnim = reduced
-    ? { initial: { opacity: 1, y: 0 } as const }
-    : { initial: { opacity: 0, y: 40 } as const, whileInView: { opacity: 1, y: 0 } as const, viewport: { once: true, margin: '-80px' } as const, transition: { duration: 1, ease: EASE } };
+  // Same props in every mode (MotionConfig makes the rise instant for reduced motion), so the
+  // server HTML and the hydrating render match.
+  const redAnim = { initial: { opacity: 0, y: 40 } as const, whileInView: { opacity: 1, y: 0 } as const, viewport: { once: true, margin: '-80px' } as const, transition: { duration: 1, ease: EASE } };
 
   return (
     <section
@@ -77,7 +75,8 @@ export function DownloadCTA() {
           backgroundSize: '26px 26px',
         }}
       />
-      {reduced ? null : <GoldParticles density={44} />}
+      {/* always rendered; it stays empty for reduced motion (decided in its effect) */}
+      <GoldParticles density={44} />
       <motion.div aria-hidden="true" className="absolute inset-0" style={{ background: bg }} />
 
       <div className="section relative z-10 text-center">

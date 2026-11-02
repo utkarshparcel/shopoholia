@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { DM_Sans, DM_Serif_Display, DM_Mono } from 'next/font/google';
 import './globals.css';
 import { SmoothScroll } from '@/components/providers/SmoothScroll';
+import { MotionProvider } from '@/components/providers/MotionProvider';
 import { ScrollProgress } from '@/components/ScrollProgress';
 import { GrainOverlay } from '@/components/GrainOverlay';
 import { SITE_URL } from '@/lib/site';
@@ -108,7 +109,9 @@ export default function RootLayout({
         >
           Skip to main content
         </a>
-        <SmoothScroll>{children}</SmoothScroll>
+        <MotionProvider>
+          <SmoothScroll>{children}</SmoothScroll>
+        </MotionProvider>
       </body>
     </html>
   );

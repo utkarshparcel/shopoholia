@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useReducedMotion } from 'framer-motion';
+import { useReducedMotionSafe } from '@/lib/motion';
 import { Mail } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
 import { CONTACT_EMAIL, closetHref } from '@/lib/site';
@@ -29,7 +29,7 @@ const COLS = [
 
 export function Footer() {
   const wordRef = useRef<HTMLDivElement>(null);
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
 
   // giant wordmark drifts up as the footer enters
   useClientReveal(wordRef, !!reduced);

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion, type Transition, type Variants } from 'framer-motion';
+import { AnimatePresence, motion, type Transition, type Variants } from 'framer-motion';
+import { useReducedMotionSafe, reveal as entrance } from '@/lib/motion';
 import { ArrowDown, CalendarDays } from 'lucide-react';
 import { stepSpace, useScrollSteps } from './useScrollSteps';
 
@@ -181,16 +182,12 @@ function Drawer({
 }
 
 export function ClosetWeek() {
-  const reduced = useReducedMotion();
+  const reduced = useReducedMotionSafe();
   const [open, setOpen] = useState<DrawerId | null>(null);
   const [prev, setPrev] = useState<DrawerId | null>(null);
   const [slotW, setSlotW] = useState(0);
   const stackRef = useRef<HTMLDivElement>(null);
   const lastReveal = useRef(0);
-
-  const a = reduced
-    ? { initial: 'visible' as const }
-    : { initial: 'hidden' as const, whileInView: 'visible' as const, viewport: { once: true, margin: '-80px' } as const };
 
   useEffect(() => {
     const el = stackRef.current;
@@ -226,7 +223,7 @@ export function ClosetWeek() {
   return (
     <section id="week" className="relative scroll-mt-24 overflow-x-clip">
       <div className="section section-py">
-        <motion.div {...a} variants={rise} custom={0}>
+        <motion.div {...entrance} variants={rise} custom={0}>
           <p className="ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold-deep">Planned every Sunday</p>
           <h2 className="mt-6 max-w-[16ch] font-display text-[clamp(32px,4.5vw,56px)] leading-[1.04] tracking-[-0.015em] text-worn-ink text-balance">
             Next week is already <em className="grad-text font-display">folded.</em>
@@ -245,7 +242,7 @@ export function ClosetWeek() {
             className="step-stick sticky grid grid-cols-[minmax(0,13fr)_minmax(0,12fr)] items-center gap-3 sm:items-start sm:gap-6 lg:grid-cols-2 lg:items-center lg:gap-x-16"
           >
             {/* The dresser, inset on phones so its top stays inside the column */}
-            <motion.div {...a} variants={rise} custom={0.15}>
+            <motion.div {...entrance} variants={rise} custom={0.15}>
               <div className="relative mx-auto w-full max-w-[460px] px-[8px] sm:px-0" style={{ paddingBottom: Math.max(0, reveal - 44) }}>
                 {/* window light on the wall behind it */}
                 <div
@@ -317,7 +314,7 @@ export function ClosetWeek() {
             </motion.div>
 
             {/* Day buttons and the day's card */}
-            <motion.div {...a} variants={rise} custom={0.25}>
+            <motion.div {...entrance} variants={rise} custom={0.25}>
               <div role="group" aria-label="Open a drawer" className="hidden grid-cols-4 gap-1.5 sm:grid lg:grid-cols-[repeat(7,minmax(0,1fr))_auto]">
                 {ORDER.map((id) => (
                   <button
