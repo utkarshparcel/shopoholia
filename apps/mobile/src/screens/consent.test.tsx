@@ -6,8 +6,17 @@ import ConsentScreen from '@/app/(closet)/consent';
 const revoke = vi.fn(async (_scope: string) => ({}));
 const grant = vi.fn(async (_input: { scope: string; source: string }) => ({}));
 
+const routerMock = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+  back: vi.fn(),
+  canGoBack: vi.fn(() => true),
+  params: {} as Record<string, string>,
+}));
+
 vi.mock('expo-router', () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => routerMock,
+  useLocalSearchParams: () => routerMock.params,
 }));
 
 vi.mock('expo-web-browser', () => ({
@@ -52,6 +61,32 @@ describe('ConsentScreen', () => {
   beforeEach(() => {
     revoke.mockClear();
     grant.mockClear();
+    routerMock.replace.mockClear();
+    routerMock.back.mockClear();
+    routerMock.params = {};
+  });
+
+  it('approving returns to the screen that opened consent, not the first tab', async () => {
+    routerMock.params = { returnTo: '/(closet)/onboarding' };
+    render(<ConsentScreen />);
+    fireEvent.click(screen.getByText(/☐ Money in your Vault/));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Approve & connect'));
+    });
+    expect(grant).toHaveBeenCalledWith({ scope: 'FINANCIAL', source: 'consent-center' });
+    expect(routerMock.back).not.toHaveBeenCalled();
+    expect(routerMock.replace).toHaveBeenCalledWith('/(closet)/onboarding');
+  });
+
+  it('falls back to the Vault without (or with a foreign) returnTo, on approve and cancel', async () => {
+    routerMock.params = { returnTo: 'https://evil.example/' };
+    render(<ConsentScreen />);
+    fireEvent.click(screen.getByText(/☐ Money in your Vault/));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Approve & connect'));
+    });
+    expect(routerMock.back).not.toHaveBeenCalled();
+    expect(routerMock.replace).toHaveBeenLastCalledWith('/(closet)/vault');
   });
 
   it('ticks nothing for the user, so approving needs an explicit choice', () => {

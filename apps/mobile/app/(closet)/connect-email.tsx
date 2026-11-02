@@ -8,6 +8,7 @@ import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { createIngestionSource } from '@/src/api/client';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { consentHref } from '@/src/lib/consentReturn';
 import { toAccountHealthRow } from '@/src/lib/accountHealth';
 import {
   VAULT_FOUND_MONEY_HREF,
@@ -192,7 +193,7 @@ export default function ConnectEmailScreen() {
       <Text style={styles.hint}>{limitedUse.ctaHint}</Text>
       <Button
         label="Review consent first"
-        onPress={() => router.push('/(closet)/consent' as never)}
+        onPress={() => router.push(consentHref('/(closet)/connect-email') as never)}
         variant="ghost"
         block
         disabled={busy}

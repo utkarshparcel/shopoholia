@@ -51,6 +51,12 @@ type ClosetState = {
   /** W022 — one-shot loyalty / coupon first-add celebration. */
   loyaltyJustAdded: boolean;
   loyaltyCelebrationKind: 'loyalty' | 'coupons' | null;
+  /**
+   * Gift card typed in Closet onboarding while it waits for the FINANCIAL consent, so the form
+   * comes back filled in. Memory only: never written to storage.
+   */
+  giftCardDraft: { merchant: string; balance: string } | null;
+  setGiftCardDraft: (draft: { merchant: string; balance: string } | null) => void;
   connectEmail: (email: string) => void;
   markJustConnected: (source?: DelightSource) => void;
   clearJustConnected: () => void;
@@ -160,6 +166,7 @@ export const useClosetStore = create<ClosetState>()(
       soonestFocusMode: false,
       loyaltyJustAdded: false,
       loyaltyCelebrationKind: null,
+      giftCardDraft: null,
       connectEmail: (email) =>
         set((state) => ({
           connectedSources: [...state.connectedSources, email],
@@ -235,8 +242,10 @@ export const useClosetStore = create<ClosetState>()(
           notificationsGranted: granted,
           deadlineSetupPending: false,
         }),
+      setGiftCardDraft: (draft) => set({ giftCardDraft: draft }),
       clear: () =>
         set({
+          giftCardDraft: null,
           connectedSources: [],
           justConnected: false,
           celebrationSource: null,
