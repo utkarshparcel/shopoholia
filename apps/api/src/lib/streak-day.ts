@@ -1,8 +1,8 @@
-import { addDaysToKey, isValidTimeZone, localDateKey } from "@worn/shared";
+import { addDaysToKey, localDateKey, resolveTimeZone } from "@worn/shared";
 
-/** The zone a streak day is counted in: the user's, or UTC when it is missing or not one `Intl` knows. */
+/** The zone a streak day is counted in: the user's, or the app default (as everywhere else) when it is missing or unknown. */
 export function streakTimeZone(timeZone: string | null | undefined): string {
-  return isValidTimeZone(timeZone) ? timeZone : "UTC";
+  return resolveTimeZone(timeZone);
 }
 
 export type StreakDay = {
