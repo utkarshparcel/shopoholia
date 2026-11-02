@@ -5,7 +5,12 @@ import { ArrowRight, Check, Mail } from 'lucide-react';
 import { CONTACT_EMAIL, WAITLIST_URL } from '@/lib/site';
 
 type List = 'play' | 'closet';
-type State = { kind: 'idle' } | { kind: 'sending' } | { kind: 'done' } | { kind: 'error'; message: string };
+type State =
+  | { kind: 'idle' }
+  | { kind: 'sending' }
+  | { kind: 'done' }
+  // `mail`: end the message with a mailto link to CONTACT_EMAIL, the way round a failed sign-up
+  | { kind: 'error'; message: string; mail?: boolean };
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -67,7 +72,8 @@ export function WaitlistForm({ list }: { list: List }) {
     } catch {
       setState({
         kind: 'error',
-        message: `We couldn’t add you just now. Try again, or email ${CONTACT_EMAIL}.`,
+        message: 'We couldn’t add you just now. Try again, or email',
+        mail: true,
       });
     }
   };
@@ -114,7 +120,25 @@ export function WaitlistForm({ list }: { list: List }) {
         </button>
       </div>
       <p id={`${id}-note`} role="status" className="mt-3 min-h-[1.5em] text-center text-caption text-worn-paper/70">
-        {state.kind === 'error' ? state.message : 'One email when your invite is ready. No spam.'}
+        {state.kind === 'error' ? (
+          <>
+            {state.message}
+            {state.mail ? (
+              <>
+                {' '}
+                <a
+                  href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(copy.subject)}`}
+                  className="text-worn-gold underline underline-offset-2 hover:text-worn-paper"
+                >
+                  {CONTACT_EMAIL}
+                </a>
+                .
+              </>
+            ) : null}
+          </>
+        ) : (
+          'One email when your invite is ready. No spam.'
+        )}
       </p>
     </form>
   );

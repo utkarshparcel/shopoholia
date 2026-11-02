@@ -50,9 +50,9 @@ const STEPS: Step[] = [
   {
     n: '04',
     title: 'Spend on the reveal',
-    copy: 'Two scenes come free. Unlock Street, Editorial dark, Night or Candid for 50 each. A new render is 50. Combining two pieces into one look is 75.',
+    copy: 'Two scenes come free. Unlock Street, Editorial dark, Night or Candid for 50 each. A new render is 50. Combine up to four pieces into one look for 75.',
     icon: Sparkles,
-    stat: 'Scene 50 · Render 50 · Two pieces 75',
+    stat: 'Scene 50 · Render 50 · Combine 75',
   },
 ];
 
@@ -130,7 +130,10 @@ export function HowItWorks() {
       aria-label="Coins, not cash"
       className="relative overflow-hidden bg-worn-paper"
     >
-      <div className="flex min-h-screen flex-col justify-center py-20 lg:h-screen lg:py-0">
+      {/* The pin only runs with motion allowed (the effect above). With reduced motion every lg: layout
+          rule below is motion-safe, so the cards fall back to a grid that fits the window instead of one
+          row wider than it, clipped by the section's overflow-hidden with nothing to scroll it along. */}
+      <div className="flex min-h-screen flex-col justify-center py-20 lg:motion-safe:h-screen lg:motion-safe:py-0">
         <div className="section w-full">
           <motion.div {...reveal} variants={rise} custom={0} className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-[640px]">
@@ -141,22 +144,22 @@ export function HowItWorks() {
                 Coins, not cash. <em className="grad-text">Spent like the real thing.</em>
               </h2>
             </div>
-            <p className="hidden font-mono text-[12px] uppercase tracking-[0.25em] text-worn-muted lg:block">
+            <p className="hidden font-mono text-[12px] uppercase tracking-[0.25em] text-worn-muted lg:motion-safe:block">
               Keep scrolling →
             </p>
           </motion.div>
         </div>
 
-        {/* horizontal track (desktop) / stacked list (mobile) */}
+        {/* horizontal track (desktop) / two-by-two grid (desktop, reduced motion) / stacked list (mobile) */}
         <div className="section mt-14 w-full lg:mt-20">
           <div
             ref={trackRef}
-            className="flex flex-col gap-8 lg:w-max lg:flex-row lg:gap-10"
+            className="flex flex-col gap-8 lg:motion-safe:w-max lg:motion-safe:flex-row lg:motion-safe:gap-10 lg:motion-reduce:grid lg:motion-reduce:grid-cols-2"
           >
             {STEPS.map((s) => (
               <article
                 key={s.n}
-                className="relative flex w-full flex-col justify-between rounded-lg border border-worn-rule bg-worn-surface p-8 shadow-card sm:p-10 lg:h-[54vh] lg:max-h-[560px] lg:w-[62vw] lg:max-w-[720px] lg:flex-none"
+                className="relative flex w-full flex-col justify-between rounded-lg border border-worn-rule bg-worn-surface p-8 shadow-card sm:p-10 lg:motion-safe:h-[54vh] lg:motion-safe:max-h-[560px] lg:motion-safe:w-[62vw] lg:motion-safe:max-w-[720px] lg:motion-safe:flex-none"
               >
                 <div className="flex items-start justify-between">
                   <span aria-hidden="true" className="font-display text-[88px] leading-[0.85] text-stroke-ink">
@@ -179,7 +182,7 @@ export function HowItWorks() {
         </div>
 
         {/* progress hairline */}
-        <div className="section mt-12 hidden w-full lg:block" aria-hidden="true">
+        <div className="section mt-12 hidden w-full lg:motion-safe:block" aria-hidden="true">
           <div className="h-px w-full bg-worn-rule">
             <div
               ref={progressRef}

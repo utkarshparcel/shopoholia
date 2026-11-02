@@ -25,6 +25,7 @@ export function Navigation() {
   const [reducedMotion, setReducedMotion] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
   // Whether closing the menu should hand focus back to its button (not after following a link)
   const returnFocus = useRef(false);
 
@@ -70,6 +71,8 @@ export function Navigation() {
   }, []);
 
   // Open: focus the first link. Closed by Escape or the button: focus goes back to the button.
+  // Tabbing (or clicking) out of the header into the page closes it too, leaving focus where it
+  // went, so the open menu never sits over the content a keyboard user is now in.
   useEffect(() => {
     if (mobileOpen) {
       menuRef.current?.querySelector<HTMLElement>('a, button')?.focus();
@@ -79,8 +82,15 @@ export function Navigation() {
           closeMenu(true);
         }
       };
+      const onFocusIn = (e: FocusEvent) => {
+        if (e.target instanceof Node && !headerRef.current?.contains(e.target)) closeMenu(false);
+      };
       document.addEventListener('keydown', onKey);
-      return () => document.removeEventListener('keydown', onKey);
+      document.addEventListener('focusin', onFocusIn);
+      return () => {
+        document.removeEventListener('keydown', onKey);
+        document.removeEventListener('focusin', onFocusIn);
+      };
     }
     if (returnFocus.current) {
       returnFocus.current = false;
@@ -92,8 +102,11 @@ export function Navigation() {
 
   return (
     <motion.header
+      ref={headerRef}
       initial={{ y: 0 }}
-      animate={{ y: visible ? 0 : -100 }}
+      // its own full height (border included), not a fixed 100px: the header is taller than that when
+      // its bar wraps or the menu is open, and a fixed offset left a strip of it showing
+      animate={{ y: visible ? 0 : '-100%' }}
       transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
       // keyboard users tabbing into a hidden header get it back
       onFocusCapture={() => setHidden(false)}
@@ -121,8 +134,9 @@ export function Navigation() {
             Worn
           </Link>
 
-          {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-8">
+          {/* Desktop nav: from lg only. Four links, the product switch and the button need ~880px; at md
+              they wrapped and pushed into the logo, so tablets get the menu button instead. */}
+          <div className="hidden lg:flex items-center gap-8">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
@@ -142,8 +156,8 @@ export function Navigation() {
             </Link>
           </div>
 
-          {/* Mobile: the product switch stays visible beside the menu */}
-          <div className="flex items-center gap-2 md:hidden">
+          {/* Phones and tablets: the product switch stays visible beside the menu */}
+          <div className="flex items-center gap-2 lg:hidden">
             <SiteSwitch current="play" />
             <button
               ref={menuButtonRef}
@@ -169,7 +183,7 @@ export function Navigation() {
               exit={{ opacity: 0, height: 0 }}
               // framer-motion durations are in seconds
               transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeOut' }}
-              className="md:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
+              className="lg:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
             >
               <div className="flex flex-col gap-4">
                 {navLinks.map((link) => (

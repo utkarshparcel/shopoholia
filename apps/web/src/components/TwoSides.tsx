@@ -37,13 +37,13 @@ export function TwoSides() {
         </motion.p>
 
         <div className="mt-14 grid gap-5 lg:grid-cols-2">
-          {/* Play: in the app today */}
+          {/* Play: coming first (not on any store yet, so no present-tense availability) */}
           <motion.div
             {...reveal(0.12)}
             className="group relative overflow-hidden rounded-card border border-worn-rule bg-worn-surface p-6 shadow-pop sm:p-10"
           >
             <span className="inline-flex items-center gap-2 rounded-pill border border-worn-gold/40 bg-worn-gold-tint px-3 py-1 font-mono text-micro uppercase tracking-[0.12em] text-worn-gold-deep sm:tracking-[0.18em]">
-              <Sparkles size={12} /> Worn Play · in the app today
+              <Sparkles size={12} /> Worn Play · coming soon
             </span>
             <h3 className="mt-6 font-display text-[clamp(28px,3.4vw,44px)] leading-tight text-worn-ink">
               The haul, without the parcel.

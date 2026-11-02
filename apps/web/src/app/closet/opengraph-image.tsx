@@ -9,7 +9,7 @@ export const contentType = 'image/png';
 const SAMPLES = [
   { kicker: 'Sample · wool coat', title: '48 wears', note: 'Cost per wear falling' },
   { kicker: 'Sample · café gift card', title: 'Expiring this month', note: 'Reminder set' },
-  { kicker: 'Sample · linen trousers', title: 'Return window: 4 days', note: 'Refund tracked' },
+  { kicker: 'Sample · linen trousers', title: '4 days to return', note: 'Refund tracked' },
 ];
 
 /* the share card: Closet's own headline on warm paper, so a shared link never reads as Worn Play */

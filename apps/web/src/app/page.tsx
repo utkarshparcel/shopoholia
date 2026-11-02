@@ -38,7 +38,8 @@ const STRUCTURED_DATA = [
     description: DESCRIPTION,
     operatingSystem: 'iOS, Android',
     applicationCategory: 'LifestyleApplication',
-    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    // No `offers` until it is on a store: an Offer says it can be had now, and it can't yet. At launch
+    // add { '@type': 'Offer', price: '0', priceCurrency: 'INR' } (free, priced for the Indian market).
     publisher: { '@type': 'Organization', name: 'Worn', url: SITE_URL },
   },
   {

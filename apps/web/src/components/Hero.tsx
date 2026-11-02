@@ -77,7 +77,7 @@ function FeedScreen({ reduced }: { reduced: boolean }) {
       <div className="mt-3 flex items-end justify-between px-5">
         <div>
           <p className="font-mono text-[8px] uppercase tracking-[0.2em] text-worn-muted">Curated for you</p>
-          <p className="mt-1 font-display text-[22px] leading-none">Today&apos;s edit</p>
+          <p className="mt-1 font-display text-[22px] leading-none">Tonight&apos;s edit</p>
         </div>
         <span className="font-display text-[11px] tracking-[0.3em] text-worn-gold">WORN</span>
       </div>

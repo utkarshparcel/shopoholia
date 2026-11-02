@@ -89,7 +89,7 @@ export function DownloadCTA() {
 
         <motion.h2
           {...redAnim}
-          className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
+          className="mx-auto mt-6 max-w-[16ch] text-balance font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
         >
           Your first haul is <em className="grad-text-ink">on us.</em>
         </motion.h2>
@@ -135,7 +135,7 @@ export function DownloadCTA() {
           </li>
         </motion.ul>
         <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
-          Free to download · Optional coin packs in-app · Delete your photos any time
+          Free when it launches · Optional coin packs in-app · Delete your photos any time
         </p>
       </div>
     </section>

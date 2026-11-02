@@ -21,7 +21,12 @@ function anchorY(el: HTMLElement) {
   const head = header ? header.offsetTop + header.offsetHeight + 12 : 0;
   const pad = el.matches('.section-py') ? el : el.querySelector<HTMLElement>(':scope > .section-py');
   const padTop = pad ? parseFloat(getComputedStyle(pad).paddingTop) || 0 : 0;
-  const top = el.getBoundingClientRect().top + window.scrollY - Math.max(0, head - padTop);
+  // A GSAP-pinned section (the demo, the Coins track) lives in a .pin-spacer. While pinned it is
+  // position: fixed, and once the page is past the pin it is translated to the pin's end, so its own
+  // box says where the pin finished, not where it starts: a jump from below landed on the last step.
+  // The spacer stays in flow and its top is where the pin begins, so measure that instead.
+  const spacer = el.parentElement?.classList.contains('pin-spacer') ? el.parentElement : null;
+  const top = (spacer ?? el).getBoundingClientRect().top + window.scrollY - Math.max(0, head - padTop);
   const max = document.documentElement.scrollHeight - window.innerHeight;
   return Math.max(0, Math.min(max, Math.round(top)));
 }
@@ -29,14 +34,43 @@ function anchorY(el: HTMLElement) {
 /* While a jump runs <html> carries this, and a data-autohide header keeps itself hidden. */
 const JUMP = 'data-anchor-jump';
 let jumpTimer: ReturnType<typeof setTimeout> | undefined;
+let jumpGen = 0;
+/* scrollY as the last scroll event reported it; differs from window.scrollY while one is still due */
+let seenY = 0;
+/* The jump's time is up but its last move hasn't been reported yet: end it on that scroll event */
+let endOnScroll = false;
 function jumpStart(ms: number) {
   document.documentElement.setAttribute(JUMP, '');
+  jumpGen++;
+  endOnScroll = false;
   clearTimeout(jumpTimer);
-  jumpTimer = setTimeout(jumpEnd, ms); // never outlives the glide, even if it is cut short
+  jumpTimer = setTimeout(jumpSettle, ms); // never outlives the glide, even if it is cut short
+}
+/**
+ * Scroll events go out with the next rendered frame, and on a busy page that frame can come after the
+ * timer: the header then read the glide's last step (often tens of px upward) as the reader scrolling
+ * up, and slid back in over the section it had just landed on. If a scroll event is still due, the
+ * jump ends right after it (a backstop timer covers one that never comes).
+ */
+function jumpSettle() {
+  if (window.scrollY !== seenY) {
+    endOnScroll = true;
+    jumpTimer = setTimeout(jumpEnd, 500);
+    return;
+  }
+  jumpEnd();
 }
 function jumpEnd() {
   clearTimeout(jumpTimer);
+  endOnScroll = false;
   document.documentElement.removeAttribute(JUMP);
+}
+function onScrollSeen() {
+  seenY = window.scrollY;
+  if (!endOnScroll) return;
+  // after every other listener (the header's) has handled this event as part of the jump
+  const gen = jumpGen;
+  setTimeout(() => gen === jumpGen && endOnScroll && jumpEnd(), 0);
 }
 
 /** Moves keyboard focus to the target without scrolling, as a fragment jump should. */
@@ -127,9 +161,15 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     // defaultPrevented and leaves the scroll to us.
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      const a = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('a[href^="#"]') : null;
-      const hash = a?.getAttribute('href');
-      if (!a || !hash || hash.length < 2 || a.target) return;
+      const a = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('a[href]') : null;
+      if (!a || a.target || a.hasAttribute('download')) return;
+      // Any link to a fragment of this page, however it is written: "#grwm", and also the footer's
+      // "/#grwm" while already on "/" (which the browser would otherwise jump to natively, with no
+      // room for the header). The same "/#grwm" on /closet resolves to another page and is left alone.
+      const url = new URL(a.href, location.href);
+      if (url.origin !== location.origin || url.pathname !== location.pathname || url.search !== location.search) return;
+      const hash = url.hash;
+      if (hash.length < 2) return;
       const el = document.getElementById(decodeURIComponent(hash.slice(1)));
       if (!el) return;
       e.preventDefault();
@@ -139,6 +179,8 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
       focusTarget(el);
     };
     window.addEventListener('click', onClick, true);
+    seenY = window.scrollY;
+    window.addEventListener('scroll', onScrollSeen, { passive: true });
 
     // A hash typed into the address bar, or Back/Forward between anchors: the browser has already
     // jumped by scroll-margin; settle it on the same mark a click would.
@@ -182,6 +224,7 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     return () => {
       clearTimeout(t);
       window.removeEventListener('click', onClick, true);
+      window.removeEventListener('scroll', onScrollSeen);
       window.removeEventListener('hashchange', onHashChange);
       window.removeEventListener('wheel', takeOver);
       window.removeEventListener('touchstart', takeOver);
