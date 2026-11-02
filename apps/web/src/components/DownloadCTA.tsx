@@ -6,10 +6,10 @@ import {
   useMotionTemplate,
   useMotionValue,
 } from 'framer-motion';
-import { ArrowRight, Mail } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
 import { Magnetic } from './Magnetic';
-import { CONTACT_EMAIL } from '@/lib/site';
+import { WaitlistForm } from './WaitlistForm';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -84,7 +84,7 @@ export function DownloadCTA() {
           {...redAnim}
           className="ml-auto mr-auto w-fit ornament font-mono text-micro uppercase tracking-[0.28em] text-worn-gold"
         >
-          Early access · free to download
+          Early access · coming to iPhone and Android
         </motion.p>
 
         <motion.h2
@@ -98,22 +98,14 @@ export function DownloadCTA() {
           {...redAnim}
           className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70"
         >
-          Worn is in early access on iOS and Android through TestFlight and Play
-          internal testing. Sign in with Google, add one photo for your avatar,
-          and start hauling with 500 welcome coins.
+          Worn is coming to iPhone and Android. Join the list and we’ll send your
+          invite when early access opens: sign in with Google, add one photo for
+          your avatar, and start hauling with 500 welcome coins.
         </motion.p>
 
         {/* actions */}
-        <motion.div {...redAnim} className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          <Magnetic strength={0.25}>
-            <a
-              href={`mailto:${CONTACT_EMAIL}?subject=Worn%20Play%20early%20access`}
-              className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-7 py-3.5 font-sans text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
-            >
-              <Mail size={15} />
-              Request early access
-            </a>
-          </Magnetic>
+        <motion.div {...redAnim} className="mt-10 flex flex-col items-center gap-4">
+          <WaitlistForm list="play" />
           <Magnetic strength={0.25}>
             <a
               href="#grwm"
@@ -125,27 +117,23 @@ export function DownloadCTA() {
           </Magnetic>
         </motion.div>
 
-        {/* where the beta runs: status labels, not store buttons (there is nothing to tap yet) */}
+        {/* where it's coming: status labels, not store buttons (there is nothing to tap yet) */}
         <motion.ul
           {...redAnim}
-          aria-label="Beta channels"
+          aria-label="Platforms"
           className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-[12px] uppercase tracking-[0.16em] text-worn-paper/75"
         >
           <li className="inline-flex items-center gap-2">
             <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-worn-gold" />
             <AppleIcon />
-            Beta on TestFlight
+            Coming to iPhone
           </li>
           <li className="inline-flex items-center gap-2">
             <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-worn-gold" />
             <PlayIcon />
-            Beta on Play internal testing
+            Coming to Android
           </li>
         </motion.ul>
-        <p className="mt-4 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
-          App Store and Google Play listings to follow
-        </p>
-
         <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
           Free to download · Optional coin packs in-app · Delete your photos any time
         </p>
