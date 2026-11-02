@@ -10,6 +10,7 @@ import {
   restorePersistedQueries,
   startQueryPersistence,
 } from '@/src/api/queryPersistence';
+import { useActiveSurfaceSync } from '@/src/hooks/useActiveSurfaceSync';
 import { usePushNotifications } from '@/src/hooks/push-notifications';
 import { useTimeZoneSync } from '@/src/hooks/useTimeZoneSync';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
@@ -176,6 +177,9 @@ export default function RootLayout() {
 
     restore();
   }, [ready, router]);
+
+  // After the restore above: the stored side follows the screen from here on.
+  useActiveSurfaceSync(FEATURE_CLOSET && ready);
 
   // Same providers either way, so the theme (and its font loading) stays mounted.
   if (!ready) {

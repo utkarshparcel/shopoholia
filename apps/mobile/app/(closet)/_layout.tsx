@@ -3,12 +3,14 @@ import { View } from 'react-native';
 
 import { BottomNav, type BottomNavItem } from '@/src/components/ui';
 import { ClosetScreenFocusProvider } from '@/src/hooks/closet/screenFocus';
+import type { ClosetTabKey } from '@/src/lib/surfaceRoute';
 import { bg } from '@/src/theme/tokens';
 
 /** A render error in one Closet screen shows a retry here instead of taking down the whole app (MOB 24). */
 export { RootErrorBoundary as ErrorBoundary } from '@/src/components/RootErrorBoundary';
 
-const NAV_ITEMS: BottomNavItem[] = [
+// Typed to the keys the surface pill shows on (src/lib/surfaceRoute.ts).
+const NAV_ITEMS: (BottomNavItem & { key: ClosetTabKey })[] = [
   { key: 'today', label: 'Today', icon: '◷' },
   { key: 'wardrobe', label: 'Wardrobe', icon: '▤' },
   { key: 'vault', label: 'Vault', icon: '◰' },
