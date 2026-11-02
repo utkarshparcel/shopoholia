@@ -4,6 +4,7 @@ import type {
   PageResponse,
   RenderScenario,
   RenderStatus,
+  RevealRating,
   StateEta,
   UserPrefs,
   UserPrefsPatch,
@@ -320,6 +321,8 @@ export type OrderRecord = {
   placedAt: Date;
   stateEta: StateEta;
   revealReadyAt: Date | null;
+  /** The buyer's reveal rating, null until rated. Never stored in stateEta (ETAs only). */
+  revealRating: RevealRating | null;
   idempotencyKey: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -1034,11 +1037,12 @@ export interface Repositories {
     sellerMap: Map<string, SellerRecord>;
   }>;
 
+  /** Sets the order's reveal rating (a repeat replaces it). Leaves stateEta untouched. */
   recordRevealRating(input: {
     orderId: string;
     userId: string;
-    rating: string;
-  }): Promise<void>
+    rating: RevealRating;
+  }): Promise<void>;
 
   recordPushEvent(input: RecordPushEventInput): Promise<PushEventRecord>;
   /**

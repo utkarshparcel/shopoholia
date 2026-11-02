@@ -127,6 +127,13 @@
       "when": 1793595109910,
       "tag": "0017_tailoring_review_per_order",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793602929195,
+      "tag": "0018_reveal_rating",
+      "breakpoints": true
     }
   ]
 }

@@ -1502,6 +1502,7 @@ export function createMemoryRepositories(): Repositories {
         placedAt: timestamp,
         stateEta: input.stateEta,
         revealReadyAt: null,
+        revealRating: null,
         idempotencyKey: input.idempotencyKey ?? null,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -1764,12 +1765,8 @@ export function createMemoryRepositories(): Repositories {
 
     async recordRevealRating(input) {
       const order = orders.get(input.orderId);
-      if (!order) return;
-      orders.set(input.orderId, {
-        ...order,
-        stateEta: { ...order.stateEta, rating: input.rating } as OrderRecord["stateEta"],
-        updatedAt: now(),
-      });
+      if (!order || order.userId !== input.userId) return;
+      orders.set(input.orderId, { ...order, revealRating: input.rating, updatedAt: now() });
     },
 
     async findVariantsByIds(ids) {

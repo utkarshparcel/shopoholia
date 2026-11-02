@@ -271,6 +271,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           200: RevealRatingResponseSchema,
           401: ErrorSchema,
           404: ErrorSchema,
+          409: ErrorSchema,
         },
       },
       preHandler: requireAuth,
@@ -279,6 +280,12 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
       const order = await app.deps.repos.findOrderById(request.params.id);
       if (!order || order.userId !== request.user.sub) {
         return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (!REVEAL_OPEN_STATES.has(order.state)) {
+        return reply.code(409).send({
+          error: "Conflict",
+          message: "You can rate the reveal once your order is delivered",
+        });
       }
 
       await app.deps.repos.recordRevealRating({

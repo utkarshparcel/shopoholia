@@ -654,6 +654,7 @@ function mapOrder(row: OrderRow): OrderRecord {
     placedAt: row.placedAt ?? row.createdAt,
     stateEta: row.stateEta,
     revealReadyAt: row.revealReadyAt,
+    revealRating: row.revealRating ?? null,
     idempotencyKey: row.idempotencyKey,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -2938,19 +2939,10 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async recordRevealRating(input) {
-      const [existing] = await db
-        .select()
-        .from(orders)
-        .where(eq(orders.id, input.orderId))
-        .limit(1);
-      if (!existing) return;
       await db
         .update(orders)
-        .set({
-          stateEta: { ...existing.stateEta, rating: input.rating } as OrderRecord["stateEta"],
-          updatedAt: now(),
-        })
-        .where(eq(orders.id, input.orderId));
+        .set({ revealRating: input.rating, updatedAt: now() })
+        .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
     },
 
     async recordPushEvent(input) {

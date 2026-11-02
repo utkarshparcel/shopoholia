@@ -12,6 +12,9 @@ import { users } from "./users.js";
 
 export type OrderStateEta = Partial<Record<string, string>>;
 
+/** How the buyer felt about an order's reveal (`RevealRating` in @worn/shared). */
+export type OrderRevealRating = "loved" | "ok" | "meh";
+
 export const orders = pgTable("orders", {
   id: id(),
   userId: uuid("user_id")
@@ -23,6 +26,8 @@ export const orders = pgTable("orders", {
   placedAt: timestamp("placed_at", { withTimezone: true }),
   stateEta: jsonb("state_eta").$type<OrderStateEta>().notNull().default({}),
   revealReadyAt: timestamp("reveal_ready_at", { withTimezone: true }),
+  /** The buyer's reveal rating; null until they rate it. Kept out of state_eta, which holds only ETAs. */
+  revealRating: text("reveal_rating").$type<OrderRevealRating>(),
   idempotencyKey: text("idempotency_key").unique(),
   ...timestamps,
 });

@@ -260,3 +260,59 @@ describe("reveal generate", () => {
     await app.close();
   });
 });
+
+describe("reveal rating", () => {
+  function rate(app: App, accessToken: string, orderId: string, rating: string) {
+    return app.inject({
+      method: "POST",
+      url: `/orders/${orderId}/reveal/rating`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { rating },
+    });
+  }
+
+  it("keeps the rating out of stateEta, so the orders list and detail still serialise", async () => {
+    const { app, repos, alice } = await setup();
+    const { order } = await deliveredOrder(repos, alice.userId);
+
+    const res = await rate(app, alice.accessToken, order.id, "loved");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ orderId: order.id, rating: "loved", recorded: true });
+
+    const stored = await repos.findOrderById(order.id);
+    expect(stored?.revealRating).toBe("loved");
+    expect(stored?.stateEta).not.toHaveProperty("rating");
+
+    const headers = { authorization: `Bearer ${alice.accessToken}` };
+    const list = await app.inject({ method: "GET", url: "/orders", headers });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().orders[0].stateEta).not.toHaveProperty("rating");
+    const detail = await app.inject({ method: "GET", url: `/orders/${order.id}`, headers });
+    expect(detail.statusCode).toBe(200);
+
+    const again = await rate(app, alice.accessToken, order.id, "meh");
+    expect(again.statusCode).toBe(200);
+    expect((await repos.findOrderById(order.id))?.revealRating).toBe("meh");
+    await app.close();
+  });
+
+  it("refuses an order whose reveal isn't open yet, and other people's orders", async () => {
+    const { app, repos, alice, bob } = await setup();
+    const { order: pending } = await repos.createOrder({
+      userId: alice.userId,
+      tier: "STANDARD",
+      coinTotal: 0,
+      stateEta: buildStateEta(new Date(), "STANDARD"),
+      items: [{ listingVariantId: randomUUID(), coinPriceSnapshot: 100, quantity: 1 }],
+    });
+    const early = await rate(app, alice.accessToken, pending.id, "ok");
+    expect(early.statusCode).toBe(409);
+    expect((await repos.findOrderById(pending.id))?.revealRating).toBeNull();
+
+    const { order: bobs } = await deliveredOrder(repos, bob.userId);
+    const foreign = await rate(app, alice.accessToken, bobs.id, "meh");
+    expect(foreign.statusCode).toBe(404);
+    expect((await repos.findOrderById(bobs.id))?.revealRating).toBeNull();
+    await app.close();
+  });
+});

@@ -55,6 +55,14 @@ describe("migrations", () => {
     expect(sql).toContain('CREATE TABLE "sellers"');
     expect(sql).toContain("listings_seller_id_sellers_id_fk");
   });
+
+  it("moves reveal ratings out of state_eta into their own column", () => {
+    const sql = readFileSync(join(root, "../migrations/0018_reveal_rating.sql"), "utf8");
+    expect(sql).toContain('ALTER TABLE "orders" ADD COLUMN "reveal_rating" text');
+    expect(sql).toContain(`SET "reveal_rating" = "state_eta"->>'rating'`);
+    expect(sql).toContain(`SET "state_eta" = "state_eta" - 'rating'`);
+    expect(schema.orders.revealRating.notNull).toBe(false);
+  });
 });
 
 describe("grantCoins", () => {
