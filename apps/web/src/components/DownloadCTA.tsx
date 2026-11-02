@@ -89,7 +89,7 @@ export function DownloadCTA() {
 
         <motion.h2
           {...redAnim}
-          className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
+          className="mx-auto mt-6 max-w-[16ch] text-balance font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
         >
           Your first haul is <em className="grad-text-ink">on us.</em>
         </motion.h2>
