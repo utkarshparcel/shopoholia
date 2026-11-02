@@ -5170,7 +5170,11 @@ export function createPostgresRepositories(db: Db): Repositories {
           orderId: input.orderId ?? null,
           rating: input.rating,
           comment: input.comment ?? null,
-        }).returning();
+        })
+        // tailoring_reviews_order_idx: a second review of the same order inserts nothing.
+        .onConflictDoNothing({ target: tailoringReviews.orderId, where: sql`${tailoringReviews.orderId} IS NOT NULL` })
+        .returning();
+        if (!row) return null;
         return {
           id: row.id,
           sellerId: row.sellerId,

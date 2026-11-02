@@ -2950,7 +2950,8 @@ export async function previewFitCustomization(accessToken: string, body: { templ
   });
   return parseJson<{ status: string; previewUrl: string | null; imageKey: string | null; selections: Record<string, string>; summary: string }>(res);
 }
-export async function createTailorReview(accessToken: string, sellerId: string, body: { orderId?: string | null; rating: number; comment?: string | null }) {
+/** Reviews a delivered order with this tailor (`orderId` is required; one review per order). */
+export async function createTailorReview(accessToken: string, sellerId: string, body: { orderId: string; rating: number; comment?: string | null }) {
   const res = await apiFetch(`${API_URL}/fit/tailors/${sellerId}/reviews`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },

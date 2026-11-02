@@ -214,7 +214,7 @@ describe("fit", () => {
   });
 
   it("assigns a tailor seller and accepts fabric photo keys + reviews", async () => {
-    const { app } = await buildTestServer();
+    const { app, repos } = await buildTestServer();
     const { accessToken, userId } = await login(app);
     const tailorsRes = await app.inject({
       method: "GET",
@@ -257,13 +257,21 @@ describe("fit", () => {
       expect.arrayContaining([`u/${userId}/fit-fabric/demo.jpg`, `u/${userId}/fit-fabric/extra.jpg`]),
     );
 
-    const review = await app.inject({
-      method: "POST",
-      url: `/fit/tailors/${o.tailorSellerId}/reviews`,
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { orderId: o.id, rating: 5, comment: "Beautiful work" },
-    });
+    const reviewOrder = () =>
+      app.inject({
+        method: "POST",
+        url: `/fit/tailors/${o.tailorSellerId}/reviews`,
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { orderId: o.id, rating: 5, comment: "Beautiful work" },
+      });
+    // Not delivered yet: nothing to review.
+    expect((await reviewOrder()).statusCode).toBe(409);
+    await repos.updateTailoringOrderState(o.id, "DELIVERED");
+    const review = await reviewOrder();
     expect(review.statusCode).toBe(201);
+    // One review per order.
+    const second = await reviewOrder();
+    expect(second.statusCode).toBe(409);
     const list = await app.inject({
       method: "GET",
       url: `/fit/tailors/${o.tailorSellerId}/reviews`,
@@ -411,7 +419,7 @@ describe("fit", () => {
       method: "POST",
       url: `/fit/tailors/${retailer.id}/reviews`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { rating: 4 },
+      payload: { orderId: "00000000-0000-4000-8000-000000000022", rating: 4 },
     });
     expect(postRetailer.statusCode).toBe(404);
 
@@ -430,7 +438,56 @@ describe("fit", () => {
       headers: { authorization: `Bearer ${accessToken}` },
       payload: { rating: 4, comment: null },
     });
-    expect(noOrder.statusCode).toBe(201);
+    expect(noOrder.statusCode).toBe(400);
+  });
+
+  it("only takes a review for the caller's own delivered order with that tailor", async () => {
+    const { app, repos } = await buildTestServer();
+    const owner = await login(app);
+    const templates = await app.inject({
+      method: "GET",
+      url: "/fit/templates?region=IN",
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    });
+    const templateId = (templates.json() as TemplatesResponse).templates[0]!.id;
+    const o = (
+      await app.inject({
+        method: "POST",
+        url: "/fit/orders",
+        headers: { authorization: `Bearer ${owner.accessToken}` },
+        payload: { templateId, selections: { neckline: "Boat" } },
+      })
+    ).json() as TailoringOrder;
+    await repos.updateTailoringOrderState(o.id, "DELIVERED");
+
+    // Someone else's order is not found for the caller.
+    const stranger = await login(app, "919876500077");
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/fit/tailors/${o.tailorSellerId}/reviews`,
+      headers: { authorization: `Bearer ${stranger.accessToken}` },
+      payload: { orderId: o.id, rating: 1 },
+    });
+    expect(foreign.statusCode).toBe(404);
+
+    // The owner can't pin the order on a different tailor.
+    const otherTailor = await repos.registerSeller(stranger.userId, "Other Tailor", "TAILOR");
+    const wrongTailor = await app.inject({
+      method: "POST",
+      url: `/fit/tailors/${otherTailor.id}/reviews`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { orderId: o.id, rating: 1 },
+    });
+    expect(wrongTailor.statusCode).toBe(403);
+
+    const ok = await app.inject({
+      method: "POST",
+      url: `/fit/tailors/${o.tailorSellerId}/reviews`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { orderId: o.id, rating: 4 },
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(await repos.listTailoringReviews(otherTailor.id)).toHaveLength(0);
   });
 
   it("previews READY with avatar, defaults, tryOn failure, and missing template", async () => {

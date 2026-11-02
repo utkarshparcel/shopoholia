@@ -1726,7 +1726,8 @@ export interface Repositories {
     userId: string,
     patch: { fabricRef?: string | null; fabricPhotoKeys?: string[] },
   ): Promise<TailoringOrderRecord | null>;
-  createTailoringReview(input: CreateTailoringReviewInput): Promise<TailoringReviewRecord>;
+  /** Null when `orderId` already has a review (one review per order). */
+  createTailoringReview(input: CreateTailoringReviewInput): Promise<TailoringReviewRecord | null>;
   listTailoringReviews(sellerId: string): Promise<TailoringReviewRecord[]>;
 
   // --- Universe P4: disposition (extended) ---

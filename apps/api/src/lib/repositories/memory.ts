@@ -4700,6 +4700,9 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
     async createTailoringReview(input) {
+      if (input.orderId && [...tailoringReviewsStore.values()].some((r) => r.orderId === input.orderId)) {
+        return null;
+      }
       const rec: TailoringReviewRecord = {
         id: randomUUID(),
         sellerId: input.sellerId,
