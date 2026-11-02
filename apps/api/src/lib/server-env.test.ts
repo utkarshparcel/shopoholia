@@ -86,13 +86,33 @@ describe("bootConfigProblems", () => {
     R2_BUCKET_NAME: "b",
   };
 
-  it("in production, a mock storage or OCR provider is an error", () => {
+  const db = { DATABASE_URL: "postgresql://worn@db/worn" };
+
+  it("in production, an in-memory database, mock storage or mock OCR is an error", () => {
     const { errors } = bootConfigProblems({ NODE_ENV: "production" });
-    expect(errors).toEqual([expect.stringMatching(/R2/), expect.stringMatching(/OCR/)]);
+    expect(errors).toEqual([
+      expect.stringMatching(/DATABASE_URL/),
+      expect.stringMatching(/R2/),
+      expect.stringMatching(/OCR/),
+    ]);
     expect(
-      bootConfigProblems({ NODE_ENV: "production", ...r2, OCR_PROVIDER_URL: "https://ocr", OCR_PROVIDER: "mock" }).errors,
+      bootConfigProblems({ NODE_ENV: "production", ...db, ...r2, OCR_PROVIDER_URL: "https://ocr", OCR_PROVIDER: "mock" }).errors,
     ).toEqual([expect.stringMatching(/OCR/)]);
-    expect(bootConfigProblems({ NODE_ENV: "production", ...r2, OCR_PROVIDER_URL: "https://ocr" }).errors).toEqual([]);
+    expect(
+      bootConfigProblems({ NODE_ENV: "production", ...db, ...r2, OCR_PROVIDER_URL: "https://ocr" }).errors,
+    ).toEqual([]);
+  });
+
+  it("in production, warns about secrets whose routes would refuse every call", () => {
+    const { warnings } = bootConfigProblems({ NODE_ENV: "production" });
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/CASHBACK_WEBHOOK_SECRET/),
+        expect.stringMatching(/ADMIN_SECRET/),
+      ]),
+    );
+    const set = bootConfigProblems({ NODE_ENV: "production", CASHBACK_WEBHOOK_SECRET: "c", ADMIN_SECRET: "a" });
+    expect(set.warnings.join("\n")).not.toMatch(/CASHBACK_WEBHOOK_SECRET|ADMIN_SECRET/);
   });
 
   it("outside production, missing providers are not errors", () => {

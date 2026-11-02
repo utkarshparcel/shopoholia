@@ -57,6 +57,9 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
   const warnings: string[] = [];
 
   if (production) {
+    if (!env.DATABASE_URL?.trim()) {
+      errors.push("DATABASE_URL is not set: every account, order and coin would live in memory and vanish on restart");
+    }
     if (!hasR2Config(env)) {
       errors.push("R2 storage is not configured (R2_*): uploads would go to an in-memory mock");
     }
@@ -65,6 +68,12 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     }
     if (!env.WEATHER_API?.trim()) {
       warnings.push("WEATHER_API is not set: weather falls back to the mock (source: mock)");
+    }
+    if (!env.CASHBACK_WEBHOOK_SECRET?.trim()) {
+      warnings.push("CASHBACK_WEBHOOK_SECRET is not set: affiliate cashback confirmations are refused");
+    }
+    if (!env.ADMIN_SECRET?.trim()) {
+      warnings.push("ADMIN_SECRET is not set: admin routes (ops playbooks, marketplace settlements) are refused");
     }
     if (!env.GOOGLE_CLIENT_ID || !env.OAUTH_STATE_SECRET) {
       warnings.push("GOOGLE_CLIENT_ID or OAUTH_STATE_SECRET is not set: Gmail connect is unavailable (503)");
