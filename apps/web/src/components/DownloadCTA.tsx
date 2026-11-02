@@ -135,7 +135,7 @@ export function DownloadCTA() {
           </li>
         </motion.ul>
         <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-paper/70">
-          Free to download · Optional coin packs in-app · Delete your photos any time
+          Free when it launches · Optional coin packs in-app · Delete your photos any time
         </p>
       </div>
     </section>

@@ -1,10 +1,10 @@
 import { Plus } from 'lucide-react';
 
-/** The questions people ask before they install. Also emitted as FAQPage structured data on `/`. */
+/** The questions people ask before they join the list. Also emitted as FAQPage structured data on `/`. */
 export const FAQS = [
   {
     q: 'Is Worn free?',
-    a: 'Yes. It’s free to download, you start with 500 coins, and you earn more every day from streaks, referrals and cashback. Coin packs are there if you want more, but you never have to buy one.',
+    a: 'Yes. It will be free to download when it launches: you start with 500 coins and earn more every day from streaks, referrals and cashback. Coin packs are there if you want more, but you never have to buy one.',
   },
   {
     q: 'Do I spend real money on the clothes?',
