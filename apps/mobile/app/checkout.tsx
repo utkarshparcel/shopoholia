@@ -94,6 +94,16 @@ export default function CheckoutScreen() {
     enabled: Boolean(accessToken && FEATURE_CLOSET && itemCount > 0),
   });
 
+  /**
+   * The order opens on top of the app, not in place of this modal: replacing checkout left the
+   * cart modal (now an empty haul) underneath, which is where Back from the order went.
+   */
+  const openPlacedOrder = (orderId: string) => {
+    setCoolingHold(null);
+    if (router.canDismiss()) router.dismissAll();
+    router.push(`/order/${orderId}`);
+  };
+
   const prebuy = prebuyQuery.data;
   const budgetNudge = prebuy?.primaryBudgetNudge;
   const fitPanel = prebuy
@@ -343,10 +353,7 @@ export default function CheckoutScreen() {
               onPress={() => {
                 void checkout
                   .mutateAsync(tier)
-                  .then((order) => {
-                    setCoolingHold(null);
-                    router.replace(`/order/${order.id}`);
-                  })
+                  .then((order) => openPlacedOrder(order.id))
                   .catch((err: Error & { code?: string; coolingOff?: { releaseAt: string } | null }) => {
                     if (err.code === 'COOLING_OFF') {
                       setCoolingHold({
@@ -366,10 +373,7 @@ export default function CheckoutScreen() {
                 onPress={() => {
                   void checkout
                     .mutateAsync({ tier, coolingOffOverride: true })
-                    .then((order) => {
-                      setCoolingHold(null);
-                      router.replace(`/order/${order.id}`);
-                    });
+                    .then((order) => openPlacedOrder(order.id));
                 }}
                 variant="secondary"
               />
