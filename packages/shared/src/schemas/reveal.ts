@@ -53,10 +53,14 @@ export type UnlockResponse = z.infer<typeof UnlockResponseSchema>;
 /**
  * One id renders that item; several (repeats count once, at most REVEAL_COMBINE_MAX_ITEMS) make
  * one combined render of them together. Every id must be a line of the order.
+ *
+ * `idempotencyKey` (one per user action, kept across retries) is scoped to the order: a repeat of
+ * the key returns the first call's render and charges nothing, whatever the repeat's body asks for.
  */
 export const GenerateRenderBodySchema = z.object({
   orderItemIds: z.array(z.string().uuid()).min(1).max(REVEAL_COMBINE_MAX_ITEMS),
   scenario: RenderScenarioSchema,
+  idempotencyKey: z.string().uuid().optional(),
 });
 
 export const GenerateRenderResponseSchema = z.object({

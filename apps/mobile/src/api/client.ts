@@ -764,6 +764,7 @@ export async function generateRenders(
   orderId: string,
   orderItemIds: string[],
   scenario: string,
+  idempotencyKey?: string,
 ) {
   const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/generate`, {
     method: 'POST',
@@ -771,7 +772,7 @@ export async function generateRenders(
       'Content-Type': 'application/json',
       ...authHeaders(accessToken),
     },
-    body: JSON.stringify({ orderItemIds, scenario }),
+    body: JSON.stringify({ orderItemIds, scenario, idempotencyKey }),
   });
   return parseJson<GenerateRenderResponse>(res);
 }

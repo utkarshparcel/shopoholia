@@ -20,3 +20,11 @@ export function cashbackLedgerRef(clickId: string): string {
 export function revealUnlockLedgerRef(orderId: string, idempotencyKey: string): string {
   return ledgerRefId("reveal_unlock", orderId, idempotencyKey);
 }
+
+/**
+ * The ref for a keyed reveal generate or combine, scoped to its order. It is also the id of the
+ * render that call creates, so a replay of the key finds that render.
+ */
+export function revealGenerateLedgerRef(orderId: string, idempotencyKey: string): string {
+  return ledgerRefId("reveal_generate", orderId, idempotencyKey);
+}

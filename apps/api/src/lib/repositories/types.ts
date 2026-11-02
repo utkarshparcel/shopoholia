@@ -153,6 +153,28 @@ export type UnlockOrderRendersResult =
   | { status: "nothing_locked" }
   | { status: "insufficient_coins"; coinsNeeded: number; balance: number };
 
+export type PurchaseRenderInput = {
+  userId: string;
+  orderId: string;
+  /** The render to create; its `orderItemId` must be a line of the user's `orderId`. */
+  render: Omit<RenderRecord, "id" | "createdAt" | "updatedAt">;
+  cost: number;
+  ledgerType: string;
+  /** Scoped to `orderId`: the same key on another order is a new render. */
+  idempotencyKey?: string;
+};
+
+export type PurchaseRenderResult =
+  /** The render this call created and charged `coinsSpent` for. */
+  | { status: "created"; render: RenderRecord; coinsSpent: number; balanceAfter: number }
+  /**
+   * The key was already spent on this order: nothing was created or charged. `render` is the one
+   * the first call made (null if it has since been deleted), whatever this call asked for.
+   */
+  | { status: "replayed"; render: RenderRecord | null; coinsSpent: number }
+  | { status: "not_found" }
+  | { status: "insufficient_coins"; coinsNeeded: number; balance: number };
+
 export type CoinPurchaseStore = "app_store" | "play_store";
 
 /** A store transaction that a verifier or a store notification vouched for. */
@@ -1025,6 +1047,13 @@ export interface Repositories {
    * repeats in `renderIds` are skipped. Nothing flips when the balance can't cover them all.
    */
   unlockOrderRenders(input: UnlockOrderRendersInput): Promise<UnlockOrderRendersResult>;
+  /**
+   * Debits `cost` and creates `render` as one step under the user's coin lock, so a render is
+   * never paid for without being made, or made without being paid for. With an `idempotencyKey`,
+   * a repeat of the key on the same order (in parallel or later) returns the first call's render
+   * and charges nothing. `not_found` when `render.orderItemId` isn't a line of the user's order.
+   */
+  purchaseRender(input: PurchaseRenderInput): Promise<PurchaseRenderResult>;
 
   findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
   findListingsByIds(ids: string[]): Promise<ListingRecord[]>;

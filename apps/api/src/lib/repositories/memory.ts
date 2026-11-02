@@ -7,7 +7,7 @@ import { InsufficientCoinsError } from "./errors.js";
 import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { cashbackLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -1760,6 +1760,45 @@ export function createMemoryRepositories(): Repositories {
         const user = users.get(input.userId);
         if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
         return { status: "unlocked" as const, renders: unlocked, coinsSpent, balanceAfter };
+      });
+    },
+
+    async purchaseRender(input) {
+      const key = input.idempotencyKey;
+      const renderId = key ? revealGenerateLedgerRef(input.orderId, key) : randomUUID();
+      const ref = key ? { refType: "reveal_generate", refId: renderId } : { refType: "order", refId: input.orderId };
+      return withCoinLock(input.userId, async () => {
+        const balance = await this.getCoinBalance(input.userId);
+        // No await from here to the ledger entry: the replay check, the insert and the debit are one step.
+        if (key) {
+          const prior = ledger.find(
+            (e) => e.userId === input.userId && e.refType === ref.refType && e.refId === ref.refId,
+          );
+          if (prior) {
+            return { status: "replayed" as const, render: renders.get(renderId) ?? null, coinsSpent: Math.abs(prior.delta) };
+          }
+        }
+        const order = orders.get(input.orderId);
+        const item = orderItems.get(input.render.orderItemId);
+        if (!order || order.userId !== input.userId || item?.orderId !== order.id) {
+          return { status: "not_found" as const };
+        }
+        if (balance < input.cost) {
+          return { status: "insufficient_coins" as const, coinsNeeded: input.cost, balance };
+        }
+        const timestamp = now();
+        const render: RenderRecord = { ...input.render, id: renderId, createdAt: timestamp, updatedAt: timestamp };
+        renders.set(render.id, render);
+        rendersByOrderItem.set(render.orderItemId, [...(rendersByOrderItem.get(render.orderItemId) ?? []), render.id]);
+        const balanceAfter = balance - input.cost;
+        appendLedger(
+          ledger,
+          { userId: input.userId, delta: -input.cost, type: input.ledgerType, ...ref },
+          balanceAfter,
+        );
+        const user = users.get(input.userId);
+        if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { status: "created" as const, render, coinsSpent: input.cost, balanceAfter };
       });
     },
 
