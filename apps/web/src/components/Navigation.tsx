@@ -12,9 +12,10 @@ const SCROLL_THRESHOLD = 8;
 const TOP_ZONE = 20;
 
 const navLinks = [
-  { href: '#grwm', label: 'The Drop' },
-  { href: '#loop', label: 'The Loop' },
+  { href: '#loop', label: 'How it works' },
+  { href: '#grwm', label: 'See it' },
   { href: '#how-it-works', label: 'Coins' },
+  { href: '#faq', label: 'FAQ' },
 ];
 
 export function Navigation() {
@@ -137,7 +138,7 @@ export function Navigation() {
               className="btn-primary btn-md"
             >
               <Download className="w-4 h-4" aria-hidden="true" />
-              Get the App
+              Get early access
             </Link>
           </div>
 
@@ -187,7 +188,7 @@ export function Navigation() {
                   onClick={() => closeMenu(false)}
                 >
                   <Download className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
-                  Get the App
+                  Get early access
                 </Link>
               </div>
             </motion.div>

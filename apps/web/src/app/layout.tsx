@@ -30,12 +30,12 @@ const dmMono = DM_Mono({
 });
 
 const DESCRIPTION =
-  'Worn is the shopping app where nothing ships. Browse real pieces, try them on your AI avatar, haul them with coins, wait for the delivery and unbox AI renders of you wearing them. The buying high without the parcel, the bill or the pile of clothes you never wear.';
+  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: 'Worn — Stop Shopping. Start Wearing.',
+    default: 'Worn Play — the fashion haul without the bill',
     template: '%s | Worn',
   },
   description: DESCRIPTION,
@@ -66,12 +66,12 @@ export const metadata: Metadata = {
     locale: 'en_US',
     url: SITE_URL,
     siteName: 'Worn',
-    title: 'Worn: the shopping app where nothing ships',
+    title: 'Worn Play — the fashion haul without the bill',
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Worn: the shopping app where nothing ships',
+    title: 'Worn Play — the fashion haul without the bill',
     description: DESCRIPTION,
   },
   // icon.svg, apple-icon.tsx and opengraph-image.tsx in this folder supply the icons and the share image

@@ -58,18 +58,19 @@ const GHOSTS = [
 export function GhostWardrobe() {
 
   return (
-    <section id="manifesto" aria-label="The ghost wardrobe" className="section-py relative overflow-hidden bg-worn-paper">
+    <section id="manifesto" aria-label="The problem" className="section-py relative overflow-hidden bg-worn-paper">
       <div className="section">
         <motion.div {...reveal} variants={rise} custom={0} className="mx-auto max-w-[780px] text-center">
           <p className="ornament ml-auto mr-auto w-fit font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
-            The ghost wardrobe
+            Sound familiar?
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            You loved the buying. <em className="grad-text">Not the pile.</em>
+            You love buying clothes. <em className="grad-text">Not what it costs you.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[54ch] text-body-l text-worn-ink-soft">
-            Every piece in there was the same purchase: the buying high, bought
-            again. Worn Play keeps the high and drops the pile.
+            The late-night cart, the outfit worn once, the tags still on. The fun
+            was the buying; the bill and the pile came after. Worn Play keeps the
+            fun part and drops the rest.
           </p>
         </motion.div>
 

@@ -91,16 +91,16 @@ export function DownloadCTA() {
           {...redAnim}
           className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(44px,7vw,104px)] leading-[1] tracking-tight"
         >
-          The high, <em className="grad-text-ink">without the pile.</em>
+          Your first haul is <em className="grad-text-ink">on us.</em>
         </motion.h2>
 
         <motion.p
           {...redAnim}
           className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70"
         >
-          Worn is coming to iPhone and Android. Join the list and we’ll send your
-          invite when early access opens: sign in with Google, add one photo for
-          your avatar, and start hauling with 500 welcome coins.
+          Worn is coming to iPhone and Android. Join the list and we’ll email your
+          invite when early access opens. Sign in with Google, add one photo, and
+          start with 500 free coins.
         </motion.p>
 
         {/* actions */}
@@ -108,10 +108,10 @@ export function DownloadCTA() {
           <WaitlistForm list="play" />
           <Magnetic strength={0.25}>
             <a
-              href="#grwm"
+              href="#loop"
               className="inline-flex items-center gap-2 rounded-pill border border-worn-paper/25 bg-worn-paper/10 px-7 py-3.5 font-sans text-[15px] font-semibold backdrop-blur transition-colors hover:border-worn-gold hover:text-worn-gold focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
             >
-              See the drop
+              See how it works
               <ArrowRight size={15} />
             </a>
           </Magnetic>

@@ -17,46 +17,46 @@ const rise: Variants = {
 const STEPS = [
   {
     n: '1',
-    title: 'See',
-    copy: 'The feed. Tonight’s edit, ranked by your style quiz.',
+    title: 'Browse',
+    copy: 'Tonight’s edit: real pieces from real stores, ranked by a five-question style quiz.',
   },
   {
     n: '2',
-    title: 'Desire',
-    copy: 'Tap Try on me. The piece, on your avatar.',
+    title: 'Try it on',
+    copy: 'One photo makes your avatar. Tap Try on me and see the piece on you.',
   },
   {
     n: '3',
-    title: 'Commit',
-    copy: 'Add to haul. Pay with coins. Pick Express, Standard or Slow burn.',
+    title: 'Check out',
+    copy: 'Add it to your haul and pay with coins, never your card. Pick Express, Standard or Slow burn.',
   },
   {
     n: '4',
-    title: 'Wait',
-    copy: 'Processing. Packed. Out for delivery. Arriving soon. A push at every step.',
+    title: 'Track it',
+    copy: 'Packed, out for delivery, arriving soon: a notification at every step.',
   },
   {
     n: '5',
-    title: 'Reveal',
-    copy: '“Your haul is here.” Six scenes of you in it, two free.',
+    title: 'Unbox it',
+    copy: 'Your haul arrives as photos of you wearing it, in six scenes. Two are free.',
   },
 ];
 
 export function DopamineLoop() {
 
   return (
-    <section id="loop" aria-label="The dopamine loop" className="section-py bg-warm">
+    <section id="loop" aria-label="How it works" className="section-py bg-warm">
       <div className="section">
         <motion.div {...reveal} variants={rise} custom={0} className="mx-auto max-w-[760px] text-center">
           <p className="ornament ml-auto mr-auto w-fit font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep">
-            The mechanic
+            How it works
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            The fix for shopping is <em className="grad-text">more shopping.</em>
+            Everything you love about a haul. <em className="grad-text">Nothing ships.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[52ch] text-body-l text-worn-ink-soft">
-            Same scroll, same little thrill, same wait by the door. Nothing
-            arrives but the renders, so nothing piles up.
+            Same scroll, same try-on, same wait for the doorbell. What arrives is
+            photos of you in it, so nothing costs real money and nothing piles up.
           </p>
         </motion.div>
 
@@ -81,7 +81,7 @@ export function DopamineLoop() {
         </div>
 
         <motion.p {...reveal} variants={rise} custom={0.4} className="mt-10 text-center font-mono text-micro uppercase tracking-[0.22em] text-worn-muted">
-          see → desire → commit → wait → reveal
+          browse → try on → check out → track → unbox
         </motion.p>
       </div>
     </section>
