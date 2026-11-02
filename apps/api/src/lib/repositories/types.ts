@@ -788,6 +788,10 @@ export interface Repositories {
     clickId: string;
   }): Promise<void>;
   listCashbackEvents(userId: string): Promise<Array<{ id: string; listingId: string | null; platform: string; coinsEarned: number; status: string; createdAt: Date }>>;
+  /**
+   * Settles a PENDING click once: CONFIRMED pays AFFILIATE_CASHBACK_COINS in the same step as the
+   * status change; a click already settled, or unknown, is left alone.
+   */
   confirmCashback(clickId: string, status: "CONFIRMED" | "REJECTED"): Promise<void>;
 
   findAvatarByUserId(userId: string): Promise<AvatarRecord | null>;

@@ -1,5 +1,5 @@
-import { randomInt } from "node:crypto";
-import { streakRewardForDay } from "@worn/shared";
+import { randomInt, randomUUID } from "node:crypto";
+import { AFFILIATE_CASHBACK_COINS, streakRewardForDay } from "@worn/shared";
 import { describe, expect, it } from "vitest";
 import { createMemoryRepositories } from "./memory.js";
 import { createPostgresRepositoriesFromUrl } from "./postgres.js";
@@ -43,5 +43,52 @@ function coinRaceCases(getRepos: () => Repositories) {
       todayClaimed: true,
       nextStreakDay: 2,
     });
+  });
+
+  it("cashback: parallel confirms of one click pay once", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const clickId = `test:${randomUUID()}`;
+    await repos.recordCashbackEvent({ userId: user.id, listingId: null, platform: "amazon", clickId });
+    const before = await repos.getCoinBalance(user.id);
+
+    await Promise.all([1, 2, 3, 4].map(() => repos.confirmCashback(clickId, "CONFIRMED")));
+
+    expect(await repos.getCoinBalance(user.id)).toBe(before + AFFILIATE_CASHBACK_COINS);
+    expect(await repos.listCashbackEvents(user.id)).toMatchObject([
+      { status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS },
+    ]);
+  });
+
+  it("cashback: a repeated click keeps a confirmed event, so it can't pay again", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const clickId = `test:${randomUUID()}`;
+    const click = () => repos.recordCashbackEvent({ userId: user.id, listingId: null, platform: "amazon", clickId });
+    await click();
+    const before = await repos.getCoinBalance(user.id);
+    await repos.confirmCashback(clickId, "CONFIRMED");
+
+    await click();
+    await repos.confirmCashback(clickId, "CONFIRMED");
+
+    expect(await repos.getCoinBalance(user.id)).toBe(before + AFFILIATE_CASHBACK_COINS);
+    expect(await repos.listCashbackEvents(user.id)).toMatchObject([{ status: "CONFIRMED" }]);
+  });
+
+  it("cashback: a rejected click stays rejected and unpaid", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const clickId = `test:${randomUUID()}`;
+    await repos.recordCashbackEvent({ userId: user.id, listingId: null, platform: "amazon", clickId });
+    const before = await repos.getCoinBalance(user.id);
+    await Promise.all([
+      repos.confirmCashback(clickId, "REJECTED"),
+      repos.confirmCashback(clickId, "REJECTED"),
+    ]);
+    await repos.confirmCashback(clickId, "CONFIRMED");
+    await repos.confirmCashback(`test:${randomUUID()}`, "CONFIRMED");
+    expect(await repos.getCoinBalance(user.id)).toBe(before);
+    expect(await repos.listCashbackEvents(user.id)).toMatchObject([{ status: "REJECTED", coinsEarned: 0 }]);
   });
 }

@@ -84,7 +84,7 @@ import {
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { cashbackLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -1501,31 +1501,41 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async confirmCashback(clickId, status) {
-      const [event] = await db
-        .select()
-        .from(cashbackEvents)
-        .where(eq(cashbackEvents.clickId, clickId))
-        .limit(1);
-      if (!event || event.status === "CONFIRMED" || event.status === "REJECTED") return;
+      const pending = and(eq(cashbackEvents.clickId, clickId), eq(cashbackEvents.status, "PENDING"));
+      if (status === "REJECTED") {
+        await db.update(cashbackEvents).set({ status: "REJECTED" }).where(pending);
+        return;
+      }
 
-      if (status === "CONFIRMED") {
-        await repos.grantCoins({
-          userId: event.userId,
-          delta: AFFILIATE_CASHBACK_COINS,
-          type: "EARN_CASHBACK",
-          refType: "cashback",
-          refId: clickId,
-        });
-        await db
+      // The event's owner, to take their row lock first, as every coin write does.
+      const [event] = await db
+        .select({ userId: cashbackEvents.userId })
+        .from(cashbackEvents)
+        .where(pending)
+        .limit(1);
+      if (!event) return;
+
+      await db.transaction(async (tx) => {
+        const balance = await lockedCoinBalance(tx, event.userId);
+        // Only one confirm moves the event off PENDING; the others get no row back and pay nothing.
+        const [confirmed] = await tx
           .update(cashbackEvents)
           .set({ status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS })
-          .where(eq(cashbackEvents.clickId, clickId));
-      } else {
-        await db
-          .update(cashbackEvents)
-          .set({ status: "REJECTED" })
-          .where(eq(cashbackEvents.clickId, clickId));
-      }
+          .where(and(pending, eq(cashbackEvents.userId, event.userId)))
+          .returning({ userId: cashbackEvents.userId });
+        if (!confirmed) return;
+        await appendCoinLedger(
+          tx,
+          {
+            userId: confirmed.userId,
+            delta: AFFILIATE_CASHBACK_COINS,
+            type: "EARN_CASHBACK",
+            refType: "cashback",
+            refId: cashbackLedgerRef(clickId),
+          },
+          balance + AFFILIATE_CASHBACK_COINS,
+        );
+      });
     },
 
     async findAvatarByUserId(userId) {

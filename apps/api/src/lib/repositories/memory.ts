@@ -6,7 +6,7 @@ import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { cashbackLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -619,6 +619,8 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async recordCashbackEvent(input) {
+      // As Postgres's ON CONFLICT DO NOTHING: a repeated click id keeps the event it has.
+      if (cashbackEvents.has(input.clickId)) return;
       cashbackEvents.set(input.clickId, {
         id: randomUUID(),
         userId: input.userId,
@@ -639,21 +641,32 @@ export function createMemoryRepositories(): Repositories {
 
     async confirmCashback(clickId, status) {
       const event = cashbackEvents.get(clickId);
-      if (!event || event.status === "CONFIRMED" || event.status === "REJECTED") return;
-      if (status === "CONFIRMED") {
-        await this.grantCoins({
-          userId: event.userId,
-          delta: AFFILIATE_CASHBACK_COINS,
-          type: "EARN_CASHBACK",
-          refType: "cashback",
-          refId: clickId,
-        });
-        event.coinsEarned = AFFILIATE_CASHBACK_COINS;
-        event.status = "CONFIRMED";
-      } else {
-        event.status = "REJECTED";
+      if (!event || event.status !== "PENDING") return;
+      if (status === "REJECTED") {
+        cashbackEvents.set(clickId, { ...event, status: "REJECTED" });
+        return;
       }
-      cashbackEvents.set(clickId, event);
+      await withCoinLock(event.userId, async () => {
+        const balance = await this.getCoinBalance(event.userId);
+        // No await from the status check to the ledger entry: one click pays once.
+        const current = cashbackEvents.get(clickId);
+        if (!current || current.status !== "PENDING") return;
+        cashbackEvents.set(clickId, { ...current, status: "CONFIRMED", coinsEarned: AFFILIATE_CASHBACK_COINS });
+        const balanceAfter = balance + AFFILIATE_CASHBACK_COINS;
+        appendLedger(
+          ledger,
+          {
+            userId: event.userId,
+            delta: AFFILIATE_CASHBACK_COINS,
+            type: "EARN_CASHBACK",
+            refType: "cashback",
+            refId: cashbackLedgerRef(clickId),
+          },
+          balanceAfter,
+        );
+        const user = users.get(event.userId);
+        if (user) users.set(event.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+      });
     },
 
     async updateUser(id, patch) {

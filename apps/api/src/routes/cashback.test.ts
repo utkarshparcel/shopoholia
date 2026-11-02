@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { CashbackClickResponse, CashbackHistoryResponse } from "@worn/shared";
+import {
+  AFFILIATE_CASHBACK_COINS,
+  type CashbackClickResponse,
+  type CashbackHistoryResponse,
+} from "@worn/shared";
 import { buildTestServer, login } from "../test-utils.js";
 
 describe("MON-AFFILIATE-CLOSET cashback events", () => {
@@ -81,5 +85,41 @@ describe("MON-AFFILIATE-CLOSET cashback events", () => {
       payload: { platform: "myntra" },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("pays a click once when the network's webhook repeats or races", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const click = () =>
+      app.inject({
+        method: "POST",
+        url: "/cashback/click",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { source: "missing_piece", platform: "myntra", clickId: "net-click-1" },
+      });
+    const { clickId } = (await click()).json() as CashbackClickResponse;
+    const before = await app.deps.repos.getCoinBalance(userId);
+
+    const webhook = () =>
+      app.inject({
+        method: "POST",
+        url: "/cashback/webhook",
+        payload: { clickId, status: "CONFIRMED" },
+      });
+    const results = await Promise.all([webhook(), webhook(), webhook()]);
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    // The same click again, then the webhook again: the confirmed event is not reopened.
+    expect((await click()).statusCode).toBe(200);
+    expect((await webhook()).statusCode).toBe(200);
+
+    expect(await app.deps.repos.getCoinBalance(userId)).toBe(before + AFFILIATE_CASHBACK_COINS);
+    const me = (
+      await app.inject({
+        method: "GET",
+        url: "/cashback/me",
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+    ).json() as CashbackHistoryResponse;
+    expect(me.totalEarned).toBe(AFFILIATE_CASHBACK_COINS);
   });
 });
