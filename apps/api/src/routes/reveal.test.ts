@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { REVEAL_UNLOCK_COST_COINS, type UnlockResponse } from "@worn/shared";
+import {
+  REVEAL_COMBINE_COST_COINS,
+  REVEAL_COMBINE_MAX_ITEMS,
+  REVEAL_GENERATE_COST_COINS,
+  REVEAL_UNLOCK_COST_COINS,
+  type GenerateRenderResponse,
+  type UnlockResponse,
+} from "@worn/shared";
 import { buildStateEta } from "../lib/orders/state-machine.js";
 import type { Repositories } from "../lib/repositories/types.js";
 import { buildTestServer, login } from "../test-utils.js";
@@ -59,6 +66,15 @@ function unlock(app: App, accessToken: string, orderId: string, payload: object)
     url: `/orders/${orderId}/reveal/unlock`,
     headers: { authorization: `Bearer ${accessToken}` },
     payload,
+  });
+}
+
+function generate(app: App, accessToken: string, orderId: string, orderItemIds: string[]) {
+  return app.inject({
+    method: "POST",
+    url: `/orders/${orderId}/reveal/generate`,
+    headers: { authorization: `Bearer ${accessToken}` },
+    payload: { orderItemIds, scenario: "STUDIO" },
   });
 }
 
@@ -173,6 +189,74 @@ describe("reveal unlock", () => {
     const short = await unlock(app, bob.accessToken, order.id, { renderIds: [locked[1]!.id] });
     expect(short.statusCode).toBe(402);
     expect((await repos.findRenderById(locked[1]!.id))?.unlocked).toBe(false);
+    await app.close();
+  });
+});
+
+describe("reveal generate", () => {
+  it("one item makes one render at the single-item price", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId);
+    const before = await repos.getCoinBalance(bob.userId);
+    const res = await generate(app, bob.accessToken, order.id, [items[0]!.id]);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as GenerateRenderResponse;
+    expect(body).toMatchObject({ coinsSpent: REVEAL_GENERATE_COST_COINS, isCombine: false });
+    expect(body.renders).toHaveLength(1);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_GENERATE_COST_COINS);
+    await app.close();
+  });
+
+  it("a combine makes one combined render", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId, 3);
+    const before = await repos.getCoinBalance(bob.userId);
+    const res = await generate(app, bob.accessToken, order.id, items.map((i) => i.id));
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as GenerateRenderResponse;
+    expect(body).toMatchObject({ coinsSpent: REVEAL_COMBINE_COST_COINS, isCombine: true });
+    expect(body.renders).toHaveLength(1);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_COMBINE_COST_COINS);
+    await app.close();
+  });
+
+  it("duplicate ids count once", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId, 2);
+    const before = await repos.getCoinBalance(bob.userId);
+    const id = items[0]!.id;
+
+    const single = await generate(app, bob.accessToken, order.id, [id, id, id]);
+    expect(single.statusCode).toBe(200);
+    expect(single.json()).toMatchObject({ coinsSpent: REVEAL_GENERATE_COST_COINS, isCombine: false });
+    expect((single.json() as GenerateRenderResponse).renders).toHaveLength(1);
+
+    const pair = await generate(app, bob.accessToken, order.id, [id, items[1]!.id, id]);
+    expect(pair.statusCode).toBe(200);
+    expect((pair.json() as GenerateRenderResponse).renders).toHaveLength(1);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(
+      before - REVEAL_GENERATE_COST_COINS - REVEAL_COMBINE_COST_COINS,
+    );
+    await app.close();
+  });
+
+  it("refuses more items than a combine takes, and items from another order", async () => {
+    const { app, repos, alice, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId, REVEAL_COMBINE_MAX_ITEMS + 1);
+    const aliceOrder = await deliveredOrder(repos, alice.userId);
+    const before = await repos.getCoinBalance(bob.userId);
+    const rendersBefore = (await repos.findRendersByOrderId(order.id)).length;
+
+    const tooMany = await generate(app, bob.accessToken, order.id, items.map((i) => i.id));
+    expect(tooMany.statusCode).toBe(400);
+    const thirty = await generate(app, bob.accessToken, order.id, Array(30).fill(items[0]!.id));
+    expect(thirty.statusCode).toBe(400);
+    const foreign = await generate(app, bob.accessToken, order.id, [items[0]!.id, aliceOrder.items[0]!.id]);
+    expect(foreign.statusCode).toBe(400);
+
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before);
+    expect(await repos.findRendersByOrderId(order.id)).toHaveLength(rendersBefore);
+    expect(await repos.findRendersByOrderId(aliceOrder.order.id)).toHaveLength(2);
     await app.close();
   });
 });

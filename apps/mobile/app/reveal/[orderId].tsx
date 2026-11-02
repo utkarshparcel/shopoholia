@@ -12,6 +12,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  REVEAL_COMBINE_COST_COINS,
+  REVEAL_COMBINE_MAX_ITEMS,
+  REVEAL_GENERATE_COST_COINS,
+} from '@worn/shared';
+
 import { submitRevealRating } from '@/src/api/client';
 import { Button, Chip, SectionHeader } from '@/src/components/ui';
 import { RevealDeck } from '@/src/components/reveal/RevealDeck';
@@ -121,13 +127,17 @@ export default function RevealScreen() {
 
   const toggleCombineId = (id: string) => {
     setSelectedCombineIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : prev.length < REVEAL_COMBINE_MAX_ITEMS
+          ? [...prev, id]
+          : prev,
     );
   };
 
   const balance = balanceData?.balance ?? 0;
   const isCombine = selectedCombineIds.length > 1;
-  const generateCost = isCombine ? 75 : 50;
+  const generateCost = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
   const canGenerate = balance >= generateCost && !generating;
   const pendingRenders = hasRendersInProgress(renders);
 
@@ -197,7 +207,7 @@ export default function RevealScreen() {
                 <Text style={styles.combineLabel}>
                   {selectedCombineIds.length > 0
                     ? `${selectedCombineIds.length} item${selectedCombineIds.length > 1 ? 's' : ''} selected (combine)`
-                    : 'Select items to combine'}
+                    : `Select up to ${REVEAL_COMBINE_MAX_ITEMS} items to combine`}
                 </Text>
                 <View style={styles.combineRow}>
                   {orderItemIds.map((id, i) => {

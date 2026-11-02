@@ -83,6 +83,8 @@ export const FREE_REVEAL_RENDERS_PER_ITEM = 2;
 export const REVEAL_UNLOCK_COST_COINS = 50;
 export const REVEAL_GENERATE_COST_COINS = 50;
 export const REVEAL_COMBINE_COST_COINS = 75;
+/** Most order items one combined render can put together. */
+export const REVEAL_COMBINE_MAX_ITEMS = 4;
 
 export const RUSH_TO_EXPRESS_COST_COINS = 25;
 

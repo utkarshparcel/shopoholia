@@ -117,7 +117,7 @@ export async function processRenderJob(
 
       for (const orderItemId of itemIds) {
         const orderItem = await deps.repos.findOrderItemById(orderItemId);
-        if (!orderItem) continue;
+        if (!orderItem || orderItem.orderId !== orderId) continue;
 
         const variant = await deps.repos.findVariantById(orderItem.listingVariantId);
         if (!variant) continue;

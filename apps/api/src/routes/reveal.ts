@@ -14,6 +14,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { renderCardDto } from "../lib/render/dto.js";
+import { InsufficientCoinsError } from "../lib/repositories/errors.js";
 import { processRenderJob } from "../lib/render/pipeline.js";
 
 const OrderParamsSchema = z.object({
@@ -178,9 +179,20 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const isCombine = request.body.orderItemIds.length > 1;
-      const coinsPerRender = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
-      const totalCost = coinsPerRender;
+      const orderItemIds = [...new Set(request.body.orderItemIds)];
+      const items = await app.deps.repos.listOrderItemsByOrderId(order.id);
+      const validItemIds = new Set(items.map((i) => i.id));
+      const invalidItemIds = orderItemIds.filter((id) => !validItemIds.has(id));
+      if (invalidItemIds.length > 0) {
+        return reply.code(400).send({
+          error: "Bad Request",
+          message: `Invalid order items: ${invalidItemIds.join(", ")}`,
+        });
+      }
+
+      // One render either way: a single item's, or one combined render of all of them.
+      const isCombine = orderItemIds.length > 1;
+      const totalCost = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
 
       const balance = await app.deps.repos.getCoinBalance(request.user.sub);
       if (balance < totalCost) {
@@ -190,36 +202,34 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const items = await app.deps.repos.listOrderItemsByOrderId(order.id);
-      const validItemIds = new Set(items.map((i) => i.id));
-      const invalidItemIds = request.body.orderItemIds.filter((id) => !validItemIds.has(id));
-      if (invalidItemIds.length > 0) {
-        return reply.code(400).send({
-          error: "Bad Request",
-          message: `Invalid order items: ${invalidItemIds.join(", ")}`,
+      try {
+        await app.deps.repos.spendCoins({
+          userId: request.user.sub,
+          delta: totalCost,
+          type: "SPEND_UNLOCK",
+          refType: "order",
+          refId: order.id,
+        });
+      } catch (error) {
+        if (!(error instanceof InsufficientCoinsError)) throw error;
+        return reply.code(402).send({
+          error: "INSUFFICIENT_COINS",
+          message: `Need ${totalCost} coins for this render.`,
         });
       }
 
-      await app.deps.repos.spendCoins({
-        userId: request.user.sub,
-        delta: totalCost,
-        type: "SPEND_UNLOCK",
-        refType: "order",
-        refId: order.id,
-      });
-
-      const creates = request.body.orderItemIds.map((orderItemId) => ({
-        orderItemId,
-        scenario: request.body.scenario,
-        imageKey: null,
-        isFree: false,
-        unlocked: true,
-        provider: isCombine
-          ? `combined:${request.body.orderItemIds.join(",")}`
-          : "user-generated",
-        status: "QUEUED" as const,
-        costMicros: 0,
-      }));
+      const creates = [
+        {
+          orderItemId: orderItemIds[0]!,
+          scenario: request.body.scenario,
+          imageKey: null,
+          isFree: false,
+          unlocked: true,
+          provider: isCombine ? `combined:${orderItemIds.join(",")}` : "user-generated",
+          status: "QUEUED" as const,
+          costMicros: 0,
+        },
+      ];
 
       const newRenders = await app.deps.repos.createRenders(creates);
 

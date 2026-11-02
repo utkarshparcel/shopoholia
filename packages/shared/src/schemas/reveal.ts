@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REVEAL_COMBINE_MAX_ITEMS } from "../economy.js";
 
 export const RenderScenarioSchema = z.enum([
   "STUDIO",
@@ -49,8 +50,12 @@ export const UnlockResponseSchema = z.object({
 
 export type UnlockResponse = z.infer<typeof UnlockResponseSchema>;
 
+/**
+ * One id renders that item; several (repeats count once, at most REVEAL_COMBINE_MAX_ITEMS) make
+ * one combined render of them together. Every id must be a line of the order.
+ */
 export const GenerateRenderBodySchema = z.object({
-  orderItemIds: z.array(z.string().uuid()).min(1),
+  orderItemIds: z.array(z.string().uuid()).min(1).max(REVEAL_COMBINE_MAX_ITEMS),
   scenario: RenderScenarioSchema,
 });
 
