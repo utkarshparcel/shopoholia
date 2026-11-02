@@ -14,7 +14,6 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { renderCardDto } from "../lib/render/dto.js";
-import { InsufficientCoinsError } from "../lib/repositories/errors.js";
 import { processRenderJob } from "../lib/render/pipeline.js";
 
 const OrderParamsSchema = z.object({
@@ -194,44 +193,47 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
       const isCombine = orderItemIds.length > 1;
       const totalCost = isCombine ? REVEAL_COMBINE_COST_COINS : REVEAL_GENERATE_COST_COINS;
 
-      const balance = await app.deps.repos.getCoinBalance(request.user.sub);
-      if (balance < totalCost) {
-        return reply.code(402).send({
-          error: "INSUFFICIENT_COINS",
-          message: `Need ${totalCost} coins for this render. You have ${balance}.`,
-        });
-      }
-
-      try {
-        await app.deps.repos.spendCoins({
-          userId: request.user.sub,
-          delta: totalCost,
-          type: "SPEND_UNLOCK",
-          refType: "order",
-          refId: order.id,
-        });
-      } catch (error) {
-        if (!(error instanceof InsufficientCoinsError)) throw error;
-        return reply.code(402).send({
-          error: "INSUFFICIENT_COINS",
-          message: `Need ${totalCost} coins for this render.`,
-        });
-      }
-
-      const creates = [
-        {
+      // The debit and the render are one step, so a retried or double-tapped request with the
+      // same key gets the first one's render back and is not charged again.
+      const result = await app.deps.repos.purchaseRender({
+        userId: request.user.sub,
+        orderId: order.id,
+        render: {
           orderItemId: orderItemIds[0]!,
           scenario: request.body.scenario,
           imageKey: null,
           isFree: false,
           unlocked: true,
-          provider: isCombine ? `combined:${orderItemIds.join(",")}` : "user-generated",
-          status: "QUEUED" as const,
+          provider: "user-generated",
+          combinedItemIds: isCombine ? orderItemIds : null,
+          status: "QUEUED",
           costMicros: 0,
         },
-      ];
+        cost: totalCost,
+        ledgerType: isCombine ? "SPEND_COMBINE" : "SPEND_RENDER",
+        idempotencyKey: request.body.idempotencyKey,
+      });
 
-      const newRenders = await app.deps.repos.createRenders(creates);
+      if (result.status === "not_found") {
+        return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (result.status === "insufficient_coins") {
+        return reply.code(402).send({
+          error: "INSUFFICIENT_COINS",
+          message: `Need ${totalCost} coins for this render. You have ${result.balance}.`,
+        });
+      }
+      if (result.status === "replayed") {
+        // The first call's render, whatever this body asked for; it was queued by that call.
+        const cards = result.render ? [await renderCardDto(result.render, app.deps.storage)] : [];
+        return {
+          renders: cards,
+          coinsSpent: result.coinsSpent,
+          isCombine: result.ledgerType === "SPEND_COMBINE",
+        };
+      }
+
+      const newRenders = [result.render];
 
       for (const render of newRenders) {
         if (app.deps.jobQueue.enqueueRender) {

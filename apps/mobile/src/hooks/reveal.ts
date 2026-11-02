@@ -77,13 +77,25 @@ export function useGenerateRenders(orderId: string) {
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
   const queryClient = useQueryClient();
+  // One key per render asked for (its items and scenario), kept until it succeeds: a retry, or a
+  // second tap while the first is in flight, sends the same key and the server charges once.
+  const pendingKeys = useRef(new Map<string, string>());
+  const attemptOf = (input: { orderItemIds: string[]; scenario: string }) =>
+    `${[...new Set(input.orderItemIds)].sort().join(',')}|${input.scenario}`;
 
   return useMutation({
     mutationFn: (input: { orderItemIds: string[]; scenario: string }) => {
       if (!accessToken) throw new Error('Sign in to generate renders');
-      return generateRenders(accessToken, orderId, input.orderItemIds, input.scenario);
+      const attempt = attemptOf(input);
+      let idempotencyKey = pendingKeys.current.get(attempt);
+      if (!idempotencyKey) {
+        idempotencyKey = newIdempotencyKey();
+        pendingKeys.current.set(attempt, idempotencyKey);
+      }
+      return generateRenders(accessToken, orderId, input.orderItemIds, input.scenario, idempotencyKey);
     },
-    onSuccess: async (result) => {
+    onSuccess: async (result, input) => {
+      pendingKeys.current.delete(attemptOf(input));
       if (!accessToken) return;
       const balance = await fetchCoinBalance(accessToken);
       setCoinBalance(balance.balance);

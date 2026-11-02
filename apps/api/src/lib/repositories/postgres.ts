@@ -85,7 +85,7 @@ import {
 import { InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
-import { cashbackLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -294,7 +294,7 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
       tier: input.tier,
       state: "PROCESSING",
       coinTotal: input.coinTotal,
-      placedAt: timestamp,
+      placedAt: input.placedAt ?? timestamp,
       stateEta: input.stateEta,
       revealReadyAt: null,
       idempotencyKey: input.idempotencyKey ?? null,
@@ -681,6 +681,7 @@ function mapRender(row: RenderRow): RenderRecord {
     isFree: row.isFree,
     unlocked: row.unlocked,
     provider: row.provider,
+    combinedItemIds: row.combinedItemIds ?? null,
     status: row.status,
     costMicros: row.costMicros,
     createdAt: row.createdAt,
@@ -2802,6 +2803,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             isFree: row.isFree,
             unlocked: row.unlocked,
             provider: row.provider,
+            combinedItemIds: row.combinedItemIds ?? null,
             status: row.status,
             costMicros: row.costMicros,
             createdAt: timestamp,
@@ -2936,6 +2938,69 @@ export function createPostgresRepositories(db: Db): Repositories {
         }
         throw error;
       }
+    },
+
+    async purchaseRender(input) {
+      const key = input.idempotencyKey;
+      const renderId = key ? revealGenerateLedgerRef(input.orderId, key) : randomUUID();
+      const ref = key ? { refType: "reveal_generate", refId: renderId } : { refType: "order", refId: input.orderId };
+      return db.transaction(async (tx) => {
+        // The user's row first, as every coin write does: a repeat of the key waits here and
+        // then finds the first one's ledger entry and render, both committed together.
+        const balance = await lockedCoinBalance(tx, input.userId);
+        if (key) {
+          const [prior] = await tx
+            .select({ delta: coinLedger.delta, type: coinLedger.type })
+            .from(coinLedger)
+            .where(
+              and(
+                eq(coinLedger.userId, input.userId),
+                eq(coinLedger.refType, ref.refType),
+                eq(coinLedger.refId, ref.refId),
+              ),
+            )
+            .limit(1);
+          if (prior) {
+            const [row] = await tx.select().from(renders).where(eq(renders.id, renderId)).limit(1);
+            return {
+              status: "replayed" as const,
+              render: row ? mapRender(row) : null,
+              coinsSpent: Math.abs(prior.delta),
+              ledgerType: prior.type,
+            };
+          }
+        }
+
+        const [item] = await tx
+          .select({ id: orderItems.id })
+          .from(orderItems)
+          .innerJoin(orders, eq(orderItems.orderId, orders.id))
+          .where(
+            and(
+              eq(orderItems.id, input.render.orderItemId),
+              eq(orders.id, input.orderId),
+              eq(orders.userId, input.userId),
+            ),
+          )
+          .limit(1);
+        if (!item) return { status: "not_found" as const };
+        if (balance < input.cost) {
+          return { status: "insufficient_coins" as const, coinsNeeded: input.cost, balance };
+        }
+
+        const timestamp = now();
+        const [row] = await tx
+          .insert(renders)
+          .values({ ...input.render, id: renderId, createdAt: timestamp, updatedAt: timestamp })
+          .returning();
+        const balanceAfter = balance - input.cost;
+        await appendCoinLedger(
+          tx,
+          { userId: input.userId, delta: -input.cost, type: input.ledgerType, ...ref },
+          balanceAfter,
+        );
+        return { status: "created" as const, render: mapRender(row!), coinsSpent: input.cost, balanceAfter };
+      });
     },
 
     async recordRevealRating(input) {

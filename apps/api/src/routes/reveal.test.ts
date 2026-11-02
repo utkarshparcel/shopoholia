@@ -69,12 +69,12 @@ function unlock(app: App, accessToken: string, orderId: string, payload: object)
   });
 }
 
-function generate(app: App, accessToken: string, orderId: string, orderItemIds: string[]) {
+function generate(app: App, accessToken: string, orderId: string, orderItemIds: string[], idempotencyKey?: string) {
   return app.inject({
     method: "POST",
     url: `/orders/${orderId}/reveal/generate`,
     headers: { authorization: `Bearer ${accessToken}` },
-    payload: { orderItemIds, scenario: "STUDIO" },
+    payload: { orderItemIds, scenario: "STUDIO", idempotencyKey },
   });
 }
 
@@ -217,6 +217,12 @@ describe("reveal generate", () => {
     expect(body).toMatchObject({ coinsSpent: REVEAL_COMBINE_COST_COINS, isCombine: true });
     expect(body.renders).toHaveLength(1);
     expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_COMBINE_COST_COINS);
+    // Done, and it still knows its items: the provider name no longer overwrites them.
+    expect(await repos.findRenderById(body.renders[0]!.id)).toMatchObject({
+      status: "DONE",
+      provider: app.deps.renderProvider.name,
+      combinedItemIds: items.map((i) => i.id),
+    });
     await app.close();
   });
 
@@ -257,6 +263,116 @@ describe("reveal generate", () => {
     expect(await repos.getCoinBalance(bob.userId)).toBe(before);
     expect(await repos.findRendersByOrderId(order.id)).toHaveLength(rendersBefore);
     expect(await repos.findRendersByOrderId(aliceOrder.order.id)).toHaveLength(2);
+    await app.close();
+  });
+});
+
+describe("reveal generate ledger", () => {
+  it("records a generate as SPEND_RENDER and a combine as SPEND_COMBINE, and lists them", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId, 2);
+    expect((await generate(app, bob.accessToken, order.id, [items[0]!.id])).statusCode).toBe(200);
+    expect((await generate(app, bob.accessToken, order.id, items.map((i) => i.id))).statusCode).toBe(200);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/coins/transactions",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const { transactions } = res.json() as { transactions: Array<{ type: string; delta: number }> };
+    // Same-millisecond entries can list in either order on memory.
+    expect(transactions.filter((t) => t.type !== "GRANT").map((t) => [t.type, t.delta]).sort()).toEqual([
+      ["SPEND_COMBINE", -REVEAL_COMBINE_COST_COINS],
+      ["SPEND_RENDER", -REVEAL_GENERATE_COST_COINS],
+    ]);
+    await app.close();
+  });
+});
+
+describe("reveal generate idempotency", () => {
+  it("a retried key returns the first render and charges once", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId);
+    const before = await repos.getCoinBalance(bob.userId);
+    const rendersBefore = (await repos.findRendersByOrderId(order.id)).length;
+    const key = randomUUID();
+
+    const first = await generate(app, bob.accessToken, order.id, [items[0]!.id], key);
+    const retry = await generate(app, bob.accessToken, order.id, [items[0]!.id], key);
+
+    expect([first.statusCode, retry.statusCode]).toEqual([200, 200]);
+    const a = first.json() as GenerateRenderResponse;
+    const b = retry.json() as GenerateRenderResponse;
+    expect(b).toMatchObject({ coinsSpent: REVEAL_GENERATE_COST_COINS, isCombine: false });
+    expect(b.renders.map((r) => r.id)).toEqual(a.renders.map((r) => r.id));
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_GENERATE_COST_COINS);
+    expect(await repos.findRendersByOrderId(order.id)).toHaveLength(rendersBefore + 1);
+    await app.close();
+  });
+
+  it("parallel combines with one key charge once and make one render", async () => {
+    const { app, repos, bob } = await setup();
+    slowBalanceReads(repos);
+    const { order, items } = await deliveredOrder(repos, bob.userId, 2);
+    const before = await repos.getCoinBalance(bob.userId);
+    const rendersBefore = (await repos.findRendersByOrderId(order.id)).length;
+    const key = randomUUID();
+
+    const results = await Promise.all(
+      [1, 2, 3, 4].map(() => generate(app, bob.accessToken, order.id, items.map((i) => i.id), key)),
+    );
+
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200, 200]);
+    const bodies = results.map((r) => r.json() as GenerateRenderResponse);
+    expect(bodies.map((body) => [body.coinsSpent, body.isCombine])).toEqual(
+      Array(4).fill([REVEAL_COMBINE_COST_COINS, true]),
+    );
+    expect(new Set(bodies.map((body) => body.renders[0]!.id)).size).toBe(1);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_COMBINE_COST_COINS);
+    expect(await repos.findRendersByOrderId(order.id)).toHaveLength(rendersBefore + 1);
+    await app.close();
+  });
+
+  it("a replay is not refused when the balance has since run out", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId);
+    const key = randomUUID();
+    expect((await generate(app, bob.accessToken, order.id, [items[0]!.id], key)).statusCode).toBe(200);
+    await repos.spendCoins({ userId: bob.userId, delta: await repos.getCoinBalance(bob.userId), type: "SPEND_UNLOCK" });
+
+    const replay = await generate(app, bob.accessToken, order.id, [items[0]!.id], key);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ coinsSpent: REVEAL_GENERATE_COST_COINS });
+    expect((await generate(app, bob.accessToken, order.id, [items[0]!.id], randomUUID())).statusCode).toBe(402);
+    await app.close();
+  });
+
+  it("the same key on another order makes a new render there", async () => {
+    const { app, repos, bob } = await setup();
+    const x = await deliveredOrder(repos, bob.userId);
+    const y = await deliveredOrder(repos, bob.userId);
+    const before = await repos.getCoinBalance(bob.userId);
+    const key = randomUUID();
+
+    const onX = await generate(app, bob.accessToken, x.order.id, [x.items[0]!.id], key);
+    const onY = await generate(app, bob.accessToken, y.order.id, [y.items[0]!.id], key);
+
+    expect([onX.statusCode, onY.statusCode]).toEqual([200, 200]);
+    const yRender = (onY.json() as GenerateRenderResponse).renders[0]!;
+    expect(yRender.orderItemId).toBe(y.items[0]!.id);
+    expect(yRender.id).not.toBe((onX.json() as GenerateRenderResponse).renders[0]!.id);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - 2 * REVEAL_GENERATE_COST_COINS);
+    await app.close();
+  });
+
+  it("without a key, each request is a new render", async () => {
+    const { app, repos, bob } = await setup();
+    const { order, items } = await deliveredOrder(repos, bob.userId);
+    const before = await repos.getCoinBalance(bob.userId);
+    await generate(app, bob.accessToken, order.id, [items[0]!.id]);
+    await generate(app, bob.accessToken, order.id, [items[0]!.id]);
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before - 2 * REVEAL_GENERATE_COST_COINS);
     await app.close();
   });
 });

@@ -54,6 +54,8 @@ export const coinLedgerTypeEnum = pgEnum("coin_ledger_type", [
   "IAP_PURCHASE",
   "SPEND_ORDER",
   "SPEND_UNLOCK",
+  "SPEND_RENDER",
+  "SPEND_COMBINE",
   "SPEND_RUSH",
   "EARN_STREAK",
   "EARN_SHARE",

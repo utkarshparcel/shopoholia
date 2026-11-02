@@ -3,9 +3,15 @@ import { act, render, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchCoinBalance, fetchReveal, unlockRenders, type RenderCard } from '@/src/api/client';
+import {
+  fetchCoinBalance,
+  fetchReveal,
+  generateRenders,
+  unlockRenders,
+  type RenderCard,
+} from '@/src/api/client';
 
-import { useReveal, useUnlockRenders } from './reveal';
+import { useGenerateRenders, useReveal, useUnlockRenders } from './reveal';
 
 vi.mock('expo-crypto', () => {
   let count = 0;
@@ -139,5 +145,53 @@ describe('useUnlockRenders', () => {
     expect(keys[1]).toBe(keys[0]);
     expect(keys[2]).not.toBe(keys[0]);
     expect(vi.mocked(unlockRenders).mock.calls[2]?.slice(1, 3)).toEqual([ORDER_ID, ['locked-2']]);
+  });
+});
+
+describe('useGenerateRenders', () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  function mountGenerate() {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return renderHook(() => useGenerateRenders(ORDER_ID), { wrapper }).result;
+  }
+
+  it('sends one idempotency key per render asked for, the same on a retry and new after success', async () => {
+    vi.mocked(fetchCoinBalance).mockResolvedValue({ balance: 100 } as never);
+    vi.mocked(generateRenders)
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValue({ renders: [], coinsSpent: 75, isCombine: true });
+    const result = mountGenerate();
+    const combine = { orderItemIds: ['item-1', 'item-2'], scenario: 'STUDIO' };
+
+    await act(async () => {
+      await result.current.mutateAsync(combine).catch(() => undefined);
+    });
+    await act(async () => {
+      // The same items in another order are the same render.
+      await result.current.mutateAsync({ ...combine, orderItemIds: ['item-2', 'item-1'] });
+    });
+    await act(async () => {
+      await result.current.mutateAsync(combine);
+    });
+    await act(async () => {
+      await result.current.mutateAsync({ ...combine, scenario: 'NIGHT' });
+    });
+
+    const keys = vi.mocked(generateRenders).mock.calls.map((call) => call[4]);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(new Set(keys).size).toBe(3);
+    expect(vi.mocked(generateRenders).mock.calls[3]?.slice(1, 4)).toEqual([
+      ORDER_ID,
+      ['item-1', 'item-2'],
+      'NIGHT',
+    ]);
   });
 });

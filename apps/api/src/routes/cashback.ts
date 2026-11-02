@@ -7,6 +7,7 @@ import {
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { secretsEqual } from "../lib/auth/admin.js";
 import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import {
@@ -17,6 +18,11 @@ import {
 } from "../lib/closet-affiliate.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
+
+/** X-Webhook-Secret against the configured secret, in constant time; a repeated header fails. */
+function webhookSecretMatches(header: string | string[] | undefined, secret: string): boolean {
+  return typeof header === "string" && secretsEqual(header, secret);
+}
 
 export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
@@ -126,10 +132,10 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
             message: "Cashback webhook is not configured",
           });
         }
-        if (request.headers["x-webhook-secret"] !== secret) {
+        if (!webhookSecretMatches(request.headers["x-webhook-secret"], secret)) {
           return reply.code(401).send({ error: "Unauthorized", message: "Invalid webhook secret" });
         }
-      } else if (secret && request.headers["x-webhook-secret"] !== secret) {
+      } else if (secret && !webhookSecretMatches(request.headers["x-webhook-secret"], secret)) {
         return reply.code(401).send({ error: "Unauthorized", message: "Invalid webhook secret" });
       }
 
