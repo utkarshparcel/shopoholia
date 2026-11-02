@@ -116,7 +116,8 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
       if (!el) return;
       e.preventDefault();
       if (location.hash !== hash) history.pushState(history.state, '', hash);
-      scrollToAnchor(el);
+      // The skip link only needs to move focus past the header: the reader is already in <main>.
+      if (el.tagName !== 'MAIN') scrollToAnchor(el);
       focusTarget(el);
     };
     window.addEventListener('click', onClick, true);

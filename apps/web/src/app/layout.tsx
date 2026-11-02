@@ -104,7 +104,7 @@ export default function RootLayout({
         <GrainOverlay />
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 z-50 btn-primary"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:px-5 focus:py-3 z-[60] btn-primary"
         >
           Skip to main content
         </a>
