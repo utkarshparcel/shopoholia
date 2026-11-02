@@ -77,10 +77,23 @@ export function stepStateForOrder(
   return 'todo';
 }
 
+/**
+ * Time left until `targetIso`: `m:ss` under 10 minutes (beta stages are 10–120 s apart, so a
+ * whole-minute label would sit still while `useNow` ticks every second), `N min` up to an hour,
+ * then hours.
+ */
 export function formatCountdown(targetIso?: string, now = Date.now()): string {
   if (!targetIso) return 'Soon';
-  const diff = new Date(targetIso).getTime() - now;
+  const target = new Date(targetIso).getTime();
+  if (Number.isNaN(target)) return 'Soon';
+  const diff = target - now;
   if (diff <= 0) return 'Any moment';
+  const secs = Math.ceil(diff / 1000);
+  if (secs < 600) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
   const mins = Math.ceil(diff / 60_000);
   if (mins < 60) return `${mins} min`;
   const hours = Math.floor(mins / 60);

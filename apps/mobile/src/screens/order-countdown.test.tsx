@@ -55,13 +55,19 @@ describe('order countdown', () => {
 
   it('keeps counting down while the polled order stays the same', () => {
     render(<OrderTrackingScreen />);
-    expect(screen.getAllByText('2 min').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2:00').length).toBeGreaterThan(0);
+
+    // Every second shows, not just every minute.
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(screen.queryAllByText('2:00')).toHaveLength(0);
+    expect(screen.getAllByText('1:59').length).toBeGreaterThan(0);
 
     act(() => {
-      vi.advanceTimersByTime(61_000);
+      vi.advanceTimersByTime(60_000);
     });
-    expect(screen.queryAllByText('2 min')).toHaveLength(0);
-    expect(screen.getAllByText('1 min').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('0:59').length).toBeGreaterThan(0);
 
     act(() => {
       vi.advanceTimersByTime(60_000);

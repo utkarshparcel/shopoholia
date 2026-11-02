@@ -31,8 +31,33 @@ describe('order-tracking', () => {
 
   it('formats countdown labels', () => {
     const now = new Date('2026-06-18T12:00:00.000Z').getTime();
-    expect(formatCountdown('2026-06-18T12:04:00.000Z', now)).toBe('4 min');
-    expect(nextEtaLabel(baseOrder, now)).toBe('5 min');
+    expect(formatCountdown('2026-06-18T12:04:00.000Z', now)).toBe('4:00');
+    expect(nextEtaLabel(baseOrder, now)).toBe('5:00');
+  });
+
+  it('counts seconds under 10 minutes so short beta stages visibly tick', () => {
+    const now = new Date('2026-06-18T12:00:00.000Z').getTime();
+    expect(formatCountdown('2026-06-18T12:01:07.000Z', now)).toBe('1:07');
+    expect(formatCountdown('2026-06-18T12:01:07.000Z', now + 1000)).toBe('1:06');
+    expect(formatCountdown('2026-06-18T12:00:09.000Z', now)).toBe('0:09');
+    // A partial second rounds up, so it never shows 0:00 while time remains.
+    expect(formatCountdown('2026-06-18T12:00:00.400Z', now)).toBe('0:01');
+    expect(formatCountdown('2026-06-18T12:09:59.000Z', now)).toBe('9:59');
+  });
+
+  it('uses minutes from 10 minutes and hours from an hour', () => {
+    const now = new Date('2026-06-18T12:00:00.000Z').getTime();
+    expect(formatCountdown('2026-06-18T12:10:00.000Z', now)).toBe('10 min');
+    expect(formatCountdown('2026-06-18T12:23:30.000Z', now)).toBe('24 min');
+    expect(formatCountdown('2026-06-18T13:00:00.000Z', now)).toBe('1h');
+    expect(formatCountdown('2026-06-18T13:25:00.000Z', now)).toBe('1h 25m');
+  });
+
+  it('keeps the no-ETA and past handling', () => {
+    const now = new Date('2026-06-18T12:00:00.000Z').getTime();
+    expect(formatCountdown(undefined, now)).toBe('Soon');
+    expect(formatCountdown('2026-06-18T12:00:00.000Z', now)).toBe('Any moment');
+    expect(formatCountdown('2026-06-18T11:59:00.000Z', now)).toBe('Any moment');
   });
 });
 
