@@ -247,7 +247,11 @@ export function DropStage() {
   const [step, setStep] = useState(0);
   const [scene, setScene] = useState(0);
   const [chosen, setChosen] = useState(DROP);
-  const [playing, setPlaying] = useState(true);
+  const [playing, setPlaying] = useState(true); // motion on: the ring spins, and autoplay may run once armed
+  // Autoplay walks the page scroll, so it only starts once the reader works the stage (a step,
+  // prev/next, a scene, a card, Play) and stops for good on their own wheel, touch or key input.
+  const [auto, setAuto] = useState(false);
+  const [tabShown, setTabShown] = useState(true);
   const [beat, setBeat] = useState(0); // bumps on every go(), so re-entering the current step re-arms autoplay
   const [pinned, setPinned] = useState(false); // strictly inside the pin range — the page scroll is walking the stage
   const [geom, setGeom] = useState({ R: 300, w: 150, h: 232, sw: 299, sh: 448, H: 800, small: false });
@@ -508,14 +512,23 @@ export function DropStage() {
     else window.scrollTo({ top: y, behavior: 'instant' as ScrollBehavior });
   }, []);
 
+  /* the reader working the stage's own controls: go there, and let autoplay carry on from it */
+  const steer = useCallback(
+    (b: number) => {
+      setAuto(true);
+      jumpTo(b);
+    },
+    [jumpTo],
+  );
+
   /* tap a card on the rail — that piece flies instead of tonight's pick */
   const pick = useCallback(
     (i: number) => {
       chosenRef.current = i;
       setChosen(i);
-      jumpTo(1);
+      steer(1);
     },
-    [jumpTo],
+    [steer],
   );
 
   /* same spot, different piece — the new look wipes down over the old one under a flash */
@@ -585,19 +598,55 @@ export function DropStage() {
   /* autoplay — each beat hands off to the next at its own pace (the flight hands off by itself; the last panel holds) */
   useEffect(() => {
     clearTimers();
-    if (!playing || !active || reduced) return;
+    if (!playing || !auto || !tabShown || !active || reduced) return;
     const dwell = STEPS[step].dwell;
     if (!dwell || step === 1) return;
     timers.current.push(window.setTimeout(() => jumpTo(beatRef.current + 1), dwell));
     return clearTimers;
-  }, [step, scene, beat, playing, active, reduced, jumpTo, clearTimers]);
+  }, [step, scene, beat, playing, auto, tabShown, active, reduced, jumpTo, clearTimers]);
+
+  /* a hidden tab holds autoplay where it is; coming back re-arms the current beat's dwell */
+  useEffect(() => {
+    const onVis = () => setTabShown(document.visibilityState === 'visible');
+    onVis();
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  /* the reader's own scrolling (wheel, touch, keys) ends autoplay for good; using the stage's controls doesn't */
+  useEffect(() => {
+    if (!auto) return;
+    const stop = () => setAuto(false);
+    const onTouch = (e: TouchEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-stage-controls]')) return;
+      stop();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (/^(Tab|Shift|Control|Alt|Meta|CapsLock)$/.test(e.key)) return;
+      const t = e.target instanceof Element ? e.target : null;
+      // Enter/Space activating one of the stage's buttons is working the stage, not leaving it
+      if ((e.key === 'Enter' || e.key === ' ') && t?.closest('button, a') && sectionRef.current?.contains(t)) return;
+      stop();
+    };
+    window.addEventListener('wheel', stop, { passive: true });
+    window.addEventListener('touchstart', onTouch, { passive: true });
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('wheel', stop);
+      window.removeEventListener('touchstart', onTouch);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [auto]);
 
   /* keys walk the beats too while the stage is pinned; at either end they fall through to the page */
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+      // Space on a focused control presses it (Pause, a step, a link); it must not scroll instead
+      if (e.key === ' ' && t?.closest('a, button, [role="button"], summary')) return;
       const b = beatRef.current;
       const fwd = e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey);
       const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey);
@@ -735,7 +784,7 @@ export function DropStage() {
         type="button"
         aria-pressed={on}
         aria-label={`See the ${s.label.toLowerCase()} scene`}
-        onClick={() => jumpTo(2 + i)}
+        onClick={() => steer(2 + i)}
         className="group flex items-center gap-2.5 text-left"
       >
         <span
@@ -1100,7 +1149,7 @@ export function DropStage() {
               </a>
               <button
                 type="button"
-                onClick={() => jumpTo(0)}
+                onClick={() => steer(0)}
                 className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-pill border border-worn-paper/25 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-paper/70 transition-colors hover:border-worn-gold hover:text-worn-paper"
               >
                 <RefreshCcw size={11} /> Back to the feed
@@ -1124,9 +1173,9 @@ export function DropStage() {
               <span className="inline-flex items-center gap-1.5 rounded-pill border border-worn-gold/50 bg-worn-gold/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-gold">
                 <Sparkles size={11} /> Coming after Worn Play
               </span>
-              <h3 className="mt-4 font-display text-[clamp(24px,3.2vw,38px)] leading-[1.05] text-worn-paper">
+              <h2 className="mt-4 font-display text-[clamp(24px,3.2vw,38px)] leading-[1.05] text-worn-paper">
                 For the clothes you <em className="text-worn-gold">already</em> bought.
-              </h3>
+              </h2>
               <p className="mx-auto mt-3 max-w-[46ch] font-sans text-[14px] leading-relaxed text-worn-paper/75 sm:text-[15px]">
                 Two hundred pieces, twenty in rotation, nothing to wear at 8 AM. Worn Closet catalogs what you own from your
                 order emails, plans your week, tracks cost per wear and finds the gift cards, warranties and resale money
@@ -1213,7 +1262,7 @@ export function DropStage() {
                   {/* icon only here, so it shares the CTA's line instead of pushing the row up into the post */}
                   <button
                     type="button"
-                    onClick={() => jumpTo(0)}
+                    onClick={() => steer(0)}
                     aria-label="Back to the feed"
                     title="Back to the feed"
                     className="grid h-11 w-11 place-items-center rounded-full border border-worn-paper/25 text-worn-paper/70 transition-colors hover:border-worn-gold hover:text-worn-paper"
@@ -1227,10 +1276,10 @@ export function DropStage() {
         ) : null}
 
         {/* controls — phones get 44px targets: the six steps and play; prev/next join from sm up */}
-        <div className="glass-dark absolute inset-x-0 bottom-4 z-40 mx-auto flex w-fit items-center gap-1 rounded-pill p-1.5">
+        <div data-stage-controls className="glass-dark absolute inset-x-0 bottom-4 z-40 mx-auto flex w-fit items-center gap-1 rounded-pill p-1.5">
           <button
             type="button"
-            onClick={() => jumpTo(beatRef.current - 1)}
+            onClick={() => steer(beatRef.current - 1)}
             aria-label="Previous step"
             className="hidden h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold sm:grid"
           >
@@ -1241,7 +1290,7 @@ export function DropStage() {
               <button
                 key={s.n}
                 type="button"
-                onClick={() => jumpTo(STEP_BEAT[i])}
+                onClick={() => steer(STEP_BEAT[i])}
                 aria-pressed={i === step}
                 className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
                   i === step ? 'bg-worn-paper/10 text-worn-paper' : 'text-worn-paper/70 hover:text-worn-paper'
@@ -1251,11 +1300,11 @@ export function DropStage() {
                 <span className="hidden lg:inline">{s.label}</span>
                 {i === step ? (
                   <motion.span
-                    key={`${step}-${scene}-${beat}-${playing}-${active}`}
+                    key={`${step}-${scene}-${beat}-${playing}-${auto}-${tabShown}-${active}`}
                     aria-hidden="true"
                     className="absolute inset-x-2 bottom-0.5 h-px origin-left bg-worn-gold"
                     initial={{ scaleX: 0 }}
-                    animate={{ scaleX: playing && active && dwellSec > 0 ? 1 : 0 }}
+                    animate={{ scaleX: playing && auto && tabShown && active && dwellSec > 0 ? 1 : 0 }}
                     transition={{ duration: dwellSec, ease: 'linear' }}
                   />
                 ) : null}
@@ -1264,7 +1313,7 @@ export function DropStage() {
           </div>
           <button
             type="button"
-            onClick={() => jumpTo(beatRef.current + 1)}
+            onClick={() => steer(beatRef.current + 1)}
             aria-label="Next step"
             className="hidden h-9 w-9 place-items-center rounded-full text-worn-paper/70 transition-colors hover:text-worn-gold sm:grid"
           >
@@ -1272,7 +1321,11 @@ export function DropStage() {
           </button>
           <button
             type="button"
-            onClick={() => setPlaying((p) => !p)}
+            onClick={() => {
+              // Play is working the stage: it arms autoplay. Pause stops the ring and autoplay.
+              setAuto(!playing);
+              setPlaying(!playing);
+            }}
             aria-label={playing ? 'Pause' : 'Play'}
             className="ml-1 grid h-11 w-11 place-items-center rounded-full bg-worn-gold text-worn-ink transition-transform active:scale-95 sm:h-9 sm:w-9"
           >
