@@ -68,6 +68,8 @@ export default function RevealScreen() {
   const [selectedScenario, setSelectedScenario] = useState('STUDIO');
   const [selectedCombineIds, setSelectedCombineIds] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
+  /** The look just generated: the deck appends it last, so it opens there. */
+  const [newRenderId, setNewRenderId] = useState<string | null>(null);
   const openedTracked = useRef(false);
 
   useEffect(() => {
@@ -99,6 +101,7 @@ export default function RevealScreen() {
         orderItemIds: selectedCombineIds.length > 0 ? selectedCombineIds : [orderItemIds[0]!],
         scenario: selectedScenario,
       });
+      setNewRenderId(result.renders.at(-1)?.id ?? null);
       trackEvent('generate_render', {
         orderId,
         scenario: selectedScenario,
@@ -176,6 +179,7 @@ export default function RevealScreen() {
       ) : (
         <>
           <RevealDeck
+            focusId={newRenderId}
             onUnlock={handleUnlock}
             renders={renders}
             unlockingId={unlockingId}
