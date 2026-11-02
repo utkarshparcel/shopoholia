@@ -132,9 +132,15 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     // defaultPrevented and leaves the scroll to us.
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      const a = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('a[href^="#"]') : null;
-      const hash = a?.getAttribute('href');
-      if (!a || !hash || hash.length < 2 || a.target) return;
+      const a = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('a[href]') : null;
+      if (!a || a.target || a.hasAttribute('download')) return;
+      // Any link to a fragment of this page, however it is written: "#grwm", and also the footer's
+      // "/#grwm" while already on "/" (which the browser would otherwise jump to natively, with no
+      // room for the header). The same "/#grwm" on /closet resolves to another page and is left alone.
+      const url = new URL(a.href, location.href);
+      if (url.origin !== location.origin || url.pathname !== location.pathname || url.search !== location.search) return;
+      const hash = url.hash;
+      if (hash.length < 2) return;
       const el = document.getElementById(decodeURIComponent(hash.slice(1)));
       if (!el) return;
       e.preventDefault();
