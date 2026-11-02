@@ -93,7 +93,9 @@ export function Navigation() {
   return (
     <motion.header
       initial={{ y: 0 }}
-      animate={{ y: visible ? 0 : -100 }}
+      // its own full height (border included), not a fixed 100px: the header is taller than that when
+      // its bar wraps or the menu is open, and a fixed offset left a strip of it showing
+      animate={{ y: visible ? 0 : '-100%' }}
       transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
       // keyboard users tabbing into a hidden header get it back
       onFocusCapture={() => setHidden(false)}
