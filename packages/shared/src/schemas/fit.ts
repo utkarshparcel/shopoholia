@@ -122,7 +122,8 @@ export const TailorsResponseSchema = z.object({
 export type TailorsResponse = z.infer<typeof TailorsResponseSchema>;
 
 export const CreateTailorReviewBodySchema = z.object({
-  orderId: z.string().uuid().optional().nullable(),
+  /** The caller's delivered order with this tailor; each order can be reviewed once. */
+  orderId: z.string().uuid(),
   rating: z.number().int().min(1).max(5),
   comment: z.string().max(500).optional().nullable(),
 });

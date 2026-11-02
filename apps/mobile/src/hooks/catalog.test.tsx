@@ -105,6 +105,24 @@ describe('useTryon', () => {
     expect(requestTryon).toHaveBeenCalledTimes(3);
   });
 
+  it('fails with when to try again when the render failed', async () => {
+    vi.mocked(requestTryon).mockResolvedValue({
+      status: 'FAILED',
+      previewUrl: null,
+      retryAfter: new Date(Date.now() + 14 * 60_000 + 1).toISOString(),
+    });
+    const { result } = renderTryon();
+
+    let failure: unknown;
+    await act(async () => {
+      await result.current.mutateAsync().catch((error: unknown) => {
+        failure = error;
+      });
+    });
+    expect(requestTryon).toHaveBeenCalledTimes(1);
+    expect((failure as Error).message).toBe("This try-on didn't work. Try again in 15 min.");
+  });
+
   it('gives up after a minute, with a failure that is not about the avatar', async () => {
     vi.mocked(requestTryon).mockResolvedValue(PROCESSING);
     const { result } = renderTryon();

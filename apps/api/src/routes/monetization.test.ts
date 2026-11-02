@@ -12,6 +12,7 @@ describe("monetization routes", () => {
     "APPLE_BUNDLE_ID",
     "ANDROID_PACKAGE_NAME",
     "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON",
+    "ADMIN_SECRET",
   ] as const;
   const originals: Record<string, string | undefined> = {};
 
@@ -25,6 +26,7 @@ describe("monetization routes", () => {
     process.env.IAP_ALLOW_SIMULATED = "1";
     process.env.FEATURE_TAKE_RATE = "1";
     process.env.EXPERIMENT_UPI_CHECKOUT = "1";
+    process.env.ADMIN_SECRET = "test-admin-secret";
     const s = await buildTestServer();
     app = s.app;
   });
@@ -80,10 +82,11 @@ describe("monetization routes", () => {
 
   it("settles marketplace order and exports CSV", async () => {
     const { accessToken } = await login(app);
+    const admin = { authorization: `Bearer ${accessToken}`, "x-admin-secret": "test-admin-secret" };
     const settle = await app.inject({
       method: "POST",
       url: "/marketplace/settlements",
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: admin,
       payload: {
         kind: "resale",
         orderRef: "disp-route-1",
@@ -97,10 +100,43 @@ describe("monetization routes", () => {
     const csv = await app.inject({
       method: "GET",
       url: "/marketplace/settlements/export.csv",
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: admin,
     });
     expect(csv.statusCode).toBe(200);
     expect(csv.body).toContain("platform_fee_minor");
+
+    const list = await app.inject({ method: "GET", url: "/marketplace/settlements", headers: admin });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().settlements).toHaveLength(1);
+  });
+
+  it("keeps marketplace settlements from signed-in users without the admin secret", async () => {
+    const { accessToken } = await login(app);
+    const requests = [
+      {
+        method: "POST" as const,
+        url: "/marketplace/settlements",
+        payload: { kind: "resale", orderRef: "disp-route-2", sellerId: "seller-route", orderAmountMinor: 100_000 },
+      },
+      { method: "GET" as const, url: "/marketplace/settlements" },
+      { method: "GET" as const, url: "/marketplace/settlements/export.csv" },
+    ];
+    for (const request of requests) {
+      const bare = await app.inject({ ...request, headers: { authorization: `Bearer ${accessToken}` } });
+      expect(bare.statusCode, request.url).toBe(401);
+      const wrong = await app.inject({
+        ...request,
+        headers: { authorization: `Bearer ${accessToken}`, "x-admin-secret": "wrong-secret" },
+      });
+      expect(wrong.statusCode, request.url).toBe(401);
+    }
+
+    // With no ADMIN_SECRET configured they're closed to everyone.
+    delete process.env.ADMIN_SECRET;
+    for (const request of requests) {
+      const res = await app.inject({ ...request, headers: { authorization: `Bearer ${accessToken}` } });
+      expect(res.statusCode, request.url).toBe(403);
+    }
   });
 
   it("refuses UPI payment intents for Closet premium and coins (store billing only)", async () => {

@@ -64,8 +64,13 @@ export const TryonRequestSchema = z.object({
 });
 
 export const TryonResponseSchema = z.object({
-  status: z.enum(["READY", "PROCESSING"]),
+  /**
+   * PROCESSING: a render is queued or running; ask again. FAILED: the last render failed; asking
+   * again before `retryAfter` doesn't start a new one.
+   */
+  status: z.enum(["READY", "PROCESSING", "FAILED"]),
   previewUrl: z.string().url().nullable(),
+  retryAfter: z.string().datetime().nullable().optional(),
 });
 
 export type ListingCard = z.infer<typeof ListingCardSchema>;

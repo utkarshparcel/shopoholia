@@ -113,6 +113,20 @@
       "when": 1793110293169,
       "tag": "0015_closet_backfill_consent_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793594729160,
+      "tag": "0016_emi_due_day",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793595109910,
+      "tag": "0017_tailoring_review_per_order",
+      "breakpoints": true
     }
   ]
 }

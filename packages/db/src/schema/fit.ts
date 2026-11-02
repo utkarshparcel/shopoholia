@@ -109,7 +109,8 @@ export const tailoringReviews = pgTable(
   (t) => [
     index("tailoring_reviews_seller_created_idx").on(t.sellerId, t.createdAt.desc().nullsFirst()),
     index("tailoring_reviews_user_idx").on(t.userId),
-    index("tailoring_reviews_order_idx")
+    // One review per order.
+    uniqueIndex("tailoring_reviews_order_idx")
       .on(t.orderId)
       .where(sql`${t.orderId} IS NOT NULL`),
   ],

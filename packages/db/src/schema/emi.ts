@@ -1,4 +1,4 @@
-import { date, index, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { date, index, integer, pgTable, smallint, text, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { emiPlanStatusEnum } from "./enums.js";
 import { users } from "./users.js";
@@ -17,6 +17,11 @@ export const emiPlans = pgTable(
     remainingMinor: integer("remaining_minor").notNull(),
     installmentMinor: integer("installment_minor").notNull(),
     nextDueOn: date("next_due_on").notNull(),
+    /**
+     * Day of the month installments fall on (1–31). A short month clamps to its last day, and the
+     * next month goes back to this day, so a 31st plan is due Feb 28/29, then Mar 31.
+     */
+    dueDay: smallint("due_day"),
     currency: text("currency").notNull().default("INR"),
     status: emiPlanStatusEnum("status").notNull().default("ACTIVE"),
     /** idempotencyKey of the last recorded payment (POST /emi/:id/pay replays). */

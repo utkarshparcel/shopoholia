@@ -6,6 +6,8 @@ import {
   emiDaysUntilDue,
   emiDueJobId,
   emiDueWithinDays,
+  addEmiMonths,
+  emiDueDayOf,
   nextDueSchedule,
   remainingAfterPayment,
 } from "./emi.js";
@@ -45,6 +47,25 @@ describe("nextDueSchedule", () => {
     expect(schedule[2]!.amountMinor).toBe(5_000);
   });
 
+  it("keeps a 31st plan on month ends instead of drifting", () => {
+    const dues = nextDueSchedule({
+      remainingMinor: 60_000,
+      installmentMinor: 10_000,
+      nextDueOn: "2027-01-31",
+    }).map((i) => i.dueOn);
+    expect(dues).toEqual(["2027-01-31", "2027-02-28", "2027-03-31", "2027-04-30", "2027-05-31", "2027-06-30"]);
+  });
+
+  it("goes back to the plan's due day after a clamped month", () => {
+    const dues = nextDueSchedule({
+      remainingMinor: 30_000,
+      installmentMinor: 10_000,
+      nextDueOn: "2028-02-29",
+      dueDay: 31,
+    }).map((i) => i.dueOn);
+    expect(dues).toEqual(["2028-02-29", "2028-03-31", "2028-04-30"]);
+  });
+
   it("empty when remaining is zero", () => {
     expect(
       nextDueSchedule({
@@ -53,6 +74,46 @@ describe("nextDueSchedule", () => {
         nextDueOn: "2026-09-01",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("addEmiMonths", () => {
+  it("clamps to the last day of shorter months, then returns to the due day", () => {
+    expect(addEmiMonths("2027-01-31", 1)).toBe("2027-02-28");
+    expect(addEmiMonths("2027-02-28", 1, 31)).toBe("2027-03-31");
+    expect(addEmiMonths("2027-03-31", 1, 31)).toBe("2027-04-30");
+    expect(addEmiMonths("2027-04-30", 1, 31)).toBe("2027-05-31");
+    expect(addEmiMonths("2027-01-30", 1)).toBe("2027-02-28");
+    expect(addEmiMonths("2027-02-28", 1, 30)).toBe("2027-03-30");
+  });
+
+  it("uses Feb 29 in leap years", () => {
+    expect(addEmiMonths("2028-01-31", 1)).toBe("2028-02-29");
+    expect(addEmiMonths("2028-01-29", 1)).toBe("2028-02-29");
+    expect(addEmiMonths("2027-01-29", 1)).toBe("2027-02-28");
+    expect(addEmiMonths("2100-01-31", 1)).toBe("2100-02-28");
+    expect(addEmiMonths("2000-01-31", 1)).toBe("2000-02-29");
+  });
+
+  it("crosses year ends and moves several months at once", () => {
+    expect(addEmiMonths("2026-12-31", 1)).toBe("2027-01-31");
+    expect(addEmiMonths("2026-11-30", 3, 31)).toBe("2027-02-28");
+    expect(addEmiMonths("2026-08-31", 6)).toBe("2027-02-28");
+    expect(addEmiMonths("2026-09-15", 1)).toBe("2026-10-15");
+  });
+
+  it("walking a 31st plan month by month never drifts", () => {
+    let due = "2027-01-31";
+    const dueDay = emiDueDayOf(due);
+    const seen: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      due = addEmiMonths(due, 1, dueDay);
+      seen.push(due);
+    }
+    expect(seen).toEqual([
+      "2027-02-28", "2027-03-31", "2027-04-30", "2027-05-31", "2027-06-30", "2027-07-31",
+      "2027-08-31", "2027-09-30", "2027-10-31", "2027-11-30", "2027-12-31", "2028-01-31",
+    ]);
   });
 });
 

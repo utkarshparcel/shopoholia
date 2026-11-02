@@ -8,6 +8,7 @@ import { fetchOrders } from '@/src/api/client';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -230,8 +231,8 @@ export default function ProfileScreen() {
           ) : null}
           <Pressable
             accessibilityRole="button"
-            // Clearing the session is enough: the root layout's auth gate goes to the login screen.
-            onPress={() => useSessionStore.getState().clear()}
+            // The root layout's auth gate goes to the login screen once the session is cleared.
+            onPress={signOut}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>

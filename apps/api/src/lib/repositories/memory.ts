@@ -4,6 +4,7 @@ import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
 import { InsufficientCoinsError } from "./errors.js";
+import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
@@ -130,21 +131,6 @@ function memoryPreviewResult(result: PreviewResult) {
     : { status: "FAILED" as const, error: result.error, retryAfter: result.retryAfter, updatedAt: now() };
 }
 
-function generateReferralCode(userId: string): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = ((hash << 5) - hash + userId.charCodeAt(i)) | 0;
-  }
-  let code = "";
-  let n = Math.abs(hash);
-  for (let i = 0; i < 6; i++) {
-    code += chars[n % chars.length]!;
-    n = Math.floor(n / chars.length);
-  }
-  return code;
-}
-
 function appendLedger(
   ledger: CoinLedgerRecord[],
   input: GrantCoinsInput,
@@ -174,6 +160,19 @@ export function createMemoryRepositories(): Repositories {
   const ledger: CoinLedgerRecord[] = [];
   const coinLocks = new Map<string, Promise<void>>();
   const moneyLocks = new Map<string, Promise<void>>();
+
+  /** A new random referral code; a taken one is a unique violation, as on users.referral_code. */
+  const freshReferralCode = () =>
+    withNewReferralCode(async (code) => {
+      for (const user of users.values()) {
+        if (user.referralCode === code) {
+          throw Object.assign(new Error('duplicate key value violates unique constraint "users_referral_code_unique"'), {
+            code: "23505",
+          });
+        }
+      }
+      return code;
+    });
 
   async function withMoneyLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
     const previous = moneyLocks.get(userId) ?? Promise.resolve();
@@ -432,7 +431,7 @@ export function createMemoryRepositories(): Repositories {
       if (existingId) {
         const existing = users.get(existingId)!;
         if (!existing.referralCode) {
-          const code = generateReferralCode(existing.id);
+          const code = await freshReferralCode();
           const updated = { ...existing, referralCode: code, updatedAt: now() };
           users.set(existingId, updated);
           return { user: updated, isNew: false };
@@ -461,8 +460,7 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
 
-      const code = generateReferralCode(user.id);
-      user.referralCode = code;
+      user.referralCode = await freshReferralCode();
 
       users.set(user.id, user);
       usersByPhone.set(phone, user.id);
@@ -473,7 +471,7 @@ export function createMemoryRepositories(): Repositories {
       const byGoogle = await this.findUserByGoogleSub(googleSub);
       if (byGoogle) {
         if (!byGoogle.referralCode) {
-          const code = generateReferralCode(byGoogle.id);
+          const code = await freshReferralCode();
           const updated = { ...byGoogle, referralCode: code, updatedAt: now() };
           users.set(byGoogle.id, updated);
           return { user: updated, isNew: false };
@@ -490,7 +488,7 @@ export function createMemoryRepositories(): Repositories {
           displayName: displayName ?? byEmail.displayName,
           updatedAt: now(),
         };
-        if (!linked.referralCode) linked.referralCode = generateReferralCode(linked.id);
+        if (!linked.referralCode) linked.referralCode = await freshReferralCode();
         users.set(byEmail.id, linked);
         return { user: linked, isNew: false };
       }
@@ -515,7 +513,7 @@ export function createMemoryRepositories(): Repositories {
         createdAt: now(),
         updatedAt: now(),
       };
-      user.referralCode = generateReferralCode(user.id);
+      user.referralCode = await freshReferralCode();
       users.set(user.id, user);
       return { user, isNew: true };
     },
@@ -1336,6 +1334,31 @@ export function createMemoryRepositories(): Repositories {
         userId,
         listingVariantId: null,
         wardrobeItemId,
+        imageKey: null,
+        status: "PROCESSING",
+        error: null,
+        retryAfter: null,
+        provider,
+        costMicros: existing?.costMicros ?? 0,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      tryonPreviews.set(key, preview);
+      return { claimed: true, preview };
+    },
+
+    async claimTryonPreview({ userId, listingVariantId, provider, staleBefore }) {
+      const key = tryonPreviewKey(userId, listingVariantId);
+      const existing = tryonPreviews.get(key);
+      const timestamp = now();
+      if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
+        return { claimed: false, preview: existing };
+      }
+      const preview: TryonPreviewRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId,
+        listingVariantId,
+        wardrobeItemId: null,
         imageKey: null,
         status: "PROCESSING",
         error: null,
@@ -4231,6 +4254,7 @@ export function createMemoryRepositories(): Repositories {
         remainingMinor: input.remainingMinor,
         installmentMinor: input.installmentMinor,
         nextDueOn: input.nextDueOn,
+        dueDay: Number(input.nextDueOn.slice(8, 10)),
         currency: input.currency ?? "INR",
         status: "ACTIVE",
         createdAt: now(),
@@ -4741,6 +4765,9 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
     async createTailoringReview(input) {
+      if (input.orderId && [...tailoringReviewsStore.values()].some((r) => r.orderId === input.orderId)) {
+        return null;
+      }
       const rec: TailoringReviewRecord = {
         id: randomUUID(),
         sellerId: input.sellerId,

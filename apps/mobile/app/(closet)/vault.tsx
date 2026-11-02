@@ -61,6 +61,7 @@ import {
   type QueuedVaultAdd,
 } from '@/src/lib/vaultAddQueue';
 import { useNetworkStatus } from '@/src/hooks/closet/useNetworkStatus';
+import { useSessionUserId } from '@/src/hooks/closet/keys';
 
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
@@ -294,18 +295,19 @@ export default function ClosetVaultScreen() {
   const demoAccount = useClosetStore((s) => s.demoAccount);
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const { isOffline } = useNetworkStatus();
   const [offlineQueuedCount, setOfflineQueuedCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    void readVaultAddQueue().then((snap) => {
+    void readVaultAddQueue(userId).then((snap) => {
       if (!cancelled) setOfflineQueuedCount(snap.items.length);
     });
     return () => {
       cancelled = true;
     };
-  }, [isOffline]);
+  }, [isOffline, userId]);
 
   const onSnapReceiptFromHero = useCallback(() => {
     trackEvent('receipt_snap_hero');
@@ -423,8 +425,8 @@ export default function ClosetVaultScreen() {
       }
       offlineQueuedCount={offlineQueuedCount}
       onOfflineRetry={async () => {
-        if (accessToken) {
-          const snap = await flushVaultAddQueue((body) => addCredit(accessToken, body));
+        if (accessToken && userId) {
+          const snap = await flushVaultAddQueue(userId, (body) => addCredit(accessToken, body));
           setOfflineQueuedCount(snap.items.length);
         }
         onRefresh();
@@ -527,6 +529,7 @@ function CreditsKindTab({
   const confirmBalance = useConfirmBalance();
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionUserId();
   const justConnected = useClosetStore((s) => s.justConnected);
   const celebrationSource = useClosetStore((s) => s.celebrationSource);
   const clearJustConnected = useClosetStore((s) => s.clearJustConnected);
@@ -590,7 +593,7 @@ function CreditsKindTab({
 
   useEffect(() => {
     let cancelled = false;
-    void readVaultAddQueue().then((snap) => {
+    void readVaultAddQueue(userId).then((snap) => {
       if (cancelled) return;
       setPendingQueue(snap.items);
       setFlushError(snap.lastFlushError);
@@ -598,12 +601,12 @@ function CreditsKindTab({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (isOffline || !accessToken || tab !== 'gift') return;
+    if (isOffline || !accessToken || !userId || tab !== 'gift') return;
     let cancelled = false;
-    void flushVaultAddQueue((body) => addCredit(accessToken, body)).then((snap) => {
+    void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
       if (cancelled) return;
       setPendingQueue(snap.items);
       setFlushError(snap.lastFlushError);
@@ -611,7 +614,7 @@ function CreditsKindTab({
     return () => {
       cancelled = true;
     };
-  }, [isOffline, accessToken, tab]);
+  }, [isOffline, accessToken, userId, tab]);
 
   useEffect(() => {
     if (!loyaltyJustAdded) return;
@@ -888,7 +891,12 @@ function CreditsKindTab({
     };
 
     if (tab === 'gift' && (isOffline || !accessToken)) {
-      void enqueueVaultAdd(payload).then((item) => {
+      // Queued adds belong to the signed-in user; with no session there's no one to save it for.
+      if (!userId) {
+        Alert.alert(`Could not add ${meta.noun}`, 'Sign in to add it.');
+        return;
+      }
+      void enqueueVaultAdd(userId, payload).then((item) => {
         setPendingQueue((prev) =>
           prev.some((p) => p.id === item.id) ? prev : [...prev, item],
         );
@@ -909,8 +917,8 @@ function CreditsKindTab({
           e.status < 500 &&
           e.status !== 408 &&
           e.status !== 429;
-        if (tab === 'gift' && !answered) {
-          void enqueueVaultAdd(payload).then((item) => {
+        if (tab === 'gift' && !answered && userId) {
+          void enqueueVaultAdd(userId, payload).then((item) => {
             setPendingQueue((prev) =>
               prev.some((p) => p.id === item.id) ? prev : [...prev, item],
             );
@@ -1475,8 +1483,8 @@ function CreditsKindTab({
             size="sm"
             variant="secondary"
             onPress={() => {
-              if (!accessToken) return;
-              void flushVaultAddQueue((body) => addCredit(accessToken, body)).then((snap) => {
+              if (!accessToken || !userId) return;
+              void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
                 setPendingQueue(snap.items);
                 setFlushError(snap.lastFlushError);
               });

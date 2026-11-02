@@ -131,4 +131,24 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       return result;
     },
   );
+
+  /**
+   * Sign-out: the refresh token stops working, so a copy left on the device (or taken from it)
+   * can't renew the session. No access token needed (it may have expired). Always 204, also for
+   * a token that is unknown or already gone, so it can be retried.
+   */
+  app.post(
+    "/auth/logout",
+    {
+      schema: {
+        tags: ["auth"],
+        body: RefreshRequestSchema,
+        response: { 204: z.null() },
+      },
+    },
+    async (request, reply) => {
+      await app.deps.repos.deleteRefreshToken(request.body.refreshToken);
+      return reply.code(204).send(null);
+    },
+  );
 };

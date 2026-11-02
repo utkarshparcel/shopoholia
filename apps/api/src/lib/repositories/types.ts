@@ -935,6 +935,13 @@ export interface Repositories {
     provider: string;
     staleBefore: Date;
   }): Promise<{ claimed: boolean; preview: TryonPreviewRecord }>;
+  /** `claimWardrobeTryon`'s rules for a Play listing variant's try-on. */
+  claimTryonPreview(input: {
+    userId: string;
+    listingVariantId: string;
+    provider: string;
+    staleBefore: Date;
+  }): Promise<{ claimed: boolean; preview: TryonPreviewRecord }>;
   /** Store a render's outcome; a no-op (null) unless the row is still PROCESSING. */
   finishWardrobeTryon(
     userId: string,
@@ -1758,7 +1765,8 @@ export interface Repositories {
     userId: string,
     patch: { fabricRef?: string | null; fabricPhotoKeys?: string[] },
   ): Promise<TailoringOrderRecord | null>;
-  createTailoringReview(input: CreateTailoringReviewInput): Promise<TailoringReviewRecord>;
+  /** Null when `orderId` already has a review (one review per order). */
+  createTailoringReview(input: CreateTailoringReviewInput): Promise<TailoringReviewRecord | null>;
   listTailoringReviews(sellerId: string): Promise<TailoringReviewRecord[]>;
 
   // --- Universe P4: disposition (extended) ---
@@ -2549,6 +2557,8 @@ export type EmiPlanRecord = {
   remainingMinor: number;
   installmentMinor: number;
   nextDueOn: string;
+  /** Day of the month installments fall on (1–31); a short month clamps (see addEmiMonths). */
+  dueDay: number;
   currency: string;
   status: "ACTIVE" | "PAID" | "DEFAULTED";
   createdAt: Date;

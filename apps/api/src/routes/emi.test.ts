@@ -103,6 +103,45 @@ describe("emi routes + schedule nudge", () => {
     await app.close();
   });
 
+  it("a plan due on the 31st stays on month ends as it is paid (Feb 28/29, then the 31st again)", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    await withConsent(app, accessToken, userId);
+    const auth = { authorization: `Bearer ${accessToken}` };
+    const plan = (
+      await app.inject({
+        method: "POST",
+        url: "/emi",
+        headers: auth,
+        payload: { provider: "Simpl", principalMinor: 60_000, installmentMinor: 10_000, nextDueOn: "2027-12-31" },
+      })
+    ).json() as EmiPlan;
+    expect(plan.dueDay).toBe(31);
+
+    const schedule = await app.inject({ method: "GET", url: `/emi/${plan.id}/schedule`, headers: auth });
+    expect((schedule.json() as EmiScheduleResponse).schedule.map((i) => i.dueOn)).toEqual([
+      "2027-12-31",
+      "2028-01-31",
+      "2028-02-29",
+      "2028-03-31",
+      "2028-04-30",
+      "2028-05-31",
+    ]);
+
+    const dues: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const pay = await app.inject({ method: "POST", url: `/emi/${plan.id}/pay`, headers: auth, payload: {} });
+      expect(pay.statusCode).toBe(200);
+      dues.push((pay.json() as EmiPlan).nextDueOn);
+    }
+    expect(dues).toEqual(["2028-01-31", "2028-02-29", "2028-03-31", "2028-04-30"]);
+
+    // After a clamped month the schedule goes back to the 31st.
+    const later = await app.inject({ method: "GET", url: `/emi/${plan.id}/schedule`, headers: auth });
+    expect((later.json() as EmiScheduleResponse).schedule.map((i) => i.dueOn)).toEqual(["2028-04-30", "2028-05-31"]);
+    await app.close();
+  });
+
   it("pay with one idempotencyKey records the installment once; a stale plan is 409; others get 404", async () => {
     const { app, repos } = await buildTestServer();
     const { accessToken, userId } = await login(app);

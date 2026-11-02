@@ -13,6 +13,7 @@ import { z } from "zod";
 import { optionalUserId, requireAuth } from "../lib/auth/guard.js";
 import { styleKeywordsForTags } from "../lib/catalog/style-match.js";
 import { listingCardDto, listingDetailDto } from "../lib/catalog/urls.js";
+import { RENDER_CLAIM_STALE_MS } from "../jobs/wardrobe-tryon.js";
 import { newJobId } from "../lib/jobs/avatar-processing.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
@@ -132,34 +133,52 @@ export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      const cached = await app.deps.repos.findTryonPreview(userId, variant.id);
-      if (cached?.status === "READY" && cached.imageKey) {
+      // One row per (user, variant): a READY, a fresh PROCESSING and a FAILED before its
+      // retryAfter are not claimed again, so retries and double taps render once.
+      const { claimed, preview } = await app.deps.repos.claimTryonPreview({
+        userId,
+        listingVariantId: variant.id,
+        provider: app.deps.renderProvider.name,
+        staleBefore: new Date(Date.now() - RENDER_CLAIM_STALE_MS),
+      });
+      if (claimed) {
+        try {
+          await app.deps.jobQueue.enqueueTryonProcessing({
+            jobId: newJobId(),
+            userId,
+            listingVariantId: variant.id,
+            modelImageKey: avatar.referenceImageKey,
+            garmentImageKey: variant.garmentImageKey,
+          });
+        } catch (err) {
+          // Not queued: release the claim so the next ask can try again in a minute.
+          await app.deps.repos.upsertTryonPreview({
+            userId,
+            listingVariantId: variant.id,
+            imageKey: null,
+            status: "FAILED",
+            error: "Could not queue the render",
+            retryAfter: new Date(Date.now() + 60_000),
+            provider: app.deps.renderProvider.name,
+            costMicros: 0,
+          });
+          throw err;
+        }
+      }
+
+      if (preview.status === "READY" && preview.imageKey) {
         return {
           status: "READY" as const,
-          previewUrl: await app.deps.storage.getSignedUrl(cached.imageKey),
+          previewUrl: await app.deps.storage.getSignedUrl(preview.imageKey),
         };
       }
-      if (cached?.status === "PROCESSING") {
-        return reply.code(202).send({ status: "PROCESSING" as const, previewUrl: null });
+      if (preview.status === "FAILED") {
+        return {
+          status: "FAILED" as const,
+          previewUrl: null,
+          retryAfter: preview.retryAfter?.toISOString() ?? null,
+        };
       }
-
-      await app.deps.repos.upsertTryonPreview({
-        userId,
-        listingVariantId: variant.id,
-        imageKey: null,
-        status: "PROCESSING",
-        provider: app.deps.renderProvider.name,
-        costMicros: 0,
-      });
-
-      await app.deps.jobQueue.enqueueTryonProcessing({
-        jobId: newJobId(),
-        userId,
-        listingVariantId: variant.id,
-        modelImageKey: avatar.referenceImageKey,
-        garmentImageKey: variant.garmentImageKey,
-      });
-
       return reply.code(202).send({ status: "PROCESSING" as const, previewUrl: null });
     },
   );

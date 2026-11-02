@@ -165,6 +165,7 @@ import { ingestionSourcesQuery } from './useIngestion';
 import { trackEvent } from '@/src/lib/analytics';
 import { localDayKey } from '@/src/lib/format';
 import { shareTextFile } from '@/src/lib/shareFile';
+import { clearVaultAddQueue } from '@/src/lib/vaultAddQueue';
 import { travelPackSharePayload } from '@/src/lib/todayOccasionWow';
 import { wearChallengeProgress } from '@/src/lib/wearChallenge';
 
@@ -1354,6 +1355,8 @@ export function useDeleteVault() {
     mutationFn: async () => {
       const accessToken = sessionToken('Sign in to delete your account');
       await deleteVault(accessToken);
+      // Offline adds queued for the deleted account must never be sent.
+      await clearVaultAddQueue().catch(() => undefined);
     },
     onSuccess: () => {
       trackEvent('vault_deleted');

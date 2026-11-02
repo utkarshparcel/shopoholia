@@ -12,6 +12,8 @@ export const EmiPlanSchema = z.object({
   remainingMinor: z.number().int().nonnegative(),
   installmentMinor: z.number().int().positive(),
   nextDueOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Day of the month installments fall on (1–31); short months clamp to their last day. */
+  dueDay: z.number().int().min(1).max(31).optional(),
   currency: z.string(),
   status: EmiPlanStatusSchema,
   createdAt: z.string().datetime(),
