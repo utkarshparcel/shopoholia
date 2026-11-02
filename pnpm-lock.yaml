@@ -271,6 +271,9 @@ importers:
         specifier: 2.5.2
         version: 2.5.2
     devDependencies:
+      '@next/eslint-plugin-next':
+        specifier: 15.2.0
+        version: 15.2.0
       '@types/node':
         specifier: 22.10.0
         version: 22.10.0
@@ -289,6 +292,9 @@ importers:
       eslint-config-next:
         specifier: 15.2.0
         version: 15.2.0(eslint@9.17.0(jiti@1.21.7))(typescript@6.0.3)
+      eslint-plugin-react-hooks:
+        specifier: 5.2.0
+        version: 5.2.0(eslint@9.17.0(jiti@1.21.7))
       postcss:
         specifier: 8.4.49
         version: 8.4.49
