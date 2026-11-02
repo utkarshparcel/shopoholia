@@ -1,5 +1,5 @@
 import FormData from "form-data";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ONBOARDING_COIN_GRANT } from "@worn/shared";
 import { buildServer } from "./index.js";
 import { createAvatarProcessingHandler } from "./lib/jobs/avatar-processing.js";
@@ -515,6 +515,86 @@ describe("tryon", () => {
     expect(ready.statusCode).toBe(200);
     expect(ready.json().status).toBe("READY");
     expect(ready.json().previewUrl).toContain("tryon");
+  });
+
+  it("answers a failed render with its retry time and renders again only after it", async () => {
+    await readyAvatar(app, token);
+    const userId = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()).sub as string;
+    const retryAfter = new Date(Date.now() + 15 * 60_000);
+    await app.deps.repos.upsertTryonPreview({
+      userId,
+      listingVariantId: variantId,
+      imageKey: null,
+      status: "FAILED",
+      error: "provider down",
+      retryAfter,
+      provider: "mock",
+      costMicros: 0,
+    });
+    const enqueue = vi.spyOn(app.deps.jobQueue, "enqueueTryonProcessing");
+
+    const failed = await app.inject({
+      method: "POST",
+      url: `/listings/${listingId}/tryon`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { variantId },
+    });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toEqual({
+      status: "FAILED",
+      previewUrl: null,
+      retryAfter: retryAfter.toISOString(),
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+
+    await app.deps.repos.upsertTryonPreview({
+      userId,
+      listingVariantId: variantId,
+      imageKey: null,
+      status: "FAILED",
+      error: "provider down",
+      retryAfter: new Date(Date.now() - 1_000),
+      provider: "mock",
+      costMicros: 0,
+    });
+    const again = await app.inject({
+      method: "POST",
+      url: `/listings/${listingId}/tryon`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { variantId },
+    });
+    expect(again.statusCode).toBe(202);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues one render for parallel taps", async () => {
+    await readyAvatar(app, token);
+    const enqueue = vi.spyOn(app.deps.jobQueue, "enqueueTryonProcessing");
+    // Hold every request at the avatar lookup until all three are in, so they race the cache.
+    const findAvatar = app.deps.repos.findAvatarByUserId.bind(app.deps.repos);
+    let arrived = 0;
+    let release!: () => void;
+    const allIn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(app.deps.repos, "findAvatarByUserId").mockImplementation(async (id) => {
+      if (++arrived === 3) release();
+      await allIn;
+      return findAvatar(id);
+    });
+
+    const responses = await Promise.all(
+      [1, 2, 3].map(() =>
+        app.inject({
+          method: "POST",
+          url: `/listings/${listingId}/tryon`,
+          headers: { authorization: `Bearer ${token}` },
+          payload: { variantId },
+        }),
+      ),
+    );
+    expect(responses.map((r) => r.statusCode)).toEqual([202, 202, 202]);
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1327,6 +1327,31 @@ export function createMemoryRepositories(): Repositories {
       return { claimed: true, preview };
     },
 
+    async claimTryonPreview({ userId, listingVariantId, provider, staleBefore }) {
+      const key = tryonPreviewKey(userId, listingVariantId);
+      const existing = tryonPreviews.get(key);
+      const timestamp = now();
+      if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
+        return { claimed: false, preview: existing };
+      }
+      const preview: TryonPreviewRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId,
+        listingVariantId,
+        wardrobeItemId: null,
+        imageKey: null,
+        status: "PROCESSING",
+        error: null,
+        retryAfter: null,
+        provider,
+        costMicros: existing?.costMicros ?? 0,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      tryonPreviews.set(key, preview);
+      return { claimed: true, preview };
+    },
+
     async finishWardrobeTryon(userId, wardrobeItemId, result) {
       const key = wardrobeTryonPreviewKey(userId, wardrobeItemId);
       const existing = tryonPreviews.get(key);

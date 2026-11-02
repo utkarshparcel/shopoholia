@@ -903,6 +903,13 @@ export interface Repositories {
     provider: string;
     staleBefore: Date;
   }): Promise<{ claimed: boolean; preview: TryonPreviewRecord }>;
+  /** `claimWardrobeTryon`'s rules for a Play listing variant's try-on. */
+  claimTryonPreview(input: {
+    userId: string;
+    listingVariantId: string;
+    provider: string;
+    staleBefore: Date;
+  }): Promise<{ claimed: boolean; preview: TryonPreviewRecord }>;
   /** Store a render's outcome; a no-op (null) unless the row is still PROCESSING. */
   finishWardrobeTryon(
     userId: string,

@@ -2436,6 +2436,33 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { claimed: false, preview: current };
     },
 
+    async claimTryonPreview({ userId, listingVariantId, provider, staleBefore }) {
+      const timestamp = now();
+      const [claimed] = await db
+        .insert(tryonPreviews)
+        .values({
+          userId,
+          listingVariantId,
+          wardrobeItemId: null,
+          imageKey: null,
+          status: "PROCESSING",
+          provider,
+          costMicros: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoUpdate({
+          target: [tryonPreviews.userId, tryonPreviews.listingVariantId],
+          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          setWhere: previewClaimable(tryonPreviews, staleBefore, timestamp),
+        })
+        .returning();
+      if (claimed) return { claimed: true, preview: mapTryonPreview(claimed) };
+      const current = await repos.findTryonPreview(userId, listingVariantId);
+      if (!current) throw new Error(`try-on preview vanished during claim: ${listingVariantId}`);
+      return { claimed: false, preview: current };
+    },
+
     async finishWardrobeTryon(userId, wardrobeItemId, result) {
       const [row] = await db
         .update(tryonPreviews)

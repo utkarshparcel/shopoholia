@@ -355,8 +355,10 @@ export type CartResponse = {
 };
 
 export type TryonResponse = {
-  status: 'READY' | 'PROCESSING';
+  /** FAILED: the last render failed; asking again before `retryAfter` won't start a new one. */
+  status: 'READY' | 'PROCESSING' | 'FAILED';
   previewUrl: string | null;
+  retryAfter?: string | null;
 };
 
 function authHeaders(accessToken: string) {
