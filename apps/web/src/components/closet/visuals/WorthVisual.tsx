@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { ArrowDownRight, ChevronRight } from 'lucide-react';
+import { ArrowDownRight, ChevronRight, Flame } from 'lucide-react';
 import { Glow, Screen, Thumb, draw, lift, pop } from './shared';
 
 /* Cost per wear of a ₹2,600 piece, wears 4 to 13: ₹650 … ₹217, ₹200 */
@@ -24,23 +24,11 @@ const LAST = POINTS[POINTS.length - 1];
 const DAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const WORN = 5; // Monday to Friday logged; Saturday is today
 
-function Coin() {
-  return (
-    <span
-      aria-hidden="true"
-      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full shadow-sm"
-      style={{ background: 'radial-gradient(circle at 32% 30%, #f6e7c8, #c8a87a 58%, #9c7a4e)' }}
-    >
-      <span className="h-3 w-3 rounded-full border border-[#806440]/45" />
-    </span>
-  );
-}
-
 export function WorthVisual() {
   return (
     <div
       role="img"
-      aria-label="Sample piece card: a ₹2,600 sage ruched mini worn 13 times, so its cost per wear has fallen from ₹217 to ₹200; last worn 9 days ago. A nudge flags a yellow midi not worn in 60 days, and a weekly wear streak pays coins."
+      aria-label="Sample piece card: a ₹2,600 sage ruched mini worn 13 times, so its cost per wear has fallen from ₹217 to ₹200; last worn 9 days ago. A nudge flags a yellow midi not worn in 60 days, and a weekly wear streak has run five days."
       className="relative isolate"
     >
       <Glow className="-inset-x-3 sm:-inset-x-6 -inset-y-10" />
@@ -111,14 +99,14 @@ export function WorthVisual() {
           </div>
         </div>
 
-        {/* Wear streak; on phones the coin line moves up beside the label to keep the card short */}
+        {/* Wear streak; on phones the streak count moves up beside the label to keep the card short */}
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-t border-worn-rule/70 bg-worn-paper/70 px-4 pb-6 pt-3 sm:items-end sm:px-5 sm:pt-3.5">
           <p className="font-mono text-micro uppercase tracking-[0.18em] text-worn-muted">
             Wear streak<span className="hidden sm:inline"> · this week</span>
           </p>
           <p className="col-start-2 flex items-center gap-2 text-[12px] font-medium text-worn-ink-soft sm:row-start-2 sm:pb-0.5">
-            <Coin />
-            Streaks pay coins
+            <Flame className="h-4 w-4 shrink-0 text-worn-gold-deep" aria-hidden="true" />
+            {WORN} days running
           </p>
           <ul className="col-span-2 row-start-2 flex gap-1.5 sm:col-span-1 sm:col-start-1">
             {DAYS.map(

@@ -166,8 +166,8 @@ const SECTIONS: ClosetSection[] = [
       },
       {
         icon: Flame,
-        title: 'Wear streaks, in coins',
-        copy: 'Keep a rewearing streak going and Worn pays you in gold coins. Small ritual, real dopamine, cheaper wardrobe.',
+        title: 'Wear streaks, counted',
+        copy: 'Rewear what you own and the streak counts every day, while each piece’s cost per wear keeps falling. Small ritual, real dopamine, cheaper wardrobe.',
       },
       {
         icon: ChartPie,
