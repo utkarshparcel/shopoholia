@@ -1,15 +1,31 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { Menu, X, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SiteSwitch } from './SiteSwitch';
 
+/* How far the page has to move in one direction before the header reacts (stops jitter) */
+const SCROLL_THRESHOLD = 8;
+/* Within this of the top the header always shows, transparent */
+const TOP_ZONE = 20;
+
+const navLinks = [
+  { href: '#grwm', label: 'The Drop' },
+  { href: '#loop', label: 'The Loop' },
+  { href: '#how-it-works', label: 'Coins' },
+];
+
 export function Navigation() {
   const [scrolled, setScrolled] = useState(false);
+  const [hidden, setHidden] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Whether closing the menu should hand focus back to its button (not after following a link)
+  const returnFocus = useRef(false);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -19,25 +35,62 @@ export function Navigation() {
     return () => mediaQuery.removeEventListener('change', handler);
   }, []);
 
+  // Hide on the way down, come back on the way up.
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20);
+    let lastY = window.scrollY;
+    const handleScroll = () => {
+      const y = window.scrollY;
+      setScrolled(y > TOP_ZONE);
+      if (y <= TOP_ZONE) {
+        setHidden(false);
+        lastY = y;
+        return;
+      }
+      const delta = y - lastY;
+      if (Math.abs(delta) < SCROLL_THRESHOLD) return;
+      setHidden(delta > 0);
+      lastY = y;
+    };
+    handleScroll();
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const navLinks = [
-    { href: '#grwm', label: 'The Drop' },
-    { href: '#loop', label: 'The Loop' },
-    { href: '#how-it-works', label: 'Coins' },
-  ];
+  const closeMenu = useCallback((focusButton: boolean) => {
+    returnFocus.current = focusButton;
+    setMobileOpen(false);
+  }, []);
+
+  // Open: focus the first link. Closed by Escape or the button: focus goes back to the button.
+  useEffect(() => {
+    if (mobileOpen) {
+      menuRef.current?.querySelector<HTMLElement>('a, button')?.focus();
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeMenu(true);
+        }
+      };
+      document.addEventListener('keydown', onKey);
+      return () => document.removeEventListener('keydown', onKey);
+    }
+    if (returnFocus.current) {
+      returnFocus.current = false;
+      menuButtonRef.current?.focus();
+    }
+  }, [mobileOpen, closeMenu]);
+
+  const visible = !hidden || mobileOpen;
 
   return (
     <motion.header
       initial={{ y: 0 }}
-      animate={{ y: scrolled ? -100 : 0 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-      className={`fixed top-0 left-0 right-0 z-40 transition-all duration-300 ease-out ${
-        scrolled ? 'bg-worn-paper/90 backdrop-blur-md border-b border-worn-rule' : 'bg-transparent'
+      animate={{ y: visible ? 0 : -100 }}
+      transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
+      // keyboard users tabbing into a hidden header get it back
+      onFocusCapture={() => setHidden(false)}
+      className={`fixed top-0 left-0 right-0 z-40 transition-colors duration-300 ease-out ${
+        scrolled || mobileOpen ? 'bg-worn-paper/90 backdrop-blur-md border-b border-worn-rule' : 'bg-transparent'
       }`}
       role="banner"
     >
@@ -83,8 +136,9 @@ export function Navigation() {
           <div className="flex items-center gap-2 md:hidden">
             <SiteSwitch current="play" />
             <button
+              ref={menuButtonRef}
               className="p-2 rounded-md text-worn-ink hover:bg-worn-warm transition-colors"
-              onClick={() => setMobileOpen(!mobileOpen)}
+              onClick={() => (mobileOpen ? closeMenu(true) : setMobileOpen(true))}
               aria-expanded={mobileOpen}
               aria-controls="mobile-menu"
               aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
@@ -98,11 +152,13 @@ export function Navigation() {
         <AnimatePresence mode="wait">
           {mobileOpen && (
             <motion.div
+              ref={menuRef}
               id="mobile-menu"
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: reducedMotion ? 0 : 200, ease: 'easeOut' }}
+              // framer-motion durations are in seconds
+              transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeOut' }}
               className="md:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
             >
               <div className="flex flex-col gap-4">
@@ -111,7 +167,7 @@ export function Navigation() {
                     key={link.href}
                     href={link.href}
                     className="text-body-l font-medium text-worn-ink-soft hover:text-worn-ink"
-                    onClick={() => setMobileOpen(false)}
+                    onClick={() => closeMenu(false)}
                   >
                     {link.label}
                   </Link>
@@ -119,7 +175,7 @@ export function Navigation() {
                 <Link
                   href="#download"
                   className="btn-primary btn-md text-center mt-2"
-                  onClick={() => setMobileOpen(false)}
+                  onClick={() => closeMenu(false)}
                 >
                   <Download className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
                   Get the App
