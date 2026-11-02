@@ -55,13 +55,16 @@ Railway, Render or Fly.io can host the API, the worker, Postgres and Redis in on
 
 ### Migrations to run on first deploy
 
-All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0018 on
+All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0020 on
 Postgres 16). On an existing database, the newest ones also repair data:
 
 - `0016_emi_due_day`: EMI plans get a due day, taken from their next due date.
 - `0017_tailoring_review_per_order`: one review per tailoring order; later duplicates keep their
   text but lose the order link.
 - `0018_reveal_rating`: reveal ratings move out of `orders.state_eta` into their own column.
+- `0019_coin_ledger_render_types`: new coin-history types for paid renders and combines.
+- `0020_render_combined_items`: a combined render's pieces get their own column, copied from the
+  old `combined:` marker where present.
 
 ### API environment
 
