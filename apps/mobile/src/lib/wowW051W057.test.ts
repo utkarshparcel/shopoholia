@@ -62,7 +62,7 @@ describe('W051–W057 Today/wardrobe occasion polish', () => {
   it('W054 travel pack share strips PII', () => {
     const raw = [
       '# Travel pack',
-      '- [ ] Uniqlo · shirt — me@worn.app',
+      '- [ ] Uniqlo · shirt — me@worncloset.app',
       '- [ ] jeans — +91 98765 43210',
       '- [ ] sneaker — aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     ].join('\n');

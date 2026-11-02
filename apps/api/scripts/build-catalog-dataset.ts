@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildSeedListings } from "@worn/shared";
+import { WEB_ORIGIN, buildSeedListings } from "@worn/shared";
 import { CATALOG_DIR, ensureCatalogDir, type CatalogRow } from "./lib/catalog-scrape.js";
 import { parseCatalogFile, type CatalogImportRow } from "./import-catalog.js";
 
@@ -126,7 +126,7 @@ export function buildSyntheticCatalogRows(count: number, startIndex = 0): Catalo
       category: seed.category,
       tags: ["synthetic", "backfill"],
       image_urls: [`https://picsum.photos/seed/worn-${hash}/533/800`],
-      affiliate_url: `https://worn.app/catalog/synthetic/${hash}/${slug}`,
+      affiliate_url: `${WEB_ORIGIN}/catalog/synthetic/${hash}/${slug}`,
       source: "synthetic" as const,
       coin_price: seed.coinPrice,
       size: variant?.size,

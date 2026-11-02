@@ -83,7 +83,7 @@ export function foundMoneyShareFromAccounts(
 }
 
 /**
- * N36 — family WhatsApp share: found-money card + `worn.app/r/{code}` referral link.
+ * N36 — family WhatsApp share: found-money card + `worncloset.app/r/{code}` referral link.
  */
 export function familyFoundMoneyShareFromAccounts(
   accounts: Array<{ merchant?: string | null; expiresAt?: string | null; balanceCacheMinor?: number }>,

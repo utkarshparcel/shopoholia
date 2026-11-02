@@ -13,8 +13,8 @@ import {
 
 describe('privacyLinks (TRUST-DPDP-GDPR)', () => {
   it('uses env URL when https', () => {
-    expect(getPrivacyPolicyUrl('https://worn.app/privacy')).toBe(
-      'https://worn.app/privacy',
+    expect(getPrivacyPolicyUrl('https://worncloset.app/privacy')).toBe(
+      'https://worncloset.app/privacy',
     );
   });
 

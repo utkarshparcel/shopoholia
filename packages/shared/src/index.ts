@@ -1184,6 +1184,16 @@ export {
   type WhatsAppInFoundMoneyShare,
 } from "./found-money.js";
 export {
+  WEB_HOST,
+  WEB_ORIGIN,
+  CLOSET_URL,
+  API_ORIGIN,
+  MEDIA_ORIGIN,
+  WEB_PRIVACY_URL,
+  SUPPORT_EMAIL,
+  PRIVACY_EMAIL,
+} from "./domains.js";
+export {
   FAMILY_SHARE_ORIGIN,
   buildReferralDeepLink,
   buildFamilyFoundMoneyShare,

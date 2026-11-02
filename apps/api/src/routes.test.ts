@@ -144,7 +144,7 @@ describe("auth", () => {
     const res = await app.inject({
       method: "POST",
       url: "/auth/google",
-      payload: { idToken: "test-google:sub-1:user@worn.app:Worn User" },
+      payload: { idToken: "test-google:sub-1:user@worncloset.app:Worn User" },
     });
 
     expect(res.statusCode).toBe(200);
@@ -156,7 +156,7 @@ describe("auth", () => {
     const again = await app.inject({
       method: "POST",
       url: "/auth/google",
-      payload: { idToken: "test-google:sub-1:user@worn.app:Worn User" },
+      payload: { idToken: "test-google:sub-1:user@worncloset.app:Worn User" },
     });
     expect(again.statusCode).toBe(200);
     expect(again.json().isNewUser).toBe(false);

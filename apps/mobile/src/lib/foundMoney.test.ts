@@ -68,7 +68,7 @@ describe("W023 WhatsApp IN share", () => {
         { merchant: "Myntra", expiresAt: null, balanceCacheMinor: 50_000 },
         { merchant: "Amazon", expiresAt: null, balanceCacheMinor: 12_34_00 },
       ],
-      { deepLink: "https://worn.app/r/HOME01" },
+      { deepLink: "https://worncloset.app/r/HOME01" },
     );
     expect(wa.blurredAmountLabel).not.toMatch(/\d/);
     expect(wa.shareText).toContain(wa.blurredAmountLabel);
@@ -79,13 +79,13 @@ describe("W023 WhatsApp IN share", () => {
 });
 
 describe("W024 family share via label", () => {
-  it("shows shared via worn.app/r/… attribution", () => {
+  it("shows shared via worncloset.app/r/… attribution", () => {
     const family = familyFoundMoneyShareFromAccounts(
       [{ merchant: "Nykaa", balanceCacheMinor: 10_000 }],
       "FAMILY1",
     );
     expect(familyShareViaLabel(family.deepLink)).toBe(
-      "shared via worn.app/r/FAMILY1",
+      "shared via worncloset.app/r/FAMILY1",
     );
     expect(family.shareText).toContain(family.deepLink);
     expect(family.shareText).not.toMatch(/Nykaa/);

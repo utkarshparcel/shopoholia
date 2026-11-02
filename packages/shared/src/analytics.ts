@@ -87,7 +87,7 @@ export const ANALYTICS_EVENTS = [
   "loyalty_first_celebration",
   /** W023 — WhatsApp IN found-money share (no PII). */
   "found_money_wa_share",
-  /** N36 — family WhatsApp share with worn.app/r/{code}. */
+  /** N36 — family WhatsApp share with worncloset.app/r/{code}. */
   "family_found_money_share",
   /** W024 — attribution confirm screen after family share open. */
   "family_share_attribution_confirm",

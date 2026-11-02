@@ -9,6 +9,13 @@ describe("package exports", () => {
     expect(shared.OrderState).toBeDefined();
   });
 
+  it("re-exports production domains", () => {
+    expect(shared.WEB_ORIGIN).toBe("https://worncloset.app");
+    expect(shared.API_ORIGIN).toBe("https://api.worncloset.app");
+    expect(shared.MEDIA_ORIGIN).toBe("https://media.worncloset.app");
+    expect(shared.SUPPORT_EMAIL).toBe("hello@worncloset.app");
+  });
+
   it("re-exports Wave A money / delight foundations", () => {
     expect(shared.formatMinor).toBeTypeOf("function");
     expect(shared.formatMinorWithPrefs).toBeTypeOf("function");

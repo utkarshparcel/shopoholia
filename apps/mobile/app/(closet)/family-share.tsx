@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { buildReferralLandingCopy } from '@worn/shared';
+import { WEB_HOST, buildReferralLandingCopy } from '@worn/shared';
 
 import { attributeReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
@@ -72,7 +72,7 @@ export default function FamilyShareConfirmScreen() {
   return (
     <ClosetScreen
       title="Family share"
-      subtitle={confirm?.viaLabel ?? 'Open a worn.app/r/… link to credit found-money tips.'}
+      subtitle={confirm?.viaLabel ?? `Open a ${WEB_HOST}/r/… link to credit found-money tips.`}
     >
       <View style={styles.card}>
         {confirm && landing ? (

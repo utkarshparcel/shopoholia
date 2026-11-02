@@ -48,7 +48,7 @@ describe("buildReturnPollShare", () => {
       pollId: "poll-1",
       itemLabel: "blue shirt",
     });
-    expect(card.deepLink).toBe("https://worn.app/p/return/poll-1");
+    expect(card.deepLink).toBe("https://worncloset.app/p/return/poll-1");
     expect(card.shareText).toMatch(/Should I return blue shirt/);
     expect(card.shareText).toContain(card.deepLink);
   });

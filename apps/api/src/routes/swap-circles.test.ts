@@ -35,7 +35,7 @@ describe("N37 swap circle", () => {
     });
     expect(invite.statusCode).toBe(200);
     const inviteBody = invite.json() as SwapInviteResponse;
-    expect(inviteBody.inviteUrl).toBe(`https://worn.app/c/${circle.inviteCode}`);
+    expect(inviteBody.inviteUrl).toBe(`https://worncloset.app/c/${circle.inviteCode}`);
     expect(inviteBody.deepLink).toBe(`worn://swap-circle/${circle.inviteCode}`);
 
     // Outsider cannot view circle (membership authz)

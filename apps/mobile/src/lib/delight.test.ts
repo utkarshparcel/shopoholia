@@ -83,7 +83,7 @@ describe('foundMoney', () => {
     expect(foundMoneySubline(2)).toMatch(/2 gift cards/);
   });
 
-  it('share card blurs merchants and watermarks worn.app', () => {
+  it('share card blurs merchants and watermarks worncloset.app', () => {
     const now = new Date('2026-08-26T10:00:00.000Z');
     const card = foundMoneyShareFromAccounts(
       [
@@ -111,7 +111,7 @@ describe('foundMoney', () => {
   it('W023 WhatsApp IN template blurs total digits', () => {
     const wa = whatsAppInFoundMoneyShareFromAccounts(
       [{ merchant: 'Myntra', balanceCacheMinor: 240_000 }],
-      { deepLink: 'https://worn.app/r/HOME01' },
+      { deepLink: 'https://worncloset.app/r/HOME01' },
     );
     expect(wa.blurredAmountLabel).not.toMatch(/\d/);
     expect(wa.shareText).not.toMatch(/Myntra/);

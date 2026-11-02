@@ -2,9 +2,11 @@
  * N26 — Household / shared closet membership + wardrobe ACL.
  */
 
+import { WEB_ORIGIN } from "./domains.js";
+
 const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export const HOUSEHOLD_INVITE_WEB_BASE = "https://worn.app/h";
+export const HOUSEHOLD_INVITE_WEB_BASE = `${WEB_ORIGIN}/h`;
 export const HOUSEHOLD_INVITE_DEEP_PREFIX = "worn://household";
 
 export function generateHouseholdInviteCode(length = 8): string {

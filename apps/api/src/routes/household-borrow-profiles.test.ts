@@ -92,7 +92,7 @@ describe("N26 household shared closet", () => {
     });
     expect(invite.statusCode).toBe(200);
     const inviteBody = invite.json() as HouseholdInviteResponse;
-    expect(inviteBody.inviteUrl).toBe(`https://worn.app/h/${household.inviteCode}`);
+    expect(inviteBody.inviteUrl).toBe(`https://worncloset.app/h/${household.inviteCode}`);
 
     const denied = await app.inject({
       method: "GET",

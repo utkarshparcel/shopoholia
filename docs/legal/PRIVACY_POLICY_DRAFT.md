@@ -5,7 +5,7 @@
 > Source path: `docs/legal/PRIVACY_POLICY_DRAFT.md`  
 > Compliance checklist: [`docs/TRUST_DPDP_GDPR.md`](../TRUST_DPDP_GDPR.md)  
 > Pentest readiness (no fake report): [`docs/PENTEST_READINESS.md`](../PENTEST_READINESS.md)  
-> Suggested publish URL: `https://worn.app/privacy` (set `EXPO_PUBLIC_PRIVACY_URL` to match)  
+> Suggested publish URL: `https://worncloset.app/privacy` (set `EXPO_PUBLIC_PRIVACY_URL` to match)  
 > In-app: Vault / Consent → Your data (`VaultPrivacyActions`)
 
 **Last updated (draft):** 2026-08-26  
@@ -13,7 +13,7 @@
 
 ## 1. Who we are
 
-WORN Closet helps you find and use money you already paid for (gift cards, store credit, return windows, warranties) and manage your wardrobe. Contact for privacy: `privacy@worn.app` (placeholder — replace before publish).
+WORN Closet helps you find and use money you already paid for (gift cards, store credit, return windows, warranties) and manage your wardrobe. Contact for privacy: `privacy@worncloset.app` (set up the mailbox before publish).
 
 ## 2. What we collect
 
@@ -90,7 +90,7 @@ We will update this policy and revise the “Last updated” date. Material chan
 
 ## 12. Contact
 
-Privacy: `privacy@worn.app` (placeholder)  
+Privacy: `privacy@worncloset.app`  
 Grievance / DPO (if appointed): TBD by counsel
 
 ---

@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WEB_ORIGIN } from '@worn/shared';
 
 import { applyReferral, getMyReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
@@ -88,7 +89,7 @@ export default function ReferralScreen() {
 
   const shareCode = async () => {
     await Share.share({
-      message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. https://shopoholia.app/r/${code}`,
+      message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. ${WEB_ORIGIN}/r/${code}`,
     });
   };
 

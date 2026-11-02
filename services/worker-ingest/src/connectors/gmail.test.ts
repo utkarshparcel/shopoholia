@@ -9,7 +9,7 @@ function makeConnector(tokenStore = createMemoryTokenStore()) {
   return new GmailConnector({
     clientId: "cid",
     clientSecret: "secret",
-    redirectUri: "https://api.shopoholia.app/ingestion/sources/oauth/callback",
+    redirectUri: "https://api.worncloset.app/ingestion/sources/oauth/callback",
     sourceId: "src-1",
     tokenStore,
   });
@@ -385,7 +385,7 @@ describe("GmailConnector", () => {
     const connector = new GmailConnector({
       clientId: "MISSING_GOOGLE_CLIENT_ID",
       clientSecret: "secret",
-      redirectUri: "https://api.shopoholia.app/ingestion/sources/oauth/callback",
+      redirectUri: "https://api.worncloset.app/ingestion/sources/oauth/callback",
       sourceId: "src-1",
       tokenStore: store,
     });

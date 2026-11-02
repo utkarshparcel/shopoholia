@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { bootConfigProblems, resolveJwtSecret, resolveListenAddress } from "./server-env.js";
+import {
+  bootConfigProblems,
+  resolveCorsOrigin,
+  resolveJwtSecret,
+  resolveListenAddress,
+} from "./server-env.js";
 
 describe("resolveJwtSecret", () => {
   it("reads the documented JWT_ACCESS_SECRET", () => {
@@ -41,6 +46,35 @@ describe("resolveListenAddress", () => {
 
   it("defaults to 0.0.0.0:3000", () => {
     expect(resolveListenAddress({})).toEqual({ port: 3000, host: "0.0.0.0" });
+  });
+});
+
+describe("resolveCorsOrigin", () => {
+  it("allows every origin outside production", () => {
+    expect(resolveCorsOrigin({ NODE_ENV: "development", CORS_ORIGIN: "https://worncloset.app" })).toBe(
+      true,
+    );
+    expect(resolveCorsOrigin({})).toBe(true);
+  });
+
+  it("defaults to the website in production", () => {
+    expect(resolveCorsOrigin({ NODE_ENV: "production" })).toBe("https://worncloset.app");
+  });
+
+  it("reads a single origin or a comma-separated list", () => {
+    expect(resolveCorsOrigin({ NODE_ENV: "production", CORS_ORIGIN: "https://worncloset.app" })).toBe(
+      "https://worncloset.app",
+    );
+    expect(
+      resolveCorsOrigin({
+        NODE_ENV: "production",
+        CORS_ORIGIN: "https://worncloset.app, https://www.worncloset.app,",
+      }),
+    ).toEqual(["https://worncloset.app", "https://www.worncloset.app"]);
+  });
+
+  it("keeps the wildcard", () => {
+    expect(resolveCorsOrigin({ NODE_ENV: "production", CORS_ORIGIN: "*" })).toBe("*");
   });
 });
 

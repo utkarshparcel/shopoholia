@@ -1,5 +1,5 @@
 /**
- * W094 — Referral deep-link landing microcopy for worn.app/r/{code}.
+ * W094 — Referral deep-link landing microcopy for worncloset.app/r/{code}.
  * Explains found-money Closet job + install CTA. No PII beyond the code.
  */
 
@@ -13,7 +13,7 @@ export type ReferralLandingCopy = {
 };
 
 /**
- * Landing copy when a friend opens `worn.app/r/{code}`.
+ * Landing copy when a friend opens `worncloset.app/r/{code}`.
  * Closet ethos: forgotten credit utility — never Play try-on lead.
  */
 export function buildReferralLandingCopy(

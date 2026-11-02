@@ -21,7 +21,7 @@ export const AttributeReferralBodySchema = z.object({
   source: z.enum(["family_share", "deep_link", "other"]).optional().default("family_share"),
 });
 
-/** W094 — landing microcopy on worn.app/r/{code}. */
+/** W094 — landing microcopy on worncloset.app/r/{code}. */
 export const ReferralLandingCopySchema = z.object({
   headline: z.string().min(1),
   body: z.string().min(1),

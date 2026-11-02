@@ -113,7 +113,7 @@ The backend in `[U]` hasn't changed since 2026-08-27.
 | 96.81% test coverage | `docs/UNIVERSE_QA_REPORT.md` l822, l863 | The figure is `@worn/mobile` line coverage over a hand-picked `include` list (`mob/vitest.config.ts:17–38`). The list covers UI components, the Closet hooks and stores, the session store and 15 lib files, and no `app/` screen. The gate is 55% of lines (l48). Of the 120 mobile test files, three render screens, all of them Play's (`src/screens/checkout`, `reveal` and `order-tracking`). None renders a Closet screen. |
 | CASA track under way | `CASA.md` l50-60 | 0 of 9 items are ticked. `scripts/check-casa-track.mjs` only checks, with regexes, that the docs and a few app source files contain certain text. |
 | Children handled | `TRUST_DPDP_GDPR.md` D8 | The doc says "age gate TBD", and `closet_profiles.kind` defaults to `KID`. |
-| Privacy policy ready | `PRIVACY_POLICY_DRAFT.md` | The legal entity is TBD, the contact is a placeholder `privacy@worn.app`, and the grievance contact is TBD (l93-94). |
+| Privacy policy ready | `PRIVACY_POLICY_DRAFT.md` | The legal entity is TBD, the contact `privacy@worncloset.app` has no mailbox yet, and the grievance contact is TBD (l93-94). |
 | Gmail import works | `api/routes/ingestion.ts`, `services/worker-ingest/src/connectors/gmail.ts` | OAuth starts, but then it breaks: <br>• The callback (`ingestion.ts:385`) is unauthenticated and returns JSON 202 to a browser (l481). <br>• No first sync runs: the OAuth job (`worker-ingest/src/index.ts:627–648`) never schedules one. <br>• `GOOGLE_CLIENT_ID` falls back to `"MISSING_GOOGLE_CLIENT_ID"` (`ingestion.ts:112`, `worker-ingest/src/index.ts:432`) and `GOOGLE_CLIENT_SECRET` to `""` (l439). <br>• The app opens it with `openBrowserAsync`, which can't return to the app. |
 | SMS import | `POST /ingestion/sms`, `mob/` | There is no native SMS module, so no messages ever come back. `READ_SMS` in `app.json` would get the app rejected on Google Play. |
 | Week planner | `POST /outfits/week/generate` | It puts the same three pieces on all seven days. Its test only checks that seven outfits exist. |
@@ -139,7 +139,7 @@ Status:
 | 7 | "The outfit, the shoes, the bag and the earrings, all things you already own" (Stylist) | Partial | `api/lib/outfit-rank.ts` takes the top three items whatever their type and adds +5 for often-worn pieces. Slots exist in `api/lib/outfit-goes-with.ts` but only some helpers use them. `api/lib/outfit-accessories.ts` adds at most one accessory and never shoes. | A composer built on slots | P1 |
 | 8 | "Tell it how today is and it restyles" (Stylist, Value) | Missing | — | `POST /outfits/today/restyle` | P2 |
 | 9 | The pick on you, in the mirror (Stylist, Today "Avatar try-on") | Partial | Play's FASHN try-on (`api/routes/wardrobe.ts:1480`) runs synchronously with no limits. With no avatar it caches a missing path, and when a try-on fails it caches the garment photo as if it were the try-on. | Mirror-photo consent and photo, overnight mage-edit renders, and fixes for both bugs | P2 |
-| 10 | Friend polls (Stylist, Today) | Partial | `api/routes/social-polls.ts` and `api/lib/social-poll-store.ts` keep polls in memory with a 72 h expiry, 2–3 options and unlimited votes. The share link `https://worn.app/p/outfit/{id}` has no page behind it. | Store polls in Postgres, allow one vote per voter, add a web vote page | P2 |
+| 10 | Friend polls (Stylist, Today) | Partial | `api/routes/social-polls.ts` and `api/lib/social-poll-store.ts` keep polls in memory with a 72 h expiry, 2–3 options and unlimited votes. The share link `https://worncloset.app/p/outfit/{id}` has no page behind it. | Store polls in Postgres, allow one vote per voter, add a web vote page | P2 |
 | 11 | Hang tag "Worn N× · ₹X a wear · Last worn" and cost per wear falling (Stylist, Value, Worth) | Partial | `POST /wear`, `POST /wear/photo` and `DELETE /wear/:id` (10-minute undo) are in `wardrobe.ts:1551–1745` and `postgres.ts:2696`, with an `item_metrics` table. | The update isn't atomic, and a back-dated wear overwrites a newer last-worn date. Cost per wear is empty when the price is 0, which is every manual and photo-dump item. | P1 |
 | 12 | Forgotten pieces, worn again (Value) | Partial | The waste heuristics work. The outfit ranker gives often-worn pieces +5, which is the opposite. | A "forgotten" boost in the composer | P1 |
 | 13 | A morning outfit using weather, calendar and laundry, in one notification (Today) | Partial | <br>• Generator: `generateOutfitForUser` (`outfits.ts` ~140–330). <br>• `GET /outfits/today?alt=n`: needs the `outfits` entitlement. <br>• `scheduleMorningOutfit` (`api/lib/wardrobe-jobs.ts`, jobId `outfit:{userId}:{date}`): only called from `outfits.ts:324`. <br>• `ww/handler.ts`: a stub that takes the first three items at 26 °C and saves an undated outfit, so the push can disagree with `/today`. <br>• Laundry rules: in memory (`api/lib/closet-ops-prefs.ts:15`). <br>• The deep link `worn://today?focus=outfit` works. | A Today job driven by the week plan, a push in local time, laundry rules that persist | P1 |
@@ -1250,7 +1250,7 @@ Week is a new screen.
 - The server never depends on it. Every scheduled push comes from the server.
 
 **App links.**
-- `apps/web` serves `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` for the production domain (assumed `worn.app`, A22).
+- `apps/web` serves `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` for the production domain (`worncloset.app`, A22; see the README "Domains" section).
 - The app sets `ios.associatedDomains` and Android `intentFilters` with `autoVerify`, for `/closet/*` only.
 - Poll pages (`/p/*`) stay on the web, because voters usually don't have the app.
 
@@ -2633,7 +2633,7 @@ Each default is what this plan assumes until the owner decides. Answer Q1–Q5 f
 | A19 | A full week needs about 12 base pieces and 2 pairs of footwear | §6.3 |
 | A20 | A cloud render costs about ₹4 | §9.5 |
 | A21 | `composeWeek` runs in under 300 ms for a 300-piece closet | §8.4, §11.6 |
-| A22 | The production domain is `worn.app` | §5.6 |
+| A22 | The production domain is `worncloset.app` (bought; no longer an assumption) | §5.6 |
 | A23 | The inbound mail service can run code (Cloudflare Email Workers) | §7.1 |
 
 ---

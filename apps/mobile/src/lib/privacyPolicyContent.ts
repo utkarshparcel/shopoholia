@@ -5,6 +5,8 @@
  * Readable without App Store / Play submit; no external fetch required.
  */
 
+import { PRIVACY_EMAIL } from '@worn/shared';
+
 export const PRIVACY_POLICY_IN_APP_TITLE = 'Privacy policy';
 
 export const PRIVACY_POLICY_BANNER =
@@ -17,7 +19,7 @@ export const PRIVACY_POLICY_SECTIONS: ReadonlyArray<{
 }> = [
   {
     heading: 'Who we are',
-    body: 'WORN Closet helps you find money you already paid for (gift cards, store credit, returns, warranties) and manage your wardrobe. Privacy contact: privacy@worn.app.',
+    body: `WORN Closet helps you find money you already paid for (gift cards, store credit, returns, warranties) and manage your wardrobe. Privacy contact: ${PRIVACY_EMAIL}.`,
   },
   {
     heading: 'What we collect',

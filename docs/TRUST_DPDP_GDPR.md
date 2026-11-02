@@ -16,7 +16,7 @@
 
 Public URL once published (set `EXPO_PUBLIC_PRIVACY_URL` / store listings):
 
-- Suggested prod path: `https://worn.app/privacy` (or marketing site equivalent)
+- Suggested prod path: `https://worncloset.app/privacy` (or marketing site equivalent)
 - Draft source of truth until then: `docs/legal/PRIVACY_POLICY_DRAFT.md`
 
 ## Counsel sign-off gate (founder — outside CI)
@@ -80,7 +80,7 @@ Engage a DPA (or vendor terms that include GDPR Art. 28 / DPDP processor clauses
 
 Reachable from Vault and Consent without digging:
 
-1. **Privacy policy** — opens `EXPO_PUBLIC_PRIVACY_URL` (default `https://worn.app/privacy`)
+1. **Privacy policy** — opens `EXPO_PUBLIC_PRIVACY_URL` (default `https://worncloset.app/privacy`)
 2. **Consent** — connected sources, revoke, Limited Use (`/(closet)/consent`)
 3. **Export my data** — `GET /vault/export` + share
 4. **Delete my account** — `DELETE /vault`
