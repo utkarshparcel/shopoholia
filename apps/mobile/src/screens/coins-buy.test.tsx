@@ -51,6 +51,14 @@ beforeEach(() => {
 });
 
 describe('Buy coins screen', () => {
+  it('says coins are store-bought, in-app only and have no cash value', () => {
+    show({ status: 'ready', packs: [pack()] });
+    const terms = screen.getByText(/can only be used in WORN/).textContent ?? '';
+    expect(terms).toMatch(/App Store or Google Play/);
+    expect(terms).toMatch(/no cash value/);
+    expect(terms).toMatch(/can’t be exchanged for money/);
+  });
+
   it('shows the store\'s price and buys the pack', () => {
     show({ status: 'ready', packs: [pack()] });
 

@@ -248,7 +248,9 @@ export default function ListingDetailScreen() {
                 <View style={styles.divider} />
                 <Text style={styles.sectionLabel}>Buy for real</Text>
                 <Text style={styles.affiliateSubtext}>
-                  Partner links — may earn you cashback coins after purchase confirmation.
+                  Partner links: you buy on the retailer’s site, WORN may earn a commission, and
+                  you may earn cashback coins once the purchase is confirmed. Coins have no cash
+                  value.
                 </Text>
                 <View style={styles.affiliateRow}>
                   {affiliateLinks.map((link, i) => (

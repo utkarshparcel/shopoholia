@@ -255,11 +255,24 @@ export default function BuyCoinsScreen() {
           <Text style={styles.perkText}>Rush delivery to Express tier (25 coins)</Text>
         </View>
       </View>
+
+      <Text style={styles.coinTerms}>
+        Coins are paid through the App Store or Google Play and can only be used in WORN. They have
+        no cash value and can’t be exchanged for money, transferred or refunded, except where the
+        law requires. Deleting your account deletes your coins.
+      </Text>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  coinTerms: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    lineHeight: 18,
+    marginTop: space4,
+  },
   back: {
     marginBottom: space4,
     paddingHorizontal: space4,
