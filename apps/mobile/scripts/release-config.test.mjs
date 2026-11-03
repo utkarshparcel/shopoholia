@@ -8,9 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { findLocalUrls, isLocalHostname, isReleaseBuild, releaseApiUrlProblem } = require(
-  './release-config.js',
-);
+const {
+  findLocalUrls,
+  isLocalHostname,
+  isReleaseBuild,
+  profileApiUrlProblem,
+  releaseApiUrlProblem,
+  releaseSettingsProblems,
+} = require('./release-config.js');
 const checker = join(dirname(fileURLToPath(import.meta.url)), 'check-release-bundle.mjs');
 
 describe('release API URL rules (Plan #4)', () => {
@@ -27,9 +32,67 @@ describe('release API URL rules (Plan #4)', () => {
     for (const host of ['localhost', '127.0.0.1', '10.0.2.2', '192.168.1.4', '172.20.0.3', '[::1]', 'api.local', 'worn.test']) {
       expect(isLocalHostname(host)).toBe(true);
     }
-    for (const host of ['api.example.com', '172.32.0.1', '11.0.0.1']) {
+    for (const host of [
+      '169.254.10.1',
+      '100.64.0.7',
+      '100.127.255.1',
+      'fe80::1',
+      'fd12:3456::1',
+      'abc123.ngrok-free.app',
+      'x.ngrok.io',
+      'quiet-cat.trycloudflare.com',
+      'mine.loca.lt',
+      'router.lan',
+    ]) {
+      expect(isLocalHostname(host)).toBe(true);
+    }
+    for (const host of ['api.example.com', '172.32.0.1', '11.0.0.1', '100.128.0.1', 'api.worncloset.app']) {
       expect(isLocalHostname(host)).toBe(false);
     }
+  });
+
+  it('pins the production profile to the production API', () => {
+    expect(profileApiUrlProblem('https://api.worncloset.app', 'production')).toBeNull();
+    expect(profileApiUrlProblem('https://api.worncloset.app/', 'production')).toBeNull();
+    expect(profileApiUrlProblem('https://staging-api.worncloset.app', 'production')).toMatch(
+      /must use https:\/\/api\.worncloset\.app/,
+    );
+    expect(profileApiUrlProblem('https://staging-api.worncloset.app', 'preview')).toBeNull();
+    expect(profileApiUrlProblem('http://localhost:3000', 'preview')).toMatch(/https/);
+  });
+
+  it("fails a release build without the Google client id of the platform it builds", () => {
+    const ios = 'ios-1.apps.googleusercontent.com';
+    const android = 'android-1.apps.googleusercontent.com';
+    expect(releaseSettingsProblems({ EAS_BUILD_PLATFORM: 'ios' }).errors).toEqual([
+      expect.stringMatching(/EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID is not set/),
+    ]);
+    expect(
+      releaseSettingsProblems({ EAS_BUILD_PLATFORM: 'ios', EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ios }).errors,
+    ).toEqual([]);
+    expect(
+      releaseSettingsProblems({ EAS_BUILD_PLATFORM: 'android', EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ios }).errors,
+    ).toEqual([expect.stringMatching(/EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID is not set/)]);
+    expect(
+      releaseSettingsProblems({ EAS_BUILD_PLATFORM: 'android', EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: 'oops' })
+        .errors,
+    ).toEqual([expect.stringMatching(/not a Google OAuth client id/)]);
+    // A local run (no platform) only warns, for both.
+    const local = releaseSettingsProblems({});
+    expect(local.errors).toEqual([]);
+    expect(local.warnings.join('\n')).toMatch(/IOS_CLIENT_ID[\s\S]*ANDROID_CLIENT_ID/);
+    expect(
+      releaseSettingsProblems({ EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ios, EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: android })
+        .warnings.join('\n'),
+    ).not.toMatch(/CLIENT_ID/);
+  });
+
+  it('warns when the build would send no crash reports or analytics', () => {
+    expect(releaseSettingsProblems({}).warnings.join('\n')).toMatch(/SENTRY_DSN[\s\S]*POSTHOG_KEY/);
+    expect(
+      releaseSettingsProblems({ EXPO_PUBLIC_SENTRY_DSN: 'https://k@o.ingest.sentry.io/1', EXPO_PUBLIC_POSTHOG_KEY: 'phc_x' })
+        .warnings.join('\n'),
+    ).not.toMatch(/SENTRY|POSTHOG/);
   });
 
   it('treats every EAS profile but development as a release, unless the profile says', () => {
