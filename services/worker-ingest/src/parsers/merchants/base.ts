@@ -3,28 +3,44 @@ import { detectCreditSignal } from "../credit-detect.js";
 import { extractOrderRef } from "../order-ref.js";
 import type { MerchantParser, ParsedPurchase, RawEmailMessage } from "../types.js";
 
+/** The domain of a From header ("Amazon.in <auto-confirm@amazon.in>" → "amazon.in"), lowercased. */
+export function senderDomain(from: string): string | null {
+  const m = from.match(/@([a-z0-9.-]+)/i);
+  return m ? m[1]!.toLowerCase().replace(/\.+$/, "") : null;
+}
+
 /** Shared base for the top-5 merchant stub parsers. Each subclass only declares
  * its identity and detection hints; extraction is heuristic and intentionally
  * partial — the spike gates how much real accuracy we invest here. */
 export abstract class BaseMerchantParser implements MerchantParser {
   abstract readonly id: string;
   abstract readonly merchant: string;
+  /** The merchant's registered sender domains; subdomains match too (mailer.amazon.in). */
   protected abstract readonly domains: string[];
   protected abstract readonly subjects: string[];
 
+  /** Whether the sender's address is on one of the merchant's domains (not just "amazon." anywhere). */
+  protected fromMerchantDomain(msg: RawEmailMessage): boolean {
+    const domain = senderDomain(msg.from);
+    if (!domain) return false;
+    return this.domains.some((d) => domain === d || domain.endsWith(`.${d}`));
+  }
+
   canParse(msg: RawEmailMessage): boolean {
-    const from = msg.from.toLowerCase();
     const subject = msg.subject.toLowerCase();
-    const domainHit = this.domains.some((d) => from.includes(d));
     const subjectHit = this.subjects.some((s) => subject.includes(s));
-    return domainHit || subjectHit;
+    return this.fromMerchantDomain(msg) || subjectHit;
   }
 
   parse(msg: RawEmailMessage): ParsedPurchase {
     const currency = this.detectCurrency(msg.text);
     const totalMinor = this.extractTotal(msg.text, currency);
     const items = this.extractItems(msg.text, totalMinor, currency);
-    const credit = detectCreditSignal(msg.subject, msg.text, totalMinor, currency);
+    // A subject word can name the merchant for a purchase (forwarded mail), but money lands in
+    // the vault only from the merchant's own domain: "Amazon" in a stranger's subject mints nothing.
+    const credit = this.fromMerchantDomain(msg)
+      ? detectCreditSignal(msg.subject, msg.text, totalMinor, currency)
+      : null;
     return {
       merchant: this.merchant,
       orderRef: this.extractOrderRef(msg.text) ?? this.extractOrderRef(msg.subject),

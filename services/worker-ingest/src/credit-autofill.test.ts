@@ -51,18 +51,23 @@ describe("detectCreditSignal", () => {
     ).toBeNull();
   });
 
-  it("uses fallback total and DD/MM expiry when amount omitted", () => {
+  it("never takes the order total as a credit when no amount sits by the credit phrase", () => {
+    // The order total used to stand in for the balance, minting credit from order emails.
+    expect(
+      detectCreditSignal(
+        "Gift voucher received",
+        "A digital gift was added to your wallet. Valid until 15/03/2027",
+        25000,
+        "INR",
+      ),
+    ).toBeNull();
     const signal = detectCreditSignal(
       "Gift voucher received",
-      "A digital gift was added to your wallet. Valid until 15/03/2027",
-      25000,
+      "A digital gift voucher of ₹250 was added to your wallet. Valid until 15/03/2027",
+      0,
       "INR",
     );
-    expect(signal).toMatchObject({
-      kind: "GIFT_CARD",
-      balanceMinor: 25000,
-      currency: "INR",
-    });
+    expect(signal).toMatchObject({ kind: "GIFT_CARD", balanceMinor: 25000, currency: "INR" });
     expect(signal?.expiresAt).toMatch(/^2027-03-15/);
   });
 
