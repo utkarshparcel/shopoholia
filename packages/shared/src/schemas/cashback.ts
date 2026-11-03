@@ -37,11 +37,11 @@ export type ClosetAffiliateSource = z.infer<typeof ClosetAffiliateSourceSchema>;
 export const CashbackClickBodySchema = z
   .object({
     listingId: z.string().uuid().nullable().optional(),
-    platform: z.string().min(1),
+    platform: z.string().min(1).max(40),
     /** Ignored: the server makes every click id. Accepted so older clients still validate. */
-    clickId: z.string().min(1).optional(),
+    clickId: z.string().min(1).max(200).optional(),
     source: z.union([z.literal("play_listing"), ClosetAffiliateSourceSchema]).optional(),
-    url: z.string().url().optional(),
+    url: z.string().url().max(2048).optional(),
   })
   .superRefine((body, ctx) => {
     const source = body.source ?? "play_listing";

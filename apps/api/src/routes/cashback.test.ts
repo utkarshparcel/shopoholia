@@ -7,16 +7,59 @@ import {
 } from "@worn/shared";
 import { buildTestServer, login } from "../test-utils.js";
 
+async function seedListing(app: Awaited<ReturnType<typeof buildTestServer>>["app"]): Promise<string> {
+  const id = randomUUID();
+  await app.deps.repos.seedListings(
+    [
+      {
+        id,
+        sellerId: null,
+        title: "Click Tee",
+        category: "tops",
+        tags: [],
+        coinPrice: 40,
+        realPrice: "₹399",
+        productImageKeys: [],
+        houseModelRenderKey: "house-models/x.jpg",
+        affiliateUrl: "https://www.myntra.com/x",
+        affiliateLinks: null,
+        status: "ACTIVE",
+        sortOrder: 0,
+        createdAt: new Date(),
+      },
+    ],
+    [],
+  );
+  return id;
+}
+
 describe("MON-AFFILIATE-CLOSET cashback events", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("refuses an unknown listing and an oversized platform, recording nothing", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken, userId } = await login(app);
+    const listingId = await seedListing(app);
+    const click = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: "/cashback/click",
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload,
+      });
+    expect((await click({ listingId: randomUUID(), platform: "amazon" })).statusCode).toBe(400);
+    expect((await click({ listingId, platform: "x".repeat(100_000) })).statusCode).toBe(400);
+    expect(await app.deps.repos.listCashbackEvents(userId)).toEqual([]);
+    expect((await click({ listingId, platform: "amazon" })).statusCode).toBe(200);
   });
 
   it("makes a fresh click id for every play click, whatever the client sends", async () => {
     const { app } = await buildTestServer();
     const alice = await login(app, "919800000001");
     const bob = await login(app, "919800000002");
-    const listingId = randomUUID();
+    const listingId = await seedListing(app);
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-10T10:00:00Z"));
     const click = (accessToken: string, clickId?: string) =>
       app.inject({
