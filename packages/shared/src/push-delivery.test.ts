@@ -116,9 +116,16 @@ describe("category opt-out + gate", () => {
     expect(notificationCategoryForEvent("FOUND_MONEY_WAITING")).toBe("credits");
     expect(notificationCategoryForEvent("WEEKLY_DIGEST")).toBe("digest");
     expect(notificationCategoryForEvent("MONTHLY_DIGEST")).toBe("digest");
+    // Every Closet push type sent through runClosetPushDelivery has a category.
+    expect(notificationCategoryForEvent("EMI_DUE")).toBe("credits");
+    expect(notificationCategoryForEvent("CASHBACK_CLAIM_DEADLINE")).toBe("credits");
+    expect(notificationCategoryForEvent("PRICE_DROP")).toBe("digest");
+    expect(notificationCategoryForEvent("PACKAGE_ASSIGNED")).toBe("returns");
+    expect(notificationCategoryForEvent("gift_occasion")).toBe("digest");
+    expect(notificationCategoryForEvent("tailoring_update")).toBe("outfits");
+    expect(notificationCategoryForEvent("cooling_off_released")).toBe("digest");
     expect(notificationCategoryForEvent("SPEND_ENVELOPE")).toBe("digest");
     expect(notificationCategoryForEvent("CREDIT_BALANCE_RECHECK")).toBe("credits");
-    expect(notificationCategoryForEvent("gift_occasion")).toBeNull();
   });
 
   it("skips when frequency cap is reached for digest", () => {
