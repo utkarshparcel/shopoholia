@@ -1,8 +1,19 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ClosetVaultScreen from '@/app/(closet)/vault';
+import { addCredit } from '@/src/api/client';
+import { enqueueVaultAdd, VAULT_ADD_QUEUE_KEY } from '@/src/lib/vaultAddQueue';
+import { useSessionStore } from '@/src/stores/session';
+
+let queryClient: QueryClient;
+function render(ui: ReactElement) {
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 const ACCOUNT = '22222222-2222-4222-8222-222222222222';
 
@@ -36,6 +47,10 @@ vi.mock('expo-router', () => ({
   Link: ({ children }: { children: unknown }) => children,
 }));
 vi.mock('expo-image', () => ({ Image: () => null }));
+vi.mock('@/src/api/client', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  addCredit: vi.fn(async () => ({ id: 'server-card' })),
+}));
 vi.mock('expo-image-picker', () => ({}));
 vi.mock('@/src/lib/features', async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -90,7 +105,10 @@ function giftCard(overrides: Record<string, unknown> = {}) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await AsyncStorage.removeItem(VAULT_ADD_QUEUE_KEY);
+  useSessionStore.setState({ accessToken: null });
   h.mutations.clear();
   h.queries.clear();
   h.queries.set('useGiftCards', { accounts: [giftCard()] });
@@ -144,5 +162,32 @@ describe('vault balance re-check reminder (S1-25)', () => {
       fireEvent.click(screen.getByLabelText('Remind me later'));
     });
     expect(vi.mocked(Alert.alert).mock.calls[0]![0]).toBe('Reminder not set');
+  });
+});
+
+describe('vault offline add queue (S1-26)', () => {
+  beforeEach(() => {
+    vi.mocked(addCredit).mockClear();
+  });
+
+  it('refetches the gift-card list once queued cards sync, and drops the pending row', async () => {
+    await enqueueVaultAdd('user-1', { kind: 'GIFT_CARD', merchant: 'Nykaa', currency: 'INR', balanceMinor: 50000 });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    useSessionStore.setState({ accessToken: 'tok' });
+    render(<ClosetVaultScreen />);
+    await waitFor(() => expect(addCredit).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(invalidate.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0])).toContain('gift-cards'),
+    );
+    await waitFor(() => expect(screen.queryByText('Nykaa (pending sync)')).toBeNull());
+  });
+
+  it('offers no spend or re-check on a card that has not synced (its id is not on the server)', async () => {
+    await enqueueVaultAdd('user-1', { kind: 'GIFT_CARD', merchant: 'Nykaa', currency: 'INR', balanceMinor: 50000 });
+    h.queries.set('useGiftCards', { accounts: [] });
+    render(<ClosetVaultScreen />);
+    await screen.findByText('Nykaa (pending sync)');
+    expect(screen.queryByText('Mark spent')).toBeNull();
+    expect(screen.queryByText('Re-check')).toBeNull();
   });
 });

@@ -54,14 +54,9 @@ import {
   isGstFocus,
   type GstInvoiceSearchPrefill,
 } from '@/src/lib/gstFromReturn';
-import {
-  enqueueVaultAdd,
-  flushVaultAddQueue,
-  queuedAddAsPendingAccount,
-  readVaultAddQueue,
-  type QueuedVaultAdd,
-} from '@/src/lib/vaultAddQueue';
+import { enqueueVaultAdd, queuedAddAsPendingAccount } from '@/src/lib/vaultAddQueue';
 import { useNetworkStatus } from '@/src/hooks/closet/useNetworkStatus';
+import { useVaultAddQueue } from '@/src/hooks/closet/useVaultAddQueue';
 import { useSessionUserId } from '@/src/hooks/closet/keys';
 
 import { Button } from '@/src/components/ui';
@@ -127,7 +122,7 @@ import {
   whatsAppStatusAssetFromAccounts,
 } from '@/src/lib/foundMoney';
 import { delightBarcodeCaptureSuccess } from '@/src/lib/barcodeCaptureDelight';
-import { ApiRequestError, getMyReferral, recordClosetAffiliateClick, addCredit } from '@/src/api/client';
+import { ApiRequestError, getMyReferral, recordClosetAffiliateClick } from '@/src/api/client';
 import {
   SAMPLE_MYNTRA_CREDIT,
   VAULT_FOUND_MONEY_HREF,
@@ -301,18 +296,7 @@ export default function ClosetVaultScreen() {
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
   const userId = useSessionUserId();
-  const { isOffline } = useNetworkStatus();
-  const [offlineQueuedCount, setOfflineQueuedCount] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    void readVaultAddQueue(userId).then((snap) => {
-      if (!cancelled) setOfflineQueuedCount(snap.items.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOffline, userId]);
+  const addQueue = useVaultAddQueue(userId);
 
   const onSnapReceiptFromHero = useCallback(() => {
     trackEvent('receipt_snap_hero');
@@ -428,12 +412,9 @@ export default function ClosetVaultScreen() {
         warranties.isRefetching ||
         ingestion.isRefetching
       }
-      offlineQueuedCount={offlineQueuedCount}
+      offlineQueuedCount={addQueue.items.length}
       onOfflineRetry={async () => {
-        if (accessToken && userId) {
-          const snap = await flushVaultAddQueue(userId, (body) => addCredit(accessToken, body));
-          setOfflineQueuedCount(snap.items.length);
-        }
+        if (accessToken) await addQueue.flush(accessToken);
         onRefresh();
       }}
       skeletonRows={5}
@@ -553,8 +534,12 @@ function CreditsKindTab({
   const copyPackId = useClosetPrefsStore((s) => s.copyPackId);
   const copyPack = getCopyPack(copyPackId);
   const { isOffline } = useNetworkStatus();
-  const [pendingQueue, setPendingQueue] = useState<QueuedVaultAdd[]>([]);
-  const [flushError, setFlushError] = useState<string | null>(null);
+  const addQueue = useVaultAddQueue(userId);
+  const pendingQueue = addQueue.items;
+  const flushAddQueue = addQueue.flush;
+  /** Why an online add was queued instead (not stored: the next flush replaces it). */
+  const [onlineAddError, setOnlineAddError] = useState<string | null>(null);
+  const flushError = addQueue.lastFlushError ?? onlineAddError;
   const [shareViaLabel, setShareViaLabel] = useState<string | null>(null);
   /** The user's own referral code once fetched, so sharing does not ask the API again. */
   const [myReferralCode, setMyReferralCode] = useState<string | null>(null);
@@ -601,29 +586,15 @@ function CreditsKindTab({
   }, [justConnected, tab, celebrationSource]);
 
   useEffect(() => {
-    let cancelled = false;
-    void readVaultAddQueue(userId).then((snap) => {
-      if (cancelled) return;
-      setPendingQueue(snap.items);
-      setFlushError(snap.lastFlushError);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  useEffect(() => {
     if (isOffline || !accessToken || !userId || tab !== 'gift') return;
     let cancelled = false;
-    void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
-      if (cancelled) return;
-      setPendingQueue(snap.items);
-      setFlushError(snap.lastFlushError);
+    void flushAddQueue(accessToken).then(() => {
+      if (!cancelled) setOnlineAddError(null);
     });
     return () => {
       cancelled = true;
     };
-  }, [isOffline, accessToken, userId, tab]);
+  }, [isOffline, accessToken, userId, tab, flushAddQueue]);
 
   useEffect(() => {
     if (!loyaltyJustAdded) return;
@@ -905,11 +876,8 @@ function CreditsKindTab({
         notify(`Could not add ${meta.noun}`, 'Sign in to add it.');
         return;
       }
-      void enqueueVaultAdd(userId, payload).then((item) => {
-        setPendingQueue((prev) =>
-          prev.some((p) => p.id === item.id) ? prev : [...prev, item],
-        );
-        setFlushError(null);
+      void enqueueVaultAdd(userId, payload).then(() => {
+        setOnlineAddError(null);
         finishLocalSuccess();
       });
       return;
@@ -927,11 +895,8 @@ function CreditsKindTab({
           e.status !== 408 &&
           e.status !== 429;
         if (tab === 'gift' && !answered && userId) {
-          void enqueueVaultAdd(userId, payload).then((item) => {
-            setPendingQueue((prev) =>
-              prev.some((p) => p.id === item.id) ? prev : [...prev, item],
-            );
-            setFlushError(closetAlertText(e));
+          void enqueueVaultAdd(userId, payload).then(() => {
+            setOnlineAddError(closetAlertText(e));
             finishLocalSuccess();
           });
           return;
@@ -1507,10 +1472,7 @@ function CreditsKindTab({
             variant="secondary"
             onPress={() => {
               if (!accessToken || !userId) return;
-              void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
-                setPendingQueue(snap.items);
-                setFlushError(snap.lastFlushError);
-              });
+              void flushAddQueue(accessToken).then(() => setOnlineAddError(null));
             }}
           />
         </View>
@@ -2095,23 +2057,28 @@ function CreditsKindTab({
                       }
                     />
                   ) : null}
-                  <Button
-                    label={
-                      'balanceCheck' in account && account.balanceCheck?.due
-                        ? 'Re-check due'
-                        : 'Re-check'
-                    }
-                    size="sm"
-                    variant="ghost"
-                    disabled={balanceCheck.isPending}
-                    onPress={() => runBalanceCheck(account.id, account.merchant)}
-                  />
-                  <Button
-                    label="Mark spent"
-                    size="sm"
-                    variant="ghost"
-                    onPress={() => setSpendingId(account.id)}
-                  />
+                  {'pendingSync' in account && account.pendingSync ? null : (
+                    // A queued card has no server id yet: a spend or re-check would 404.
+                    <>
+                      <Button
+                        label={
+                          'balanceCheck' in account && account.balanceCheck?.due
+                            ? 'Re-check due'
+                            : 'Re-check'
+                        }
+                        size="sm"
+                        variant="ghost"
+                        disabled={balanceCheck.isPending}
+                        onPress={() => runBalanceCheck(account.id, account.merchant)}
+                      />
+                      <Button
+                        label="Mark spent"
+                        size="sm"
+                        variant="ghost"
+                        onPress={() => setSpendingId(account.id)}
+                      />
+                    </>
+                  )}
                 </View>
               </View>
             )}
