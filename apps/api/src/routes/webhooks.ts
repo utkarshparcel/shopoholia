@@ -1,5 +1,6 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { secretsEqual } from "../lib/auth/admin.js";
 import { notImplemented } from "../lib/stub.js";
 import { publishIngestJob } from "../lib/ingest-queue.js";
 import { processAppStoreNotification } from "../lib/iap/notifications.js";
@@ -126,7 +127,8 @@ export const webhooksRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const secret = request.headers["x-webhook-secret"];
       const expected = process.env.INGEST_WEBHOOK_SECRET;
-      if (!expected || secret !== expected) {
+      // Constant time, and a repeated header (an array) never matches.
+      if (!expected || typeof secret !== "string" || !secretsEqual(secret, expected)) {
         return reply.code(401).send({
           error: "Unauthorized",
           message: "Invalid or missing X-Webhook-Secret",
