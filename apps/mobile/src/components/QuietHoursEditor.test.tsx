@@ -35,4 +35,18 @@ describe('QuietHoursEditor (W082)', () => {
     fireEvent.click(plusButtons[0]!);
     expect(onChange).toHaveBeenCalledWith('22:30', '07:00');
   });
+
+  it('S3-25 / S3-27: says the times are local, never UTC', () => {
+    render(
+      <QuietHoursEditor
+        quietHoursStart="22:00"
+        quietHoursEnd="07:00"
+        timeZone="Asia/Kolkata"
+        onChange={vi.fn()}
+      />,
+    );
+    const hint = screen.getByTestId('quiet-hours-hint').textContent ?? '';
+    expect(hint).toContain('your local time (Asia/Kolkata)');
+    expect(screen.getByTestId('quiet-hours-editor').textContent).not.toMatch(/UTC|HH:mm/);
+  });
 });
