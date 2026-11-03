@@ -258,6 +258,22 @@ describe("worker-returns queue", () => {
     expect(db.inserted[0]!.title).toBe("Return window closes tomorrow");
   });
 
+  it("says today on the last day, and skips once the window has closed", async () => {
+    // 17:30 IST; the deadline is 3 hours away, still today in IST.
+    const soon = new Date(NOON.getTime() + 3 * 3_600_000);
+    const db = mockDb({ returnRequest: { state: "REQUESTED", windowDeadline: soon } });
+    await processReturnDeadline({ ...payload, windowDeadline: soon.toISOString() }, db, { now: NOON });
+    expect(db.inserted[0]!.title).toBe("Return window closes today");
+
+    // Delayed past the deadline (quiet hours): no push claiming it closes tomorrow.
+    const past = new Date(NOON.getTime() - 60_000);
+    const late = mockDb({ returnRequest: { state: "REQUESTED", windowDeadline: past } });
+    expect(
+      await processReturnDeadline({ ...payload, windowDeadline: past.toISOString() }, late, { now: NOON }),
+    ).toEqual({ status: "skipped" });
+    expect(late.inserted).toHaveLength(0);
+  });
+
   it("skips a user who no longer exists", async () => {
     const db = mockDb({ user: null });
     const result = await processReturnDeadline(payload, db, { now: NOON });
