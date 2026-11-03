@@ -1213,6 +1213,8 @@ export async function checkCreditBalance(accessToken: string, id: string) {
   const res = await apiFetch(`${API_URL}/credits/${id}/balance-check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    // Fastify rejects an empty body sent as application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+    body: '{}',
   });
   return parseJson<BalanceCheckResponse>(res);
 }
@@ -2282,6 +2284,8 @@ export async function startWearChallenge(accessToken: string, itemId: string) {
   const res = await apiFetch(`${API_URL}/waste/${itemId}/challenge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    // Fastify rejects an empty body sent as application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+    body: '{}',
   });
   return parseJson<{
     wardrobeItemId: string;
