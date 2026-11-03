@@ -8,22 +8,27 @@ type List = 'play' | 'closet';
 type State =
   | { kind: 'idle' }
   | { kind: 'sending' }
-  | { kind: 'done' }
+  | { kind: 'done'; already?: boolean }
   // `mail`: end the message with a mailto link to CONTACT_EMAIL, the way round a failed sign-up
   | { kind: 'error'; message: string; mail?: boolean };
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/* The sign-up script refuses these too (waitlist/apps-script.gs): no address needs them. */
+const FORMULA = /^[=+\-@]|["'()&;<>`\\]/;
+const INVALID = 'Enter an email address like name@example.com.';
 
-const COPY: Record<List, { button: string; subject: string; done: string }> = {
+const COPY: Record<List, { button: string; subject: string; done: string; already: string }> = {
   play: {
     button: 'Request early access',
     subject: 'Worn Play early access',
     done: 'You’re on the list. We’ll email you when your invite is ready.',
+    already: 'You’re already on the list. We’ll email you when your invite is ready.',
   },
   closet: {
     button: 'Join the Closet list',
     subject: 'Worn Closet early access',
     done: 'You’re on the Closet list. You’ll hear first when it opens.',
+    already: 'You’re already on the Closet list. You’ll hear first when it opens.',
   },
 };
 
@@ -51,8 +56,8 @@ export function WaitlistForm({ list }: { list: List }) {
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const value = email.trim();
-    if (!EMAIL.test(value)) {
-      setState({ kind: 'error', message: 'Enter an email address like name@example.com.' });
+    if (!EMAIL.test(value) || FORMULA.test(value) || value.length > 254) {
+      setState({ kind: 'error', message: INVALID });
       return;
     }
     setState({ kind: 'sending' });
@@ -65,10 +70,15 @@ export function WaitlistForm({ list }: { list: List }) {
         referrer: document.referrer,
         website: String(new FormData(e.currentTarget).get('website') ?? ''),
       });
-      const res = await fetch(WAITLIST_URL, { method: 'POST', body });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      // A stalled request ends in the error message (with the email fallback), not "Adding you…" forever.
+      const res = await fetch(WAITLIST_URL, { method: 'POST', body, signal: AbortSignal.timeout(15000) });
+      const data = (await res.json()) as { ok?: boolean; error?: string; duplicate?: boolean };
+      if (!data.ok && data.error === 'invalid email') {
+        setState({ kind: 'error', message: INVALID });
+        return;
+      }
       if (!data.ok) throw new Error(data.error || 'not added');
-      setState({ kind: 'done' });
+      setState({ kind: 'done', already: !!data.duplicate });
     } catch {
       setState({
         kind: 'error',
@@ -81,7 +91,7 @@ export function WaitlistForm({ list }: { list: List }) {
   if (state.kind === 'done') {
     return (
       <p role="status" className="inline-flex items-center gap-2 rounded-pill bg-worn-paper/10 px-6 py-3 text-[15px] font-semibold text-worn-paper">
-        <Check className="h-4 w-4 text-worn-gold" aria-hidden="true" /> {copy.done}
+        <Check className="h-4 w-4 shrink-0 text-worn-gold" aria-hidden="true" /> {state.already ? copy.already : copy.done}
       </p>
     );
   }

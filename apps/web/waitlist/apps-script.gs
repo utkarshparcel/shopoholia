@@ -5,6 +5,9 @@
 const SHEET_NAME = 'Waitlist';
 const LISTS = ['play', 'closet'];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/** No real address needs these, and they are what a formula is made of (=IMPORTDATA("…")&"@a.bc"). */
+const FORMULA_START = /^[=+\-@\t\r]/;
+const FORMULA_CHARS = /["'()&;<>`\\]/;
 
 function doPost(e) {
   const p = (e && e.parameter) || {};
@@ -12,7 +15,9 @@ function doPost(e) {
   if (p.website) return json({ ok: true });
 
   const email = String(p.email || '').trim().toLowerCase();
-  if (!EMAIL.test(email) || email.length > 254) return json({ ok: false, error: 'invalid email' });
+  if (!EMAIL.test(email) || email.length > 254 || FORMULA_START.test(email) || FORMULA_CHARS.test(email)) {
+    return json({ ok: false, error: 'invalid email' });
+  }
   const list = LISTS.indexOf(p.list) >= 0 ? p.list : 'play';
 
   // One writer at a time, so two quick submits can't both pass the duplicate check.
@@ -22,8 +27,9 @@ function doPost(e) {
     const sheet = waitlistSheet();
     const last = sheet.getLastRow();
     const existing = last > 1 ? sheet.getRange(2, 2, last - 1, 2).getValues() : [];
-    if (existing.some((row) => row[0] === email && row[1] === list)) return json({ ok: true, duplicate: true });
-    sheet.appendRow([new Date(), email, list, cell(p.page), cell(p.referrer)]);
+    if (existing.some((row) => row[0] === cell(email) && row[1] === list)) return json({ ok: true, duplicate: true });
+    // Every visitor-supplied value goes through cell(), the email too.
+    sheet.appendRow([new Date(), cell(email), list, cell(p.page), cell(p.referrer)]);
     return json({ ok: true });
   } finally {
     lock.releaseLock();
