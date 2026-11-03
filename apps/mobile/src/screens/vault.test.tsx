@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ClosetVaultScreen from '@/app/(closet)/vault';
@@ -48,6 +49,8 @@ vi.mock('@/src/hooks/closet/keys', async (importOriginal) => ({
 vi.mock('@/src/hooks/closet/useConsent', () => ({
   useConsentGate: () => ({ allowed: true, missingError: null }),
 }));
+const reminder = vi.hoisted(() => ({ schedule: vi.fn() }));
+vi.mock('@/src/lib/balanceReminder', () => ({ scheduleBalanceRecheckReminder: reminder.schedule }));
 // Panels on other tabs and decorative components are not under test here.
 vi.mock('@/src/components/ReturnsPanel', () => ({ ReturnsPanel: () => null }));
 vi.mock('@/src/components/PackagesPanel', () => ({ PackagesPanel: () => null }));
@@ -112,5 +115,34 @@ describe('vault gift-card spend (S1-19)', () => {
       fireEvent.click(screen.getByLabelText('Confirm'));
     });
     expect(spend.mutate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('vault balance re-check reminder (S1-25)', () => {
+  beforeEach(() => {
+    reminder.schedule.mockReset();
+    vi.mocked(Alert.alert).mockReset();
+    h.queries.set('useGiftCards', {
+      accounts: [giftCard({ balanceCheck: { due: true, checkUrl: null } })],
+    });
+  });
+
+  it('schedules a reminder before saying it is set', async () => {
+    reminder.schedule.mockResolvedValue({ scheduled: true, at: new Date(2026, 10, 10, 10) });
+    render(<ClosetVaultScreen />);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Remind me later'));
+    });
+    expect(reminder.schedule).toHaveBeenCalledWith(expect.objectContaining({ id: ACCOUNT, merchant: 'Myntra' }));
+    expect(vi.mocked(Alert.alert).mock.calls[0]![0]).toBe('Reminder set');
+  });
+
+  it('does not claim a reminder when notifications are off', async () => {
+    reminder.schedule.mockResolvedValue({ scheduled: false, reason: 'permission' });
+    render(<ClosetVaultScreen />);
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Remind me later'));
+    });
+    expect(vi.mocked(Alert.alert).mock.calls[0]![0]).toBe('Reminder not set');
   });
 });

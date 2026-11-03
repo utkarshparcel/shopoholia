@@ -45,6 +45,7 @@ import {
 import { formatClosetDate } from '@/src/lib/format';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { parseAmountInput } from '@/src/lib/amountInput';
+import { scheduleBalanceRecheckReminder } from '@/src/lib/balanceReminder';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { addMonthsToDayKey, endOfDayKeyIso, localDayKey, parseDayKey } from '@/src/lib/localDay';
 import { celebrationVariantForSource } from '@/src/lib/celebrationVariants';
@@ -1290,23 +1291,34 @@ function CreditsKindTab({
     });
     const checkUrl =
       account.balanceCheck?.checkUrl ?? merchantDeepLink(account.merchant);
-    Alert.alert(
-      'Reminder set',
-      'We’ll nudge you to re-check this balance. You can also confirm it on the merchant site now.',
-      checkUrl
-        ? [
-            {
-              text: 'Open merchant',
-              onPress: () => {
-                Linking.openURL(checkUrl).catch(() =>
-                  Alert.alert('Could not open link'),
-                );
-              },
+    const buttons = checkUrl
+      ? [
+          {
+            text: 'Open merchant',
+            onPress: () => {
+              Linking.openURL(checkUrl).catch(() => Alert.alert('Could not open link'));
             },
-            { text: 'OK' },
-          ]
-        : [{ text: 'OK' }],
-    );
+          },
+          { text: 'OK' },
+        ]
+      : [{ text: 'OK' }];
+    void scheduleBalanceRecheckReminder(account).then((result) => {
+      if (result.scheduled) {
+        Alert.alert(
+          'Reminder set',
+          `We’ll nudge you to re-check this balance on ${formatClosetDate(result.at)}. You can also confirm it on the merchant site now.`,
+          buttons,
+        );
+        return;
+      }
+      Alert.alert(
+        'Reminder not set',
+        result.reason === 'permission'
+          ? 'Turn on notifications for WORN to get a reminder. You can also confirm the balance on the merchant site now.'
+          : 'Could not schedule the reminder. You can confirm the balance on the merchant site now.',
+        buttons,
+      );
+    });
   }
 
   function submitRecheck(id: string) {
