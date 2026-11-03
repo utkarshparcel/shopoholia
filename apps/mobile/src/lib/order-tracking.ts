@@ -1,4 +1,4 @@
-import type { OrderState } from '@worn/shared';
+import { TIER_TIMINGS_PROD, type OrderState } from '@worn/shared';
 
 export type OrderSummary = {
   id: string;
@@ -15,6 +15,24 @@ export const TIER_LABELS: Record<OrderSummary['tier'], string> = {
   STANDARD: 'Standard',
   SLOW_BURN: 'Slow burn',
 };
+
+/**
+ * How long a tier takes from checkout to the reveal, in words ("about 2 hours"), from the
+ * production delivery timers the API runs at launch (TIER_TIMINGS_PROD), so checkout never
+ * promises a pace the server doesn't keep.
+ */
+export function tierDurationLabel(
+  tier: OrderSummary['tier'],
+  timings: Record<OrderSummary['tier'], { DELIVERED: number }> = TIER_TIMINGS_PROD,
+): string {
+  const ms = timings[tier].DELIVERED;
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `about ${minutes} min`;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 48 || hours % 24 !== 0) return `about ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  const days = hours / 24;
+  return `about ${days} days`;
+}
 
 export function tierLabel(tier: OrderSummary['tier']): string {
   return TIER_LABELS[tier] ?? tier;
