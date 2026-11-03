@@ -24,7 +24,9 @@
   },
   "//": [
     "pnpm.overrides: fast-uri and @fastify/busboy are transitive (fast-uri via ajv/fast-json-stringify/@fastify/ajv-compiler, busboy via @fastify/multipart) and every parent already allows the fixed versions but the lockfile kept the old ones.",
-    "fast-uri <3.1.7: SSRF / host confusion advisories. @fastify/busboy <3.2.1: multipart DoS advisory. Drop these once the lockfile resolves fixed versions on its own."
+    "fast-uri <3.1.7: SSRF / host confusion advisories. @fastify/busboy <3.2.1: multipart DoS advisory. Drop these once the lockfile resolves fixed versions on its own.",
+    "shell-quote <1.11.0 has a critical quote() command injection. It is in the production trees through gel (drizzle-orm optional peer, never imported: we use drizzle-orm/postgres-js) in the API and workers, and through react-native -> react-devtools-core / launch-editor (dev tooling) in mobile. 1.12.0 is a compatible minor.",
+    "minimatch@9>brace-expansion: @sentry/node (API and workers at runtime) -> minimatch 9 -> brace-expansion 2.1.1, which has several DoS advisories fixed in 2.1.7."
   ],
   "pnpm": {
     "patchedDependencies": {
@@ -32,7 +34,9 @@
     },
     "overrides": {
       "fast-uri@<3.1.7": "^3.1.9",
-      "@fastify/busboy@<3.2.1": "^3.2.4"
+      "@fastify/busboy@<3.2.1": "^3.2.4",
+      "minimatch@9>brace-expansion": "^2.1.7",
+      "shell-quote@<1.11.0": "^1.12.0"
     }
   }
 }
