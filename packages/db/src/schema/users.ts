@@ -13,6 +13,8 @@ export const users = pgTable("users", {
   phone: text("phone").unique(),
   email: text("email").unique(),
   googleSub: text("google_sub").unique(),
+  /** Sign in with Apple's stable user id (the identity token's `sub`). */
+  appleSub: text("apple_sub").unique(),
   displayName: text("display_name"),
   avatarStatus: avatarStatusEnum("avatar_status").notNull().default("NONE"),
   coinBalanceCache: integer("coin_balance_cache").notNull().default(0),

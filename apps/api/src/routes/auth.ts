@@ -1,4 +1,5 @@
 import {
+  AppleAuthRequestSchema,
   GoogleAuthRequestSchema,
   OtpRequestSchema,
   OtpResponseSchema,
@@ -8,9 +9,19 @@ import {
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
+import {
+  AppleVerifyUnavailableError,
+  appleSignInAudiences,
+  verifyAppleIdentityToken,
+} from "../lib/auth/apple.js";
 import { GoogleVerifyUnavailableError, verifyGoogleIdToken } from "../lib/auth/google.js";
 import { OtpRateLimitError, OtpUnavailableError } from "../lib/auth/otp.js";
-import { loginWithGoogleProfile, refreshAccessToken, verifyAndLogin } from "../lib/auth/tokens.js";
+import {
+  loginWithAppleProfile,
+  loginWithGoogleProfile,
+  refreshAccessToken,
+  verifyAndLogin,
+} from "../lib/auth/tokens.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -109,6 +120,57 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         googleSub: profile.sub,
         email: profile.email,
         displayName: profile.name,
+      });
+    },
+  );
+
+  /**
+   * Sign in with Apple (iOS; App Store Guideline 4.8 because Google sign-in is offered). The
+   * identity token is checked against Apple's keys, the app's bundle id and this sign-in's nonce.
+   */
+  app.post(
+    "/auth/apple",
+    {
+      schema: {
+        tags: ["auth"],
+        body: AppleAuthRequestSchema,
+        response: {
+          200: TokenResponseSchema,
+          401: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (appleSignInAudiences().length === 0 && process.env.NODE_ENV !== "test") {
+        return reply.code(503).send({
+          error: "Service Unavailable",
+          message: "Sign in with Apple is not configured (set APPLE_BUNDLE_ID)",
+        });
+      }
+
+      let identity: Awaited<ReturnType<typeof verifyAppleIdentityToken>>;
+      try {
+        identity = await verifyAppleIdentityToken(request.body.identityToken, request.body.nonce);
+      } catch (error) {
+        if (!(error instanceof AppleVerifyUnavailableError)) throw error;
+        request.log.warn({ err: error }, "apple keys unavailable");
+        return reply.code(503).send({
+          error: "Service Unavailable",
+          message: "Sign in with Apple is unavailable right now. Try again in a moment.",
+        });
+      }
+      if (!identity) {
+        return reply.code(401).send({
+          error: "Unauthorized",
+          message: "Invalid Apple identity token",
+        });
+      }
+
+      return loginWithAppleProfile(app, app.deps.repos, {
+        appleSub: identity.sub,
+        email: identity.email,
+        displayName: request.body.fullName ?? null,
       });
     },
   );

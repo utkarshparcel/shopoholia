@@ -458,6 +458,7 @@ function mapUser(row: UserRow): UserRecord {
     phone: row.phone ?? null,
     email: row.email ?? null,
     googleSub: row.googleSub ?? null,
+    appleSub: row.appleSub ?? null,
     displayName: row.displayName,
     avatarStatus: row.avatarStatus as AvatarStatus,
     coinBalanceCache: row.coinBalanceCache,
@@ -1228,6 +1229,11 @@ export function createPostgresRepositories(db: Db): Repositories {
       return row ? mapUser(row) : null;
     },
 
+    async findUserByAppleSub(appleSub) {
+      const [row] = await db.select().from(users).where(eq(users.appleSub, appleSub)).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
     async findUserByEmail(email) {
       const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
       return row ? mapUser(row) : null;
@@ -1312,6 +1318,50 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { user: mapUser(row), isNew: true };
     },
 
+    async findOrCreateAppleUser({ appleSub, email, displayName }) {
+      const existingApple = await repos.findUserByAppleSub(appleSub);
+      if (existingApple) {
+        if (!existingApple.referralCode) {
+          return { user: await assignReferralCode(existingApple.id), isNew: false };
+        }
+        return { user: existingApple, isNew: false };
+      }
+
+      const existingEmail = email ? await repos.findUserByEmail(email) : null;
+      if (existingEmail) {
+        const updated = await repos.updateUser(existingEmail.id, {
+          appleSub,
+          displayName: existingEmail.displayName ?? displayName ?? null,
+        });
+        return { user: updated.referralCode ? updated : await assignReferralCode(updated.id), isNew: false };
+      }
+
+      const userId = randomUUID();
+      const row = await withNewReferralCode((referralCode) =>
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone: null,
+              email: email ? email.toLowerCase() : null,
+              googleSub: null,
+              appleSub,
+              displayName: displayName ?? null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
+
+      return { user: mapUser(row), isNew: true };
+    },
+
     async updateUser(id, patch) {
       const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       if (!existing) throw new Error(`User not found: ${id}`);
@@ -1322,6 +1372,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           phone: patch.phone !== undefined ? patch.phone : existing.phone,
           email: patch.email !== undefined ? patch.email : existing.email,
           googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
+          appleSub: patch.appleSub !== undefined ? patch.appleSub : existing.appleSub,
           displayName: patch.displayName ?? existing.displayName,
           avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
           coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,

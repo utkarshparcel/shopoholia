@@ -418,6 +418,13 @@ export function createMemoryRepositories(): Repositories {
       return null;
     },
 
+    async findUserByAppleSub(appleSub) {
+      for (const user of users.values()) {
+        if (user.appleSub === appleSub) return user;
+      }
+      return null;
+    },
+
     async findUserByEmail(email) {
       const normalized = email.toLowerCase();
       for (const user of users.values()) {
@@ -444,6 +451,7 @@ export function createMemoryRepositories(): Repositories {
         phone,
         email: null,
         googleSub: null,
+        appleSub: null,
         displayName: null,
         avatarStatus: "NONE",
         coinBalanceCache: 0,
@@ -498,6 +506,7 @@ export function createMemoryRepositories(): Repositories {
         phone: null,
         email: email.toLowerCase(),
         googleSub,
+        appleSub: null,
         displayName: displayName ?? null,
         avatarStatus: "NONE",
         coinBalanceCache: 0,
@@ -514,6 +523,55 @@ export function createMemoryRepositories(): Repositories {
         updatedAt: now(),
       };
       user.referralCode = await freshReferralCode();
+      users.set(user.id, user);
+      return { user, isNew: true };
+    },
+
+    async findOrCreateAppleUser({ appleSub, email, displayName }) {
+      const byApple = await this.findUserByAppleSub(appleSub);
+      if (byApple) {
+        if (!byApple.referralCode) {
+          const updated = { ...byApple, referralCode: await freshReferralCode(), updatedAt: now() };
+          users.set(byApple.id, updated);
+          return { user: updated, isNew: false };
+        }
+        return { user: byApple, isNew: false };
+      }
+
+      const byEmail = email ? await this.findUserByEmail(email) : null;
+      if (byEmail) {
+        const linked = {
+          ...byEmail,
+          appleSub,
+          displayName: byEmail.displayName ?? displayName ?? null,
+          updatedAt: now(),
+        };
+        if (!linked.referralCode) linked.referralCode = await freshReferralCode();
+        users.set(byEmail.id, linked);
+        return { user: linked, isNew: false };
+      }
+
+      const user: UserRecord = {
+        id: randomUUID(),
+        phone: null,
+        email: email ? email.toLowerCase() : null,
+        googleSub: null,
+        appleSub,
+        displayName: displayName ?? null,
+        avatarStatus: "NONE",
+        coinBalanceCache: 0,
+        consentFlags: {},
+        prefs: {},
+        timeZone: DEFAULT_TIME_ZONE,
+        pushToken: null,
+        referralCode: await freshReferralCode(),
+        referredBy: null,
+        streakCount: 0,
+        lastStreakClaimAt: null,
+        styleProfile: null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
       users.set(user.id, user);
       return { user, isNew: true };
     },

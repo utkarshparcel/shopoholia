@@ -18,6 +18,8 @@ export type UserRecord = {
   phone: string | null;
   email: string | null;
   googleSub: string | null;
+  /** Sign in with Apple user id. */
+  appleSub: string | null;
   displayName: string | null;
   avatarStatus: AvatarStatus;
   coinBalanceCache: number;
@@ -774,12 +776,22 @@ export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
   findUserByGoogleSub(googleSub: string): Promise<UserRecord | null>;
+  findUserByAppleSub(appleSub: string): Promise<UserRecord | null>;
   findUserByEmail(email: string): Promise<UserRecord | null>;
   findUserByReferralCode(code: string): Promise<UserRecord | null>;
   createUser(phone: string): Promise<{ user: UserRecord; isNew: boolean }>;
   findOrCreateGoogleUser(input: {
     googleSub: string;
     email: string;
+    displayName?: string | null;
+  }): Promise<{ user: UserRecord; isNew: boolean }>;
+  /**
+   * Sign in with Apple: the user with this Apple id, else the one with this (Apple-verified) email,
+   * which gets the Apple id linked, else a new user. `email` is null when the user shared none.
+   */
+  findOrCreateAppleUser(input: {
+    appleSub: string;
+    email: string | null;
     displayName?: string | null;
   }): Promise<{ user: UserRecord; isNew: boolean }>;
   updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord>;

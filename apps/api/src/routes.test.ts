@@ -171,6 +171,82 @@ describe("auth", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  describe("Sign in with Apple", () => {
+    const NONCE = "nonce-0123456789abcdef";
+    const signIn = (identityToken: string, extra: Record<string, unknown> = {}) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/apple",
+        payload: { identityToken, nonce: NONCE, ...extra },
+      });
+
+    it("creates the account with the onboarding coins, then signs the same user in again", async () => {
+      const first = await signIn(`test-apple:apple-sub-1:x7@privaterelay.appleid.com:${NONCE}`, {
+        fullName: "Asha Rao",
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ isNewUser: true, coinBalance: ONBOARDING_COIN_GRANT });
+      const firstUser = (app.jwt.verify(first.json().accessToken) as { sub: string }).sub;
+      expect(await app.deps.repos.findUserById(firstUser)).toMatchObject({
+        appleSub: "apple-sub-1",
+        email: "x7@privaterelay.appleid.com",
+        displayName: "Asha Rao",
+      });
+
+      // Later sign-ins carry no name (Apple sends it once) and keep the account.
+      const again = await signIn(`test-apple:apple-sub-1:x7@privaterelay.appleid.com:${NONCE}`);
+      expect(again.statusCode).toBe(200);
+      expect(again.json()).toMatchObject({ isNewUser: false, coinBalance: ONBOARDING_COIN_GRANT });
+      expect((app.jwt.verify(again.json().accessToken) as { sub: string }).sub).toBe(firstUser);
+      expect((await app.deps.repos.findUserById(firstUser))?.displayName).toBe("Asha Rao");
+
+      const refreshed = await app.inject({
+        method: "POST",
+        url: "/auth/refresh",
+        payload: { refreshToken: again.json().refreshToken },
+      });
+      expect(refreshed.statusCode).toBe(200);
+    });
+
+    it("signs in without an email when the user shared none", async () => {
+      const res = await signIn(`test-apple:apple-sub-2:-:${NONCE}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().isNewUser).toBe(true);
+    });
+
+    it("links to the Google account with the same email instead of making a second account", async () => {
+      const google = await app.inject({
+        method: "POST",
+        url: "/auth/google",
+        payload: { idToken: "test-google:g-sub:same@worncloset.app:Same" },
+      });
+      const googleUser = (app.jwt.verify(google.json().accessToken) as { sub: string }).sub;
+      const apple = await signIn(`test-apple:apple-sub-3:Same@worncloset.app:${NONCE}`);
+      expect(apple.statusCode).toBe(200);
+      expect(apple.json().isNewUser).toBe(false);
+      expect((app.jwt.verify(apple.json().accessToken) as { sub: string }).sub).toBe(googleUser);
+    });
+
+    it("refuses a token for another sign-in (nonce) or not from Apple", async () => {
+      expect((await signIn(`test-apple:apple-sub-4:a@b.co:other-nonce-0123456789`)).statusCode).toBe(401);
+      expect((await signIn("not-an-apple-identity-token")).statusCode).toBe(401);
+      expect((await signIn(`test-apple:apple-sub-4:a@b.co:${NONCE}`, { nonce: "short" })).statusCode).toBe(400);
+    });
+
+    it("answers 503 when no bundle id is configured", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("APPLE_BUNDLE_ID", "");
+      vi.stubEnv("APPLE_SIGN_IN_AUDIENCES", "");
+      try {
+        const res = await signIn(`test-apple:apple-sub-5:a@b.co:${NONCE}`);
+        expect(res.statusCode).toBe(503);
+        expect(res.json().message).toMatch(/APPLE_BUNDLE_ID/);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   it("refreshes tokens", async () => {
     await app.inject({ method: "POST", url: "/auth/otp", payload: { phone: "919876543210" } });
     const verify = await app.inject({
