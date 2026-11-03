@@ -1,5 +1,6 @@
 import { detectDeliveryFromText } from "@worn/shared";
 import { detectCreditSignal } from "../credit-detect.js";
+import { extractOrderRef } from "../order-ref.js";
 import type { MerchantParser, ParsedPurchase, RawEmailMessage } from "../types.js";
 
 /** Shared base for the top-5 merchant stub parsers. Each subclass only declares
@@ -125,10 +126,7 @@ export abstract class BaseMerchantParser implements MerchantParser {
   }
 
   protected extractOrderRef(text: string): string | undefined {
-    const m = text.match(
-      /(?:order(?:\s*id)?|order\s*#)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,})/i,
-    );
-    return m?.[1];
+    return extractOrderRef(text);
   }
 
   protected extractItems(
