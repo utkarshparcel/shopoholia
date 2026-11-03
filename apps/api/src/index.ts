@@ -82,7 +82,20 @@ export async function buildServer(options: BuildServerOptions = {}) {
   // A unique-constraint race the route didn't handle is a conflict, not a server error.
   // Everything else goes to Fastify's default handler (and the onError hook above).
   app.setErrorHandler(async (error, request, reply) => {
-    if (!isUniqueViolation(error)) throw error;
+    if (!isUniqueViolation(error)) {
+      const status = typeof error.statusCode === "number" ? error.statusCode : 500;
+      // In production a server error's message (SQL, ids, internals) stays in the log.
+      if (status >= 500 && process.env.NODE_ENV === "production") {
+        request.log.error({ err: error }, "request failed");
+        // The onError hook only runs for errors sent as errors: report this one here.
+        await reportRequestError(request, reply.code(status), error);
+        return reply.send({
+          error: "Internal Server Error",
+          message: "Something went wrong. Please try again.",
+        });
+      }
+      throw error;
+    }
     request.log.warn({ err: error }, "unique constraint conflict");
     return reply.code(409).send({
       error: "Conflict",
