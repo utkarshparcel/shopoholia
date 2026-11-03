@@ -57,8 +57,21 @@ export function coverageUntilFromCategory(
 ): Date {
   const months =
     monthsOverride ?? WARRANTY_COVERAGE_PRESETS[category].months;
-  const start = new Date(purchasedAt).getTime();
-  return new Date(start + months * 30 * 86_400_000);
+  return addCalendarMonths(new Date(purchasedAt), months);
+}
+
+/**
+ * `start` plus whole calendar months (UTC), keeping the time of day. A day the target month
+ * doesn't have clamps to its last day (31 Jan + 1 month = 28/29 Feb), like `addEmiMonths`.
+ */
+export function addCalendarMonths(start: Date, months: number): Date {
+  const monthIndex = start.getUTCFullYear() * 12 + start.getUTCMonth() + Math.trunc(months);
+  const year = Math.floor(monthIndex / 12);
+  const month = monthIndex - year * 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const out = new Date(start.getTime());
+  out.setUTCFullYear(year, month, Math.min(start.getUTCDate(), lastDay));
+  return out;
 }
 
 export type WarrantyDraftFromRules = {

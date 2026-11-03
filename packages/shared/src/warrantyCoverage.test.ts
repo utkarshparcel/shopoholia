@@ -33,15 +33,11 @@ describe("coverageUntilFromCategory", () => {
     const electronics = coverageUntilFromCategory(purchasedAt, "electronics");
     const appliances = coverageUntilFromCategory(purchasedAt, "appliances");
     const apparel = coverageUntilFromCategory(purchasedAt, "apparel");
-    expect(electronics.getTime() - Date.parse(purchasedAt)).toBe(
-      WARRANTY_COVERAGE_PRESETS.electronics.months * 30 * 86_400_000,
-    );
-    expect(appliances.getTime() - Date.parse(purchasedAt)).toBe(
-      WARRANTY_COVERAGE_PRESETS.appliances.months * 30 * 86_400_000,
-    );
-    expect(apparel.getTime() - Date.parse(purchasedAt)).toBe(
-      WARRANTY_COVERAGE_PRESETS.apparel.months * 30 * 86_400_000,
-    );
+    // Calendar months, not 30-day blocks (12 × 30 days ended a year's warranty 5 days early).
+    expect(WARRANTY_COVERAGE_PRESETS.electronics.months).toBe(12);
+    expect(electronics.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    expect(appliances.toISOString()).toBe("2028-01-01T00:00:00.000Z");
+    expect(apparel.toISOString()).toBe("2026-07-01T00:00:00.000Z");
   });
 
   it("honors monthsOverride", () => {
@@ -82,5 +78,14 @@ describe("draftWarrantiesFromCategoryRules (U010)", () => {
     expect(drafts[1]!.category).toBe("appliances");
     expect(inferWarrantyCategory("Gaming console")).toBe("electronics");
     expect(inferWarrantyCategory("Denim jeans")).toBe("apparel");
+  });
+
+  it("ends coverage on the same calendar day the warranty's months later", () => {
+    const bought = new Date("2026-03-15T10:00:00.000Z");
+    expect(coverageUntilFromCategory(bought, "electronics").toISOString()).toBe("2027-03-15T10:00:00.000Z");
+    expect(coverageUntilFromCategory(bought, "appliances").toISOString()).toBe("2028-03-15T10:00:00.000Z");
+    expect(coverageUntilFromCategory("2026-01-31T00:00:00.000Z", "apparel", 1).toISOString()).toBe(
+      "2026-02-28T00:00:00.000Z",
+    );
   });
 });
