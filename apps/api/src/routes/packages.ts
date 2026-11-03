@@ -24,6 +24,7 @@ import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
+import { ownsStorageKey } from "../lib/storage/r2.js";
 import {
   IN_TRANSIT_STATUSES,
   isValidPackageTransition,
@@ -349,6 +350,10 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!existing || existing.userId !== userId) {
         return reply.code(404).send({ error: "Not Found", message: "Package not found" });
       }
+      // Proof photos must be this user's own uploads: they are signed for display and deleted on erasure.
+      if (request.body.deliveryProofKeys?.some((key) => !ownsStorageKey(key, userId))) {
+        return reply.code(404).send({ error: "Not Found", message: "Image not found" });
+      }
 
       const nextStatus = (request.body.deliveryStatus ??
         existing.deliveryStatus) as PackageDeliveryStatus;
@@ -592,6 +597,9 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       const existing = await app.deps.repos.findMerchantPurchaseById(id);
       if (!existing || existing.userId !== userId) {
         return reply.code(404).send({ error: "Not Found", message: "Package not found" });
+      }
+      if (!ownsStorageKey(request.body.imageKey, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Image not found" });
       }
       const keys = [...(existing.deliveryProofKeys ?? [])];
       if (!keys.includes(request.body.imageKey)) keys.push(request.body.imageKey);

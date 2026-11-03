@@ -53,6 +53,22 @@ export function isUserObjectKey(key: string, userId: string): boolean {
   );
 }
 
+/**
+ * True for a key this user's own uploads made: `u/{userId}/…`, or the older
+ * `{wardrobe|care-tags|wear}/{userId}/…` keys. Check every storage key a client sends with it,
+ * before signing, storing or (on erasure) deleting it.
+ */
+export function ownsStorageKey(key: string, userId: string): boolean {
+  if (isUserObjectKey(key, userId)) return true;
+  const parts = key.split("/");
+  return (
+    parts.length === 3 &&
+    ["wardrobe", "care-tags", "wear"].includes(parts[0]!) &&
+    parts[1] === userId &&
+    isKeyPart(parts[2]!)
+  );
+}
+
 /** Key prefixes of catalog images (listing photos, garments, seller product shots). */
 const PUBLIC_CATALOG_PREFIXES = ["house-models/", "garments/", "products/"];
 
