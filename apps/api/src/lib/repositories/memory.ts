@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline, RenderScenarioSchema } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
@@ -149,6 +149,9 @@ function appendLedger(
   ledger.push(entry);
   return entry;
 }
+
+/** The render_scenario enum's declared order, which is how Postgres sorts it. */
+const RENDER_SCENARIO_ORDER: readonly string[] = RenderScenarioSchema.options;
 
 export function createMemoryRepositories(): Repositories {
   const users = new Map<string, UserRecord>();
@@ -1696,7 +1699,15 @@ export function createMemoryRepositories(): Repositories {
           if (render) all.push(render);
         }
       }
-      return all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      // Same order as Postgres: renders made together share a timestamp, so ties go by item,
+      // scenario (in its enum order) and id, and the reveal deck keeps its order between polls.
+      return all.sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          compareText(a.orderItemId, b.orderItemId) ||
+          RENDER_SCENARIO_ORDER.indexOf(a.scenario) - RENDER_SCENARIO_ORDER.indexOf(b.scenario) ||
+          compareText(a.id, b.id),
+      );
     },
 
     async listPendingRenders() {
@@ -1812,6 +1823,56 @@ export function createMemoryRepositories(): Repositories {
         if (user) users.set(input.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
         return { status: "created" as const, render, coinsSpent: input.cost, balanceAfter };
       });
+    },
+
+    async failRender(input) {
+      const fail = () => {
+        const existing = renders.get(input.renderId);
+        if (!existing) return null;
+        const failed: RenderRecord = { ...existing, status: "FAILED", updatedAt: now() };
+        renders.set(failed.id, failed);
+        return failed;
+      };
+      const refund = input.refund;
+      if (!refund || refund.coins <= 0) return { render: fail(), coinsRefunded: 0 };
+      return withCoinLock(refund.userId, async () => {
+        const balance = await this.getCoinBalance(refund.userId);
+        // No await from here to the ledger entry: the repeat check, the status and the credit are one step.
+        const render = fail();
+        if (!render) return { render, coinsRefunded: 0 };
+        const prior = ledger.find(
+          (e) =>
+            e.userId === refund.userId &&
+            e.type === "REFUND" &&
+            e.refType === "render_failed" &&
+            e.refId === input.renderId,
+        );
+        if (prior) return { render, coinsRefunded: 0 };
+        const balanceAfter = balance + refund.coins;
+        appendLedger(
+          ledger,
+          { userId: refund.userId, delta: refund.coins, type: "REFUND", refType: "render_failed", refId: input.renderId },
+          balanceAfter,
+        );
+        const user = users.get(refund.userId);
+        if (user) users.set(refund.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { render, coinsRefunded: refund.coins };
+      });
+    },
+
+    async requeueFailedFreeRenders(input) {
+      const order = orders.get(input.orderId);
+      if (!order || order.userId !== input.userId) return [];
+      const itemIds = new Set(orderItemsByOrder.get(order.id) ?? []);
+      const flipped: RenderRecord[] = [];
+      for (const id of new Set(input.renderIds)) {
+        const render = renders.get(id);
+        if (!render || !itemIds.has(render.orderItemId) || !render.isFree || render.status !== "FAILED") continue;
+        const queued: RenderRecord = { ...render, status: "QUEUED", updatedAt: now() };
+        renders.set(id, queued);
+        flipped.push(queued);
+      }
+      return flipped;
     },
 
     async recordRevealRating(input) {

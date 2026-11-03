@@ -71,3 +71,15 @@ export const GenerateRenderResponseSchema = z.object({
 
 export type GenerateRenderBody = z.infer<typeof GenerateRenderBodySchema>;
 export type GenerateRenderResponse = z.infer<typeof GenerateRenderResponseSchema>;
+
+/** Free renders of the order that FAILED, to render again. Paid ones are refunded instead. */
+export const RetryRendersBodySchema = z.object({
+  renderIds: z.array(z.string().uuid()).min(1).max(50),
+});
+
+export const RetryRendersResponseSchema = z.object({
+  renders: z.array(RenderCardSchema),
+});
+
+export type RetryRendersBody = z.infer<typeof RetryRendersBodySchema>;
+export type RetryRendersResponse = z.infer<typeof RetryRendersResponseSchema>;

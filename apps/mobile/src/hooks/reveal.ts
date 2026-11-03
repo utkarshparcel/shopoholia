@@ -5,6 +5,7 @@ import {
   fetchCoinBalance,
   fetchReveal,
   generateRenders,
+  retryRenders,
   unlockRenders,
   type RenderCard,
 } from '@/src/api/client';
@@ -67,6 +68,27 @@ export function useUnlockRenders(orderId: string) {
           ...prev,
           renders: prev.renders.map((r) => byId.get(r.id) ?? r),
         };
+      });
+    },
+  });
+}
+
+/** Retries a failed included look; the returned QUEUED card restarts the reveal's polling. */
+export function useRetryRenders(orderId: string) {
+  const accessToken = useSessionStore((s) => s.accessToken);
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (renderIds: string[]) => {
+      if (!accessToken) throw new Error('Sign in to retry renders');
+      return retryRenders(accessToken, orderId, renderIds);
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData(revealKey(orderId, userId), (prev: { renders: RenderCard[] } | undefined) => {
+        if (!prev) return prev;
+        const byId = new Map(result.renders.map((r) => [r.id, r]));
+        return { ...prev, renders: prev.renders.map((r) => byId.get(r.id) ?? r) };
       });
     },
   });

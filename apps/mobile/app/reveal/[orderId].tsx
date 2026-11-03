@@ -20,7 +20,7 @@ import { submitRevealRating } from '@/src/api/client';
 import { Button, Chip, SectionHeader } from '@/src/components/ui';
 import { RevealDeck } from '@/src/components/reveal/RevealDeck';
 import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfactionSurvey';
-import { useReveal, useUnlockRenders, useGenerateRenders } from '@/src/hooks/reveal';
+import { useReveal, useUnlockRenders, useGenerateRenders, useRetryRenders } from '@/src/hooks/reveal';
 import { useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
 import { notify } from '@/src/lib/confirm';
@@ -64,7 +64,9 @@ export default function RevealScreen() {
   const unlockMutation = useUnlockRenders(orderId ?? '');
   const generateMutation = useGenerateRenders(orderId ?? '');
   const { data: balanceData } = useCoinBalance();
+  const retryMutation = useRetryRenders(orderId ?? '');
   const [unlockingId, setUnlockingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [selectedScenario, setSelectedScenario] = useState('STUDIO');
   const [selectedCombineIds, setSelectedCombineIds] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -90,6 +92,17 @@ export default function RevealScreen() {
       notify('Unlock failed', error instanceof Error ? error.message : 'Try again');
     } finally {
       setUnlockingId(null);
+    }
+  };
+
+  const handleRetry = async (renderId: string) => {
+    try {
+      setRetryingId(renderId);
+      await retryMutation.mutateAsync([renderId]);
+    } catch (error) {
+      notify('Retry failed', error instanceof Error ? error.message : 'Try again');
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -176,8 +189,10 @@ export default function RevealScreen() {
         <>
           <RevealDeck
             focusId={newRenderId}
+            onRetry={(id) => void handleRetry(id)}
             onUnlock={handleUnlock}
             renders={renders}
+            retryingId={retryingId}
             unlockingId={unlockingId}
           />
 

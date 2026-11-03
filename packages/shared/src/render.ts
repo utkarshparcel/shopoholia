@@ -3,8 +3,11 @@ export type AvatarReferenceInput = {
 };
 
 export type AvatarReferenceResult = {
+  /** The stored image every try-on uses as the model. May be one of the uploads itself. */
   referenceImageKey: string;
   bodyMeta: Record<string, unknown>;
+  /** Bytes to store at `referenceImageKey`; absent when that key already holds the image. */
+  imageBytes?: Uint8Array;
 };
 
 export type TryOnInput = {
@@ -41,6 +44,7 @@ export type ScenarioPassInput = {
 };
 
 export type ScenarioPassResult = {
+  /** The scene's image; the try-on's own key when the provider has no scene pass. */
   imageKey: string;
   costMicros: number;
   imageBytes?: Uint8Array;

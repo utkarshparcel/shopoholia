@@ -103,6 +103,20 @@ describe("bootConfigProblems", () => {
     ).toEqual([]);
   });
 
+  it("in production, warns when FASHN_API_KEY is missing (try-on and reveal renders can't run)", () => {
+    expect(bootConfigProblems({ NODE_ENV: "production" }).warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/FASHN_API_KEY/)]),
+    );
+    expect(bootConfigProblems({ NODE_ENV: "production", FASHN_API_KEY: " " }).warnings.join("\n")).toMatch(
+      /FASHN_API_KEY/,
+    );
+    expect(bootConfigProblems({ NODE_ENV: "production", FASHN_API_KEY: "fa-live" }).warnings.join("\n")).not.toMatch(
+      /FASHN_API_KEY/,
+    );
+    // Outside production the mock renders, so there's nothing to warn about.
+    expect(bootConfigProblems({}).warnings.join("\n")).not.toMatch(/FASHN_API_KEY/);
+  });
+
   it("in production, warns about secrets whose routes would refuse every call", () => {
     const { warnings } = bootConfigProblems({ NODE_ENV: "production" });
     expect(warnings).toEqual(

@@ -4,7 +4,7 @@ import { buildStateEta } from "../orders/state-machine.js";
 import type { OrderTransitionJob } from "./order-processing.js";
 
 /** Checkout state followed by the timer-driven steps, in order. */
-const DELIVERY_ARC: readonly OrderState[] = ["PROCESSING", ...ORDER_DELIVERY_LADDER];
+export const DELIVERY_ARC: readonly OrderState[] = ["PROCESSING", ...ORDER_DELIVERY_LADDER];
 
 /** States whose next step is still waiting on a delivery timer. */
 export const IN_TRANSIT_ORDER_STATES: readonly OrderState[] = DELIVERY_ARC.slice(0, -1);

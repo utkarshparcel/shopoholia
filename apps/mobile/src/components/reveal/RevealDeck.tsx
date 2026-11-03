@@ -57,17 +57,25 @@ type RevealDeckProps = {
   unlockingId?: string | null;
   /** A card to show — a look just generated, which the deck appends at the end. */
   focusId?: string | null;
+  /** Renders an included look that failed again; without it the card offers no retry. */
+  onRetry?: (renderId: string) => void;
+  retryingId?: string | null;
 };
 
 function RenderCardView({
   card,
   onUnlock,
   unlocking,
+  onRetry,
+  retrying,
 }: {
   card: RenderCard;
   onUnlock: (id: string) => void;
   unlocking: boolean;
+  onRetry?: (id: string) => void;
+  retrying: boolean;
 }) {
+  const failed = card.status === 'FAILED' && (card.isFree || card.unlocked);
   const locked = !card.isFree && !card.unlocked;
   // A locked look sits QUEUED until it's unlocked: it shows the lock, not "Rendering…".
   const processing = isRenderInProgress(card);
@@ -104,6 +112,26 @@ function RenderCardView({
         </View>
       ) : null}
 
+      {failed ? (
+        <View style={styles.lockOverlay}>
+          <Text style={styles.lockTitle}>Couldn’t render this look</Text>
+          {card.isFree ? (
+            onRetry ? (
+              <Button
+                disabled={retrying}
+                label={retrying ? 'Retrying…' : 'Try again'}
+                onPress={() => onRetry(card.id)}
+                size="md"
+                style={styles.unlockBtn}
+                variant="secondary"
+              />
+            ) : null
+          ) : (
+            <Text style={styles.lockBody}>Your coins were refunded. Generate it again below.</Text>
+          )}
+        </View>
+      ) : null}
+
       {processing ? (
         <View style={styles.processingBadge}>
           <Text style={styles.processingText}>Rendering…</Text>
@@ -118,7 +146,7 @@ function RenderCardView({
   );
 }
 
-export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDeckProps) {
+export function RevealDeck({ renders, onUnlock, unlockingId, focusId, onRetry, retryingId }: RevealDeckProps) {
   const [index, setIndex] = useState(0);
 
   // Jump to a newly generated look once it is in the deck (once per focus, so later polls that
@@ -202,7 +230,9 @@ export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDe
       <Animated.View style={animatedStyle} {...panResponder.panHandlers}>
         <RenderCardView
           card={card}
+          onRetry={onRetry}
           onUnlock={onUnlock}
+          retrying={retryingId === card.id}
           unlocking={unlockingId === card.id}
         />
       </Animated.View>

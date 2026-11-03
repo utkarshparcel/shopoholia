@@ -9,20 +9,47 @@ import {
   type UnlockResponse,
 } from "@worn/shared";
 import { buildStateEta } from "../lib/orders/state-machine.js";
+import { createUnavailableRenderProvider } from "../lib/render/provider.js";
+import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import type { Repositories } from "../lib/repositories/types.js";
+import { buildServer } from "../index.js";
 import { buildTestServer, login } from "../test-utils.js";
 
 type App = Awaited<ReturnType<typeof buildTestServer>>["app"];
 
 /** A delivered order with `itemCount` lines, each with one locked paid render and one free render. */
 async function deliveredOrder(repos: Repositories, userId: string, itemCount = 1) {
+  // Real catalog lines, so a render of them has garments to dress.
+  const listingId = randomUUID();
+  const variantIds = Array.from({ length: itemCount }, () => randomUUID());
+  await repos.seedListings(
+    [
+      {
+        id: listingId,
+        sellerId: null,
+        title: "Reveal test",
+        category: "TOPS",
+        tags: [],
+        coinPrice: 100,
+        realPrice: null,
+        productImageKeys: [],
+        houseModelRenderKey: `house-models/${listingId}.jpg`,
+        affiliateUrl: null,
+        affiliateLinks: null,
+        status: "DRAFT",
+        sortOrder: 0,
+        createdAt: new Date(),
+      },
+    ],
+    variantIds.map((id) => ({ id, listingId, size: "M", color: "Black", garmentImageKey: `garments/${id}.jpg` })),
+  );
   const { order, items } = await repos.createOrder({
     userId,
     tier: "EXPRESS",
     coinTotal: 0,
     stateEta: buildStateEta(new Date(), "EXPRESS"),
-    items: Array.from({ length: itemCount }, () => ({
-      listingVariantId: randomUUID(),
+    items: variantIds.map((listingVariantId) => ({
+      listingVariantId,
       coinPriceSnapshot: 100,
       quantity: 1,
     })),
@@ -217,6 +244,7 @@ describe("reveal generate", () => {
     expect(body).toMatchObject({ coinsSpent: REVEAL_COMBINE_COST_COINS, isCombine: true });
     expect(body.renders).toHaveLength(1);
     expect(await repos.getCoinBalance(bob.userId)).toBe(before - REVEAL_COMBINE_COST_COINS);
+    await app.deps.jobQueue.flushRenderJobs!();
     // Done, and it still knows its items: the provider name no longer overwrites them.
     expect(await repos.findRenderById(body.renders[0]!.id)).toMatchObject({
       status: "DONE",
@@ -373,6 +401,86 @@ describe("reveal generate idempotency", () => {
     await generate(app, bob.accessToken, order.id, [items[0]!.id]);
     await generate(app, bob.accessToken, order.id, [items[0]!.id]);
     expect(await repos.getCoinBalance(bob.userId)).toBe(before - 2 * REVEAL_GENERATE_COST_COINS);
+    await app.close();
+  });
+});
+
+describe("reveal renders run in the background", () => {
+  it("generate and unlock answer with QUEUED cards and leave other renders alone", async () => {
+    const { app, repos, alice, bob } = await setup();
+    const aliceOrder = await deliveredOrder(repos, alice.userId);
+    const [alicePending] = await repos.createRenders([
+      { ...aliceOrder.free[0]!, id: undefined, scenario: "GOLDEN_HOUR", imageKey: null, status: "QUEUED" },
+    ]);
+    await app.deps.jobQueue.enqueueRender({ renderId: alicePending!.id, orderId: aliceOrder.order.id });
+    const { order, items, locked } = await deliveredOrder(repos, bob.userId);
+    await repos.updateRender(locked[0]!.id, { status: "QUEUED", imageKey: null });
+
+    const generated = await generate(app, bob.accessToken, order.id, [items[0]!.id]);
+    const unlocked = await unlock(app, bob.accessToken, order.id, { renderIds: [locked[0]!.id] });
+
+    expect((generated.json() as GenerateRenderResponse).renders.map((r) => r.status)).toEqual(["QUEUED"]);
+    expect((unlocked.json() as UnlockResponse).renders.map((r) => [r.status, r.imageUrl])).toEqual([["QUEUED", null]]);
+    // Nothing rendered inside the requests, and Alice's queued render was not run by Bob's.
+    expect((await repos.findRenderById(alicePending!.id))?.status).toBe("QUEUED");
+
+    await app.deps.jobQueue.flushRenderJobs!();
+    const generatedId = (generated.json() as GenerateRenderResponse).renders[0]!.id;
+    expect((await repos.findRendersByIds([generatedId, locked[0]!.id, alicePending!.id])).map((r) => r.status)).toEqual([
+      "DONE",
+      "DONE",
+      "DONE",
+    ]);
+    await app.close();
+  });
+
+  it("answers 503 without charging when renders can't run", async () => {
+    const repos = createMemoryRepositories();
+    const app = await buildServer({
+      logger: false,
+      deps: { repos, renderProvider: createUnavailableRenderProvider() },
+    });
+    const bob = await login(app, "919800000002");
+    await repos.grantCoins({ userId: bob.userId, delta: 1000, type: "GRANT" });
+    const { order, items, locked } = await deliveredOrder(repos, bob.userId);
+    const rendersBefore = (await repos.findRendersByOrderId(order.id)).length;
+    const before = await repos.getCoinBalance(bob.userId);
+
+    const generated = await generate(app, bob.accessToken, order.id, [items[0]!.id]);
+    const unlocked = await unlock(app, bob.accessToken, order.id, { renderIds: [locked[0]!.id] });
+
+    expect([generated.statusCode, unlocked.statusCode]).toEqual([503, 503]);
+    expect(generated.json()).toMatchObject({ error: "tryon_unavailable" });
+    expect(await repos.getCoinBalance(bob.userId)).toBe(before);
+    expect(await repos.findRendersByOrderId(order.id)).toHaveLength(rendersBefore);
+    expect((await repos.findRenderById(locked[0]!.id))?.unlocked).toBe(false);
+    await app.close();
+  });
+
+  it("retries a failed free render, and only the order owner's failed free ones", async () => {
+    const { app, repos, alice, bob } = await setup();
+    const { order, free, locked } = await deliveredOrder(repos, bob.userId);
+    await repos.updateRender(free[0]!.id, { status: "FAILED", imageKey: null });
+    await repos.updateRender(locked[0]!.id, { status: "FAILED", unlocked: true, imageKey: null });
+    const retry = (token: string, renderIds: string[]) =>
+      app.inject({
+        method: "POST",
+        url: `/orders/${order.id}/reveal/retry`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { renderIds },
+      });
+
+    expect((await retry(alice.accessToken, [free[0]!.id])).statusCode).toBe(404);
+    expect((await retry(bob.accessToken, [locked[0]!.id])).statusCode).toBe(404);
+    const res = await retry(bob.accessToken, [free[0]!.id, locked[0]!.id]);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().renders.map((r: { id: string; status: string }) => [r.id, r.status])).toEqual([
+      [free[0]!.id, "QUEUED"],
+    ]);
+
+    await app.deps.jobQueue.flushRenderJobs!();
+    expect((await repos.findRenderById(free[0]!.id))?.status).toBe("DONE");
+    expect((await repos.findRenderById(locked[0]!.id))?.status).toBe("FAILED");
     await app.close();
   });
 });

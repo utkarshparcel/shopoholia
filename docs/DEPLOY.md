@@ -82,6 +82,7 @@ Set these too (the API starts without them, but the feature answers 503 or refus
 
 | Variable | Without it |
 |---|---|
+| `FASHN_API_KEY` | No AI renders (Worn Play's core): try-on previews and reveal unlock/generate answer 503 (no coins are taken), and every free reveal look shows as failed. See "FASHN renders" below. |
 | `REDIS_URL` | The API worker can't start. |
 | `R2_PUBLIC_URL=https://media.worncloset.app` | Image links point nowhere. |
 | `CORS_ORIGIN=https://worncloset.app` | (This is the default.) |
@@ -93,6 +94,23 @@ Set these too (the API starts without them, but the feature answers 503 or refus
 | `SENTRY_DSN`, `POSTHOG_KEY` | No error reports or server analytics. |
 
 The boot log lists every missing setting as an error or a warning.
+
+#### FASHN renders
+
+Avatars, try-on previews and reveal looks are rendered by [FASHN](https://fashn.ai) (`tryon-max`,
+2k, via `https://api.fashn.ai/v1/run` and `/status`). Create an API key in the FASHN dashboard, buy
+credits, and set it as `FASHN_API_KEY` on the API and the API worker.
+
+- FASHN fetches the images itself: the avatar photo and stored renders go as signed R2 URLs, and
+  catalog images that are already full URLs go as they are. Both must be reachable from the
+  internet.
+- An avatar is the user's uploaded photo, kept as it is (there is no normalisation step).
+- FASHN has no scene endpoint in our client, so each reveal scene (Studio, Golden hour…) is its own
+  try-on render, not a restyled background.
+- Reveal renders run in the API process, three at a time, retried twice on timeouts, 429s and 5xx.
+  A render that still fails is reported to Sentry; a paid one (unlock, generate, combine) refunds
+  its coins (a `REFUND` ledger entry, ref `render_failed`), and a free one can be retried from the
+  reveal.
 
 ### The apps
 
