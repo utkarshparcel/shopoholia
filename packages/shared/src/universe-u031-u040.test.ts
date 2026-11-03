@@ -215,6 +215,11 @@ describe("U039 lent overdue actions", () => {
     expect(lentOverdueActionLabels()).toHaveLength(3);
     const item = { id: "w1", lentTo: "Sam", lentDueOn: "2026-08-01", category: "jacket" };
     expect(applyLentOverdueAction(item, "nudge").ok).toBe(true);
+    // Nothing is sent to the borrower, so the copy doesn't claim a nudge went out.
+    const nudge = applyLentOverdueAction(item, "nudge");
+    expect(nudge.ok && nudge.action === "nudge" && nudge.message).toBe(
+      "Reminder set — ask Sam to return it by 2026-08-01.",
+    );
     const lost = applyLentOverdueAction(item, "lost");
     expect(lost.ok && lost.action === "lost" && lost.wasteNote).toMatch(/Lost/);
     const ret = applyLentOverdueAction(item, "returned");
