@@ -85,9 +85,6 @@ export function RewearStreakCelebrate({ streak }: Props) {
           testID="rewear-streak-milestone"
         >
           <Text style={styles.bannerText}>{model.copy}</Text>
-          {reduceMotion ? (
-            <Text style={styles.muted}>Reduce Motion — celebration is static.</Text>
-          ) : null}
         </View>
       ) : null}
     </View>
