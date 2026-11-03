@@ -158,9 +158,10 @@ describe('LoginScreen: Sign in with Apple (App Store 4.8)', () => {
     expect(screen.queryByRole('button', { name: 'Continue with Apple' })).toBeNull();
   });
 
-  it('gives Apple the hashed nonce, sends the server the raw one and the name, and signs in', async () => {
+  it('gives Apple the hashed nonce, sends the server the raw one, the name and the code, and signs in', async () => {
     mocks.appleSignInAsync.mockResolvedValue({
       identityToken: 'apple-identity-token',
+      authorizationCode: 'apple-authorization-code',
       fullName: { givenName: 'Asha', familyName: 'Rao' },
       email: null,
     });
@@ -179,6 +180,7 @@ describe('LoginScreen: Sign in with Apple (App Store 4.8)', () => {
       identityToken: 'apple-identity-token',
       nonce: rawNonce,
       fullName: 'Asha Rao',
+      authorizationCode: 'apple-authorization-code',
     });
     expect(useSessionStore.getState().accessToken).toBe('ap');
     expect(lastRoute()).toBe('/(onboarding)/avatar?welcome=1');
@@ -206,6 +208,8 @@ describe('LoginScreen: Sign in with Apple (App Store 4.8)', () => {
     });
     expect(screen.getByText('Invalid Apple identity token')).toBeTruthy();
     expect(useSessionStore.getState().accessToken).toBeNull();
+    // No authorization code from Apple: the request says so instead of leaving it out silently.
+    expect(mocks.signInWithApple).toHaveBeenCalledWith(expect.objectContaining({ authorizationCode: null }));
   });
 });
 
