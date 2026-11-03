@@ -23,7 +23,8 @@ const RELEASE = {
 function loadConfig(env) {
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   delete require.cache[configPath];
-  return require(configPath).expo;
+  // Expo calls the config function with app.json's `expo` object.
+  return require(configPath)({ config: structuredClone(require('../app.json').expo) });
 }
 
 function pluginOptions(config, name) {

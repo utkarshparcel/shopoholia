@@ -83,12 +83,14 @@ const blockedPermissions = closetOn
   : [...new Set([...android.blockedPermissions, ...PLAY_BLOCKED_PERMISSIONS])];
 const permissions = android.permissions.filter((p) => !blockedPermissions.includes(p));
 
-/** @type {import('expo/config').ExpoConfig} */
-module.exports = {
-  expo: {
-    ...appJson.expo,
-    plugins,
-    android: { ...android, permissions, blockedPermissions },
-    extra: { ...appJson.expo.extra, ...(apiUrl ? { apiUrl } : {}) },
-  },
-};
+/**
+ * Expo passes app.json's `expo` object as `config`; this adds the computed values to it.
+ * @param {{ config: import('expo/config').ExpoConfig }} ctx
+ * @returns {import('expo/config').ExpoConfig}
+ */
+module.exports = ({ config }) => ({
+  ...config,
+  plugins,
+  android: { ...config.android, permissions, blockedPermissions },
+  extra: { ...config.extra, ...(apiUrl ? { apiUrl } : {}) },
+});
