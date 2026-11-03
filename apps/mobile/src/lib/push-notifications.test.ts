@@ -15,7 +15,11 @@ const constants = vi.hoisted(() => ({
   easConfig: null as { projectId?: string } | null,
 }));
 const expo = vi.hoisted(() => ({ isRunningInExpoGo: vi.fn(() => false) }));
-const api = vi.hoisted(() => ({ registerPushToken: vi.fn(), clearPushToken: vi.fn() }));
+const api = vi.hoisted(() => ({
+  registerPushToken: vi.fn(),
+  clearPushToken: vi.fn(),
+  logout: vi.fn(async () => undefined),
+}));
 const analytics = vi.hoisted(() => ({ trackEvent: vi.fn() }));
 
 vi.mock('expo-notifications', () => notifications);
@@ -319,5 +323,61 @@ describe('syncPushRegistration', () => {
       EXPO_TOKEN,
     );
     warn.mockRestore();
+  });
+});
+
+describe('sign-out', () => {
+  it('unregisters the push token with the live session first, then ends the session', async () => {
+    const { syncPushRegistration } = await loadPush();
+    const { signOut } = await import('./signOut');
+    const { useSessionStore } = await import('@/src/stores/session');
+    const order: string[] = [];
+    api.clearPushToken.mockImplementation(async (token: string) => {
+      // Still signed in: apiFetch can renew an expired access token with the refresh token.
+      order.push(`clear with ${token}, refresh ${useSessionStore.getState().refreshToken}`);
+      return { registered: false };
+    });
+    const unsubscribe = useSessionStore.subscribe((state, prev) => {
+      if (prev.accessToken && !state.accessToken) order.push('session cleared');
+    });
+
+    useSessionStore.getState().setSession({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+    await syncPushRegistration('access-1');
+    // Renewed since registering; the newest token is the one to send.
+    useSessionStore.getState().setTokens({ accessToken: 'access-2', refreshToken: 'refresh-2' });
+
+    await signOut();
+    unsubscribe();
+
+    expect(order).toEqual(['clear with access-2, refresh refresh-2', 'session cleared']);
+    expect(api.clearPushToken).toHaveBeenCalledWith('access-2', EXPO_TOKEN);
+    expect(api.logout).toHaveBeenCalledWith('refresh-2');
+  });
+
+  it('still signs out when unregistering fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { syncPushRegistration } = await loadPush();
+    const { signOut } = await import('./signOut');
+    const { useSessionStore } = await import('@/src/stores/session');
+    api.clearPushToken.mockRejectedValue(new Error('offline'));
+    useSessionStore.getState().setSession({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+    await syncPushRegistration('access-1');
+
+    await signOut();
+
+    expect(useSessionStore.getState().accessToken).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('signs out at once when the device never registered', async () => {
+    await loadPush();
+    const { signOut } = await import('./signOut');
+    const { useSessionStore } = await import('@/src/stores/session');
+    useSessionStore.getState().setSession({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+
+    void signOut();
+
+    expect(useSessionStore.getState().accessToken).toBeNull();
+    expect(api.clearPushToken).not.toHaveBeenCalled();
   });
 });
