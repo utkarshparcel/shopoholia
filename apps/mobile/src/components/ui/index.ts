@@ -6,6 +6,8 @@ export { Chip } from './Chip';
 export type { ChipProps } from './Chip';
 export { CoinIcon, CoinWallet } from './CoinWallet';
 export type { CoinWalletProps } from './CoinWallet';
+export { isNotFoundError, LoadError } from './LoadError';
+export type { LoadErrorProps } from './LoadError';
 export { ListingCard } from './ListingCard';
 export type { ListingCardProps, ListingCardVariant, PlaceholderTone } from './ListingCard';
 export { OrderTracker } from './OrderTracker';
