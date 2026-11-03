@@ -875,17 +875,20 @@ export function DropStage() {
 
         {/* captions */}
         <div
-          className="absolute left-1/2 top-[8%] z-30 w-full max-w-[760px] -translate-x-1/2 px-5 text-center"
+          className="absolute left-1/2 top-[8%] z-30 w-full max-w-[760px] -translate-x-1/2 px-5 text-center short:top-[4%]"
           aria-live="polite"
         >
-          <p className="font-mono text-micro uppercase tracking-[0.3em] text-worn-gold">{step === 5 ? COPY.kickerMore : COPY.kicker}</p>
-          <div ref={capRef} className="mt-3">
+          {/* short phones: the kicker and the sub line give their room to the stage, which otherwise ran
+              into them. On the last step the panel covered the line on phones under 800px tall, so there
+              the panel's own heading stands in for it. */}
+          <p className="font-mono text-micro uppercase tracking-[0.3em] text-worn-gold short:hidden">{step === 5 ? COPY.kickerMore : COPY.kicker}</p>
+          <div ref={capRef} className="mt-3 short:mt-0">
             <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-paper/60">
               {STEPS[step].n} — {cap.eyebrow}
             </p>
-            <p className="mt-2 font-display text-[clamp(22px,2.8vw,34px)] leading-tight text-worn-paper">{cap.line}</p>
+            <p className={`mt-2 font-display text-[clamp(22px,2.8vw,34px)] leading-tight text-worn-paper ${step === 5 ? '[@media(max-width:639px)_and_(max-height:799px)]:hidden' : ''}`}>{cap.line}</p>
             {cap.sub ? (
-              <p className="mt-2 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-gold/80">{cap.sub}</p>
+              <p className="mt-2 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-gold/80 short:hidden">{cap.sub}</p>
             ) : null}
           </div>
         </div>
@@ -1174,7 +1177,7 @@ export function DropStage() {
               exit={{ opacity: 0 }}
               style={{ x: '-50%' }}
               transition={{ duration: 0.6, delay: 0.2, ease: EASE }}
-              className="glass-dark absolute left-1/2 top-[54%] z-30 w-[min(92vw,560px)] rounded-card p-6 text-center sm:p-9"
+              className="glass-dark absolute left-1/2 top-[54%] z-30 w-[min(92vw,560px)] rounded-card p-6 text-center short:p-5 sm:p-9"
             >
               <span className="inline-flex items-center gap-1.5 rounded-pill border border-worn-gold/50 bg-worn-gold/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-gold">
                 <Sparkles size={11} /> Coming after Worn Play
@@ -1182,7 +1185,8 @@ export function DropStage() {
               <h2 className="mt-4 font-display text-[clamp(24px,3.2vw,38px)] leading-[1.05] text-worn-paper">
                 For the clothes you <em className="text-worn-gold">already</em> bought.
               </h2>
-              <p className="mx-auto mt-3 max-w-[46ch] font-sans text-[14px] leading-relaxed text-worn-paper/75 sm:text-[15px]">
+              {/* short phones: the points below say it in brief, and the panel fits between caption and controls */}
+              <p className="mx-auto mt-3 max-w-[46ch] font-sans text-[14px] leading-relaxed text-worn-paper/75 short:hidden sm:text-[15px]">
                 Two hundred pieces, twenty in rotation, nothing to wear at 8 AM. Worn Closet catalogs what you own from your
                 order emails, plans your week, tracks cost per wear and finds the gift cards, warranties and resale money
                 sleeping in your wardrobe.
@@ -1300,7 +1304,8 @@ export function DropStage() {
                 aria-pressed={i === step}
                 // the step name only shows from lg; below that the button would be named just "01"
                 aria-label={`${s.n} ${s.label}`}
-                className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
+                // 40px wide under 360px: six 44px steps and play came to 330px, wider than a 320px phone
+                className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 max-[359px]:min-w-[40px] font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
                   i === step ? 'bg-worn-paper/10 text-worn-paper' : 'text-worn-paper/70 hover:text-worn-paper'
                 }`}
               >
