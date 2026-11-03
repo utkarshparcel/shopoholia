@@ -148,6 +148,8 @@ export async function scheduleReturnDeadlineReminder(payload: ReturnDeadlinePayl
  *  1. Prefer an ACTIVE CASH account
  *  2. Else ACTIVE STORE_CREDIT matching merchant (case-insensitive)
  *  3. Else create a dedicated CASH "Refund" account
+ * A STORE_CREDIT destination only ever uses the return merchant's own STORE_CREDIT account, and
+ * otherwise creates one for that merchant.
  */
 export type RefundAccountCandidate = {
   id: string;
@@ -156,6 +158,9 @@ export type RefundAccountCandidate = {
   status?: string;
 };
 
+/** The store-credit account a refund opens when the return has no merchant. */
+const STORE_CREDIT_FALLBACK_MERCHANT = "Store credit";
+
 export function selectRefundAccount(
   accounts: RefundAccountCandidate[],
   merchant?: string | null,
@@ -163,23 +168,19 @@ export function selectRefundAccount(
   destination?: "ORIGINAL_CARD" | "STORE_CREDIT" | "UPI" | null,
 ): RefundAccountCandidate | null {
   const active = accounts.filter((a) => !a.status || a.status === "ACTIVE");
-  const preferStore = destination === "STORE_CREDIT";
-  if (preferStore && merchant) {
-    const needle = merchant.toLowerCase().trim();
-    const store = active.find(
-      (a) =>
-        a.kind === "STORE_CREDIT" &&
-        a.merchant.toLowerCase().trim() === needle,
+  if (destination === "STORE_CREDIT") {
+    // Store credit belongs to one merchant: only that merchant's account takes it. Without one the
+    // caller opens it (reconcileRefund), never another merchant's credit or a cash account.
+    const needle = (merchant?.trim() || STORE_CREDIT_FALLBACK_MERCHANT).toLowerCase();
+    return (
+      active.find(
+        (a) => a.kind === "STORE_CREDIT" && a.merchant.toLowerCase().trim() === needle,
+      ) ?? null
     );
-    if (store) return store;
-  }
-  if (preferStore) {
-    const anyStore = active.find((a) => a.kind === "STORE_CREDIT");
-    if (anyStore) return anyStore;
   }
   const cash = active.find((a) => a.kind === "CASH");
   if (cash) return cash;
-  if (!preferStore && merchant) {
+  if (merchant) {
     const needle = merchant.toLowerCase().trim();
     const store = active.find(
       (a) =>
@@ -229,7 +230,7 @@ export async function reconcileRefund(
     const created = await repos.createMoneyAccount({
       userId,
       kind,
-      merchant: dest === "STORE_CREDIT" ? (merchant?.trim() || "Store credit") : "Refund",
+      merchant: dest === "STORE_CREDIT" ? (merchant?.trim() || STORE_CREDIT_FALLBACK_MERCHANT) : "Refund",
       currency: "INR",
       balanceCacheMinor: 0,
       expiresAt: null,

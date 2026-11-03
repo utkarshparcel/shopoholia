@@ -96,6 +96,16 @@ describe("selectRefundAccount", () => {
     expect(picked?.id).toBe("sc");
   });
 
+  it("never books store credit to another merchant's account or to cash", () => {
+    const accounts = [
+      { id: "ajio", kind: "STORE_CREDIT", merchant: "Ajio", status: "ACTIVE" },
+      { id: "cash", kind: "CASH", merchant: "worn", status: "ACTIVE" },
+    ];
+    expect(selectRefundAccount(accounts, "Myntra", "STORE_CREDIT")).toBeNull();
+    expect(selectRefundAccount(accounts, "ajio ", "STORE_CREDIT")?.id).toBe("ajio");
+    expect(selectRefundAccount(accounts, null, "STORE_CREDIT")).toBeNull();
+  });
+
   it("ignores frozen accounts and returns null when nothing matches", () => {
     expect(
       selectRefundAccount(
@@ -107,6 +117,30 @@ describe("selectRefundAccount", () => {
 });
 
 describe("reconcileRefund", () => {
+  it("opens a store-credit account for the return's merchant instead of using another's", async () => {
+    const postMoneyLedger = vi.fn(async () => ({ balanceAfter: 500 }));
+    const createMoneyAccount = vi.fn(async () => ({ id: "myntra-sc" }));
+    await reconcileRefund(
+      {
+        postMoneyLedger,
+        listMoneyAccounts: async () => [
+          { id: "ajio", kind: "STORE_CREDIT", merchant: "Ajio", status: "ACTIVE" },
+        ],
+        createMoneyAccount,
+      },
+      "u1",
+      "r1",
+      500,
+      "Myntra",
+      "STORE_CREDIT",
+    );
+    expect(createMoneyAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "STORE_CREDIT", merchant: "Myntra" }),
+    );
+    expect(postMoneyLedger).toHaveBeenCalledWith(expect.objectContaining({ accountId: "myntra-sc" }));
+  });
+
+
   it("no-ops for non-positive refund", async () => {
     const postMoneyLedger = vi.fn();
     await reconcileRefund(
