@@ -75,6 +75,10 @@ export async function buildServer(options: BuildServerOptions = {}) {
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
     connectionTimeout: 60_000,
+    // Fastify's default, set explicitly because it is a security control: zod 3 can exhaust memory
+    // validating an oversized constrained collection (fixed only in zod 4.6.6), so no JSON body may
+    // exceed 1 MiB. Uploads go through multipart, whose own limits are below.
+    bodyLimit: 1024 * 1024,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
