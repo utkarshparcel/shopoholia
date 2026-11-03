@@ -1,3 +1,4 @@
+import { REVEAL_UNLOCK_COST_COINS } from '@worn/shared';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -94,7 +95,7 @@ function RenderCardView({
             label={
               unlocking
                 ? 'Unlocking…'
-                : `Unlock · ${card.unlockCostCoins ?? 50} coins`
+                : `Unlock · ${card.unlockCostCoins ?? REVEAL_UNLOCK_COST_COINS} coins`
             }
             onPress={() => onUnlock(card.id)}
             size="md"

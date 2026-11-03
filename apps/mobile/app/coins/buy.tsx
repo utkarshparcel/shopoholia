@@ -1,5 +1,11 @@
 import { useRouter } from 'expo-router';
 import {
+  REVEAL_COMBINE_COST_COINS,
+  REVEAL_GENERATE_COST_COINS,
+  REVEAL_UNLOCK_COST_COINS,
+  RUSH_TO_EXPRESS_COST_COINS,
+} from '@worn/shared';
+import {
   ActivityIndicator,
   Pressable,
   ScrollView,
@@ -240,19 +246,19 @@ export default function BuyCoinsScreen() {
         <Text style={styles.perksTitle}>What you can do with coins</Text>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
-          <Text style={styles.perkText}>Unlock premium scenes (50 coins each)</Text>
+          <Text style={styles.perkText}>Unlock premium scenes ({REVEAL_UNLOCK_COST_COINS} coins each)</Text>
         </View>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
-          <Text style={styles.perkText}>Generate new renders in any scenario (50 coins)</Text>
+          <Text style={styles.perkText}>Generate new renders in any scenario ({REVEAL_GENERATE_COST_COINS} coins)</Text>
         </View>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
-          <Text style={styles.perkText}>Combine items into full looks (75 coins)</Text>
+          <Text style={styles.perkText}>Combine items into full looks ({REVEAL_COMBINE_COST_COINS} coins)</Text>
         </View>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
-          <Text style={styles.perkText}>Rush delivery to Express tier (25 coins)</Text>
+          <Text style={styles.perkText}>Rush delivery to Express tier ({RUSH_TO_EXPRESS_COST_COINS} coins)</Text>
         </View>
       </View>
     </ScrollView>

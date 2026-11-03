@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_ORIGIN } from '@worn/shared';
+import { REFERRAL_REWARD_COINS, WEB_ORIGIN } from '@worn/shared';
 
 import { applyReferral, getMyReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
@@ -150,7 +150,7 @@ export default function ReferralScreen() {
       <View style={styles.hero}>
         <Text style={styles.heroTitle}>Refer & earn</Text>
         <Text style={styles.heroSubtitle}>
-          You earn 100 coins when your friend places their first haul
+          You earn {REFERRAL_REWARD_COINS} coins when your friend places their first haul
         </Text>
       </View>
 
