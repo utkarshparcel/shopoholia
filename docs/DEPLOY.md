@@ -67,7 +67,7 @@ share links (`/r/<code>` and the rest, below) are rewrites in `next.config.js` t
 |---|---|---|
 | API | `pnpm --filter @worn/api build && pnpm --filter @worn/api start` | **One instance only**: order delivery timers run inside this process (they resume after a restart). |
 | API worker | `pnpm --filter @worn/api start:worker` | **Run it at launch.** Retries of account deletion (stored objects left after a storage error), data exports, Google Play purchase reconciliation, cooling-off and Closet jobs, via Redis (BullMQ). |
-| Closet workers | `services/worker-*` (`pnpm --filter <name> start`) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
+| Closet workers | `pnpm --filter <name> build && pnpm --filter <name> start` for `@worn/worker-ingest`, `-expiry`, `-wardrobe`, `-returns`, `-gifts` and `-nudge` (`start` runs `dist/main.js`, the BullMQ consumer; see infra/README.md for each one's queues and settings) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
 | Postgres 16 | managed | Run `pnpm --filter @worn/db db:migrate` with `DATABASE_URL` before each API release. |
 | Redis 7 | managed | `maxmemory-policy noeviction` (BullMQ requires it). |
 | Cloudflare R2 | bucket + custom domain `media.worncloset.app` | Catalog images, avatars, renders. |
