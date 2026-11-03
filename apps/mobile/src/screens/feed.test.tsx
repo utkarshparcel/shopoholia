@@ -67,6 +67,10 @@ vi.mock('react-native', () => {
       select: <T,>(spec: { ios?: T; native?: T; default?: T }) => spec.ios ?? spec.native ?? spec.default,
     },
     PanResponder: { create: () => ({ panHandlers: {} }) },
+    AccessibilityInfo: {
+      isReduceMotionEnabled: async () => false,
+      addEventListener: () => ({ remove: () => undefined }),
+    },
   };
 });
 
@@ -201,6 +205,53 @@ describe('FeedScreen', () => {
     expect(cart.addToHaul).toHaveBeenCalledWith({ variantId: 'variant-a' });
     expect(fetchListing).toHaveBeenCalledWith('a');
     expect(client.getQueryData(listingQueryOptions('a').queryKey)).toEqual(detail);
+  });
+
+  it('a double tap on quick add adds the piece once, and the next tap after it lands adds again', async () => {
+    const detail: ListingDetail = {
+      ...piece('a', 'Black Solid One Shoulder Top', 'tops'),
+      tags: [],
+      variants: [
+        { id: 'variant-a', size: 'M', color: 'Black', garmentImageUrl: 'https://img.test/a.png' },
+      ],
+    };
+    vi.mocked(fetchListing).mockResolvedValue(detail);
+    cart.addToHaul.mockClear();
+    vi.mocked(Alert.alert).mockClear();
+    let land!: () => void;
+    cart.addToHaul.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        land = resolve;
+      }),
+    );
+    renderFeed();
+
+    const plus = screen.getAllByText('+')[0]!;
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+    await waitFor(() => expect(cart.addToHaul).toHaveBeenCalledTimes(1));
+    fireEvent.click(plus);
+    expect(cart.addToHaul).toHaveBeenCalledTimes(1);
+
+    await act(async () => land());
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalledTimes(1));
+    fireEvent.click(plus);
+    await waitFor(() => expect(cart.addToHaul).toHaveBeenCalledTimes(2));
+  });
+
+  it('says why a quick add failed in plain words', async () => {
+    vi.mocked(fetchListing).mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.mocked(Alert.alert).mockClear();
+    renderFeed();
+
+    fireEvent.click(screen.getAllByText('+')[1]!);
+
+    await waitFor(() =>
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Couldn’t add',
+        'Could not reach WORN. Check your connection and try again.',
+      ),
+    );
   });
 
   it('redraws only the card whose saved state changed', () => {
