@@ -10,6 +10,7 @@ import {
   addCredit,
   bookReturnPickup,
   borrowSwapListing,
+  returnSwapListing,
   buildTravelPack,
   cancelReturnPickup,
   captureCreditBarcode,
@@ -1932,6 +1933,19 @@ export function useBorrowSwapListing() {
       borrowSwapListing(sessionToken(), circleId, listingId),
     onSuccess: () => {
       trackEvent('swap_listing_borrowed' as never);
+      void qc.invalidateQueries({ queryKey: ['swap-listings'] });
+    },
+  });
+}
+
+/** S1-22 — the borrower (or the owner) hands a borrowed swap piece back. */
+export function useReturnSwapListing() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ circleId, listingId }: { circleId: string; listingId: string }) =>
+      returnSwapListing(sessionToken(), circleId, listingId),
+    onSuccess: () => {
+      trackEvent('swap_listing_returned' as never);
       void qc.invalidateQueries({ queryKey: ['swap-listings'] });
     },
   });

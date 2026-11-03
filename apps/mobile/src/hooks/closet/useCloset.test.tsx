@@ -11,6 +11,7 @@ import {
   useAccountantSeasonRoi,
   useBalanceCheck,
   useBorrowSwapListing,
+  useReturnSwapListing,
   useBudgets,
   useBulkUploadWardrobe,
   useCapsule,
@@ -454,6 +455,7 @@ vi.mock('@/src/api/client', () => ({
   joinSwapCircle: vi.fn(async () => ({ id: 'sc1' })),
   fetchSwapListings: vi.fn(async () => ({ listings: [] })),
   borrowSwapListing: vi.fn(async () => ({ id: 'sl1', status: 'BORROWED' })),
+  returnSwapListing: vi.fn(async () => ({ id: 'sl1', status: 'RETURNED' })),
   lendWardrobeItem: vi.fn(async () => ({ id: 'w1', lentTo: 'Ada' })),
   returnLentWardrobeItem: vi.fn(async () => ({ id: 'w1' })),
   createHousehold: vi.fn(async () => ({ id: 'hh1', name: 'Home' })),
@@ -1918,6 +1920,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
     let createSwap!: ReturnType<typeof useCreateSwapCircle>['mutateAsync'];
     let joinSwap!: ReturnType<typeof useJoinSwapCircle>['mutateAsync'];
     let borrow!: ReturnType<typeof useBorrowSwapListing>['mutateAsync'];
+    let giveBack!: ReturnType<typeof useReturnSwapListing>['mutateAsync'];
     let lend!: ReturnType<typeof useLendWardrobeItem>['mutateAsync'];
     let returnLent!: ReturnType<typeof useReturnLentWardrobeItem>['mutateAsync'];
     let createHh!: ReturnType<typeof useCreateHousehold>['mutateAsync'];
@@ -1932,6 +1935,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
       createSwap = useCreateSwapCircle().mutateAsync;
       joinSwap = useJoinSwapCircle().mutateAsync;
       borrow = useBorrowSwapListing().mutateAsync;
+      giveBack = useReturnSwapListing().mutateAsync;
       lend = useLendWardrobeItem().mutateAsync;
       returnLent = useReturnLentWardrobeItem().mutateAsync;
       createHh = useCreateHousehold().mutateAsync;
@@ -1958,6 +1962,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
       await createSwap('Friends');
       await joinSwap('INVITE');
       await borrow({ circleId: 'sc1', listingId: 'sl1' });
+      await giveBack({ circleId: 'sc1', listingId: 'sl1' });
       await lend({ id: 'w1', lentTo: 'Ada', dueOn: '2026-09-30' });
       await returnLent('w1');
       await createHh('Home');
@@ -1972,6 +1977,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
     expect(api.createSwapCircle).toHaveBeenCalled();
     expect(api.joinSwapCircle).toHaveBeenCalled();
     expect(api.borrowSwapListing).toHaveBeenCalled();
+    expect(api.returnSwapListing).toHaveBeenCalledWith('test-token', 'sc1', 'sl1');
     expect(api.lendWardrobeItem).toHaveBeenCalled();
     expect(api.returnLentWardrobeItem).toHaveBeenCalled();
     expect(api.createHousehold).toHaveBeenCalled();
