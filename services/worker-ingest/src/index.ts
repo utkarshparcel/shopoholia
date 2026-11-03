@@ -52,7 +52,7 @@ import {
   createDbCreditAutofillRepos,
   type CreditAutofillRepos,
 } from "./credit-autofill.js";
-import { autofillEmiFromSignal, type EmiAutofillRepos } from "./emi-autofill.js";
+import { autofillEmiFromSignal, createDbEmiAutofillRepos, type EmiAutofillRepos } from "./emi-autofill.js";
 import { detectEmiSignal } from "./parsers/emi-detect.js";
 import {
   createDbPersister,
@@ -276,7 +276,8 @@ async function tryEmiAutofill(
   deps: ProcessIngestDeps,
 ): Promise<ProcessIngestResult["emiAutofill"]> {
   if (!deps.userId || !deps.emiRepos) return undefined;
-  const signal = detectEmiSignal(msg.subject, msg.text);
+  const timeZone = (await deps.emiRepos.userTimeZone?.(deps.userId)) ?? undefined;
+  const signal = detectEmiSignal(msg.subject, msg.text, new Date(), timeZone);
   if (!signal) return undefined;
   const filled = await autofillEmiFromSignal(deps.emiRepos, {
     userId: deps.userId,
@@ -306,7 +307,7 @@ export async function processSmsDocument(
   doc: { id: string; parsedJson: Record<string, unknown> },
   persister: IngestPersister,
   metrics?: MetricsSink,
-  opts: { userId?: string; creditRepos?: CreditAutofillRepos } = {},
+  opts: { userId?: string; creditRepos?: CreditAutofillRepos; emiRepos?: EmiAutofillRepos } = {},
 ): Promise<ProcessIngestResult> {
   const msg = smsToRawMessage(doc);
   return processIngestJob(msg, {
@@ -316,6 +317,7 @@ export async function processSmsDocument(
     metrics,
     userId: opts.userId,
     creditRepos: opts.creditRepos,
+    emiRepos: opts.emiRepos,
   });
 }
 
@@ -325,7 +327,7 @@ export async function processSmsJob(
   documentId: string,
   persister: IngestPersister,
   metrics?: MetricsSink,
-  opts: { userId?: string; creditRepos?: CreditAutofillRepos } = {},
+  opts: { userId?: string; creditRepos?: CreditAutofillRepos; emiRepos?: EmiAutofillRepos } = {},
 ): Promise<ProcessIngestResult> {
   const [row] = await db
     .select()
@@ -353,6 +355,7 @@ export interface ResyncDeps {
   persister: IngestPersister;
   metrics?: MetricsSink;
   creditRepos?: CreditAutofillRepos;
+  emiRepos?: EmiAutofillRepos;
   connectorFactory: (source: {
     id: string;
     provider: string;
@@ -411,6 +414,7 @@ export async function processResync(
       metrics: deps.metrics,
       userId,
       creditRepos: deps.creditRepos,
+      emiRepos: deps.emiRepos,
       mutedMerchants,
     });
   }
@@ -625,6 +629,8 @@ export function createBullmqIngestWorker(
     }
   };
   const creditRepos = createDbCreditAutofillRepos(db, trackIngest);
+  // U007: EMI-due SMS and emails become emi_plans rows.
+  const emiRepos = createDbEmiAutofillRepos(db, trackIngest);
 
   const resolveUserIdForSource = async (
     sourceId: string,
@@ -686,7 +692,7 @@ export function createBullmqIngestWorker(
     const backoffDelay = getBackoffDelay(sourceId);
     if (backoffDelay > 0) deferJob(backoffDelay);
     try {
-      await processResync(sourceId, { db, persister, metrics, creditRepos, connectorFactory });
+      await processResync(sourceId, { db, persister, metrics, creditRepos, emiRepos, connectorFactory });
     } catch (err) {
       // Disconnected or consent revoked: no retry helps, and the repeating sync should stop.
       if (err instanceof SourceGoneError || err instanceof ConsentRequiredError) {
@@ -755,6 +761,7 @@ export function createBullmqIngestWorker(
       await processSmsJob(db, data.documentId, persister, metrics, {
         userId: data.userId,
         creditRepos,
+        emiRepos,
       });
       return;
     }
@@ -775,6 +782,7 @@ export function createBullmqIngestWorker(
         metrics,
         userId,
         creditRepos,
+        emiRepos,
         mutedMerchants,
       });
       if (data.sourceId) recordSuccess(data.sourceId);
