@@ -142,6 +142,69 @@ describe("reveal render with the live FASHN provider", () => {
   });
 });
 
+describe("combined render with the live FASHN provider", () => {
+  it("keeps only the final image: the try-on steps before it are deleted", async () => {
+    const repos = createMemoryRepositories();
+    const { user, order, items } = await deliveredOrder(repos, {
+      itemCount: 2,
+      avatarKey: "uploads/u1/selfie.jpg",
+      garmentImageKey: "https://assets.newme.asia/x.webp",
+    });
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7, 7]);
+    let prediction = 0;
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/run")) {
+        prediction += 1;
+        return new Response(JSON.stringify({ id: `pred-${prediction}` }), { status: 200 });
+      }
+      if (href.includes("/status/")) {
+        const id = href.split("/status/")[1];
+        return new Response(
+          JSON.stringify({ status: "completed", output: [`https://cdn.fashn.ai/${id}/output_0.jpg`] }),
+          { status: 200 },
+        );
+      }
+      return new Response(jpeg, { status: 200 });
+    }) as unknown as typeof fetch;
+    const storage = recordingStorage();
+    const deleted: string[] = [];
+    storage.deleteMany = async (keys) => {
+      deleted.push(...keys);
+      for (const key of keys) storage.stored.delete(key);
+    };
+    const provider = createFashnRenderProvider("live-key", {
+      resolveImage: (key) => storage.getSignedUrl(key),
+      fetchImpl,
+    });
+    const combine = await repos.purchaseRender({
+      userId: user.id,
+      orderId: order.id,
+      render: {
+        orderItemId: items[0]!.id,
+        scenario: "NIGHT",
+        imageKey: null,
+        isFree: false,
+        unlocked: true,
+        provider: "user-generated",
+        combinedItemIds: items.map((i) => i.id),
+        status: "QUEUED",
+        costMicros: 0,
+      },
+      cost: REVEAL_COMBINE_COST_COINS,
+      ledgerType: "SPEND_COMBINE",
+    });
+    if (combine.status !== "created") throw new Error(combine.status);
+
+    await processRenderJob(deps(repos, provider, storage), combine.render.id, order.id);
+
+    const done = await repos.findRenderById(combine.render.id);
+    expect(done).toMatchObject({ status: "DONE", imageKey: "tryon/fashn/pred-2.jpg" });
+    expect(deleted).toEqual(["tryon/fashn/pred-1.jpg"]);
+    expect([...storage.stored.keys()]).toEqual(["tryon/fashn/pred-2.jpg"]);
+  });
+});
+
 describe("render failures (memory)", () => {
   failureCases(() => createMemoryRepositories());
 });

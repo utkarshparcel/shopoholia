@@ -166,6 +166,9 @@ export type RenderJobDeps = {
   retryDelaysMs?: readonly number[];
 };
 
+/** Where the live FASHN provider stores each try-on: one key per prediction. */
+const LIVE_TRYON_PREFIX = "tryon/fashn/";
+
 async function storeImage(storage: StorageClient, key: string, bytes: Uint8Array | undefined) {
   if (!bytes) return;
   await storage.put({ key, body: Buffer.from(bytes), contentType: "image/jpeg" });
@@ -197,12 +200,15 @@ async function renderOnce(deps: RenderJobDeps, render: RenderRecord, orderId: st
 
   let currentModelKey = await modelImageFor(deps, order, garments[0]!.listingId);
   let costMicros = 0;
+  // Try-on images this render stored on its way to the final one (one per piece of a combine).
+  const stepKeys: string[] = [];
   for (const garment of garments) {
     const tryOn = await deps.renderProvider.tryOn({
       modelImageKey: currentModelKey,
       garmentImageKey: garment.garmentImageKey,
     });
     await storeImage(deps.storage, tryOn.imageKey, tryOn.imageBytes);
+    if (tryOn.imageBytes) stepKeys.push(tryOn.imageKey);
     currentModelKey = tryOn.imageKey;
     costMicros += tryOn.costMicros;
   }
@@ -212,6 +218,14 @@ async function renderOnce(deps: RenderJobDeps, render: RenderRecord, orderId: st
     scenario: render.scenario,
   });
   await storeImage(deps.storage, styled.imageKey, styled.imageBytes);
+  // Only the final key is recorded on the render, so account erasure can't find the steps before
+  // it: images of the user that nothing else uses. Delete them now (best effort). Only the live
+  // provider's keys are one per call (tryon/fashn/<prediction>); the mock's are derived from the
+  // inputs and shared with try-on previews, so those stay.
+  const leftovers = stepKeys.filter((key) => key !== styled.imageKey && key.startsWith(LIVE_TRYON_PREFIX));
+  if (leftovers.length > 0) {
+    await deps.storage.deleteMany(leftovers).catch(() => undefined);
+  }
   return { imageKey: styled.imageKey, costMicros: costMicros + styled.costMicros };
 }
 
