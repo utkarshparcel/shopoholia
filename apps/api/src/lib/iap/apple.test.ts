@@ -113,10 +113,12 @@ describe("verifyAppleJws", () => {
 });
 
 describe("appleEnvironment", () => {
-  it("accepts Production always, Sandbox outside production, Xcode only from the Xcode cert", () => {
+  it("accepts Production always, Sandbox unless refused (App Review buys in Sandbox against production), Xcode only from the Xcode cert", () => {
     expect(appleEnvironment("Production", false, true)).toBe("production");
-    expect(appleEnvironment("Sandbox", false, true)).toBeNull();
+    expect(appleEnvironment("Sandbox", false, true)).toBe("sandbox");
+    expect(appleEnvironment("Sandbox", false, true, false)).toBeNull();
     expect(appleEnvironment("Sandbox", false, false)).toBe("sandbox");
+    expect(appleEnvironment("Production", false, true, false)).toBe("production");
     expect(appleEnvironment("Xcode", false, false)).toBeNull();
     expect(appleEnvironment("Xcode", true, false)).toBe("xcode");
     expect(appleEnvironment("Xcode", true, true)).toBeNull();
@@ -157,10 +159,19 @@ describe("decodeAppStoreNotification", () => {
     });
   });
 
-  it("ignores another app and Sandbox in production; rejects bad signatures", () => {
+  it("ignores another app, and Sandbox when test purchases are refused; rejects bad signatures", () => {
     const body = { notificationType: "TEST", notificationUUID: "n-2" };
     expect(decodeAppStoreNotification(appStoreNotification({ ...body, bundleId: "com.other.app" }), opts)).toBeNull();
-    expect(decodeAppStoreNotification(appStoreNotification(body), { ...opts, production: true })).toBeNull();
+    expect(decodeAppStoreNotification(appStoreNotification(body), { ...opts, production: true })).toMatchObject({
+      environment: "sandbox",
+    });
+    expect(
+      decodeAppStoreNotification(appStoreNotification(body), {
+        ...opts,
+        production: true,
+        acceptTestPurchases: false,
+      }),
+    ).toBeNull();
     const signed = appStoreNotification(body);
     expect(() => decodeAppStoreNotification(`${signed.slice(0, -4)}AAAA`, opts)).toThrow(AppleJwsError);
   });
