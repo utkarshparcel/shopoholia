@@ -1,16 +1,23 @@
 import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { FlatList, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { OrderState } from '@worn/shared';
+import { PRIVACY_EMAIL, type OrderState } from '@worn/shared';
 
 import { Button, CoinWallet } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
+import {
+  DELETE_ACCOUNT_MESSAGE,
+  DELETE_ACCOUNT_TITLE,
+  useDeleteAccount,
+} from '@/src/hooks/account';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { confirmAsync } from '@/src/lib/confirm';
 import { orderBadgeLabel, orderHref, profileOrderList, tierLabel } from '@/src/lib/order-tracking';
+import { getPrivacyPolicyUrl } from '@/src/lib/privacyLinks';
 import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -70,6 +77,23 @@ export default function ProfileScreen() {
       { confirmLabel: 'Delete', destructive: true },
     );
     if (ok) deletePhotos.mutate();
+  };
+
+  // Account deletion has to be in the app itself (App Store 5.1.1(v), Google Play), with or
+  // without Closet.
+  const deleteAccount = useDeleteAccount();
+  const confirmDeleteAccount = async () => {
+    const ok = await confirmAsync(DELETE_ACCOUNT_TITLE, DELETE_ACCOUNT_MESSAGE, {
+      confirmLabel: 'Delete account',
+      destructive: true,
+    });
+    if (ok) deleteAccount.mutate();
+  };
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const openPrivacyPolicy = () => {
+    const url = getPrivacyPolicyUrl();
+    setPrivacyError(null);
+    Linking.openURL(url).catch(() => setPrivacyError(`Couldn’t open ${url}`));
   };
 
   const { data: ordersData } = useQuery({
@@ -228,6 +252,32 @@ export default function ProfileScreen() {
             <Text style={styles.menuItemText}>Sign out</Text>
             <Text style={styles.menuItemArrow}>→</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="link"
+            onPress={openPrivacyPolicy}
+            style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.menuItemText}>Privacy policy</Text>
+            <Text style={styles.menuItemArrow}>→</Text>
+          </Pressable>
+          {privacyError ? <Text style={[styles.photosNote, styles.danger]}>{privacyError}</Text> : null}
+          <Pressable
+            accessibilityRole="button"
+            disabled={deleteAccount.isPending}
+            onPress={() => void confirmDeleteAccount()}
+            style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={[styles.menuItemText, styles.danger]}>
+              {deleteAccount.isPending ? 'Deleting your account…' : 'Delete account'}
+            </Text>
+            <Text style={styles.menuItemArrow}>→</Text>
+          </Pressable>
+          {deleteAccount.isError ? (
+            <Text style={[styles.photosNote, styles.danger]}>
+              Couldn’t delete your account. {deleteAccount.error.message} If this keeps happening,
+              email {PRIVACY_EMAIL}.
+            </Text>
+          ) : null}
           <View style={styles.divider} />
           <Text style={styles.footerNote}>WORN · The shopping arc is the product</Text>
         </View>
