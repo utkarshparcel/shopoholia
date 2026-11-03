@@ -279,10 +279,8 @@ describe("INGEST-GMAIL-E2E recorded fixture inbox path", () => {
         }),
       ]),
     );
-    expect(cursors.map((c) => c.cursor).sort()).toEqual([
-      "msg-amazon-fixture-1",
-      "msg-flipkart-fixture-1",
-    ]);
+    // The source cursor is a Gmail historyId: messages never write their id into it.
+    expect(cursors).toEqual([]);
   });
 
   it("incremental history.list (messagesAdded) → parse → ≥1 purchase", async () => {

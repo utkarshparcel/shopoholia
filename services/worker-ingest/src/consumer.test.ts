@@ -124,6 +124,38 @@ describe("worker-ingest consumer", () => {
     ).rejects.toMatchObject({ name: "UnrecoverableError", message: 'no email connector for provider "outlook"' });
   });
 
+  it("a resync moves the cursor to the batch's historyId only once every message is in", async () => {
+    const amazon = (id: string) => ({
+      messageId: id,
+      from: "no-reply@amazon.in",
+      to: "me@example.com",
+      subject: "Your Amazon.in order has been placed",
+      text: `Order #403-${id}-1234567 Order total: Rs. 1,299.00`,
+      receivedAt: "2026-10-20T10:00:00.000Z",
+    });
+    const source = { id: SOURCE_ID, provider: "gmail", consentGrantId: "g-1", cursor: "h100", encryptedToken: null, meta: {} };
+    const connectorFactory = () => ({
+      listSince: async () => ({ messages: [amazon("111"), amazon("222"), amazon("333")], nextCursor: "h200" }),
+    });
+
+    // Message 2 fails: the batch stops and the cursor stays at h100, never a message id.
+    const failing = fakePersister();
+    failing.insert.mockImplementation(async (p: { orderRef?: string }) => {
+      if (p.orderRef?.includes("222")) throw new Error("db down");
+      return "pid";
+    });
+    const db = mockDb({ source, grant: { id: "g-1", revokedAt: null, userId: "u-1" } });
+    await expect(
+      processResync(SOURCE_ID, { db, persister: failing.persister, connectorFactory: connectorFactory as never }),
+    ).rejects.toThrow(/db down/);
+    expect(failing.persister.updateSourceCursor).not.toHaveBeenCalled();
+
+    const ok = fakePersister();
+    await processResync(SOURCE_ID, { db, persister: ok.persister, connectorFactory: connectorFactory as never });
+    expect(ok.persister.updateSourceCursor).toHaveBeenCalledTimes(1);
+    expect(ok.persister.updateSourceCursor).toHaveBeenCalledWith(SOURCE_ID, "h200");
+  });
+
   it("refuses to build a Gmail connector without Google credentials", () => {
     vi.stubEnv("GOOGLE_CLIENT_ID", "");
     vi.stubEnv("GOOGLE_CLIENT_SECRET", "");

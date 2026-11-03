@@ -215,9 +215,6 @@ export async function processIngestJob(
       if (deps.documentId) {
         await deps.persister.markDocument(deps.documentId, "UNMATCHED");
       }
-      if (deps.sourceId) {
-        await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
-      }
       return {
         matched: false,
         skippedMuted: true,
@@ -233,9 +230,6 @@ export async function processIngestJob(
     });
     if (deps.documentId) {
       await deps.persister.markDocument(deps.documentId, "MATCHED", purchaseId);
-    }
-    if (deps.sourceId) {
-      await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
     }
 
     let creditAutofill: ProcessIngestResult["creditAutofill"];
@@ -270,9 +264,6 @@ export async function processIngestJob(
 
   if (deps.documentId) {
     await deps.persister.markDocument(deps.documentId, "PARSED");
-  }
-  if (deps.sourceId) {
-    await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
   }
   return {
     matched: false,
@@ -410,11 +401,13 @@ export async function processResync(
     (source.meta ?? null) as Record<string, unknown> | null,
   );
 
+  // The cursor is a Gmail historyId: it moves to `nextCursor` only after the whole batch is in,
+  // so a message that fails leaves it where it was and the next resync reads the batch again
+  // (purchases dedupe on the order). Writing a message id there would break history.list.
   for (const msg of messages) {
     await processIngestJob(msg, {
       persister: deps.persister,
       sourceKind: "EMAIL",
-      sourceId: source.id,
       metrics: deps.metrics,
       userId,
       creditRepos: deps.creditRepos,
