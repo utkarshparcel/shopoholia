@@ -109,6 +109,8 @@ export {
   UnlockResponseSchema,
   GenerateRenderBodySchema,
   GenerateRenderResponseSchema,
+  RetryRendersBodySchema,
+  RetryRendersResponseSchema,
   type RenderStatus,
   type RenderCard,
   type RevealResponse,
@@ -116,6 +118,8 @@ export {
   type UnlockResponse,
   type GenerateRenderBody,
   type GenerateRenderResponse,
+  type RetryRendersBody,
+  type RetryRendersResponse,
 } from "./schemas/reveal.js";
 export {
   ListingCardSchema,

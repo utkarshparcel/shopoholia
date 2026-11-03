@@ -978,8 +978,18 @@ describe("reveal", () => {
     expect(unlock.statusCode).toBe(200);
     expect(unlock.json().coinsSpent).toBe(50);
     expect(unlock.json().renders[0].unlocked).toBe(true);
-    expect(unlock.json().renders[0].status).toBe("DONE");
-    expect(unlock.json().renders[0].imageUrl).toBeTruthy();
+    // Queued, not rendered inside the request; the app polls the reveal.
+    expect(unlock.json().renders[0].status).toBe("QUEUED");
+
+    await app.deps.jobQueue.flushRenderJobs!();
+    const after = await app.inject({
+      method: "GET",
+      url: `/orders/${orderId}/reveal`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const card = after.json().renders.find((r: { id: string }) => r.id === lockedId);
+    expect(card.status).toBe("DONE");
+    expect(card.imageUrl).toBeTruthy();
 
     const balanceAfter = (
       await app.inject({

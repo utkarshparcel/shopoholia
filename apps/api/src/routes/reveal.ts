@@ -9,12 +9,15 @@ import {
   REVEAL_UNLOCK_COST_COINS,
   REVEAL_GENERATE_COST_COINS,
   REVEAL_COMBINE_COST_COINS,
+  RetryRendersBodySchema,
+  RetryRendersResponseSchema,
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { renderCardDto } from "../lib/render/dto.js";
-import { processRenderJob } from "../lib/render/pipeline.js";
+import { USER_GENERATED_PROVIDER } from "../lib/render/pipeline.js";
+import { renderProviderAvailable } from "../lib/render/provider.js";
 
 const OrderParamsSchema = z.object({
   id: z.string().uuid(),
@@ -23,6 +26,12 @@ const OrderParamsSchema = z.object({
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const REVEAL_OPEN_STATES = new Set(["DELIVERED", "REVEAL_READY"]);
+
+/** Before any coins move: a render that can't run must not be paid for. */
+const RENDER_UNAVAILABLE = {
+  error: "tryon_unavailable",
+  message: "Renders are not available right now. You have not been charged.",
+};
 
 export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
   app.get(
@@ -67,6 +76,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           402: ErrorSchema,
           404: ErrorSchema,
           409: ErrorSchema,
+          503: ErrorSchema,
         },
       },
       preHandler: requireAuth,
@@ -81,6 +91,9 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           error: "Conflict",
           message: "Reveal is not available until your order is delivered",
         });
+      }
+      if (!renderProviderAvailable(app.deps.renderProvider)) {
+        return reply.code(503).send(RENDER_UNAVAILABLE);
       }
 
       const result = await app.deps.repos.unlockOrderRenders({
@@ -114,34 +127,16 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const { renders: unlocked, coinsSpent } = result;
 
+      // Rendering takes minutes: the job runs in the background, and the app polls the reveal
+      // while the cards come back QUEUED. A render that fails is refunded.
       for (const render of unlocked) {
         if (render.status === "QUEUED") {
           await app.deps.jobQueue.enqueueRender({ renderId: render.id, orderId: order.id });
         }
       }
 
-      if (app.deps.jobQueue.flushRenderJobs) {
-        await app.deps.jobQueue.flushRenderJobs();
-      } else {
-        for (const render of unlocked) {
-          if (render.status === "QUEUED") {
-            await processRenderJob(
-              {
-                repos: app.deps.repos,
-                storage: app.deps.storage,
-                renderProvider: app.deps.renderProvider,
-                push: app.deps.push,
-              },
-              render.id,
-              order.id,
-            );
-          }
-        }
-      }
-
-      const refreshed = await app.deps.repos.findRendersByIds(unlocked.map((r) => r.id));
       const cards = await Promise.all(
-        refreshed.map((render) => renderCardDto(render, app.deps.storage)),
+        unlocked.map((render) => renderCardDto(render, app.deps.storage)),
       );
 
       return { renders: cards, coinsSpent };
@@ -162,6 +157,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           402: ErrorSchema,
           404: ErrorSchema,
           409: ErrorSchema,
+          503: ErrorSchema,
         },
       },
       preHandler: requireAuth,
@@ -176,6 +172,9 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           error: "Conflict",
           message: "Reveal is not available until your order is delivered",
         });
+      }
+      if (!renderProviderAvailable(app.deps.renderProvider)) {
+        return reply.code(503).send(RENDER_UNAVAILABLE);
       }
 
       const orderItemIds = [...new Set(request.body.orderItemIds)];
@@ -204,7 +203,7 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
           imageKey: null,
           isFree: false,
           unlocked: true,
-          provider: "user-generated",
+          provider: USER_GENERATED_PROVIDER,
           combinedItemIds: isCombine ? orderItemIds : null,
           status: "QUEUED",
           costMicros: 0,
@@ -233,32 +232,65 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         };
       }
 
-      const newRenders = [result.render];
+      // Queued, not rendered here: the app polls the reveal until the card is DONE or FAILED
+      // (and refunded).
+      await app.deps.jobQueue.enqueueRender({ renderId: result.render.id, orderId: order.id });
 
-      for (const render of newRenders) {
-        if (app.deps.jobQueue.enqueueRender) {
-          await app.deps.jobQueue.enqueueRender({ renderId: render.id, orderId: order.id });
-        }
+      return {
+        renders: [await renderCardDto(result.render, app.deps.storage)],
+        coinsSpent: totalCost,
+        isCombine,
+      };
+    },
+  );
+
+  app.post(
+    "/orders/:id/reveal/retry",
+    {
+      schema: {
+        tags: ["reveal"],
+        params: OrderParamsSchema,
+        body: RetryRendersBodySchema,
+        response: {
+          200: RetryRendersResponseSchema,
+          401: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+      preHandler: requireAuth,
+    },
+    async (request, reply) => {
+      const order = await app.deps.repos.findOrderById(request.params.id);
+      if (!order || order.userId !== request.user.sub) {
+        return reply.code(404).send({ error: "Not Found", message: "Order not found" });
+      }
+      if (!REVEAL_OPEN_STATES.has(order.state)) {
+        return reply.code(409).send({
+          error: "Conflict",
+          message: "Reveal is not available until your order is delivered",
+        });
+      }
+      if (!renderProviderAvailable(app.deps.renderProvider)) {
+        return reply.code(503).send(RENDER_UNAVAILABLE);
       }
 
-      if (app.deps.jobQueue.flushRenderJobs) {
-        await app.deps.jobQueue.flushRenderJobs();
-      } else {
-        for (const render of newRenders) {
-          await processRenderJob(
-            { repos: app.deps.repos, storage: app.deps.storage, renderProvider: app.deps.renderProvider, push: app.deps.push },
-            render.id,
-            order.id,
-          );
-        }
+      // Free looks only: a paid render that failed was refunded, and is bought again instead.
+      const queued = await app.deps.repos.requeueFailedFreeRenders({
+        userId: request.user.sub,
+        orderId: order.id,
+        renderIds: request.body.renderIds,
+      });
+      if (queued.length === 0) {
+        return reply.code(404).send({ error: "Not Found", message: "No failed renders to retry" });
+      }
+      for (const render of queued) {
+        await app.deps.jobQueue.enqueueRender({ renderId: render.id, orderId: order.id });
       }
 
-      const refreshed = await app.deps.repos.findRendersByIds(newRenders.map((r) => r.id));
-      const cards = await Promise.all(
-        refreshed.map((render) => renderCardDto(render, app.deps.storage)),
-      );
-
-      return { renders: cards, coinsSpent: totalCost, isCombine };
+      const cards = await Promise.all(queued.map((render) => renderCardDto(render, app.deps.storage)));
+      return { renders: cards };
     },
   );
 
