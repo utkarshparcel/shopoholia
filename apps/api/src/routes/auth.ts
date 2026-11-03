@@ -14,6 +14,7 @@ import {
   appleSignInAudiences,
   verifyAppleIdentityToken,
 } from "../lib/auth/apple.js";
+import { encryptedAppleRefreshTokenFor } from "../lib/auth/apple-revoke.js";
 import { GoogleVerifyUnavailableError, verifyGoogleIdToken } from "../lib/auth/google.js";
 import { OtpRateLimitError, OtpUnavailableError } from "../lib/auth/otp.js";
 import {
@@ -127,6 +128,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
   /**
    * Sign in with Apple (iOS; App Store Guideline 4.8 because Google sign-in is offered). The
    * identity token is checked against Apple's keys, the app's bundle id and this sign-in's nonce.
+   * The optional authorization code is exchanged for a refresh token to revoke on deletion.
    */
   app.post(
     "/auth/apple",
@@ -167,11 +169,22 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      return loginWithAppleProfile(app, app.deps.repos, {
-        appleSub: identity.sub,
-        email: identity.email,
-        displayName: request.body.fullName ?? null,
+      // With the revocation key set, the authorization code is traded for the refresh token that
+      // account deletion revokes (App Store requirement). It runs alongside the account lookup and
+      // never fails the sign-in.
+      const encryptedRefreshToken = encryptedAppleRefreshTokenFor(request.body.authorizationCode, {
+        log: request.log,
       });
+      return loginWithAppleProfile(
+        app,
+        app.deps.repos,
+        {
+          appleSub: identity.sub,
+          email: identity.email,
+          displayName: request.body.fullName ?? null,
+        },
+        { encryptedRefreshToken },
+      );
     },
   );
 

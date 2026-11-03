@@ -807,6 +807,14 @@ export interface Repositories {
     displayName?: string | null;
   }): Promise<{ user: UserRecord; isNew: boolean }>;
   updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord>;
+  /**
+   * `users.apple_refresh_token_enc`: the Sign in with Apple refresh token, already encrypted
+   * (@worn/shared/token-crypto). Null clears it. A no-op for an unknown user. Kept off UserRecord
+   * so it never reaches a response or an export; deleteAllUserData deletes it with the user.
+   */
+  setAppleRefreshToken(userId: string, encrypted: string | null): Promise<void>;
+  /** The stored encrypted Apple refresh token, or null. */
+  getAppleRefreshToken(userId: string): Promise<string | null>;
   /** Writes only `users.time_zone`; returns it, or null when the user doesn't exist. Validate first. */
   setUserTimeZone(userId: string, timeZone: string): Promise<string | null>;
   /** `users.prefs`, or null when the user doesn't exist. */

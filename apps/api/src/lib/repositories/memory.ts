@@ -155,6 +155,8 @@ function appendLedger(
 
 export function createMemoryRepositories(): Repositories {
   const users = new Map<string, UserRecord>();
+  /** users.apple_refresh_token_enc, kept off UserRecord like in Postgres. */
+  const appleRefreshTokens = new Map<string, string>();
   const usersByPhone = new Map<string, string>();
   const avatars = new Map<string, AvatarRecord>();
   const avatarsByUser = new Map<string, string>();
@@ -756,6 +758,16 @@ export function createMemoryRepositories(): Repositories {
       const updated = { ...user, ...patch, prefs: user.prefs, updatedAt: now() };
       users.set(id, updated);
       return updated;
+    },
+
+    async setAppleRefreshToken(userId, encrypted) {
+      if (!users.has(userId)) return;
+      if (encrypted) appleRefreshTokens.set(userId, encrypted);
+      else appleRefreshTokens.delete(userId);
+    },
+
+    async getAppleRefreshToken(userId) {
+      return appleRefreshTokens.get(userId) ?? null;
     },
 
     async setUserTimeZone(userId, timeZone) {
@@ -2780,6 +2792,7 @@ export function createMemoryRepositories(): Repositories {
       if (user) {
         if (user.phone) usersByPhone.delete(user.phone);
       }
+      appleRefreshTokens.delete(userId);
       users.delete(userId);
     },
 

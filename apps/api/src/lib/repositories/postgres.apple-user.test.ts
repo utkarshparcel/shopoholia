@@ -54,4 +54,26 @@ function appleUserCases(getRepos: () => Repositories) {
     expect(linked.user).toMatchObject({ id: google.user.id, appleSub, googleSub: google.user.googleSub, displayName: "G" });
     expect((await repos.findUserByAppleSub(appleSub))?.id).toBe(google.user.id);
   });
+
+  it("stores the encrypted Apple refresh token off the user record, replaces it, and erases it with the user", async () => {
+    const repos = getRepos();
+    const { user } = await repos.findOrCreateAppleUser({ appleSub: `001.${unique()}`, email: null });
+    expect(await repos.getAppleRefreshToken(user.id)).toBeNull();
+
+    await repos.setAppleRefreshToken(user.id, "v2:blob-1");
+    await repos.setAppleRefreshToken(user.id, "v2:blob-2");
+    expect(await repos.getAppleRefreshToken(user.id)).toBe("v2:blob-2");
+    expect(JSON.stringify(await repos.findUserById(user.id))).not.toContain("blob-2");
+    // The user's data export leaves it out.
+    expect(JSON.stringify(await repos.exportUserTables(user.id))).not.toContain("blob-2");
+
+    await repos.setAppleRefreshToken(user.id, null);
+    expect(await repos.getAppleRefreshToken(user.id)).toBeNull();
+    await repos.setAppleRefreshToken(user.id, "v2:blob-3");
+    await repos.deleteAllUserData(user.id);
+    expect(await repos.getAppleRefreshToken(user.id)).toBeNull();
+    // An unknown user is a no-op.
+    await repos.setAppleRefreshToken(user.id, "v2:blob-4");
+    expect(await repos.getAppleRefreshToken(user.id)).toBeNull();
+  });
 }

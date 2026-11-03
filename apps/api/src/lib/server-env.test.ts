@@ -7,6 +7,7 @@ import {
   resolveTrustProxy,
 } from "./server-env.js";
 import { resolveEconomyMode } from "./orders/state-machine.js";
+import { appleRevocationEnv, appleSignInKeyPair } from "./auth/apple-test-support.js";
 
 describe("resolveTrustProxy", () => {
   it("trusts the host's one proxy hop in production and nothing elsewhere", () => {
@@ -185,6 +186,32 @@ describe("bootConfigProblems", () => {
       FASHN_API_KEY: "k",
     });
     expect(set.warnings.join("\n")).not.toMatch(/REDIS_URL|GOOGLE_CLIENT_IDS|Sign in with Apple|FASHN_API_KEY|TestFlight/);
+  });
+
+  it("in production, warns when Apple tokens would not be revoked on account deletion", () => {
+    const revocation = /Apple tokens are not revoked when an account is deleted/;
+    const bundleOnly = bootConfigProblems({ NODE_ENV: "production", APPLE_BUNDLE_ID: "app.bundle" });
+    expect(bundleOnly.warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/APPLE_SIGN_IN_KEY_ID, APPLE_TEAM_ID or APPLE_SIGN_IN_PRIVATE_KEY/)]),
+    );
+    const { pem } = appleSignInKeyPair();
+    const configured = {
+      NODE_ENV: "production",
+      OAUTH_TOKEN_SECRET: "secret",
+      ...appleRevocationEnv(pem, "app.bundle"),
+    };
+    expect(bootConfigProblems(configured).warnings.join("\n")).not.toMatch(revocation);
+    expect(bootConfigProblems({ ...configured, APPLE_SIGN_IN_PRIVATE_KEY: "nope" }).warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/not a \.p8/)]),
+    );
+    expect(bootConfigProblems({ ...configured, OAUTH_TOKEN_SECRET: "" }).warnings).toEqual(
+      expect.arrayContaining([expect.stringMatching(/OAUTH_TOKEN_SECRET is not set/)]),
+    );
+    // Not without Sign in with Apple, and not outside production.
+    expect(bootConfigProblems({ NODE_ENV: "production" }).warnings.join("\n")).not.toMatch(revocation);
+    expect(bootConfigProblems({ NODE_ENV: "development", APPLE_BUNDLE_ID: "app.bundle" }).warnings.join("\n")).not.toMatch(
+      revocation,
+    );
   });
 
   it("in production, warns when sign-in, deletion, renders or the delivery timers would be off", () => {

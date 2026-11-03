@@ -1396,6 +1396,22 @@ export function createPostgresRepositories(db: Db): Repositories {
       return mapUser(row!);
     },
 
+    async setAppleRefreshToken(userId, encrypted) {
+      await db
+        .update(users)
+        .set({ appleRefreshTokenEnc: encrypted, updatedAt: now() })
+        .where(eq(users.id, userId));
+    },
+
+    async getAppleRefreshToken(userId) {
+      const [row] = await db
+        .select({ token: users.appleRefreshTokenEnc })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      return row?.token ?? null;
+    },
+
     async setUserTimeZone(userId, timeZone) {
       const [row] = await db
         .update(users)
