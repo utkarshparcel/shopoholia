@@ -681,7 +681,7 @@ export function useBulkUpdateWardrobe() {
 export function useUploadWardrobeItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ imageUri, meta }: { imageUri: string; meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number } }) => uploadWardrobeItem(sessionToken(), imageUri, meta),
+    mutationFn: ({ imageUri, meta }: { imageUri: string; meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number; profileId?: string | null } }) => uploadWardrobeItem(sessionToken(), imageUri, meta),
     onSuccess: (item) => {
       trackEvent('wardrobe_item_added', { itemId: item.id });
       queryClient.invalidateQueries({ queryKey: ['wardrobe'] });
@@ -701,7 +701,7 @@ export function useBulkUploadWardrobe() {
       perItemMeta,
     }: {
       imageUris: string[];
-      meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number };
+      meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number; profileId?: string | null };
       onProgress?: (p: {
         index: number;
         total: number;
@@ -715,6 +715,7 @@ export function useBulkUploadWardrobe() {
         colors?: string[];
         brand?: string | null;
         costMinor?: number;
+        profileId?: string | null;
       }>;
     }) =>
       uploadWardrobeItemsBulk(sessionToken(), imageUris, meta, {

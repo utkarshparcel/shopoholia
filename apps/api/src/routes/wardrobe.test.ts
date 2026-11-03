@@ -486,6 +486,51 @@ describe("wardrobe", () => {
     await app.close();
   });
 
+  it("POST /wardrobe/upload files the piece under the profile it was added from (S1-23)", async () => {
+    const { app } = await buildTestServer();
+    const { accessToken } = await login(app);
+    const profiles = await app.inject({
+      method: "GET",
+      url: "/closet-profiles",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    const profileId = (profiles.json() as { activeProfileId: string }).activeProfileId;
+    const boundary = "----wornwardrobeprofile";
+    const upload = (profile: string) =>
+      app.inject({
+        method: "POST",
+        url: "/wardrobe/upload",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        payload: Buffer.concat([
+          Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="profileId"\r\n\r\n${profile}\r\n` +
+              `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="tee.jpg"\r\n` +
+              `Content-Type: image/jpeg\r\n\r\n`,
+          ),
+          Buffer.from("fake-jpeg"),
+          Buffer.from(`\r\n--${boundary}--\r\n`),
+        ]),
+      });
+
+    const ok = await upload(profileId);
+    expect(ok.statusCode).toBe(201);
+    expect((ok.json() as WardrobeItem & { profileId: string | null }).profileId).toBe(profileId);
+    const listed = await app.inject({
+      method: "GET",
+      url: `/wardrobe?profileId=${profileId}`,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect((listed.json() as { items: WardrobeItem[] }).items.map((i) => i.id)).toContain(ok.json().id);
+
+    // Someone else's profile (or garbage) is refused before anything is stored.
+    expect((await upload("11111111-1111-4111-8111-111111111111")).statusCode).toBe(404);
+    expect((await upload("not-a-uuid")).statusCode).toBe(400);
+    await app.close();
+  });
+
   it("POST /wear/photo uploads and POST /wear validates ids", async () => {
     const { app } = await buildTestServer();
     const { accessToken } = await login(app);

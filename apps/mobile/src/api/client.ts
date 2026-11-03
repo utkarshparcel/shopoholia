@@ -1593,13 +1593,15 @@ export async function deleteWardrobeItem(accessToken: string, id: string) {
   return parseJson<void>(res);
 }
 
-export async function uploadWardrobeItem(accessToken: string, imageUri: string, meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number }) {
+export async function uploadWardrobeItem(accessToken: string, imageUri: string, meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number; profileId?: string | null }) {
   const form = new FormData();
   form.append('file', jpegPart(imageUri, 'wardrobe.jpg'));
   form.append('category', meta.category);
   if (meta.colors) form.append('colors', JSON.stringify(meta.colors));
   if (meta.brand) form.append('brand', meta.brand);
   if (meta.costMinor) form.append('costMinor', String(meta.costMinor));
+  // The closet profile it is added from (a kid's closet); without one it goes to the user's own.
+  if (meta.profileId) form.append('profileId', meta.profileId);
   const res = await apiFetch(`${API_URL}/wardrobe/upload`, { method: 'POST', headers: { ...authHeaders(accessToken), 'Content-Type': 'multipart/form-data' }, body: form });
   return parseJson<WardrobeItem>(res);
 }
@@ -1719,6 +1721,7 @@ export async function uploadWardrobeItemsBulk(
     colors?: string[];
     brand?: string | null;
     costMinor?: number;
+    profileId?: string | null;
   },
   opts?: {
     /** Per-item progress (W059). */
@@ -1731,6 +1734,7 @@ export async function uploadWardrobeItemsBulk(
       colors?: string[];
       brand?: string | null;
       costMinor?: number;
+      profileId?: string | null;
     }>;
   },
 ) {
