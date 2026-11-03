@@ -12,6 +12,12 @@ export const DELETE_ACCOUNT_MESSAGE =
   'and coin history, streaks and referrals. Coins you haven’t spent are lost and can’t be ' +
   'refunded. This can’t be undone.';
 
+/** The same, from Closet, which also holds the Vault and wardrobe. */
+export const DELETE_ACCOUNT_MESSAGE_WITH_CLOSET = DELETE_ACCOUNT_MESSAGE.replace(
+  'streaks and referrals.',
+  'streaks and referrals, and everything in Closet: your Vault, receipts, wardrobe and connected sources.',
+);
+
 /**
  * In-app account deletion (App Store 5.1.1(v), Google Play). The server erases the account before
  * it answers (DELETE /vault, the same erasure Closet uses), which also ends every session; the
