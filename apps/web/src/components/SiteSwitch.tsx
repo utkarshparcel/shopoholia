@@ -5,9 +5,10 @@ const SITES = [
 
 /**
  * Which half of Worn you're looking at, and the way to the other one. Lives in both headers at every
- * width, so the two pages always read as two products under one name.
+ * width, so the two pages always read as two products under one name. Without `current` (pages that
+ * belong to neither, like /privacy) both are links.
  */
-export function SiteSwitch({ current, className = '' }: { current: 'play' | 'closet'; className?: string }) {
+export function SiteSwitch({ current, className = '' }: { current?: 'play' | 'closet'; className?: string }) {
   return (
     <nav
       aria-label="Worn products"
