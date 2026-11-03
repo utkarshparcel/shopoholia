@@ -22,6 +22,7 @@ vi.mock('expo-router', () => ({
 vi.mock('expo-web-browser', () => ({
   maybeCompleteAuthSession: vi.fn(),
   openBrowserAsync: vi.fn(),
+  openAuthSessionAsync: vi.fn(),
 }));
 
 vi.mock('@/src/lib/features', async (importOriginal) => ({
