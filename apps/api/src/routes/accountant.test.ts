@@ -722,10 +722,8 @@ describe("accountant", () => {
       garmentImageKey: "w.jpg",
       purchaseItemId,
     });
-    // Force createdAt into 2025 by re-reading — memory repos set createdAt=now.
-    // Use custom from/to around "now" instead if needed; patch via update isn't available for createdAt.
-    // Seed a second item with workwear via inject and filter year = current UTC year.
-    const year = new Date().getUTCFullYear();
+    // The item was added to the closet now but bought on 2025-05-10: its spend is 2025's.
+    const year = 2025;
 
     const denied = await app.inject({
       method: "GET",
@@ -745,10 +743,28 @@ describe("accountant", () => {
       to: string;
     };
     expect(pack.year).toBe(year);
-    expect(pack.spendRowCount).toBeGreaterThanOrEqual(1);
+    expect(pack.spendRowCount).toBe(1);
     expect(pack.spendCsv).toContain("blazer");
-    expect(pack.from.startsWith(`${year}-01-01`)).toBe(true);
-    expect(pack.to.startsWith(`${year}-12-31`)).toBe(true);
+    expect(pack.spendCsv).toContain("2025-05-10T12:00:00.000Z");
+    // The year runs midnight to midnight in the user's zone (Asia/Kolkata by default).
+    expect(pack.from).toBe("2024-12-31T18:30:00.000Z");
+    expect(pack.to).toBe("2025-12-31T18:29:59.999Z");
+
+    const thisYear = await app.inject({
+      method: "GET",
+      url: `/accountant/tax-pack?year=${new Date().getUTCFullYear()}`,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect((thisYear.json() as { spendRowCount: number }).spendRowCount).toBe(0);
+
+    const fy = await app.inject({
+      method: "GET",
+      url: "/accountant/tax-pack?fy=2025",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(fy.statusCode).toBe(200);
+    expect((fy.json() as { label: string }).label).toBe("FY2025-26");
+    expect((fy.json() as { spendRowCount: number }).spendRowCount).toBe(1);
 
     // Custom range that excludes everything (past year with no data)
     const empty = await app.inject({

@@ -419,6 +419,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["accountant"],
         querystring: z.object({
           year: z.coerce.number().int().min(2000).max(2100).optional(),
+          fy: z.coerce.number().int().min(2000).max(2100).optional(),
           from: z.string().min(4).optional(),
           to: z.string().min(4).optional(),
           format: z.enum(["json", "csv", "zip"]).optional().default("json"),
@@ -436,8 +437,10 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       const q = request.query;
       const rangeOrErr = resolveTaxPackRange({
         year: q.year,
+        fy: q.fy,
         from: q.from,
         to: q.to,
+        timeZone: (await app.deps.repos.findUserById(userId))?.timeZone,
       });
       if ("error" in rangeOrErr) {
         return reply.code(400).send({ error: "Bad Request", message: rangeOrErr.error });
@@ -463,6 +466,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
         wardrobeItems: items,
         receipts,
         purchaseIdByItemId,
+        purchasedAtByPurchaseId: new Map(purchases.map((p) => [p.id, p.purchasedAt])),
       });
 
       audit(app.log, "money.read", {
