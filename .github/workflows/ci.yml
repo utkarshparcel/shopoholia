@@ -186,3 +186,23 @@ jobs:
             echo "::error::Schema drift: run \`pnpm --filter @worn/db db:generate\` and commit the migration"
             exit 1
           fi
+
+  # Fails on any critical advisory in a production dependency tree (the API, workers, and the
+  # packages the apps ship). Dev and build tooling is out of scope here. Nothing is ignored: a
+  # runtime critical is fixed (upgrade, or a pnpm.overrides entry documented in package.json),
+  # never allowlisted.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: No critical advisories in production dependencies
+        run: pnpm audit --prod --audit-level=critical
