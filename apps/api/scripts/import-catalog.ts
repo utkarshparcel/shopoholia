@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
+import { coinPriceForRupees } from "@worn/shared";
 import { z } from "zod";
 import { createMemoryRepositories } from "../src/lib/repositories/memory.js";
 import { createPostgresRepositoriesFromUrl } from "../src/lib/repositories/postgres.js";
@@ -75,8 +76,14 @@ Options:
   return { file, dryRun, limit, startSortOrder };
 }
 
+/**
+ * A shop row's `coin_price` is the shop's rupee price (the scrapers write it so), and the piece
+ * costs coinPriceForRupees of it; a synthetic row's `coin_price` is already in coins.
+ */
 function defaultCoinPrice(row: CatalogImportRow, index: number): number {
-  if (row.coin_price) return row.coin_price;
+  if (row.coin_price) {
+    return row.source === "synthetic" ? row.coin_price : coinPriceForRupees(row.coin_price);
+  }
   const base =
     row.source === "shein"
       ? 26
@@ -177,6 +184,9 @@ export function mapRowToRecords(
     category: row.category,
     tags: [`src:${row.source}`, ...row.tags],
     coinPrice: defaultCoinPrice(row, index),
+    // The shop's own price, shown as the partner price next to the affiliate link.
+    realPrice:
+      row.coin_price && row.source !== "synthetic" ? `₹${row.coin_price.toLocaleString("en-IN")}` : null,
     productImageKeys: [...row.image_urls],
     houseModelRenderKey: row.image_urls[0]!,
     affiliateUrl: row.affiliate_url,

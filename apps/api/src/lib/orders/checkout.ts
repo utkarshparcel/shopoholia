@@ -4,7 +4,7 @@ import {
   type DeliveryTier,
   type DuplicateWarningResult,
 } from "@worn/shared";
-import { InsufficientCoinsError } from "../repositories/errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "../repositories/errors.js";
 import type { PlaceOrderResult, Repositories } from "../repositories/types.js";
 import { buildStateEta } from "./state-machine.js";
 import type { JobQueue } from "../jobs/queue.js";
@@ -242,10 +242,18 @@ export async function checkoutOrder(
       placedAt,
       idempotencyKey: input.idempotencyKey,
       items,
+      // Taken out of the cart in the same step, so one cart can't be checked out twice.
+      cartItems: rows.map((row) => ({ id: row.id, quantity: row.quantity })),
     });
   } catch (error) {
     if (error instanceof InsufficientCoinsError) {
       throw new CheckoutError("INSUFFICIENT_COINS", "Not enough WORN coins for this haul");
+    }
+    if (error instanceof CartChangedError) {
+      throw new CheckoutError("CART_CHANGED", "Your haul changed while checking out. Check it and try again.");
+    }
+    if (error instanceof IdempotencyKeyConflictError) {
+      throw new CheckoutError("IDEMPOTENCY_CONFLICT", "Idempotency key already used by another order");
     }
     throw error;
   }
@@ -254,7 +262,6 @@ export async function checkoutOrder(
   // A concurrent retry with the same idempotency key already placed (and is finishing) it.
   if (!placed.created) return { order, budgetNudge: null, duplicateWarnings: [] };
 
-  await deps.repos.clearCart(cart.id);
   await deps.jobQueue.scheduleOrderLadder(order.id);
 
   const user = await deps.repos.findUserById(input.userId);
@@ -287,7 +294,13 @@ export async function checkoutOrder(
 
 export class CheckoutError extends Error {
   constructor(
-    readonly code: "EMPTY_CART" | "INVALID_CART" | "INSUFFICIENT_COINS" | "COOLING_OFF",
+    readonly code:
+      | "EMPTY_CART"
+      | "INVALID_CART"
+      | "INSUFFICIENT_COINS"
+      | "COOLING_OFF"
+      | "CART_CHANGED"
+      | "IDEMPOTENCY_CONFLICT",
     message: string,
     readonly coolingOff: CoolingOffHold | null = null,
   ) {

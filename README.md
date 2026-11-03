@@ -10,8 +10,8 @@ worn/
 │   ├── mobile/          # Expo Router (iOS + Android)
 │   └── api/             # Fastify HTTP API
 ├── services/
-│   ├── worker-orders/   # BullMQ: order state machine + timers
-│   └── worker-render/   # BullMQ: render pipeline
+│   ├── worker-orders/   # stub (order delivery timers run inside the API process)
+│   └── worker-render/   # stub (renders run inside the API process)
 ├── packages/
 │   ├── shared/          # Zod schemas, DTOs, economy constants
 │   ├── db/              # Drizzle schema + migrations
@@ -71,7 +71,7 @@ Copy `.env.example` to `.env` at the repo root when wiring Postgres-backed API o
 |----------|----------|-------------|
 | `DATABASE_URL` | For Postgres mode | e.g. `postgresql://worn:worn@localhost:5432/worn` |
 
-When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, push events, and login refresh tokens (stored hashed). Phone OTP codes stay in memory. Without `DATABASE_URL`, all repos use in-memory storage (CI default).
+When `DATABASE_URL` is set, the API uses Postgres for users, avatars, coin ledger, listings, sellers, carts, orders, renders, try-on previews, push events, and login refresh tokens (stored hashed) and phone OTP codes (stored as HMACs). Without `DATABASE_URL`, all repos use in-memory storage (CI default).
 
 ### Cloudflare R2 storage
 
@@ -214,7 +214,6 @@ Each of these is off (a no-op) until its env var is set.
 
 | Command          | Description                          |
 |------------------|--------------------------------------|
-| `pnpm dev`       | Start all workspaces in dev mode     |
 | `pnpm dev:api`   | Run API only                         |
 | `pnpm build`     | Build all packages and apps          |
 | `pnpm test`      | Run all workspace tests              |
@@ -239,7 +238,7 @@ Each of these is off (a no-op) until its env var is set.
 
 Feature flag: `EXPO_PUBLIC_FEATURE_CLOSET=1` gates the `(closet)` surface (default on in dev). Rate limiting is global (`@fastify/rate-limit`: 100/min, 20/min for `auth`/`vault/consent`).
 
-Monetization scaffold (env-flagged, no store secrets): `FEATURE_REVENUECAT` / `EXPO_PUBLIC_FEATURE_REVENUECAT` + optional `REVENUECAT_WEBHOOK_SECRET`; `FEATURE_PREMIUM_GATES` for Accountant/Outfits paywall; `FEATURE_TAKE_RATE` for marketplace settlements; `EXPERIMENT_UPI_CHECKOUT` / `FEATURE_UPI` for India UPI intents (`POST /payments/*`).
+Monetization scaffold (env-flagged, no store secrets): `FEATURE_PREMIUM_GATES` for Accountant/Outfits paywall; `FEATURE_TAKE_RATE` for marketplace settlements; `EXPERIMENT_UPI_CHECKOUT` / `FEATURE_UPI` for India UPI intents (`POST /payments/*`).
 
 Workers (BullMQ + Redis):
 

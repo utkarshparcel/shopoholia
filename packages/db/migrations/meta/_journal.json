@@ -155,6 +155,13 @@
       "when": 1793702457988,
       "tag": "0021_users_apple_sub",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793720799031,
+      "tag": "0022_catalog_coin_prices",
+      "breakpoints": true
     }
   ]
 }

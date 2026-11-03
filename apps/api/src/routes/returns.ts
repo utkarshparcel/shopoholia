@@ -33,6 +33,7 @@ import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { audit } from "../lib/audit.js";
 import { trackServerEvent } from "../lib/analytics.js";
+import { ownsStorageKey } from "../lib/storage/r2.js";
 import {
   ReturnStateConflictError,
   isValidReturnTransition,
@@ -1186,6 +1187,10 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       const existing = await app.deps.repos.findReturnRequest(id, userId);
       if (!existing) {
         return reply.code(404).send({ error: "Not Found", message: "Return not found" });
+      }
+      // The label is signed for display and deleted on erasure: only the user's own upload.
+      if (!ownsStorageKey(request.body.imageKey, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Image not found" });
       }
       const updated = await app.deps.repos.updateReturnRequest(
         id,

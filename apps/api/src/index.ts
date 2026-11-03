@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
@@ -7,12 +9,13 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyError, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { initServerAnalyticsFromEnv } from "./lib/analytics.js";
 import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
+import { resolveEconomyMode } from "./lib/orders/state-machine.js";
 import { closeQueues } from "./lib/queues/enqueue.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import {
@@ -20,6 +23,7 @@ import {
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
+  resolveTrustProxy,
 } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
@@ -33,6 +37,26 @@ const HealthResponseSchema = z.object({
 /** Route groups with tighter rate limits (money, vault data, sign-in). */
 const RATE_LIMITED_GROUPS = ["/auth/", "/vault/consent", "/credits", "/accountant", "/ingestion", "/receipts"];
 
+/**
+ * What the request log keeps of a request: never its query string, which can carry an OAuth
+ * code and state (the Gmail callback), tokens or personal data.
+ */
+export function requestLogFields(request: {
+  method: string;
+  url: string;
+  host?: string;
+  ip?: string;
+  socket?: { remotePort?: number };
+}) {
+  return {
+    method: request.method,
+    url: request.url.split("?")[0],
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket?.remotePort,
+  };
+}
+
 export type BuildServerOptions = {
   deps?: Partial<AppDeps>;
   logger?: boolean;
@@ -42,7 +66,10 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const boot = bootConfigProblems();
   const deps = await createDefaultDeps(options.deps);
   const app = Fastify({
-    logger: options.logger ?? process.env.NODE_ENV !== "test",
+    logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: { req: requestLogFields } } : false,
+    // Behind the host's proxy the socket peer is the proxy: request.ip must come from
+    // X-Forwarded-For, or every user shares one rate-limit bucket.
+    trustProxy: resolveTrustProxy() ?? false,
     // A slow client gets 2 minutes to send a request (10 MB uploads on a weak mobile link);
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
@@ -56,8 +83,21 @@ export async function buildServer(options: BuildServerOptions = {}) {
   app.addHook("onClose", async () => closeQueues());
   // A unique-constraint race the route didn't handle is a conflict, not a server error.
   // Everything else goes to Fastify's default handler (and the onError hook above).
-  app.setErrorHandler(async (error, request, reply) => {
-    if (!isUniqueViolation(error)) throw error;
+  app.setErrorHandler(async (error: FastifyError, request, reply) => {
+    if (!isUniqueViolation(error)) {
+      const status = typeof error.statusCode === "number" ? error.statusCode : 500;
+      // In production a server error's message (SQL, ids, internals) stays in the log.
+      if (status >= 500 && process.env.NODE_ENV === "production") {
+        request.log.error({ err: error }, "request failed");
+        // The onError hook only runs for errors sent as errors: report this one here.
+        await reportRequestError(request, reply.code(status), error);
+        return reply.send({
+          error: "Internal Server Error",
+          message: "Something went wrong. Please try again.",
+        });
+      }
+      throw error;
+    }
     request.log.warn({ err: error }, "unique constraint conflict");
     return reply.code(409).send({
       error: "Conflict",
@@ -160,6 +200,7 @@ async function main() {
   const app = await buildServer();
 
   try {
+    app.log.info(`Delivery timers: ${resolveEconomyMode()} (WORN_ECONOMY_MODE)`);
     const resumed = await resumeInFlightWork(app.deps);
     app.log.info(resumed, "Resumed in-flight orders and renders");
   } catch (error) {
@@ -176,6 +217,17 @@ async function main() {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+/** True when this file is the process's entry point (node dist/index.js, tsx src/index.ts). */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined = process.argv[1]): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+// Importing buildServer (tests, scripts) must not start a second API with its timers.
+if (process.env.NODE_ENV !== "test" && isEntryPoint(import.meta.url)) {
   void main();
 }

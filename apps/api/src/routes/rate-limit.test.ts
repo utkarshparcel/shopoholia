@@ -81,4 +81,26 @@ describe("rate limiting (DoD: rate-limited)", () => {
       await app.close();
     }
   });
+
+  it("behind the host's proxy, keys signed-out callers by their own address, not the proxy's", async () => {
+    const saved = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = "1";
+    const app = await buildServer({ logger: false });
+    try {
+      const fromProxy = (client: string) =>
+        app.inject({
+          method: "GET",
+          url: "/health",
+          remoteAddress: "10.0.0.1",
+          headers: { "x-forwarded-for": client },
+        });
+      const first = await fromProxy("203.0.113.9");
+      const second = await fromProxy("198.51.100.7");
+      expect(first.headers["x-ratelimit-remaining"]).toBe(second.headers["x-ratelimit-remaining"]);
+    } finally {
+      if (saved === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = saved;
+      await app.close();
+    }
+  });
 });

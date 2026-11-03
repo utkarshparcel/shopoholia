@@ -82,10 +82,11 @@ import {
   repairLogs,
   type Db,
 } from "@worn/db";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -1366,27 +1367,29 @@ export function createPostgresRepositories(db: Db): Repositories {
       const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       if (!existing) throw new Error(`User not found: ${id}`);
 
+      // Only the fields given (null clears a nullable one, as in memory). Writing every column
+      // back from the row read above would undo a concurrent write: a streak claim committed in
+      // between got its streak count and claim time reset, so the day could be claimed again.
+      const set: Partial<typeof users.$inferInsert> = { updatedAt: now() };
+      if (patch.phone !== undefined) set.phone = patch.phone;
+      if (patch.email !== undefined) set.email = patch.email;
+      if (patch.googleSub !== undefined) set.googleSub = patch.googleSub;
+      if (patch.appleSub !== undefined) set.appleSub = patch.appleSub;
+      if (patch.displayName !== undefined) set.displayName = patch.displayName;
+      if (patch.avatarStatus != null) set.avatarStatus = patch.avatarStatus;
+      if (patch.coinBalanceCache != null) set.coinBalanceCache = patch.coinBalanceCache;
+      if (patch.consentFlags != null) set.consentFlags = patch.consentFlags;
+      if (patch.timeZone !== undefined) set.timeZone = patch.timeZone;
+      if (patch.pushToken !== undefined) set.pushToken = patch.pushToken;
+      if (patch.referralCode !== undefined) set.referralCode = patch.referralCode;
+      if (patch.referredBy !== undefined) set.referredBy = patch.referredBy;
+      if (patch.streakCount != null) set.streakCount = patch.streakCount;
+      if (patch.lastStreakClaimAt !== undefined) set.lastStreakClaimAt = patch.lastStreakClaimAt;
+      if (patch.styleProfile !== undefined) set.styleProfile = patch.styleProfile;
+
       const [row] = await db
         .update(users)
-        .set({
-          phone: patch.phone !== undefined ? patch.phone : existing.phone,
-          email: patch.email !== undefined ? patch.email : existing.email,
-          googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
-          appleSub: patch.appleSub !== undefined ? patch.appleSub : existing.appleSub,
-          displayName: patch.displayName ?? existing.displayName,
-          avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
-          coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,
-          consentFlags: patch.consentFlags ?? existing.consentFlags,
-          // Only when given, so an unrelated update never writes back a stale time zone.
-          ...(patch.timeZone !== undefined ? { timeZone: patch.timeZone } : {}),
-          pushToken: patch.pushToken ?? existing.pushToken,
-          referralCode: patch.referralCode ?? existing.referralCode,
-          referredBy: patch.referredBy ?? existing.referredBy,
-          streakCount: patch.streakCount ?? existing.streakCount,
-          lastStreakClaimAt: patch.lastStreakClaimAt ?? existing.lastStreakClaimAt,
-          styleProfile: patch.styleProfile ?? existing.styleProfile,
-          updatedAt: now(),
-        })
+        .set(set)
         .where(eq(users.id, id))
         .returning();
 
@@ -1435,12 +1438,13 @@ export function createPostgresRepositories(db: Db): Repositories {
       if (!user || user.referredBy) return null;
       const [referrer] = await db.select().from(users).where(eq(users.referralCode, referralCode)).limit(1);
       if (!referrer || referrer.id === userId) return null;
+      // Only while still unreferred, so of two concurrent applies exactly one wins.
       const [row] = await db
         .update(users)
         .set({ referredBy: referrer.id, updatedAt: now() })
-        .where(eq(users.id, userId))
+        .where(and(eq(users.id, userId), isNull(users.referredBy)))
         .returning();
-      return mapUser(row!);
+      return row ? mapUser(row) : null;
     },
 
     async countReferrals(referrerId) {
@@ -1676,14 +1680,16 @@ export function createPostgresRepositories(db: Db): Repositories {
 
       if (cursor) {
         const [cursorRow] = await db
-          .select()
+          .select({ id: coinLedger.id })
           .from(coinLedger)
-          .where(eq(coinLedger.id, cursor))
+          .where(and(eq(coinLedger.id, cursor), eq(coinLedger.userId, userId)))
           .limit(1);
 
         if (cursorRow) {
+          // Compared in SQL against the cursor row itself: created_at has microseconds (a JS Date
+          // would drop them and skip rows), and postgres-js can't bind a Date in raw sql.
           conditions.push(
-            sql`(${coinLedger.createdAt} < ${cursorRow.createdAt} OR (${coinLedger.createdAt} = ${cursorRow.createdAt} AND ${coinLedger.id} < ${cursorRow.id}))`,
+            sql`(${coinLedger.createdAt}, ${coinLedger.id}) < (SELECT c.created_at, c.id FROM coin_ledger c WHERE c.id = ${cursorRow.id}::uuid)`,
           );
         }
       }
@@ -2148,9 +2154,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: listing.category,
             tags: listing.tags,
             coinPrice: listing.coinPrice,
+            realPrice: listing.realPrice ?? null,
             productImageKeys: listing.productImageKeys,
             houseModelRenderKey: listing.houseModelRenderKey,
             affiliateUrl: listing.affiliateUrl,
+            affiliateLinks: listing.affiliateLinks ?? null,
             status: listing.status,
             sortOrder: listing.sortOrder,
             createdAt: listing.createdAt,
@@ -2175,8 +2183,17 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async clearCatalog() {
-      // CASCADE clears cart_items / tryon_previews that reference variants.
-      await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
+      // Never TRUNCATE ... CASCADE: that empties every table referencing the catalog, including
+      // order_items and (through them) renders. Listings someone ordered are archived instead.
+      await db.transaction(async (tx) => {
+        const ordered = sql`(SELECT lv.listing_id FROM listing_variants lv JOIN order_items oi ON oi.listing_variant_id = lv.id)`;
+        await tx.execute(sql`DELETE FROM cart_items`);
+        await tx.execute(
+          sql`UPDATE listings SET status = 'ARCHIVED', updated_at = now() WHERE id IN ${ordered}`,
+        );
+        // Variants, try-on previews and lookbook rows go with the listing (ON DELETE CASCADE).
+        await tx.execute(sql`DELETE FROM listings WHERE id NOT IN ${ordered}`);
+      });
     },
 
     async listListings({
@@ -2380,9 +2397,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: input.category,
             tags: input.tags,
             coinPrice: input.coinPrice,
+            realPrice: input.realPrice ?? null,
             productImageKeys: input.productImageKeys,
             houseModelRenderKey: input.houseModelRenderKey,
             affiliateUrl,
+            affiliateLinks: input.affiliateLinks ?? null,
             status: "ACTIVE",
             sortOrder,
             createdAt: timestamp,
@@ -2711,9 +2730,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             .limit(1);
 
           if (existing) {
-            if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
-            }
+            if (existing.userId !== input.userId) throw new IdempotencyKeyConflictError();
             const itemRows = await tx
               .select()
               .from(orderItems)
@@ -2728,6 +2745,22 @@ export function createPostgresRepositories(db: Db): Repositories {
 
         const balanceAfter = balance - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the user's row lock: a second checkout of the same cart finds these lines gone.
+          const ids = input.cartItems.map((line) => line.id);
+          const removed =
+            ids.length === 0
+              ? []
+              : await tx
+                  .delete(cartItems)
+                  .where(inArray(cartItems.id, ids))
+                  .returning({ id: cartItems.id, quantity: cartItems.quantity });
+          const read = new Map(input.cartItems.map((line) => [line.id, line.quantity]));
+          if (removed.length !== ids.length || removed.some((line) => read.get(line.id) !== line.quantity)) {
+            throw new CartChangedError();
+          }
+        }
 
         const { order, items } = await insertOrderWithItems(tx, input);
         await appendCoinLedger(
@@ -2887,11 +2920,11 @@ export function createPostgresRepositories(db: Db): Repositories {
         .select()
         .from(renders)
         .where(inArray(renders.orderItemId, itemIds))
-        // Renders made together share created_at: without a tie-break the order changes as rows
-        // are updated, and the reveal deck reshuffles between polls.
-        .orderBy(asc(renders.createdAt), asc(renders.orderItemId), asc(renders.scenario), asc(renders.id));
+        .orderBy(asc(renders.createdAt), asc(renders.id));
 
-      return rows.map(mapRender);
+      // One order's renders share a created_at: ties go by item, scenario and id, the same as
+      // memory, so the reveal's cards keep their places between polls instead of heap order.
+      return sortRendersForReveal(rows.map(mapRender));
     },
 
     async listPendingRenders() {

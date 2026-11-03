@@ -20,7 +20,24 @@ function parseTags(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Seller self-service publishes straight into the global feed, with no moderation and no app UI,
+ * so it is off in production unless FEATURE_SELLERS=1. Elsewhere it is on unless FEATURE_SELLERS=0.
+ */
+export function sellerRoutesEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.FEATURE_SELLERS === "1") return true;
+  if (env.FEATURE_SELLERS === "0") return false;
+  return env.NODE_ENV !== "production";
+}
+
 export const sellersRoutes: FastifyPluginAsyncZod = async (app) => {
+  // Scoped to this plugin's routes (the plugin is encapsulated).
+  app.addHook("onRequest", async (_request, reply) => {
+    if (!sellerRoutesEnabled()) {
+      return reply.code(404).send({ error: "Not Found", message: "Not found" });
+    }
+  });
+
   app.post(
     "/sellers/register",
     {

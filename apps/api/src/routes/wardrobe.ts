@@ -105,7 +105,7 @@ import { decodeCursor, InvalidCursorError } from "../lib/paging.js";
 import { enqueueJob, jobIdFrom } from "../lib/queues/enqueue.js";
 import { renderProviderAvailable } from "../lib/render/provider.js";
 import type { CreateWardrobeItemInput, WardrobeItemRecord } from "../lib/repositories/types.js";
-import { isUserObjectKey, userObjectKey } from "../lib/storage/r2.js";
+import { ownsStorageKey, userObjectKey } from "../lib/storage/r2.js";
 import {
   handleWardrobeTryon,
   RENDER_CLAIM_STALE_MS,
@@ -135,13 +135,6 @@ const UploadFieldsSchema = z.object({
 });
 
 const OCR_UNAVAILABLE = { error: "ocr_unavailable", message: "Couldn't read the tag right now. Try again later." };
-
-/** A key this user's uploads made: `u/{userId}/…`, or the older `{area}/{userId}/…` keys. */
-function ownsStorageKey(key: string, userId: string): boolean {
-  if (isUserObjectKey(key, userId)) return true;
-  const parts = key.split("/");
-  return parts.length === 3 && ["wardrobe", "care-tags", "wear"].includes(parts[0]!) && parts[1] === userId;
-}
 
 /** 404 body when a client-sent storage key isn't one of the caller's uploads (checked before any storage call). */
 function foreignKeyError(userId: string, keys: Array<string | null | undefined>) {

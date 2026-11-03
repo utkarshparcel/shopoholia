@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline, RenderScenarioSchema } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normalizeWishlist, DEFAULT_TIME_ZONE, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -151,7 +152,6 @@ function appendLedger(
 }
 
 /** The render_scenario enum's declared order, which is how Postgres sorts it. */
-const RENDER_SCENARIO_ORDER: readonly string[] = RenderScenarioSchema.options;
 
 export function createMemoryRepositories(): Repositories {
   const users = new Map<string, UserRecord>();
@@ -609,7 +609,10 @@ export function createMemoryRepositories(): Repositories {
       if (!user || user.referredBy) return null;
       const referrer = await this.findUserByReferralCode(referralCode);
       if (!referrer || referrer.id === userId) return null;
-      const updated = { ...user, referredBy: referrer.id, updatedAt: now() };
+      // Re-read after the await: a concurrent apply may have referred the user meanwhile.
+      const current = users.get(userId);
+      if (!current || current.referredBy) return null;
+      const updated = { ...current, referredBy: referrer.id, updatedAt: now() };
       users.set(userId, updated);
       return updated;
     },
@@ -848,9 +851,13 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listCoinTransactions({ userId, cursor, limit }: ListCoinTransactionsInput) {
+      // Newest first; entries in one millisecond newest first too (the ledger is append-only),
+      // as Postgres orders them by their microsecond timestamps.
       const all = ledger
-        .filter((e) => e.userId === userId)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => entry.userId === userId)
+        .sort((a, b) => b.entry.createdAt.getTime() - a.entry.createdAt.getTime() || b.index - a.index)
+        .map(({ entry }) => entry);
 
       let start = 0;
       if (cursor) {
@@ -1198,10 +1205,29 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async clearCatalog() {
-      listings.clear();
-      variants.clear();
-      variantsByListing.clear();
-      lookbooks.clear();
+      // Listings someone ordered are archived, so order lines keep their variant.
+      const ordered = new Set<string>();
+      for (const item of orderItems.values()) {
+        const variant = variants.get(item.listingVariantId);
+        if (variant) ordered.add(variant.listingId);
+      }
+      cartItems.clear();
+      cartItemsByCart.clear();
+      for (const [id, listing] of listings) {
+        if (ordered.has(id)) {
+          listings.set(id, { ...listing, status: "ARCHIVED" });
+          continue;
+        }
+        listings.delete(id);
+        for (const variantId of variantsByListing.get(id) ?? []) variants.delete(variantId);
+        variantsByListing.delete(id);
+      }
+      for (const [key, preview] of tryonPreviews) {
+        if (preview.listingVariantId && !variants.has(preview.listingVariantId)) tryonPreviews.delete(key);
+      }
+      for (const saved of lookbooks.values()) {
+        for (const listingId of saved.keys()) if (!listings.has(listingId)) saved.delete(listingId);
+      }
     },
 
     async listListings({ cursor, limit, sellerId, category, styleKeywords }: ListListingsInput) {
@@ -1620,7 +1646,7 @@ export function createMemoryRepositories(): Repositories {
           const existing = await this.findOrderByIdempotencyKey(input.idempotencyKey);
           if (existing) {
             if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
+              throw new IdempotencyKeyConflictError();
             }
             return {
               order: existing,
@@ -1632,6 +1658,22 @@ export function createMemoryRepositories(): Repositories {
 
         const balanceAfter = (await this.getCoinBalance(input.userId)) - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the coin lock: a second checkout of the same cart finds these lines gone.
+          const lines = input.cartItems.map((line) => ({ line, stored: cartItems.get(line.id) }));
+          if (lines.some(({ line, stored }) => !stored || stored.quantity !== line.quantity)) {
+            throw new CartChangedError();
+          }
+          for (const { stored } of lines) {
+            cartItems.delete(stored!.id);
+            const ids = cartItemsByCart.get(stored!.cartId) ?? [];
+            cartItemsByCart.set(
+              stored!.cartId,
+              ids.filter((id) => id !== stored!.id),
+            );
+          }
+        }
 
         const { order, items } = await this.createOrder(input);
         appendLedger(
@@ -1775,15 +1817,7 @@ export function createMemoryRepositories(): Repositories {
           if (render) all.push(render);
         }
       }
-      // Same order as Postgres: renders made together share a timestamp, so ties go by item,
-      // scenario (in its enum order) and id, and the reveal deck keeps its order between polls.
-      return all.sort(
-        (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          compareText(a.orderItemId, b.orderItemId) ||
-          RENDER_SCENARIO_ORDER.indexOf(a.scenario) - RENDER_SCENARIO_ORDER.indexOf(b.scenario) ||
-          compareText(a.id, b.id),
-      );
+      return sortRendersForReveal(all);
     },
 
     async listPendingRenders() {
@@ -2035,8 +2069,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listPushEvents(userId) {
-      if (!userId) return [...pushEvents];
-      return pushEvents.filter((e) => e.userId === userId);
+      // Newest first, as Postgres lists them (pushEvents is in insertion order).
+      const listed = userId ? pushEvents.filter((e) => e.userId === userId) : [...pushEvents];
+      return listed
+        .map((event, index) => ({ event, index }))
+        .sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime() || b.index - a.index)
+        .map(({ event }) => event);
     },
 
     async updatePushEvent(id, patch) {
@@ -2067,9 +2105,11 @@ export function createMemoryRepositories(): Repositories {
       if (onlyIf !== undefined && user.pushToken !== onlyIf) return;
       users.set(userId, { ...user, pushToken: null, updatedAt: now() });
     },
-    async updatePushEventStatus(id, status, _expoTicketId) {
+    async updatePushEventStatus(id, status, expoTicketId) {
       const event = pushEvents.find((e) => e.id === id);
-      if (event) event.status = status;
+      if (!event) return;
+      event.status = status;
+      if (expoTicketId !== undefined) event.expoTicketId = expoTicketId ?? null;
     },
 
     async findActiveConsent(userId, scope) {

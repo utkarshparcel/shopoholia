@@ -80,6 +80,21 @@ export function streakRewardForDay(day: number): number {
   return STREAK_REWARDS[1]!;
 }
 
+/** A catalog piece costs about 1 coin per ₹10 of its shop price. */
+export const CATALOG_RUPEES_PER_COIN = 10;
+/** No catalog piece costs fewer coins than this. */
+export const CATALOG_MIN_COIN_PRICE = 10;
+
+/**
+ * The coin price of a catalog piece from its shop price in rupees: ₹10 a coin, rounded to the
+ * nearest 5 coins, at least CATALOG_MIN_COIN_PRICE (₹549 → 55, ₹405 → 40). The welcome grant
+ * then buys a first haul of 4 to 6 pieces.
+ */
+export function coinPriceForRupees(rupees: number): number {
+  const coins = Math.round(rupees / CATALOG_RUPEES_PER_COIN / 5) * 5;
+  return Math.max(CATALOG_MIN_COIN_PRICE, coins);
+}
+
 export const AFFILIATE_CASHBACK_COINS = 25;
 
 export const FREE_REVEAL_RENDERS_PER_ITEM = 2;

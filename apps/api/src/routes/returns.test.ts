@@ -602,12 +602,21 @@ describe("U026 GST invoice request + U029 return label", () => {
       method: "POST",
       url: `/returns/${ret.id}/label`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { imageKey: `returns/${userId}/${ret.id}/label.jpg` },
+      payload: { imageKey: `u/${userId}/returns/${ret.id}-label.jpg` },
     });
     expect(upload.statusCode).toBe(200);
     const labeled = upload.json() as { labelImageKey: string | null; labelUsedAt: string | null };
     expect(labeled.labelImageKey).toContain("label.jpg");
     expect(labeled.labelUsedAt).toBeNull();
+
+    // Another object's key would be signed for this user and deleted on their erasure.
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/returns/${ret.id}/label`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { imageKey: "references/house-model.jpg" },
+    });
+    expect(foreign.statusCode).toBe(404);
 
     const used = await app.inject({
       method: "POST",

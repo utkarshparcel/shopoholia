@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { coinPriceForRupees } from "@worn/shared";
 import { z } from "zod";
 import type {
   ListingRecord,
@@ -53,8 +54,9 @@ export function filterRealCatalogRows(rows: CatalogImportRow[]): CatalogImportRo
   );
 }
 
+/** Scraped `coin_price` is the shop's rupee price; the piece costs coinPriceForRupees of it. */
 function defaultCoinPrice(row: CatalogImportRow, index: number): number {
-  if (row.coin_price) return row.coin_price;
+  if (row.coin_price) return coinPriceForRupees(row.coin_price);
   const base =
     row.source === "shein"
       ? 26
@@ -66,9 +68,13 @@ function defaultCoinPrice(row: CatalogImportRow, index: number): number {
   return base + (index % 12) * 2;
 }
 
-function inferRealPrice(coinPrice: number): string {
-  const rupees = Math.max(999, coinPrice * 18);
-  return `₹${rupees.toLocaleString("en-IN")}`;
+/**
+ * The partner's price as shown next to the affiliate link. Scraped `coin_price` is the store's
+ * rupee price (probe-runner rounds it), so it is shown as is; without one the price is unknown.
+ */
+function partnerRealPrice(row: CatalogImportRow): string | null {
+  if (!row.coin_price) return null;
+  return `₹${row.coin_price.toLocaleString("en-IN")}`;
 }
 
 export function mapScrapedRowToRecords(
@@ -89,7 +95,7 @@ export function mapScrapedRowToRecords(
     category: row.category,
     tags: [`src:${row.source}`, ...row.tags],
     coinPrice,
-    realPrice: inferRealPrice(coinPrice),
+    realPrice: partnerRealPrice(row),
     productImageKeys: [...row.image_urls],
     houseModelRenderKey: imageUrl,
     affiliateUrl: row.affiliate_url,

@@ -23,7 +23,7 @@ import { createMemoryJobQueue, type JobQueue } from "./jobs/queue.js";
 import { createExpoPushService } from "./push/expo.js";
 import type { PushService } from "./push/stub.js";
 import { seedCatalog } from "./seed/catalog.js";
-import { isRealProductImageUrl } from "./seed/scraped.js";
+import { isRealProductImageUrl, seedScrapedCatalog } from "./seed/scraped.js";
 
 export type AppDeps = {
   repos: Repositories;
@@ -58,8 +58,25 @@ function catalogNeedsRealImages(items: { houseModelRenderKey: string }[]): boole
   );
 }
 
-async function maybeSeedCatalog(repos: Repositories, storage: StorageClient) {
+/**
+ * Boot-time catalog seeding. Production only ever fills an empty catalog, from the scraped catalog
+ * file (bundled in dist, or CATALOG_SEED_FILE): it never clears listings and never seeds synthetic
+ * fixtures. Outside production a placeholder catalog is replaced with the scraped one.
+ */
+export async function maybeSeedCatalog(
+  repos: Repositories,
+  storage: StorageClient,
+  env: Record<string, string | undefined> = process.env,
+) {
   const page = await repos.listListings({ limit: 50 });
+  if (env.NODE_ENV === "production") {
+    if (page.items.length > 0) return;
+    const seeded = await seedScrapedCatalog(repos, { limit: 10_000, env });
+    if (!seeded) {
+      console.warn("[catalog] the catalog is empty and no catalog file was found: nothing seeded");
+    }
+    return;
+  }
   if (!catalogNeedsRealImages(page.items)) return;
 
   if (page.items.length > 0) {

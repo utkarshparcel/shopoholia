@@ -59,7 +59,7 @@ Railway, Render or Fly.io can host the API, the worker, Postgres and Redis in on
 
 ### Migrations to run on first deploy
 
-All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0021 on
+All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0022 on
 Postgres 16). On an existing database, the newest ones also repair data:
 
 - `0016_emi_due_day`: EMI plans get a due day, taken from their next due date.
@@ -70,6 +70,9 @@ Postgres 16). On an existing database, the newest ones also repair data:
 - `0020_render_combined_items`: a combined render's pieces get their own column, copied from the
   old `combined:` marker where present.
 - `0021_users_apple_sub`: users get `apple_sub` (Sign in with Apple).
+- `0022_catalog_coin_prices`: shop listings are repriced to about a coin per ₹10 (nearest 5, at
+  least 10), get their shop price as the partner price and a partner link; open carts holding them
+  are repriced. Order lines keep what they were bought at.
 
 ### API environment
 
@@ -80,7 +83,7 @@ The API refuses to start in production if any of these is missing:
 | `NODE_ENV=production` | |
 | `DATABASE_URL` | Postgres. Without it everything would live in memory. |
 | `JWT_ACCESS_SECRET` | Signs access tokens: a long random string. |
-| `PRIVACY_HMAC_SECRET` | Keys the pseudonymous ids kept after account deletion: a random string of at least 16 characters, never changed afterwards. |
+| `PRIVACY_HMAC_SECRET` | Keys the pseudonymous ids kept after account deletion, consent/audit subject refs and poll share links: a random string of at least 16 characters. Never change it once set (old refs and links stop matching). |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Storage. |
 | `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
 
@@ -94,12 +97,16 @@ renders fail, and the boot log warns:
 | `ANDROID_PACKAGE_NAME=com.shopoholia.worn`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play purchases answer 503. |
 | `FASHN_API_KEY` | No AI renders (Worn Play's core): try-on previews and reveal unlock/generate answer 503 (no coins are taken), and every free reveal look shows as failed. See "FASHN renders" below. |
 | `REDIS_URL` + the API worker running | See "Account deletion" below: deletion itself works, but the retries for leftover stored objects, data exports and Play purchase reconciliation never run, and routes that enqueue a job answer 503. Redis with `maxmemory-policy noeviction`. |
-| `R2_PUBLIC_URL=https://media.worncloset.app` | Image links point nowhere. |
+| `R2_PUBLIC_URL=https://media.worncloset.app` | Catalog image links point nowhere. Only catalog images (`house-models/`, `garments/`, `products/`) are linked through it; selfies, avatar references, try-ons, reveals and receipts always get 15-minute signed URLs. A custom domain makes every object in the bucket readable by anyone who knows its key, so keep user photos out of reach: put a Cloudflare WAF/transform rule on `media.` that only allows those three prefixes (or serve the catalog from a separate public bucket). |
 
 Set these too:
 
 | Variable | Without it |
 |---|---|
+| `TRUST_PROXY` | Defaults to `1` in production: one proxy hop (the host's load balancer) in front of the API, so rate limits key on the caller's address from `X-Forwarded-For`. Set the hop count your host uses, `true` behind a fully trusted network, or a comma-separated list of proxy addresses/CIDRs. Set `false` only if clients reach the API directly; otherwise every user shares the proxy's sign-in rate limit (20 a minute). |
+| `WORN_ECONOMY_MODE` | Delivery timers. Production defaults to `prod`, the launch timers (Express 2 h, Standard 12 h, Slow burn 48 h); `beta` gives minutes (Express 2 min, Standard 5 min, Slow burn 8 min) and logs a warning. The boot log names the active mode. |
+| `CATALOG_SEED_FILE` | Optional. The catalog file (JSON lines) an empty production catalog is filled from at boot; the bundled `dist/lib/seed/scraped-catalog.jsonl` is used otherwise. A catalog that has listings is never cleared or reseeded at boot. |
+| `FEATURE_SELLERS` | Leave unset. Seller self-service (`/sellers/*`: anyone signed in publishes listings straight into the feed, unmoderated, with no app screen) is off in production; `1` turns it on. |
 | `CORS_ORIGIN=https://worncloset.app` | (This is the default.) |
 | `ADMIN_SECRET` | Admin routes are refused. |
 | `CASHBACK_WEBHOOK_SECRET` | Affiliate cashback confirmations are refused. |
@@ -136,6 +143,9 @@ gone, the request stays `RUNNING` with the keys in `privacy_requests.storage_key
 worker's `privacy-erase` job retries them. Without the worker, delete those keys by hand
 (`docs/playbooks/data-deletion.md`). Only when the database itself fails before anything is deleted
 and no retry can be queued does the app get a 503 and keep the user signed in to try again.
+
+The API worker (`start:worker`) reads the same settings as the API: give it the same environment,
+`REDIS_URL` included (it refuses to start without Redis).
 
 ### The apps
 
