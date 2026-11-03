@@ -4,6 +4,7 @@ import {
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
+  fastifyTrustProxy,
   resolveTrustProxy,
 } from "./server-env.js";
 import { resolveEconomyMode } from "./orders/state-machine.js";
@@ -21,6 +22,26 @@ describe("resolveTrustProxy", () => {
     expect(resolveTrustProxy({ TRUST_PROXY: "true" })).toBe(true);
     expect(resolveTrustProxy({ TRUST_PROXY: "10.0.0.0/8, 127.0.0.1" })).toBe("10.0.0.0/8, 127.0.0.1");
     expect(resolveTrustProxy({ TRUST_PROXY: "lots" })).toBeUndefined();
+  });
+});
+
+describe("fastifyTrustProxy", () => {
+  it("passes booleans and address lists through", () => {
+    expect(fastifyTrustProxy(false)).toBe(false);
+    expect(fastifyTrustProxy(undefined)).toBe(false);
+    expect(fastifyTrustProxy(true)).toBe(true);
+    expect(fastifyTrustProxy("10.0.0.0/8")).toBe("10.0.0.0/8");
+  });
+
+  it("turns a hop count into internal-address hops only", () => {
+    const trust = fastifyTrustProxy(1) as (address: string, hop: number) => boolean;
+    expect(trust("10.0.0.1", 0)).toBe(true);
+    expect(trust("fdaa:0:1::2", 0)).toBe(true);
+    expect(trust("100.64.3.4", 0)).toBe(true);
+    expect(trust("127.0.0.1", 0)).toBe(true);
+    // A second hop is beyond the count; a public peer is a client, not the host's balancer.
+    expect(trust("10.0.0.2", 1)).toBe(false);
+    expect(trust("203.0.113.9", 0)).toBe(false);
   });
 });
 
@@ -45,6 +66,17 @@ describe("resolveJwtSecret", () => {
 
   it("refuses to start in production without a secret", () => {
     expect(() => resolveJwtSecret({ NODE_ENV: "production" })).toThrow(
+      "JWT_ACCESS_SECRET must be set in production",
+    );
+  });
+
+  it("never returns an empty or blank secret", () => {
+    for (const NODE_ENV of ["development", "test", undefined]) {
+      const result = resolveJwtSecret({ NODE_ENV, JWT_ACCESS_SECRET: "", JWT_SECRET: "   " });
+      expect(result.secret.trim()).not.toBe("");
+      expect(result.warning).toMatch(/JWT_ACCESS_SECRET not set/);
+    }
+    expect(() => resolveJwtSecret({ NODE_ENV: "production", JWT_ACCESS_SECRET: " " })).toThrow(
       "JWT_ACCESS_SECRET must be set in production",
     );
   });

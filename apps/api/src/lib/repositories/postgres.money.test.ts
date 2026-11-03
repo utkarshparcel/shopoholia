@@ -173,7 +173,12 @@ function moneyWriteCases(getRepos: () => Repositories) {
     const d = (await repos.createMerchantPurchase(purchaseInput(user.id))).purchase;
     await repos.openReturnRequest({ userId: user.id, purchaseId: c.id, windowDeadline });
     await repos.openReturnRequest({ userId: user.id, purchaseId: d.id, windowDeadline });
-    await expect(repos.mergeMerchantPurchases(user.id, c.id, d.id)).rejects.toMatchObject({ code: "23505" });
+    // On Postgres, drizzle-orm wraps the driver error (DrizzleQueryError): the unique violation is its cause.
+    const mergeError = (await repos.mergeMerchantPurchases(user.id, c.id, d.id).then(
+      () => null,
+      (err: unknown) => err,
+    )) as { code?: string; cause?: { code?: string } } | null;
+    expect(mergeError?.code ?? mergeError?.cause?.code).toBe("23505");
     expect(await repos.listMerchantPurchaseItems(d.id)).toHaveLength(2);
     expect((await repos.findMerchantPurchaseById(d.id))?.status).not.toBe("DUPLICATE");
     expect((await repos.findMerchantPurchaseById(c.id))?.totalMinor).toBe(3000);

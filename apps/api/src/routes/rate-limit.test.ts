@@ -50,7 +50,7 @@ describe("rate limiting (DoD: rate-limited)", () => {
     try {
       const a = (await app.deps.repos.createUser("919800000101")).user;
       const b = (await app.deps.repos.createUser("919800000102")).user;
-      const bearer = (sub: string) => ({ authorization: `Bearer ${app.jwt.sign({ sub, phone: "x" })}` });
+      const bearer = (sub: string) => ({ authorization: `Bearer ${app.jwt.sign({ sub, phone: "x" }, { expiresIn: "15m" })}` });
       const get = (url: string, headers: Record<string, string> = {}) =>
         app.inject({ method: "GET", url, headers });
 

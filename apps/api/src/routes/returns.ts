@@ -225,7 +225,12 @@ async function expireNow(app: FastifyInstance, id: string, userId: string) {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  return (err as { code?: string })?.code === "23505";
+  // drizzle-orm >= 0.44 wraps driver errors in DrizzleQueryError; postgres-js's error is its `cause`.
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 type MoneyAccountDraft = Parameters<FastifyInstance["deps"]["repos"]["createMoneyAccountWithEntry"]>[0]["account"];
