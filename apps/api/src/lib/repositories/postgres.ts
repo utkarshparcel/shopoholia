@@ -2836,7 +2836,9 @@ export function createPostgresRepositories(db: Db): Repositories {
         .select()
         .from(renders)
         .where(inArray(renders.orderItemId, itemIds))
-        .orderBy(asc(renders.createdAt));
+        // Renders made together share created_at: without a tie-break the order changes as rows
+        // are updated, and the reveal deck reshuffles between polls.
+        .orderBy(asc(renders.createdAt), asc(renders.orderItemId), asc(renders.scenario), asc(renders.id));
 
       return rows.map(mapRender);
     },
@@ -3001,6 +3003,65 @@ export function createPostgresRepositories(db: Db): Repositories {
         );
         return { status: "created" as const, render: mapRender(row!), coinsSpent: input.cost, balanceAfter };
       });
+    },
+
+    async failRender(input) {
+      const refund = input.refund && input.refund.coins > 0 ? input.refund : null;
+      return db.transaction(async (tx) => {
+        // The user's row first, as every coin write does: a repeat waits here, then finds the refund.
+        const balance = refund ? await lockedCoinBalance(tx, refund.userId) : 0;
+        const [row] = await tx
+          .update(renders)
+          .set({ status: "FAILED", updatedAt: now() })
+          .where(eq(renders.id, input.renderId))
+          .returning();
+        if (!row || !refund) return { render: row ? mapRender(row) : null, coinsRefunded: 0 };
+
+        const [prior] = await tx
+          .select({ id: coinLedger.id })
+          .from(coinLedger)
+          .where(
+            and(
+              eq(coinLedger.userId, refund.userId),
+              eq(coinLedger.type, "REFUND"),
+              eq(coinLedger.refType, "render_failed"),
+              eq(coinLedger.refId, input.renderId),
+            ),
+          )
+          .limit(1);
+        if (prior) return { render: mapRender(row), coinsRefunded: 0 };
+
+        await appendCoinLedger(
+          tx,
+          { userId: refund.userId, delta: refund.coins, type: "REFUND", refType: "render_failed", refId: input.renderId },
+          balance + refund.coins,
+        );
+        return { render: mapRender(row), coinsRefunded: refund.coins };
+      });
+    },
+
+    async requeueFailedFreeRenders(input) {
+      const uniqueIds = [...new Set(input.renderIds)];
+      if (uniqueIds.length === 0) return [];
+      const items = db
+        .select({ id: orderItems.id })
+        .from(orderItems)
+        .innerJoin(orders, eq(orderItems.orderId, orders.id))
+        .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
+      // Only rows still FAILED flip, so a parallel retry of the same render queues it once.
+      const rows = await db
+        .update(renders)
+        .set({ status: "QUEUED", updatedAt: now() })
+        .where(
+          and(
+            inArray(renders.id, uniqueIds),
+            inArray(renders.orderItemId, items),
+            eq(renders.isFree, true),
+            eq(renders.status, "FAILED"),
+          ),
+        )
+        .returning();
+      return rows.map(mapRender);
     },
 
     async recordRevealRating(input) {

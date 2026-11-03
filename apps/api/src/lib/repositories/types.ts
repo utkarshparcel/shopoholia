@@ -164,6 +164,12 @@ export type PurchaseRenderInput = {
   idempotencyKey?: string;
 };
 
+export type FailRenderInput = {
+  renderId: string;
+  /** The coins to give back to the render's buyer; null for a free render. */
+  refund: { userId: string; coins: number } | null;
+};
+
 export type PurchaseRenderResult =
   /** The render this call created and charged `coinsSpent` for. */
   | { status: "created"; render: RenderRecord; coinsSpent: number; balanceAfter: number }
@@ -1067,6 +1073,21 @@ export interface Repositories {
    * and charges nothing. `not_found` when `render.orderItemId` isn't a line of the user's order.
    */
   purchaseRender(input: PurchaseRenderInput): Promise<PurchaseRenderResult>;
+  /**
+   * Marks a render FAILED and, with `refund`, credits the coins paid for it back as one REFUND
+   * entry (ref `render_failed`/render id), in one step under the user's coin lock. A render is
+   * refunded once however often this runs; `coinsRefunded` is 0 on a repeat.
+   */
+  failRender(input: FailRenderInput): Promise<{ render: RenderRecord | null; coinsRefunded: number }>;
+  /**
+   * Puts the user's order's FAILED free renders among `renderIds` back to QUEUED and returns the
+   * ones this call flipped, so parallel retries of one render queue it once.
+   */
+  requeueFailedFreeRenders(input: {
+    userId: string;
+    orderId: string;
+    renderIds: string[];
+  }): Promise<RenderRecord[]>;
 
   findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
   findListingsByIds(ids: string[]): Promise<ListingRecord[]>;

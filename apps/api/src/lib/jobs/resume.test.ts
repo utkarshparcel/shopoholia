@@ -55,7 +55,8 @@ async function createOrder(
         coinPrice: 100,
         realPrice: null,
         productImageKeys: [],
-        houseModelRenderKey: "",
+        // No avatar: renders go on the listing's house-model photo.
+        houseModelRenderKey: "house-models/resume.jpg",
         affiliateUrl: null,
         affiliateLinks: null,
         status: "ACTIVE",
