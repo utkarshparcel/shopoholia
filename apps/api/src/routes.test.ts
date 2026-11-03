@@ -338,6 +338,30 @@ describe("avatar", () => {
     expect(body.referencePreviewUrl).toContain("references");
   });
 
+  it("deletes the old photos when a new avatar replaces them", async () => {
+    await readyAvatar(app, token);
+    const userId = (app.jwt.verify(token) as { sub: string }).sub;
+    const first = (await app.deps.repos.findAvatarByUserId(userId))!;
+    // A processed avatar keeps its reference image (the job deletes the uploads it used).
+    const oldKeys = [first.referenceImageKey!, ...first.sourceUploadKeys];
+    expect(first.referenceImageKey).toBeTruthy();
+    for (const key of oldKeys) await expect(app.deps.storage.getSignedUrl(key)).resolves.toBeTruthy();
+    const deleted: string[] = [];
+    const deleteMany = app.deps.storage.deleteMany.bind(app.deps.storage);
+    app.deps.storage.deleteMany = async (keys) => {
+      deleted.push(...keys);
+      await deleteMany(keys);
+    };
+
+    await readyAvatar(app, token);
+
+    expect(deleted).toEqual(expect.arrayContaining(oldKeys));
+    const second = (await app.deps.repos.findAvatarByUserId(userId))!;
+    // What erasure and DELETE /avatar can reach is only the new avatar's photos.
+    expect([second.referenceImageKey, ...second.sourceUploadKeys]).not.toContain(oldKeys[0]);
+    expect(await app.deps.repos.listUserStorageKeys(userId)).not.toContain(oldKeys[0]);
+  });
+
   it("rejects empty upload", async () => {
     const form = new FormData();
     const res = await app.inject({
@@ -810,6 +834,19 @@ describe("orders", () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  it("places a first order whose referrer's account no longer exists", async () => {
+    // A row written before erasure cleared referred_by: it points at a missing user.
+    const userId = (app.jwt.verify(token) as { sub: string }).sub;
+    await app.deps.repos.updateUser(userId, { referredBy: "00000000-0000-4000-8000-00000000dead" });
+    const created = await app.inject({
+      method: "POST",
+      url: "/orders",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tier: "STANDARD" },
+    });
+    expect(created.statusCode).toBe(201);
   });
 
   it("rejects checkout with empty cart", async () => {

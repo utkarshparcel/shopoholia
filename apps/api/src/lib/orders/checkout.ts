@@ -258,7 +258,10 @@ export async function checkoutOrder(
   await deps.jobQueue.scheduleOrderLadder(order.id);
 
   const user = await deps.repos.findUserById(input.userId);
-  if (user?.referredBy) {
+  // The referrer may have deleted their account since (erasure clears referred_by, but a row
+  // written before that fix can still point at a missing user): the order is placed either way.
+  const referrer = user?.referredBy ? await deps.repos.findUserById(user.referredBy) : null;
+  if (user?.referredBy && referrer) {
     const existingOrders = await deps.repos.listOrdersByUserId(input.userId);
     if (existingOrders.length === 1) {
       await deps.repos.grantCoins({

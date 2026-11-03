@@ -53,6 +53,14 @@ export const avatarRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const avatarId = randomUUID();
       const jobId = newJobId();
+      // The new upload replaces the old avatar row, so the old photos would be out of reach of
+      // DELETE /avatar and account deletion: delete them once the new row is stored.
+      const previous = await app.deps.repos.findAvatarByUserId(userId);
+      const replacedKeys = previous
+        ? [previous.referenceImageKey, ...previous.sourceUploadKeys].filter(
+            (k): k is string => Boolean(k) && !uploadKeys.includes(k!),
+          )
+        : [];
 
       await app.deps.repos.upsertAvatar({
         id: avatarId,
@@ -63,6 +71,11 @@ export const avatarRoutes: FastifyPluginAsyncZod = async (app) => {
         status: "PROCESSING",
       });
       await app.deps.repos.updateUser(userId, { avatarStatus: "PROCESSING" });
+      if (replacedKeys.length > 0) {
+        await app.deps.storage.deleteMany(replacedKeys).catch((err: unknown) => {
+          request.log.warn({ err, userId }, "avatar.replaced_photos_not_deleted");
+        });
+      }
 
       await app.deps.jobQueue.enqueueAvatarProcessing({
         jobId,

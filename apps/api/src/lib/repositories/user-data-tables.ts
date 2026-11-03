@@ -149,7 +149,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
   refresh_tokens: "session secrets; revoked with the account, not user content",
   customization_templates: "shared catalog of tailoring templates; no user column",
   oauth_states: "one-time OAuth nonces, deleted by the callback; go with the user",
-  otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column",
+  otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column (erasure deletes the user's phone's codes)",
   job_dead_letters: "worker failure log, ids only; no user column",
 };
 
@@ -160,7 +160,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
 export const SECONDARY_USER_COLUMNS: Record<string, string> = {
   "merchant_purchases.assignee_user_id": "household member a parcel is assigned to",
   "swap_listings.borrower_user_id": "borrower of another member's item",
-  "users.referred_by": "referrer of another user",
+  "users.referred_by": "referrer of another user (text, no FK: deleteAllUserData clears it)",
   "disposition_listings.seller_id": "marketplace seller row, owned through sellers",
   "tailoring_orders.tailor_seller_id": "tailor's seller row",
   "tailoring_reviews.seller_id": "reviewed tailor's seller row",

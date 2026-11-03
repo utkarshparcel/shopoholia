@@ -202,6 +202,24 @@ export function createMemoryRepositories(): Repositories {
   const wardrobeTryonPreviewKey = (userId: string, wardrobeItemId: string) =>
     `${userId}:w:${wardrobeItemId}`;
   const fitPreviewsStore = new Map<string, FitPreviewRecord>();
+  /** This user's seller listings that another user's order or cart points at (they outlive erasure). */
+  const listingsKeptForOthers = (userId: string): Set<string> => {
+    const ownCart = cartsByUser.get(userId);
+    const ownOrders = new Set(ordersByUser.get(userId) ?? []);
+    const referenced = new Set<string>();
+    for (const item of orderItems.values()) {
+      if (!ownOrders.has(item.orderId)) referenced.add(item.listingVariantId);
+    }
+    for (const item of cartItems.values()) {
+      if (item.cartId !== ownCart) referenced.add(item.listingVariantId);
+    }
+    const kept = new Set<string>();
+    for (const vid of referenced) {
+      const variant = variants.get(vid);
+      if (variant) kept.add(variant.listingId);
+    }
+    return kept;
+  };
   const fitPreviewKey = (userId: string, templateId: string, selectionsKey: string) =>
     `${userId}:${templateId}:${selectionsKey}`;
   const cartsByUser = new Map<string, string>();
@@ -2078,6 +2096,7 @@ export function createMemoryRepositories(): Repositories {
 
     async listUserStorageKeys(userId) {
       const keys = new Set<string>();
+      const keptListings = listingsKeptForOthers(userId);
       const add = (k: string | null | undefined) => {
         if (typeof k === "string" && k.trim() && !/^[a-z][a-z0-9+.-]*:\/\//i.test(k) && !k.startsWith("data:")) {
           keys.add(k.trim());
@@ -2115,6 +2134,16 @@ export function createMemoryRepositories(): Repositories {
         if (d.rawKey && (d.userId ?? ingestionDocumentUser.get(d.id)) === userId) add(d.rawKey);
       }
       for (const r of privacyRequestsStore.values()) if (r.userId === userId) add(r.resultKey);
+      for (const f of fitPreviewsStore.values()) if (f.userId === userId) add(f.imageKey);
+      const sellerId = sellersByUser.get(userId);
+      if (sellerId) {
+        for (const [lid, l] of listings) {
+          if (l.sellerId !== sellerId || keptListings.has(lid)) continue;
+          add(l.houseModelRenderKey);
+          l.productImageKeys.forEach(add);
+          for (const vid of variantsByListing.get(lid) ?? []) add(variants.get(vid)?.garmentImageKey);
+        }
+      }
       return [...keys];
     },
 
@@ -2496,8 +2525,15 @@ export function createMemoryRepositories(): Repositories {
         cartsByUser.delete(userId);
       }
 
-      // 8. sellers / listings / variants (variants cascade from listings)
+      // 8. sellers / listings / variants (variants cascade from listings). As in Postgres, a
+      // listing another user ordered or carted is archived and loses its seller instead.
+      const keptListings = listingsKeptForOthers(userId);
       for (const lid of listingIds) {
+        const listing = listings.get(lid);
+        if (keptListings.has(lid) && listing) {
+          listings.set(lid, { ...listing, status: "ARCHIVED", sellerId: null });
+          continue;
+        }
         const vIds = variantsByListing.get(lid) ?? [];
         for (const vid of vIds) variants.delete(vid);
         variantsByListing.delete(lid);
@@ -2632,8 +2668,14 @@ export function createMemoryRepositories(): Repositories {
         if (state.userId === userId) oauthStates.delete(nonce);
       }
 
-      // 17. finally user
+      // 17. other users' referred_by, and the sign-in codes sent to the user's phone
+      for (const [id, other] of users) {
+        if (other.referredBy === userId) users.set(id, { ...other, referredBy: null });
+      }
       const user = users.get(userId);
+      if (user?.phone) otps.delete(user.phone);
+
+      // 18. finally user
       if (user) {
         if (user.phone) usersByPhone.delete(user.phone);
       }
