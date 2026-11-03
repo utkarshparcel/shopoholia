@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react';
 export const FAQS = [
   {
     q: 'Is Worn free?',
-    a: 'Yes. It will be free to download when it launches: you start with 500 coins and earn more every day from streaks, referrals and cashback. Coin packs are there if you want more, but you never have to buy one.',
+    a: 'Yes. It will be free to download when it launches: you start with 500 coins and earn more from daily streaks and from friends you refer. Coin packs are there if you want more, but you never have to buy one.',
   },
   {
     q: 'Do I spend real money on the clothes?',
@@ -12,7 +12,7 @@ export const FAQS = [
   },
   {
     q: 'Do I actually get the clothes?',
-    a: 'No parcel arrives. Your haul is delivered as photos of you wearing it. If you fall for a piece, every listing links to the store that sells it, and buying it through Worn earns you 25 coins back.',
+    a: 'No parcel arrives. Your haul is delivered as photos of you wearing it. If you fall for a piece, every listing links to the store that sells it.',
   },
   {
     q: 'What happens to my photo?',
