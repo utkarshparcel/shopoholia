@@ -1040,6 +1040,8 @@ function CreditsKindTab({
   }
 
   function submitSpend(id: string) {
+    // A second tap while the first spend is in flight would record it twice.
+    if (spendGiftCard.isPending) return;
     if (demoAccount && id === demoAccount.id) {
       Alert.alert('Sample card', 'Add a real card to track spends.');
       return;
@@ -1968,6 +1970,8 @@ function CreditsKindTab({
                   <Button
                     label="Confirm"
                     size="sm"
+                    disabled={spendGiftCard.isPending}
+                    loading={spendGiftCard.isPending}
                     onPress={() => submitSpend(account.id)}
                   />
                   <Button

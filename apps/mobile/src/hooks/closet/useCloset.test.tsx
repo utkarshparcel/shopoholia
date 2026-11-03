@@ -1014,6 +1014,67 @@ describe('useSpendGiftCard', () => {
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] })?.queryKey?.[0]);
     expect(keys).toContain('gift-cards');
   });
+
+  it('reuses the idempotency key when a failed spend is retried, and mints a new one after success', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    let mutateAsync!: ReturnType<typeof useSpendGiftCard>['mutateAsync'];
+    function SpendProbe({ onReady }: { onReady: (m: ReturnType<typeof useSpendGiftCard>['mutateAsync']) => void }) {
+      const spend = useSpendGiftCard();
+      onReady(spend.mutateAsync);
+      return <span>spend</span>;
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <SpendProbe onReady={(m) => (mutateAsync = m)} />
+      </QueryClientProvider>,
+    );
+    const id = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(spendCredit).mockRejectedValueOnce(new Error('timeout'));
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 }).catch(() => undefined);
+    });
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 });
+    });
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 });
+    });
+    const sent = vi.mocked(spendCredit).mock.calls.map((c) => c[2].idempotencyKey);
+    expect(sent).toHaveLength(3);
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[1]);
+  });
+});
+
+describe('useAddGiftCard retries', () => {
+  it('reuses the idempotency key when the same add is retried after a failure', async () => {
+    vi.mocked(addCredit).mockClear();
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    let mutateAsync!: ReturnType<typeof useAddGiftCard>['mutateAsync'];
+    render(
+      <QueryClientProvider client={client}>
+        <AddProbe onReady={(m) => (mutateAsync = m)} />
+      </QueryClientProvider>,
+    );
+    const input = { kind: 'GIFT_CARD' as const, merchant: 'Amazon', currency: 'INR', balanceMinor: 1000 };
+    vi.mocked(addCredit).mockRejectedValueOnce(new Error('timeout'));
+    await act(async () => {
+      await mutateAsync(input).catch(() => undefined);
+    });
+    await act(async () => {
+      await mutateAsync(input);
+    });
+    await act(async () => {
+      await mutateAsync({ ...input, merchant: 'Myntra' });
+    });
+    const sent = vi.mocked(addCredit).mock.calls.map((c) => c[1].idempotencyKey);
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[1]);
+  });
 });
 
 describe('useMuteMerchant without sources', () => {

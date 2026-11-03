@@ -159,6 +159,8 @@ import type {
 import type { CorrectIngestionDocumentBody, WardrobeItem, WardrobePage } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import { useClosetStore } from '@/src/stores/closet';
+import { useRef } from 'react';
+
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { closetKey, sessionToken, useClosetSubscribed, useSessionUserId } from './keys';
 import { ingestionSourcesQuery } from './useIngestion';
@@ -287,15 +289,42 @@ export function useGiftCards(kind?: MoneyAccountKind) {
   });
 }
 
+/**
+ * One idempotency key per attempt: a retry of the same action (same fingerprint) after a timeout
+ * or an error reuses the key, so the server applies it once. The key is dropped on success, or
+ * when the action changes (another card, another amount).
+ */
+function useAttemptKey() {
+  const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
+  return {
+    keyFor(fingerprint: string): string {
+      if (attempt.current?.fingerprint !== fingerprint) {
+        attempt.current = { fingerprint, key: newIdempotencyKey() };
+      }
+      return attempt.current.key;
+    },
+    clear(fingerprint: string) {
+      if (attempt.current?.fingerprint === fingerprint) attempt.current = null;
+    },
+  };
+}
+
+function addFingerprint(input: AddCreditBody): string {
+  const { idempotencyKey: _ignored, ...rest } = input;
+  return JSON.stringify(rest);
+}
+
 export function useAddGiftCard() {
   const queryClient = useQueryClient();
+  const attemptKey = useAttemptKey();
   return useMutation({
     mutationFn: (input: AddCreditBody) =>
       addCredit(sessionToken(), {
         ...input,
-        idempotencyKey: input.idempotencyKey ?? newIdempotencyKey(),
+        idempotencyKey: input.idempotencyKey ?? attemptKey.keyFor(addFingerprint(input)),
       }),
-    onSuccess: (account) => {
+    onSuccess: (account, input) => {
+      if (!input.idempotencyKey) attemptKey.clear(addFingerprint(input));
       trackEvent('credit_added', { accountId: account.id, kind: account.kind });
       queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
@@ -328,6 +357,7 @@ export function useCaptureGiftCard() {
 
 export function useSpendGiftCard() {
   const queryClient = useQueryClient();
+  const attemptKey = useAttemptKey();
   return useMutation({
     mutationFn: async ({
       id,
@@ -338,7 +368,7 @@ export function useSpendGiftCard() {
       amountMinor: number;
       idempotencyKey?: string;
     }) => {
-      const key = idempotencyKey ?? newIdempotencyKey();
+      const key = idempotencyKey ?? attemptKey.keyFor(`${id}:${amountMinor}`);
       const result = await spendCredit(sessionToken(), id, {
         amountMinor,
         idempotencyKey: key,
@@ -346,6 +376,7 @@ export function useSpendGiftCard() {
       return { ...result, idempotencyKey: key, amountMinor, id };
     },
     onSuccess: (result, vars) => {
+      attemptKey.clear(`${vars.id}:${vars.amountMinor}`);
       trackEvent('credit_spent', { accountId: vars.id, amountMinor: vars.amountMinor });
       queryClient.invalidateQueries({ queryKey: ['gift-cards'] });
     },
