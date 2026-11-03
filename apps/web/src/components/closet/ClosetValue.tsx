@@ -131,6 +131,9 @@ export function ClosetValue() {
   const reduced = !!useReducedMotionSafe();
   const [wears, setWears] = useState(1);
   const [draft, setDraft] = useState(String(START));
+  // The last price that made sense: while the field is cleared or 0, the tag keeps it instead of
+  // jumping back to the sample's ₹2,600.
+  const [lastPrice, setLastPrice] = useState(START);
   const [bump, setBump] = useState(0);
   const touched = useRef(false);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -140,7 +143,8 @@ export function ClosetValue() {
   const [said, setSaid] = useState(() => describe(1, START));
 
   const parsed = parseInt(draft, 10);
-  const price = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX) : START;
+  const valid = Number.isFinite(parsed) && parsed > 0;
+  const price = valid ? Math.min(parsed, MAX) : lastPrice;
   const goalWears = Math.max(1, Math.ceil(price / GOAL));
   const progress = Math.min(1, wears / goalWears);
 
@@ -202,8 +206,16 @@ export function ClosetValue() {
                     value={draft}
                     onChange={(e) => {
                       touched.current = true;
-                      setDraft(e.target.value.replace(/\D/g, '').slice(0, 6));
+                      const next = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setDraft(next);
+                      const n = parseInt(next, 10);
+                      if (n > 0) setLastPrice(Math.min(n, MAX));
                     }}
+                    // a field left empty or at 0 goes back to the price the tag shows
+                    onBlur={() => {
+                      if (!valid) setDraft(String(lastPrice));
+                    }}
+                    aria-invalid={!valid}
                     className="w-[92px] bg-transparent px-1.5 text-body-l font-semibold text-worn-ink outline-none"
                     aria-label="What you paid, in rupees"
                   />

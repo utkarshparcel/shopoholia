@@ -239,6 +239,7 @@ export function DropStage() {
   const flashRef = useRef<HTMLDivElement>(null);
   const burstRef = useRef<HTMLDivElement>(null);
   const capRef = useRef<HTMLDivElement>(null);
+  const steeredAt = useRef(0); // when the reader last used the stage's controls
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
   const cloneRef = useRef<HTMLElement | null>(null);
   const inView = useInView(sectionRef, { amount: 0.35 });
@@ -515,6 +516,7 @@ export function DropStage() {
   /* the reader working the stage's own controls: go there, and let autoplay carry on from it */
   const steer = useCallback(
     (b: number) => {
+      steeredAt.current = Date.now();
       setAuto(true);
       jumpTo(b);
     },
@@ -652,9 +654,11 @@ export function DropStage() {
       const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey);
       if (fwd && b < BEATS - 1) {
         e.preventDefault();
+        steeredAt.current = Date.now();
         jumpTo(b + 1);
       } else if (back && b > 0) {
         e.preventDefault();
+        steeredAt.current = Date.now();
         jumpTo(b - 1);
       }
     };
@@ -711,6 +715,14 @@ export function DropStage() {
     sub: base.sub,
   };
   const capKey = `${step}-${step === 3 ? scene : 0}-${dress.key}`;
+
+  /* Screen readers hear the caption only when the reader moved the stage with its controls: autoplay
+     and the page scroll change it every few seconds, and a live region would talk over everything. */
+  const [spoken, setSpoken] = useState('');
+  const spokenText = [`${STEPS[step].n} ${cap.eyebrow}.`, cap.line, cap.sub].filter(Boolean).join(' ');
+  useEffect(() => {
+    if (Date.now() - steeredAt.current < 2000) setSpoken(spokenText);
+  }, [spokenText]);
 
   /* caption swap — GSAP, not a keyed presence (a re-keyed presence child stalled at its initial state here) */
   useLayoutEffect(() => {
@@ -876,8 +888,10 @@ export function DropStage() {
         {/* captions */}
         <div
           className="absolute left-1/2 top-[8%] z-30 w-full max-w-[760px] -translate-x-1/2 px-5 text-center short:top-[4%]"
-          aria-live="polite"
         >
+          <p className="sr-only" aria-live="polite">
+            {spoken}
+          </p>
           {/* short phones: the kicker and the sub line give their room to the stage, which otherwise ran
               into them. On the last step the panel covered the line on phones under 800px tall, so there
               the panel's own heading stands in for it. */}
