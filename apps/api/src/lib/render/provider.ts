@@ -6,9 +6,9 @@ const SCENARIO_COST_MICROS = 120_000;
 
 export type RenderProviderDeps = {
   apiKey?: string;
+  /** Signs a storage key into a URL FASHN can fetch. Absolute http(s) URLs are sent as they are. */
   resolveImage?: (key: string) => Promise<string>;
   fetchImpl?: FashnFetch;
-  downloadImage?: (url: string) => Promise<Uint8Array>;
 };
 
 /** No live try-on provider is configured (production without FASHN_API_KEY). */
@@ -30,6 +30,7 @@ export function createMockRenderProvider(): RenderProvider {
       return {
         referenceImageKey: primary.replace(/^uploads\//, "references/"),
         bodyMeta: { provider: "mock-fashn", normalized: true },
+        imageBytes: new Uint8Array(Buffer.from("mock-avatar-reference")),
       };
     },
     async tryOn({ modelImageKey, garmentImageKey }) {
@@ -49,20 +50,47 @@ export function createMockRenderProvider(): RenderProvider {
   };
 }
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+/**
+ * The avatar reference is the user's first uploaded photo, kept where it was stored. There is no
+ * normalisation step (FASHN's try-on takes the photo as it is), so its bytes are never rewritten.
+ */
+function uploadedPhotoReference(provider: string): RenderProvider["createAvatarReference"] {
+  return async ({ uploadKeys }) => {
+    const primary = uploadKeys[0];
+    if (!primary) throw new Error("An avatar needs at least one uploaded photo");
+    return {
+      referenceImageKey: primary,
+      bodyMeta: { provider, source: "upload", normalized: false },
+    };
+  };
+}
+
+/**
+ * The FASHN client has no scene endpoint (only tryon-max), so a scene is the try-on image
+ * itself: a real render, never a placeholder, at no extra cost.
+ */
+const tryOnAsScene: RenderProvider["scenarioPass"] = async ({ tryOnImageKey }) => ({
+  imageKey: tryOnImageKey,
+  costMicros: 0,
+});
+
 export function createFashnRenderProvider(
   apiKey?: string,
-  deps: Pick<RenderProviderDeps, "resolveImage" | "fetchImpl" | "downloadImage"> = {},
+  deps: Pick<RenderProviderDeps, "resolveImage" | "fetchImpl"> = {},
 ): RenderProvider {
   if (!apiKey) {
     return createMockRenderProvider();
   }
 
   const client = createFashnClient({ apiKey, fetchImpl: deps.fetchImpl });
-  const mock = createMockRenderProvider();
 
   return {
     name: "fashn",
-    createAvatarReference: (input) => mock.createAvatarReference(input),
+    createAvatarReference: uploadedPhotoReference("fashn"),
     async tryOn({ modelImageKey, garmentImageKey }) {
       const resolve = deps.resolveImage;
       if (!resolve) {
@@ -70,10 +98,12 @@ export function createFashnRenderProvider(
           "FASHN provider requires resolveImage to map storage keys to image URLs or base64",
         );
       }
+      // Catalog images are often full URLs already; only storage keys are signed.
+      const imageUrl = (key: string) => (isHttpUrl(key) ? Promise.resolve(key) : resolve(key));
 
       const [modelImage, productImage] = await Promise.all([
-        resolve(modelImageKey),
-        resolve(garmentImageKey),
+        imageUrl(modelImageKey),
+        imageUrl(garmentImageKey),
       ]);
 
       const fashnResult = await client.tryOnMax({ modelImage, productImage });
@@ -86,42 +116,22 @@ export function createFashnRenderProvider(
         imageBytes,
       };
     },
-    async scenarioPass(input) {
-      const download = deps.downloadImage;
-      if (download) {
-        try {
-          const result = await mock.scenarioPass(input);
-          let imageBytes: Uint8Array | undefined;
-
-          if (input.tryOnImageKey.startsWith('tryon/fashn/')) {
-            const baseUrl = 'https://cdn.fashn.ai';
-            const url = `${baseUrl}/${input.tryOnImageKey.replace(/^tryon\/fashn\//, '')}`;
-            imageBytes = await download(url);
-          }
-
-          return { ...result, imageBytes };
-        } catch {
-          // Fall back to mock scenario when CDN download fails.
-        }
-      }
-      return mock.scenarioPass(input);
-    },
+    scenarioPass: tryOnAsScene,
   };
 }
 
 /**
  * Production without a key: try-on throws RenderUnavailableError instead of returning mock
- * images. Avatar references and scenario passes keep their current behaviour.
+ * images. Avatars still keep the user's real photo, and no scene is ever a mock image.
  */
 export function createUnavailableRenderProvider(): RenderProvider {
-  const mock = createMockRenderProvider();
   return {
     name: "unavailable",
-    createAvatarReference: (input) => mock.createAvatarReference(input),
+    createAvatarReference: uploadedPhotoReference("unavailable"),
     async tryOn() {
       throw new RenderUnavailableError();
     },
-    scenarioPass: (input) => mock.scenarioPass(input),
+    scenarioPass: tryOnAsScene,
   };
 }
 
