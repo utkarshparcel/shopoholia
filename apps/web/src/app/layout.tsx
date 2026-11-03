@@ -79,6 +79,9 @@ export const metadata: Metadata = {
   category: 'Lifestyle',
 };
 
+/* Marks an <img> that failed with data-img-failed, and clears it if a new src loads later. */
+const IMAGE_FALLBACK = `(function(){function f(e){var t=e.target;if(t&&t.tagName==='IMG'){if(e.type==='error')t.setAttribute('data-img-failed','');else t.removeAttribute('data-img-failed');}}document.addEventListener('error',f,true);document.addEventListener('load',f,true);})();`;
+
 export const viewport: Viewport = {
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#faf8f5' },
@@ -99,6 +102,9 @@ export default function RootLayout({
       <head>
         {/* fonts are self-hosted by next/font; the only third-party origin is the catalog's image CDN */}
         <link rel="preconnect" href="https://assets.newme.asia" />
+        {/* Before any image loads: one that fails (the catalog CDN down or refusing us) hides instead of
+            showing the browser's broken-image icon over its card's placeholder (globals.css). */}
+        <script dangerouslySetInnerHTML={{ __html: IMAGE_FALLBACK }} />
       </head>
       <body className="min-h-screen flex flex-col">
         <ScrollProgress />

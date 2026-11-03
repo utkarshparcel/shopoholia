@@ -33,6 +33,11 @@
     @apply outline-none ring-2 ring-worn-gold-deep ring-offset-2 ring-offset-worn-paper;
   }
 
+  /* An image that failed to load (layout.tsx marks it): keep its box, drop the broken-image icon */
+  img[data-img-failed] {
+    visibility: hidden;
+  }
+
   /* A section an anchor jump moved focus to (SmoothScroll): no ring round the whole section */
   [data-anchor-target]:focus {
     outline: none;
