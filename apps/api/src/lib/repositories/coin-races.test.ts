@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { AFFILIATE_CASHBACK_COINS, streakRewardForDay } from "@worn/shared";
 import { describe, expect, it } from "vitest";
+import { CartChangedError, IdempotencyKeyConflictError } from "./errors.js";
 import { createMemoryRepositories } from "./memory.js";
 import { createPostgresRepositoriesFromUrl } from "./postgres.js";
 import type { Repositories } from "./types.js";
@@ -90,5 +91,91 @@ function coinRaceCases(getRepos: () => Repositories) {
     await repos.confirmCashback(`test:${randomUUID()}`, "CONFIRMED");
     expect(await repos.getCoinBalance(user.id)).toBe(before);
     expect(await repos.listCashbackEvents(user.id)).toMatchObject([{ status: "REJECTED", coinsEarned: 0 }]);
+  });
+
+  it("referral: parallel applies of different codes refer the user once", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const referrers = await Promise.all([newUser(repos), newUser(repos), newUser(repos)]);
+    const codes = await Promise.all(
+      referrers.map(async (referrer) => {
+        const code = `R${randomInt(10 ** 8, 10 ** 9)}`;
+        await repos.updateUser(referrer.id, { referralCode: code });
+        return code;
+      }),
+    );
+    const results = await Promise.all(codes.map((code) => repos.applyReferralCode(user.id, code)));
+    const applied = results.filter((result) => result !== null);
+    expect(applied).toHaveLength(1);
+    // The one that answered "applied" is the referrer the user really has.
+    expect((await repos.findUserById(user.id))?.referredBy).toBe(applied[0]!.referredBy);
+  });
+
+  it("checkout: two parallel orders from one cart charge it once", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    await repos.grantCoins({ userId: user.id, delta: 500, type: "GRANT", refType: "test" });
+    const listingId = randomUUID();
+    const variantId = randomUUID();
+    await repos.seedListings(
+      [
+        {
+          id: listingId,
+          sellerId: null,
+          title: "Race Tee",
+          category: `race-${listingId.slice(0, 8)}`,
+          tags: [],
+          coinPrice: 60,
+          realPrice: null,
+          productImageKeys: [],
+          houseModelRenderKey: "house-models/x.jpg",
+          affiliateUrl: null,
+          affiliateLinks: null,
+          status: "ACTIVE",
+          sortOrder: 2_000_000_200,
+          createdAt: new Date(),
+        },
+      ],
+      [{ id: variantId, listingId, size: "M", color: "Black", garmentImageKey: "garments/x.jpg" }],
+    );
+    const cart = await repos.getOrCreateCart(user.id);
+    await repos.addCartItem({ cartId: cart.id, listingVariantId: variantId, coinPriceSnapshot: 60, quantity: 1 });
+    const lines = await repos.getCartItems(cart.id);
+    const before = await repos.getCoinBalance(user.id);
+
+    const place = (idempotencyKey: string) =>
+      repos.placeOrder({
+        userId: user.id,
+        tier: "STANDARD",
+        coinTotal: 60,
+        stateEta: { PROCESSING: new Date().toISOString() },
+        idempotencyKey,
+        items: [{ listingVariantId: variantId, coinPriceSnapshot: 60, quantity: 1 }],
+        cartItems: lines.map((line) => ({ id: line.id, quantity: line.quantity })),
+      });
+    const results = await Promise.allSettled([place(randomUUID()), place(randomUUID())]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect((rejected as PromiseRejectedResult).reason).toBeInstanceOf(CartChangedError);
+    expect(await repos.getCoinBalance(user.id)).toBe(before - 60);
+    expect(await repos.listOrdersByUserId(user.id)).toHaveLength(1);
+    expect(await repos.getCartItems(cart.id)).toEqual([]);
+  });
+
+  it("checkout: another user's idempotency key is a conflict, not a crash", async () => {
+    const repos = getRepos();
+    const [a, b] = [await newUser(repos), await newUser(repos)];
+    const key = randomUUID();
+    const input = (userId: string) => ({
+      userId,
+      tier: "STANDARD" as const,
+      coinTotal: 0,
+      stateEta: { PROCESSING: new Date().toISOString() },
+      idempotencyKey: key,
+      items: [],
+    });
+    await repos.placeOrder(input(a.id));
+    await expect(repos.placeOrder(input(b.id))).rejects.toBeInstanceOf(IdempotencyKeyConflictError);
   });
 }

@@ -746,6 +746,12 @@ export type CreateOrderInput = {
     coinPriceSnapshot: number;
     quantity: number;
   }>;
+  /**
+   * placeOrder only: the cart lines the order is made from. They are removed in the same step as
+   * the debit; when any is gone or its quantity changed (a concurrent checkout of the same cart
+   * already took it) nothing is placed and CartChangedError is thrown.
+   */
+  cartItems?: Array<{ id: string; quantity: number }>;
 };
 
 export type PlaceOrderResult = {

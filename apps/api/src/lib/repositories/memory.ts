@@ -3,7 +3,7 @@ import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normali
 import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
@@ -530,7 +530,10 @@ export function createMemoryRepositories(): Repositories {
       if (!user || user.referredBy) return null;
       const referrer = await this.findUserByReferralCode(referralCode);
       if (!referrer || referrer.id === userId) return null;
-      const updated = { ...user, referredBy: referrer.id, updatedAt: now() };
+      // Re-read after the await: a concurrent apply may have referred the user meanwhile.
+      const current = users.get(userId);
+      if (!current || current.referredBy) return null;
+      const updated = { ...current, referredBy: referrer.id, updatedAt: now() };
       users.set(userId, updated);
       return updated;
     },
@@ -1560,7 +1563,7 @@ export function createMemoryRepositories(): Repositories {
           const existing = await this.findOrderByIdempotencyKey(input.idempotencyKey);
           if (existing) {
             if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
+              throw new IdempotencyKeyConflictError();
             }
             return {
               order: existing,
@@ -1572,6 +1575,22 @@ export function createMemoryRepositories(): Repositories {
 
         const balanceAfter = (await this.getCoinBalance(input.userId)) - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the coin lock: a second checkout of the same cart finds these lines gone.
+          const lines = input.cartItems.map((line) => ({ line, stored: cartItems.get(line.id) }));
+          if (lines.some(({ line, stored }) => !stored || stored.quantity !== line.quantity)) {
+            throw new CartChangedError();
+          }
+          for (const { stored } of lines) {
+            cartItems.delete(stored!.id);
+            const ids = cartItemsByCart.get(stored!.cartId) ?? [];
+            cartItemsByCart.set(
+              stored!.cartId,
+              ids.filter((id) => id !== stored!.id),
+            );
+          }
+        }
 
         const { order, items } = await this.createOrder(input);
         appendLedger(

@@ -82,7 +82,7 @@ import {
   repairLogs,
   type Db,
 } from "@worn/db";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
@@ -1384,12 +1384,13 @@ export function createPostgresRepositories(db: Db): Repositories {
       if (!user || user.referredBy) return null;
       const [referrer] = await db.select().from(users).where(eq(users.referralCode, referralCode)).limit(1);
       if (!referrer || referrer.id === userId) return null;
+      // Only while still unreferred, so of two concurrent applies exactly one wins.
       const [row] = await db
         .update(users)
         .set({ referredBy: referrer.id, updatedAt: now() })
-        .where(eq(users.id, userId))
+        .where(and(eq(users.id, userId), isNull(users.referredBy)))
         .returning();
-      return mapUser(row!);
+      return row ? mapUser(row) : null;
     },
 
     async countReferrals(referrerId) {
@@ -2673,9 +2674,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             .limit(1);
 
           if (existing) {
-            if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
-            }
+            if (existing.userId !== input.userId) throw new IdempotencyKeyConflictError();
             const itemRows = await tx
               .select()
               .from(orderItems)
@@ -2690,6 +2689,22 @@ export function createPostgresRepositories(db: Db): Repositories {
 
         const balanceAfter = balance - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the user's row lock: a second checkout of the same cart finds these lines gone.
+          const ids = input.cartItems.map((line) => line.id);
+          const removed =
+            ids.length === 0
+              ? []
+              : await tx
+                  .delete(cartItems)
+                  .where(inArray(cartItems.id, ids))
+                  .returning({ id: cartItems.id, quantity: cartItems.quantity });
+          const read = new Map(input.cartItems.map((line) => [line.id, line.quantity]));
+          if (removed.length !== ids.length || removed.some((line) => read.get(line.id) !== line.quantity)) {
+            throw new CartChangedError();
+          }
+        }
 
         const { order, items } = await insertOrderWithItems(tx, input);
         await appendCoinLedger(
