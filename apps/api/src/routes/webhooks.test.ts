@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { secretsEqual } from "../lib/auth/admin.js";
+import type * as AdminModule from "../lib/auth/admin.js";
 import { buildTestServer } from "../test-utils.js";
 
 vi.mock("../lib/auth/admin.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/auth/admin.js")>();
+  const actual = await importOriginal<typeof AdminModule>();
   return { ...actual, secretsEqual: vi.fn(actual.secretsEqual) };
 });
 

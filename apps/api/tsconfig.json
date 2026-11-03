@@ -12,6 +12,6 @@
     "noEmitOnError": true
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"],
+  "exclude": ["src/**/*.test.ts", "src/test-utils.ts", "src/lib/iap/test-support.ts"],
   "references": [{ "path": "../../packages/shared" }]
 }

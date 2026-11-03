@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "./index.js";
 import { captureException } from "./lib/sentry.js";
+import type * as SentryModule from "./lib/sentry.js";
 
 vi.mock("./lib/sentry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./lib/sentry.js")>();
+  const actual = await importOriginal<typeof SentryModule>();
   return { ...actual, captureException: vi.fn() };
 });
 

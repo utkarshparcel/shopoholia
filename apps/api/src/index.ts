@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
@@ -7,7 +9,7 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyError, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { initServerAnalyticsFromEnv } from "./lib/analytics.js";
@@ -81,7 +83,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   app.addHook("onClose", async () => closeQueues());
   // A unique-constraint race the route didn't handle is a conflict, not a server error.
   // Everything else goes to Fastify's default handler (and the onError hook above).
-  app.setErrorHandler(async (error, request, reply) => {
+  app.setErrorHandler(async (error: FastifyError, request, reply) => {
     if (!isUniqueViolation(error)) {
       const status = typeof error.statusCode === "number" ? error.statusCode : 500;
       // In production a server error's message (SQL, ids, internals) stays in the log.
@@ -215,6 +217,17 @@ async function main() {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+/** True when this file is the process's entry point (node dist/index.js, tsx src/index.ts). */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined = process.argv[1]): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+// Importing buildServer (tests, scripts) must not start a second API with its timers.
+if (process.env.NODE_ENV !== "test" && isEntryPoint(import.meta.url)) {
   void main();
 }
