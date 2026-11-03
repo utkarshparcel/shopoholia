@@ -777,6 +777,19 @@ export async function generateRenders(
   return parseJson<GenerateRenderResponse>(res);
 }
 
+/** Renders an included look that FAILED again; it comes back QUEUED and the reveal polls it. */
+export async function retryRenders(accessToken: string, orderId: string, renderIds: string[]) {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/retry`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ renderIds }),
+  });
+  return parseJson<{ renders: RenderCard[] }>(res);
+}
+
 export async function submitRevealRating(
   accessToken: string,
   orderId: string,
