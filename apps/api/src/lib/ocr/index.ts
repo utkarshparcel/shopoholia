@@ -58,6 +58,7 @@ export class UnavailableOcrClient implements OcrClient {
  */
 export function createOcrClientFromEnv(
   env: Record<string, string | undefined> = process.env,
+  opts: { resolveImageUrl?: (key: string) => Promise<string> } = {},
 ): OcrClient {
   const explicit = env.OCR_PROVIDER;
   const production = env.NODE_ENV === "production";
@@ -73,6 +74,7 @@ export function createOcrClientFromEnv(
       apiKey: env.OCR_PROVIDER_API_KEY,
       url,
       format,
+      resolveImageUrl: opts.resolveImageUrl,
     });
   }
 

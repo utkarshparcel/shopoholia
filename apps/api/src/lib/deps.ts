@@ -89,7 +89,9 @@ export async function maybeSeedCatalog(
 export async function createDefaultDeps(overrides: Partial<AppDeps> = {}): Promise<AppDeps> {
   const repos = overrides.repos ?? createRepositories();
   const storage = overrides.storage ?? createStorageFromEnv();
-  const ocr = overrides.ocr ?? createOcrClientFromEnv();
+  const ocr =
+    overrides.ocr ??
+    createOcrClientFromEnv(process.env, { resolveImageUrl: (key) => storage.getSignedUrl(key) });
   const renderProvider =
     overrides.renderProvider ??
     createRenderProvider({

@@ -102,7 +102,7 @@ The API refuses to start in production if any of these is missing:
 | `JWT_ACCESS_SECRET` | Signs access tokens: a long random string. |
 | `PRIVACY_HMAC_SECRET` | Keys the pseudonymous ids kept after account deletion, consent/audit subject refs and poll share links: a random string of at least 16 characters. Never change it once set (old refs and links stop matching). |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Storage. |
-| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
+| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_URL=https://vision.googleapis.com/v1/images:annotate`, `OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
 
 Required for the app to pass store review. The API starts without them, but sign-in, purchases or
 renders fail, and the boot log warns:
