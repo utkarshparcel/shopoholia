@@ -2,13 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 
 import {
-  fetchCoinBalance,
   fetchReveal,
   generateRenders,
   unlockRenders,
   type RenderCard,
 } from '@/src/api/client';
-import { orderKeys } from '@/src/hooks/orders';
+import { refreshCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { hasRendersInProgress } from '@/src/lib/reveal';
@@ -54,12 +53,10 @@ export function useUnlockRenders(orderId: string) {
       }
       return unlockRenders(accessToken, orderId, renderIds, idempotencyKey);
     },
-    onSuccess: async (result, renderIds) => {
+    // The server charged once this resolves: nothing after it may turn the spend into an error
+    // (a retry would then send a new key and pay again), so the balance refresh can't throw.
+    onSuccess: (result, renderIds) => {
       pendingKeys.current.delete([...renderIds].sort().join(','));
-      if (!accessToken) return;
-      const balance = await fetchCoinBalance(accessToken);
-      setCoinBalance(balance.balance);
-      queryClient.setQueryData(orderKeys.balance(userId), balance);
       queryClient.setQueryData(revealKey(orderId, userId), (prev: { renders: RenderCard[] } | undefined) => {
         if (!prev) return prev;
         const byId = new Map(result.renders.map((r) => [r.id, r]));
@@ -68,6 +65,7 @@ export function useUnlockRenders(orderId: string) {
           renders: prev.renders.map((r) => byId.get(r.id) ?? r),
         };
       });
+      if (accessToken) refreshCoinBalance(queryClient, accessToken, userId, setCoinBalance);
     },
   });
 }
@@ -94,12 +92,9 @@ export function useGenerateRenders(orderId: string) {
       }
       return generateRenders(accessToken, orderId, input.orderItemIds, input.scenario, idempotencyKey);
     },
-    onSuccess: async (result, input) => {
+    // As for unlocks: a charged generate never reports failure because of the balance refresh.
+    onSuccess: (result, input) => {
       pendingKeys.current.delete(attemptOf(input));
-      if (!accessToken) return;
-      const balance = await fetchCoinBalance(accessToken);
-      setCoinBalance(balance.balance);
-      queryClient.setQueryData(orderKeys.balance(userId), balance);
       queryClient.setQueryData(revealKey(orderId, userId), (prev: { renders: RenderCard[] } | undefined) => {
         if (!prev) return prev;
         const byId = new Map(result.renders.map((r) => [r.id, r]));
@@ -111,6 +106,7 @@ export function useGenerateRenders(orderId: string) {
         }
         return { ...prev, renders: merged };
       });
+      if (accessToken) refreshCoinBalance(queryClient, accessToken, userId, setCoinBalance);
     },
   });
 }
