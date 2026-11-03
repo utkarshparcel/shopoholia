@@ -35,6 +35,26 @@ const HealthResponseSchema = z.object({
 /** Route groups with tighter rate limits (money, vault data, sign-in). */
 const RATE_LIMITED_GROUPS = ["/auth/", "/vault/consent", "/credits", "/accountant", "/ingestion", "/receipts"];
 
+/**
+ * What the request log keeps of a request: never its query string, which can carry an OAuth
+ * code and state (the Gmail callback), tokens or personal data.
+ */
+export function requestLogFields(request: {
+  method: string;
+  url: string;
+  host?: string;
+  ip?: string;
+  socket?: { remotePort?: number };
+}) {
+  return {
+    method: request.method,
+    url: request.url.split("?")[0],
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket?.remotePort,
+  };
+}
+
 export type BuildServerOptions = {
   deps?: Partial<AppDeps>;
   logger?: boolean;
@@ -44,7 +64,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const boot = bootConfigProblems();
   const deps = await createDefaultDeps(options.deps);
   const app = Fastify({
-    logger: options.logger ?? process.env.NODE_ENV !== "test",
+    logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: { req: requestLogFields } } : false,
     // Behind the host's proxy the socket peer is the proxy: request.ip must come from
     // X-Forwarded-For, or every user shares one rate-limit bucket.
     trustProxy: resolveTrustProxy() ?? false,
