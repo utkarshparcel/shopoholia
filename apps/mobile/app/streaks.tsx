@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -5,6 +6,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { claimStreak, getStreak } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
+import { applyCoinBalance } from '@/src/hooks/orders';
+import { userIdFromAccessToken } from '@/src/lib/access-token';
+import { errorText } from '@/src/lib/errorText';
+import { goBack } from '@/src/lib/goBack';
 import { useSessionStore } from '@/src/stores/session';
 import {
   accent,
@@ -48,6 +53,9 @@ export default function StreaksScreen() {
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [balance, setBalance] = useState(0);
+  const queryClient = useQueryClient();
+  const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
+  const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
 
   useEffect(() => {
     if (!accessToken) {
@@ -66,7 +74,7 @@ export default function StreaksScreen() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'Failed to load streak');
+        setError(errorText(e, 'Failed to load streak'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -93,10 +101,12 @@ export default function StreaksScreen() {
       const res = await claimStreak(accessToken);
       setStreak(res.currentStreak);
       setBalance(res.balanceAfter);
+      // Profile, checkout and Rush read the shared balance: the claimed coins show there too.
+      applyCoinBalance(queryClient, userId, setCoinBalance, res.balanceAfter);
       setTodayClaimed(true);
       setNextCoins(10);
     } catch (e: unknown) {
-      setClaimError(e instanceof Error ? e.message : 'Failed to claim reward');
+      setClaimError(errorText(e, 'Failed to claim reward'));
     } finally {
       setClaiming(false);
     }
@@ -110,7 +120,7 @@ export default function StreaksScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
