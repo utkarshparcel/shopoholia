@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Menu, X, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { SiteSwitch } from './SiteSwitch';
+import { GET_APP_LABEL } from '@/lib/site';
 
 /* How far the page has to move in one direction before the header reacts (stops jitter) */
 const SCROLL_THRESHOLD = 8;
@@ -152,7 +153,7 @@ export function Navigation() {
               className="btn-primary btn-md"
             >
               <Download className="w-4 h-4" aria-hidden="true" />
-              Get early access
+              {GET_APP_LABEL}
             </Link>
           </div>
 
@@ -202,7 +203,7 @@ export function Navigation() {
                   onClick={() => closeMenu(false)}
                 >
                   <Download className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
-                  Get early access
+                  {GET_APP_LABEL}
                 </Link>
               </div>
             </motion.div>

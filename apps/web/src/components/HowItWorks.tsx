@@ -29,23 +29,23 @@ const STEPS: Step[] = [
   {
     n: '01',
     title: 'Start with 500',
-    copy: 'Sign in with Google and 500 welcome coins land in your wallet, enough for a piece under 500 tonight. Want more? Coin packs are optional in-app purchases.',
+    copy: 'Sign in with Google and 500 welcome coins land in your wallet, enough for a first haul of four to six pieces. Want more? Coin packs are optional in-app purchases.',
     icon: Gift,
     stat: '500 welcome coins',
   },
   {
     n: '02',
     title: 'Earn by showing up',
-    copy: 'Daily streaks pay out on day 1, 3, 7, 14 and 30, from 10 coins up to 100. A friend you refer places a first haul: 100 coins. Buy the real thing through the partner link: 25 coins cashback.',
+    copy: 'Claim your streak every day: 10 coins a day to start, more from day 3, 7 and 14, and 100 a day from day 30. A friend you refer places a first haul: 100 coins.',
     icon: Flame,
-    stat: 'Streaks 10 → 100 · Referral 100 · Cashback 25',
+    stat: 'Streaks 10 → 100 a day · Referral 100',
   },
   {
     n: '03',
     title: 'Spend on the haul',
-    copy: 'Every piece has a coin price, 405 to 1,649 in tonight’s edit. Pay with coins at checkout. In a hurry? Rush to Express for 25.',
+    copy: 'Every piece has a coin price, about a tenth of its price in rupees: 41 to 165 in tonight’s edit. Pay with coins at checkout. In a hurry? Rush to Express for 25.',
     icon: ShoppingBag,
-    stat: '405 to 1,649 per piece · Rush 25',
+    stat: '41 to 165 per piece · Rush 25',
   },
   {
     n: '04',

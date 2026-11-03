@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
 import { gsap, ScrollTrigger } from '@/lib/gsap';
-import { closetHref } from '@/lib/site';
+import { REQUEST_APP_LABEL, closetHref } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -40,7 +40,7 @@ const DRESSES = [
     name: 'Yellow floral a-line maxi dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/04/021348591258e001/NM-PRC-414-DRS-26-APR-32495-YELLOW(1).webp',
-    caption: '1,049 coins · XS',
+    caption: '105 coins · XS',
   },
   {
     key: 'black',
@@ -49,7 +49,7 @@ const DRESSES = [
     name: 'Black cowl neck midi dress',
     size: 'S',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/04152538fdacdf9c/NM-PRC-374-DRS-26-JUN-34296-BLACK(1).webp',
-    caption: '1,049 coins · S',
+    caption: '105 coins · S',
   },
   {
     key: 'sage',
@@ -58,7 +58,7 @@ const DRESSES = [
     name: 'Sage ruched bodycon mini dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/12073053427750de/NM-PRC-455-DRS-26-JUN-34374-SAGE(1).webp',
-    caption: 'Tonight’s pick · 1,049 coins',
+    caption: 'Tonight’s pick · 105 coins',
   },
   {
     key: 'red',
@@ -67,7 +67,7 @@ const DRESSES = [
     name: 'Red one shoulder ruched dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/05/09102331e3473fe4/NM-IN-56-DRS-24-APR-5058-RED(0).webp',
-    caption: '450 coins · XS',
+    caption: '45 coins · XS',
   },
   {
     key: 'pink',
@@ -76,7 +76,7 @@ const DRESSES = [
     name: 'Light pink sequin halter neck maxi dress',
     size: 'S',
     img: 'https://assets.newme.asia/wp-content/uploads/2025/11/2008454511161b6b/NM-PRC-9997-DRS-25-NOV-26970-LIGHTPINK(1).webp',
-    caption: '1,649 coins · S',
+    caption: '165 coins · S',
   },
   {
     key: 'stripe',
@@ -85,7 +85,7 @@ const DRESSES = [
     name: 'Off white striped maxi dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/03/1715592685b4dd97/NM-PRC-178-DRS-26-MAR-31596-OFFWHITE(1).webp',
-    caption: '949 coins · XS',
+    caption: '95 coins · XS',
   },
 ];
 type Dress = (typeof DRESSES)[number];
@@ -239,6 +239,7 @@ export function DropStage() {
   const flashRef = useRef<HTMLDivElement>(null);
   const burstRef = useRef<HTMLDivElement>(null);
   const capRef = useRef<HTMLDivElement>(null);
+  const steeredAt = useRef(0); // when the reader last used the stage's controls
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
   const cloneRef = useRef<HTMLElement | null>(null);
   const inView = useInView(sectionRef, { amount: 0.35 });
@@ -515,6 +516,7 @@ export function DropStage() {
   /* the reader working the stage's own controls: go there, and let autoplay carry on from it */
   const steer = useCallback(
     (b: number) => {
+      steeredAt.current = Date.now();
       setAuto(true);
       jumpTo(b);
     },
@@ -652,9 +654,11 @@ export function DropStage() {
       const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey);
       if (fwd && b < BEATS - 1) {
         e.preventDefault();
+        steeredAt.current = Date.now();
         jumpTo(b + 1);
       } else if (back && b > 0) {
         e.preventDefault();
+        steeredAt.current = Date.now();
         jumpTo(b - 1);
       }
     };
@@ -711,6 +715,14 @@ export function DropStage() {
     sub: base.sub,
   };
   const capKey = `${step}-${step === 3 ? scene : 0}-${dress.key}`;
+
+  /* Screen readers hear the caption only when the reader moved the stage with its controls: autoplay
+     and the page scroll change it every few seconds, and a live region would talk over everything. */
+  const [spoken, setSpoken] = useState('');
+  const spokenText = [`${STEPS[step].n} ${cap.eyebrow}.`, cap.line, cap.sub].filter(Boolean).join(' ');
+  useEffect(() => {
+    if (Date.now() - steeredAt.current < 2000) setSpoken(spokenText);
+  }, [spokenText]);
 
   /* caption swap — GSAP, not a keyed presence (a re-keyed presence child stalled at its initial state here) */
   useLayoutEffect(() => {
@@ -875,17 +887,22 @@ export function DropStage() {
 
         {/* captions */}
         <div
-          className="absolute left-1/2 top-[8%] z-30 w-full max-w-[760px] -translate-x-1/2 px-5 text-center"
-          aria-live="polite"
+          className="absolute left-1/2 top-[8%] z-30 w-full max-w-[760px] -translate-x-1/2 px-5 text-center short:top-[4%]"
         >
-          <p className="font-mono text-micro uppercase tracking-[0.3em] text-worn-gold">{step === 5 ? COPY.kickerMore : COPY.kicker}</p>
-          <div ref={capRef} className="mt-3">
+          <p className="sr-only" aria-live="polite">
+            {spoken}
+          </p>
+          {/* short phones: the kicker and the sub line give their room to the stage, which otherwise ran
+              into them. On the last step the panel covered the line on phones under 800px tall, so there
+              the panel's own heading stands in for it. */}
+          <p className="font-mono text-micro uppercase tracking-[0.3em] text-worn-gold short:hidden">{step === 5 ? COPY.kickerMore : COPY.kicker}</p>
+          <div ref={capRef} className="mt-3 short:mt-0">
             <p className="font-mono text-micro uppercase tracking-[0.22em] text-worn-paper/60">
               {STEPS[step].n} — {cap.eyebrow}
             </p>
-            <p className="mt-2 font-display text-[clamp(22px,2.8vw,34px)] leading-tight text-worn-paper">{cap.line}</p>
+            <p className={`mt-2 font-display text-[clamp(22px,2.8vw,34px)] leading-tight text-worn-paper ${step === 5 ? '[@media(max-width:639px)_and_(max-height:799px)]:hidden' : ''}`}>{cap.line}</p>
             {cap.sub ? (
-              <p className="mt-2 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-gold/80">{cap.sub}</p>
+              <p className="mt-2 font-mono text-[12px] uppercase tracking-[0.2em] text-worn-gold/80 short:hidden">{cap.sub}</p>
             ) : null}
           </div>
         </div>
@@ -1151,7 +1168,7 @@ export function DropStage() {
                 href="#download"
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
               >
-                Request early access <ArrowRight size={14} />
+                {REQUEST_APP_LABEL} <ArrowRight size={14} />
               </a>
               <button
                 type="button"
@@ -1174,7 +1191,7 @@ export function DropStage() {
               exit={{ opacity: 0 }}
               style={{ x: '-50%' }}
               transition={{ duration: 0.6, delay: 0.2, ease: EASE }}
-              className="glass-dark absolute left-1/2 top-[54%] z-30 w-[min(92vw,560px)] rounded-card p-6 text-center sm:p-9"
+              className="glass-dark absolute left-1/2 top-[54%] z-30 w-[min(92vw,560px)] rounded-card p-6 text-center short:p-5 sm:p-9"
             >
               <span className="inline-flex items-center gap-1.5 rounded-pill border border-worn-gold/50 bg-worn-gold/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-gold">
                 <Sparkles size={11} /> Coming after Worn Play
@@ -1182,7 +1199,8 @@ export function DropStage() {
               <h2 className="mt-4 font-display text-[clamp(24px,3.2vw,38px)] leading-[1.05] text-worn-paper">
                 For the clothes you <em className="text-worn-gold">already</em> bought.
               </h2>
-              <p className="mx-auto mt-3 max-w-[46ch] font-sans text-[14px] leading-relaxed text-worn-paper/75 sm:text-[15px]">
+              {/* short phones: the points below say it in brief, and the panel fits between caption and controls */}
+              <p className="mx-auto mt-3 max-w-[46ch] font-sans text-[14px] leading-relaxed text-worn-paper/75 short:hidden sm:text-[15px]">
                 Two hundred pieces, twenty in rotation, nothing to wear at 8 AM. Worn Closet catalogs what you own from your
                 order emails, plans your week, tracks cost per wear and finds the gift cards, warranties and resale money
                 sleeping in your wardrobe.
@@ -1208,7 +1226,7 @@ export function DropStage() {
                   href="#download"
                   className="inline-flex items-center gap-2 rounded-pill border border-worn-paper/25 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-paper/80 transition-colors hover:border-worn-gold hover:text-worn-paper"
                 >
-                  Request early access
+                  {REQUEST_APP_LABEL}
                 </a>
               </div>
             </motion.div>
@@ -1263,7 +1281,7 @@ export function DropStage() {
                     href="#download"
                     className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
                   >
-                    Request early access <ArrowRight size={14} />
+                    {REQUEST_APP_LABEL} <ArrowRight size={14} />
                   </a>
                   {/* icon only here, so it shares the CTA's line instead of pushing the row up into the post */}
                   <button
@@ -1300,7 +1318,8 @@ export function DropStage() {
                 aria-pressed={i === step}
                 // the step name only shows from lg; below that the button would be named just "01"
                 aria-label={`${s.n} ${s.label}`}
-                className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
+                // 40px wide under 360px: six 44px steps and play came to 330px, wider than a 320px phone
+                className={`relative min-h-[44px] min-w-[44px] overflow-hidden whitespace-nowrap rounded-pill px-2 py-2 max-[359px]:min-w-[40px] font-mono text-[10px] uppercase tracking-[0.18em] transition-colors sm:min-h-0 sm:min-w-0 sm:px-3 ${
                   i === step ? 'bg-worn-paper/10 text-worn-paper' : 'text-worn-paper/70 hover:text-worn-paper'
                 }`}
               >

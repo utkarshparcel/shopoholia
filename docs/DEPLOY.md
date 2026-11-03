@@ -10,37 +10,54 @@ which needs the Apple and Google developer accounts.
 
 ## Phase 1: the website
 
-`apps/web` is a static Next.js site (every page is prerendered; no server code, no middleware).
+`apps/web` is a static Next.js site (every page is prerendered; no server code, no middleware). The
+share links (`/r/<code>` and the rest, below) are rewrites in `next.config.js` to static pages.
 
 1. **Host.** Vercel is the simplest fit for Next.js: import the repo, set the root directory to
    `apps/web`, framework Next.js, install command `pnpm install --frozen-lockfile`, build command
-   `pnpm build`. Cloudflare Pages works too but needs the Next.js adapter.
+   `pnpm build`. Leave **Include files outside the root directory in the Build Step** on (the
+   default): `/privacy` is rendered from `docs/legal/PRIVACY_POLICY_DRAFT.md` at build time.
+   Cloudflare Pages works too but needs the Next.js adapter, and must keep the rewrites.
 2. **Environment variables** (Production, and Preview if you want):
    - `NEXT_PUBLIC_WAITLIST_URL`: the Google Apps Script web app URL (set-up steps in
      [`apps/web/waitlist/README.md`](../apps/web/waitlist/README.md)). Without it the sign-up
      forms fall back to an email button.
    - `NEXT_PUBLIC_SITE_URL` only if the site is not served from `https://worncloset.app`.
+   - `NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL`: the Worn Play store listings.
+     **Leave them unset until the app is live in that store.** Unset, the site says "coming to
+     iPhone and Android" and shows the waitlist. Set one or both and redeploy: the site shows App
+     Store / Google Play buttons, its copy switches to "out now" / "Get the app", the FAQ and its
+     search data follow, and the waitlist stays only for a platform that isn't out yet.
+
+   All `NEXT_PUBLIC_*` values are read at build time: change one, then redeploy.
 3. **Domains.** Add `worncloset.app` and `www.worncloset.app` to the host and redirect `www` to the
    apex. Create the DNS records the host gives you.
 4. **Email.** Forward `hello@` and `privacy@worncloset.app` to a real inbox (Cloudflare Email
    Routing if the DNS is on Cloudflare, otherwise ImprovMX). The site and the privacy policy use
    both addresses.
-5. **Check after deploy:** `/`, `/closet`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`,
-   `/closet/opengraph-image` all load; submit one email through each form and see the row in the
-   Sheet; paste the URL into a chat app to see the share card.
+5. **Check after deploy:** `/`, `/closet`, `/privacy`, `/support`, `/r/TEST1234`, `/c/TEST1234`,
+   `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, `/closet/opengraph-image` all load, and
+   `/nope` shows the 404 page; submit one email through each form and see the row in the Sheet;
+   paste the URL into a chat app to see the share card.
 
 ### Known gaps on the website
 
-- **`/privacy` needs your sign-off.** The app links to it (login screen and Profile), Google
-  sign-in's consent screen and both stores require it, and Play's account-deletion URL is its
-  `#delete-account` section. The draft in `docs/legal/PRIVACY_POLICY_DRAFT.md` describes Worn Play
-  as it ships; fill in the `[placeholders]` (legal entity, address, grievance officer, minimum
-  age, hosting provider, backup retention) and approve it before it's published.
-- **Share links open the website, not the app.** The app builds links like `/r/<code>`
-  (referrals), `/c/<code>`, `/h/<code>`, `/p/outfit/<id>` and `/p/return/<id>`. The app has no
-  Universal Links / App Links (no associated domains, no `/.well-known` files needed): a link opens
-  the site's landing page, which points to the stores, and a referral code is typed in the app
-  (Profile → Refer & earn).
+- **`/privacy` needs your sign-off.** The page is built from `docs/legal/PRIVACY_POLICY_DRAFT.md`
+  at deploy time (wording, placeholders and its "Draft" notice included), so whatever that file
+  says is what the site shows. The app links to it (login screen and Profile), Google sign-in's
+  consent screen and both stores require it, and Play's account-deletion URL is its
+  `#delete-account` section. The draft describes Worn Play as it ships: fill in the
+  `[placeholders]` (legal entity, address, grievance officer, minimum age, hosting provider, backup
+  retention), remove the draft notice, and approve it before you give the URL to Apple, Google or
+  the OAuth consent screen.
+- **Share links land on static pages.** `/r/<code>` (Worn Play referrals) shows the code and how to
+  use it (Profile → Refer & earn); `/c/<code>`, `/h/<code>` (Closet invites), `/p/outfit/<id>` and
+  `/p/return/<id>` (Closet polls) say Closet hasn't opened and offer its list. Nothing is looked up,
+  so a poll can't be shown or voted on from the web yet, and the pages are `noindex`.
+- **No app links on the domain.** The app declares no associated domains, so these links open in
+  the browser, not the app. Universal Links / App Links would need
+  `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` here plus
+  `associatedDomains` / intent filters in `apps/mobile/app.json`.
 
 ## Phase 2: the backend and the apps
 

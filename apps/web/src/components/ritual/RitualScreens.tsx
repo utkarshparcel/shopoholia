@@ -70,10 +70,10 @@ const Img = ({ src, className = '' }: { src: string; className?: string }) => (
 /* 01 — the feed */
 export function FeedMock() {
   const items = [
-    { img: NEWME.sage, title: 'Sage ruched mini', coins: '1,049' },
-    { img: NEWME.red, title: 'Red one-shoulder', coins: '450' },
-    { img: NEWME.yellow, title: 'Yellow floral maxi', coins: '1,049' },
-    { img: NEWME.stripe, title: 'Striped knit maxi', coins: '949' },
+    { img: NEWME.sage, title: 'Sage ruched mini', coins: '105' },
+    { img: NEWME.red, title: 'Red one-shoulder', coins: '45' },
+    { img: NEWME.yellow, title: 'Yellow floral maxi', coins: '105' },
+    { img: NEWME.stripe, title: 'Striped knit maxi', coins: '95' },
   ];
   return (
     <>
@@ -129,7 +129,7 @@ export function TryOnMock() {
       </div>
       <div className="mt-3 flex items-center justify-between px-4">
         <span className="flex items-center gap-1 text-[11px] font-semibold">
-          <Coin /> 1,049 coins
+          <Coin /> 105 coins
         </span>
         <span className="rounded-full bg-worn-ink px-3 py-1.5 text-[9px] font-semibold text-worn-paper">Add to haul</span>
       </div>
@@ -141,8 +141,8 @@ export function TryOnMock() {
 /* 03 — haul it */
 export function HaulMock() {
   const items = [
-    { img: NEWME.sage, title: 'Sage ruched mini', coins: '1,049' },
-    { img: NEWME.red, title: 'Red one-shoulder', coins: '450' },
+    { img: NEWME.sage, title: 'Sage ruched mini', coins: '105' },
+    { img: NEWME.red, title: 'Red one-shoulder', coins: '45' },
   ];
   return (
     <>
@@ -178,7 +178,7 @@ export function HaulMock() {
       <div className="mx-4 mt-3 flex items-center justify-between border-t border-worn-rule pt-2.5">
         <span className="text-[9px] text-worn-ink-soft">Haul total</span>
         <span className="flex items-center gap-1 text-[11px] font-semibold">
-          <Coin /> 1,499 coins
+          <Coin /> 150 coins
         </span>
       </div>
       <div className="mx-3 mt-3 rounded-full bg-worn-ink py-2 text-center text-[10px] font-semibold text-worn-paper">

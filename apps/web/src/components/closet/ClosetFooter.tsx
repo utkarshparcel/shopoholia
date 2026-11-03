@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { CONTACT_EMAIL, PRIVACY_PATH, SUPPORT_PATH } from '@/lib/site';
 
 function TagGlyph() {
   return (
@@ -78,10 +79,21 @@ export function ClosetFooter() {
           </nav>
         </div>
 
-        <div className="mt-14 border-t border-worn-paper/10 pt-6">
+        <div className="mt-14 flex flex-col gap-3 border-t border-worn-paper/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-micro tracking-wide text-worn-paper/50">
             © 2026 Worn, Inc. · Part of the Worn app
           </p>
+          <nav aria-label="Legal" className="flex gap-6 text-micro tracking-wide">
+            <a href={PRIVACY_PATH} className="text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper">
+              Privacy
+            </a>
+            <a href={SUPPORT_PATH} className="text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper">
+              Support
+            </a>
+            <a href={`mailto:${CONTACT_EMAIL}`} className="text-worn-paper/70 transition-colors duration-200 hover:text-worn-paper">
+              {CONTACT_EMAIL}
+            </a>
+          </nav>
         </div>
       </div>
     </footer>

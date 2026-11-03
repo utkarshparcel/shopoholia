@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useReducedMotionSafe } from '@/lib/motion';
 import { Mail } from 'lucide-react';
 import { gsap } from '@/lib/gsap';
-import { CONTACT_EMAIL, closetHref } from '@/lib/site';
+import { CONTACT_EMAIL, PRIVACY_PATH, REQUEST_APP_LABEL, SUPPORT_PATH, closetHref } from '@/lib/site';
 
 const COLS = [
   {
@@ -13,7 +13,7 @@ const COLS = [
       { label: 'The Drop', href: '/#grwm' },
       { label: 'The Loop', href: '/#loop' },
       { label: 'Coins', href: '/#how-it-works' },
-      { label: 'Request early access', href: '/#download' },
+      { label: REQUEST_APP_LABEL, href: '/#download' },
     ],
   },
   {
@@ -85,6 +85,14 @@ export function Footer() {
           <p className="font-mono text-micro tracking-wider text-worn-paper/60">
             © 2026 Worn, Inc.
           </p>
+          <nav aria-label="Legal" className="flex gap-6 font-mono text-micro tracking-wider">
+            <a href={PRIVACY_PATH} className="text-worn-paper/70 transition-colors hover:text-worn-paper">
+              Privacy
+            </a>
+            <a href={SUPPORT_PATH} className="text-worn-paper/70 transition-colors hover:text-worn-paper">
+              Support
+            </a>
+          </nav>
           <p className="font-mono text-micro tracking-wider text-worn-paper/60">
             Made for the 1 AM cart
           </p>

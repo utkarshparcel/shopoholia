@@ -32,9 +32,14 @@ again.
 
 ## Notes
 
-- "Anyone" access means anyone with the URL can post a sign-up; the script only accepts a valid email
-  and a known list, ignores bots that fill the hidden `website` field, and never lets visitor text
-  run as a formula.
+- "Anyone" access means anyone with the URL can post a sign-up. The script only accepts a valid email
+  and a known list, and ignores bots that fill the hidden `website` field. So that nothing a visitor
+  sends can become a live formula in the Sheet, it refuses emails that start with `=`, `+`, `-` or `@`
+  or contain quotes, brackets, `&`, `;`, `<`, `>` or backslashes, and every visitor value (email, page,
+  referrer) is written through `cell()`, which stores text that starts like a formula as plain text.
+- **If you deployed an earlier version of the script**, deploy this one as a new version (below): the
+  earlier one wrote the email without those checks. Scan the Email column for anything starting with
+  `=`, `+`, `-` or `@` and delete those rows.
 - Apps Script's free quota is far beyond what a waitlist needs.
 - To get an email for each sign-up, add `MailApp.sendEmail('you@gmail.com', 'New Worn sign-up', email)`
   after `appendRow` in `doPost` (it will ask for one more permission on the next deploy).
