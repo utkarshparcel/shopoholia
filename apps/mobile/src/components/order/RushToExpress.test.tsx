@@ -100,6 +100,24 @@ describe('RushToExpress', () => {
     expect(rushOrder).not.toHaveBeenCalled();
   });
 
+  it('a double tap asks once, and only one rush is sent', async () => {
+    const rushed: OrderSummary = { ...ORDER, tier: 'EXPRESS', rushAvailable: false };
+    vi.mocked(rushOrder).mockResolvedValue({ order: rushed, balanceAfter: 75 });
+    renderRush();
+    let confirm: (() => void) | undefined;
+    vi.mocked(Alert.alert).mockImplementation((_title, _message, buttons) => {
+      confirm = buttons?.find((button) => button.text === 'Rush it')?.onPress;
+    });
+
+    pressRush();
+    pressRush();
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+
+    confirm?.();
+    await waitFor(() => expect(useSessionStore.getState().coinBalance).toBe(75));
+    expect(rushOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('rushes on confirm and takes the new order and balance from the response', async () => {
     const rushed: OrderSummary = { ...ORDER, tier: 'EXPRESS', rushAvailable: false };
     vi.mocked(rushOrder).mockResolvedValueOnce({ order: rushed, balanceAfter: 75 });

@@ -1,10 +1,12 @@
 import { useRouter } from 'expo-router';
+import { useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { OrderSummary } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
 import { isInsufficientCoinsError, useRushOrder } from '@/src/hooks/orders';
 import { confirmAsync, notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
 import { useSessionStore } from '@/src/stores/session';
 import { fontSans, fontSansMedium, fsCaption, space6, textMuted } from '@/src/theme/tokens';
 
@@ -17,17 +19,27 @@ export function RushToExpress({ order }: { order: OrderSummary }) {
   // The balance is refreshed when a rush is refused, so this is current after a 402.
   const deficit = Math.max(0, cost - coinBalance);
 
+  // One question per rush: a double tap asked twice (and could send two rushes).
+  const asking = useRef(false);
+
   const confirmRush = async () => {
-    const ok = await confirmAsync(
-      'Rush to Express?',
-      `Spend ${cost} coins to move this haul onto the Express schedule.`,
-      { confirmLabel: 'Rush it', cancelLabel: 'Not now' },
-    );
+    if (asking.current || rush.isPending) return;
+    asking.current = true;
+    let ok = false;
+    try {
+      ok = await confirmAsync(
+        'Rush to Express?',
+        `Spend ${cost} coins to move this haul onto the Express schedule.`,
+        { confirmLabel: 'Rush it', cancelLabel: 'Not now' },
+      );
+    } finally {
+      asking.current = false;
+    }
     if (!ok) return;
     rush.mutate(undefined, {
       onError: (error) => {
         if (!isInsufficientCoinsError(error)) {
-          notify('Couldn’t rush', error.message);
+          notify('Couldn’t rush', errorText(error, 'Try again.'));
         }
       },
     });
