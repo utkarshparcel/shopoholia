@@ -6,6 +6,7 @@ import {
   captureSmokeEvent,
   initSentry,
   resetSentryForTests,
+  setSentrySurface,
 } from './sentry';
 
 /** A fresh copy of the module (and of the @sentry/react-native mock), so each test starts uninitialized. */
@@ -71,12 +72,12 @@ describe('mobile sentry', () => {
     expect(Sentry.captureException).not.toHaveBeenCalled();
   });
 
-  it('inits with closet surface tag and reports screen errors', () => {
+  it('inits tagged as Play (the surface every release build opens on) and reports screen errors', () => {
     process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
     initSentry();
     expect(Sentry.init).toHaveBeenCalledWith(
       expect.objectContaining({
-        initialScope: { tags: { worn_surface: 'closet' } },
+        initialScope: { tags: { worn_surface: 'play' } },
       }),
     );
     captureClosetException(new Error('load failed'), { screen: 'Vault' });
@@ -88,7 +89,26 @@ describe('mobile sentry', () => {
     process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
     process.env.EXPO_PUBLIC_SENTRY_SMOKE = '1';
     initSentry();
-    expect(Sentry.captureMessage).toHaveBeenCalledWith('worn.smoke.closet', 'info');
+    expect(Sentry.captureMessage).toHaveBeenCalledWith('worn.smoke.play', 'info');
     expect(captureSmokeEvent()).toBe(true);
+  });
+
+  it('retags later events when the Closet surface opens, and back to Play when it closes', () => {
+    process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
+    initSentry();
+
+    setSentrySurface('closet');
+    expect(Sentry.setTag).toHaveBeenLastCalledWith('worn_surface', 'closet');
+    setSentrySurface('play');
+    expect(Sentry.setTag).toHaveBeenLastCalledWith('worn_surface', 'play');
+  });
+
+  it('starts tagged with the surface set before init', () => {
+    setSentrySurface('closet');
+    process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
+    initSentry();
+    expect(Sentry.init).toHaveBeenCalledWith(
+      expect.objectContaining({ initialScope: { tags: { worn_surface: 'closet' } } }),
+    );
   });
 });

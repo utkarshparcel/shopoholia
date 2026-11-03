@@ -1,37 +1,31 @@
-import { Link, Stack } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { StyleSheet, View } from 'react-native';
 
+import { LoadError } from '@/src/components/ui';
+import { goBack } from '@/src/lib/goBack';
+import { bg, space6 } from '@/src/theme/tokens';
+
+/** A link to a screen that doesn't exist (an old push, a mistyped URL): a way back into the app. */
 export default function NotFoundScreen() {
+  const router = useRouter();
   return (
-    <>
-      <Stack.Screen options={{ title: 'Oops!' }} />
-      <View style={styles.container}>
-        <Text style={styles.title}>This screen doesn't exist.</Text>
-        <Link href="/" style={styles.link}>
-          <Text style={styles.linkText}>Go to home screen!</Text>
-        </Link>
-      </View>
-    </>
+    <View style={styles.container}>
+      <LoadError
+        body="This link doesn’t lead anywhere in WORN any more."
+        onSecondary={() => goBack(router)}
+        secondaryLabel="Back to WORN"
+        title="Page not found"
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     alignItems: 'center',
+    backgroundColor: bg,
+    flex: 1,
     justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  link: {
-    marginTop: 15,
-    paddingVertical: 15,
-  },
-  linkText: {
-    fontSize: 14,
-    color: '#2e78b7',
+    padding: space6,
   },
 });

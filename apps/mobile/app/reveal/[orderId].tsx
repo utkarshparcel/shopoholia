@@ -17,14 +17,16 @@ import {
 } from '@worn/shared';
 
 import { submitRevealRating } from '@/src/api/client';
-import { Button, Chip, SectionHeader } from '@/src/components/ui';
+import { Button, Chip, isNotFoundError, LoadError, SectionHeader } from '@/src/components/ui';
 import { RevealDeck } from '@/src/components/reveal/RevealDeck';
 import { RevealSatisfactionSurvey } from '@/src/components/reveal/RevealSatisfactionSurvey';
 import { useReveal, useUnlockRenders, useGenerateRenders, useRetryRenders } from '@/src/hooks/reveal';
-import { useCoinBalance } from '@/src/hooks/orders';
+import { isInsufficientCoinsError, useCoinBalance } from '@/src/hooks/orders';
 import { trackEvent } from '@/src/lib/analytics';
-import { notify } from '@/src/lib/confirm';
+import { confirmAsync, notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
 import { shareText } from '@/src/lib/share';
+import { goBack } from '@/src/lib/goBack';
 import { hasRendersInProgress } from '@/src/lib/reveal';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -83,13 +85,23 @@ export default function RevealScreen() {
   const renders = revealQuery.data?.renders ?? [];
   const orderItemIds = [...new Set(renders.map((r) => r.orderItemId))];
 
+  const offerCoins = (message: string) => {
+    void confirmAsync('Not enough coins', message, {
+      confirmLabel: 'Get coins',
+      cancelLabel: 'Not now',
+    }).then((ok) => {
+      if (ok) router.push('/coins/buy' as never);
+    });
+  };
+
   const handleUnlock = async (renderId: string) => {
     try {
       setUnlockingId(renderId);
       await unlockMutation.mutateAsync([renderId]);
       trackEvent('unlock', { orderId: orderId ?? '', renderId });
     } catch (error) {
-      notify('Unlock failed', error instanceof Error ? error.message : 'Try again');
+      if (isInsufficientCoinsError(error)) offerCoins('Not enough coins to unlock this look.');
+      else notify('Unlock failed', errorText(error, 'Try again.'));
     } finally {
       setUnlockingId(null);
     }
@@ -121,7 +133,8 @@ export default function RevealScreen() {
         isCombine: result.isCombine ?? false,
       });
     } catch (error) {
-      notify('Generate failed', error instanceof Error ? error.message : 'Try again');
+      if (isInsufficientCoinsError(error)) offerCoins('Not enough coins to generate this look.');
+      else notify('Generate failed', errorText(error, 'Try again.'));
     } finally {
       setGenerating(false);
     }
@@ -163,7 +176,7 @@ export default function RevealScreen() {
       style={styles.screen}
     >
       <View style={styles.topBar}>
-        <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+        <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <Pressable
@@ -177,13 +190,28 @@ export default function RevealScreen() {
       </View>
 
       <SectionHeader kicker="Reveal" title="Your haul, on you" />
-      {pendingRenders ? (
+      {!revealQuery.data ? null : pendingRenders ? (
         <Text style={styles.pendingHint}>Still rendering looks — this updates automatically.</Text>
       ) : (
         <Text style={styles.pendingHint}>Swipe the deck to browse your scenes.</Text>
       )}
 
-      {revealQuery.isLoading || !revealQuery.data ? (
+      {!revealQuery.data && revealQuery.isError ? (
+        isNotFoundError(revealQuery.error) ? (
+          <LoadError
+            body="This reveal isn’t on your account, or its haul hasn’t arrived yet."
+            onSecondary={() => router.replace('/(tabs)/profile')}
+            secondaryLabel="See your orders"
+            title="Reveal not found"
+          />
+        ) : (
+          <LoadError
+            error={revealQuery.error}
+            onRetry={() => void revealQuery.refetch()}
+            title="Couldn’t load your reveal"
+          />
+        )
+      ) : !revealQuery.data ? (
         <ActivityIndicator color={wornInk} style={styles.loader} />
       ) : (
         <>

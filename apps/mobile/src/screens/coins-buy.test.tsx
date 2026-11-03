@@ -127,3 +127,20 @@ describe('Buy coins screen', () => {
     expect(screen.queryByTestId('purchase-notice')).toBeNull();
   });
 });
+
+describe('what coins buy', () => {
+  it('quotes the prices the server charges, and promises no cashback', async () => {
+    const economy = await import('@worn/shared');
+    show({ status: 'ready', packs: [pack()] });
+    expect(
+      screen.getByText(`Unlock premium scenes (${economy.REVEAL_UNLOCK_COST_COINS} coins each)`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Combine items into full looks (${economy.REVEAL_COMBINE_COST_COINS} coins)`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Rush delivery to Express tier (${economy.RUSH_TO_EXPRESS_COST_COINS} coins)`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/cashback|coins back/i)).toBeNull();
+  });
+});

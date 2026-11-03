@@ -1,11 +1,11 @@
 import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { FlatList, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PRIVACY_EMAIL, type OrderState } from '@worn/shared';
 
-import { Button, CoinWallet } from '@/src/components/ui';
+import { Button, CoinWallet, LoadError } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
 import {
   DELETE_ACCOUNT_MESSAGE,
@@ -16,6 +16,7 @@ import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { confirmAsync } from '@/src/lib/confirm';
+import { FEATURE_CASHBACK } from '@/src/lib/features';
 import { orderBadgeLabel, orderHref, profileOrderList, tierLabel } from '@/src/lib/order-tracking';
 import { getPrivacyPolicyUrl } from '@/src/lib/privacyLinks';
 import { signOut } from '@/src/lib/signOut';
@@ -41,6 +42,7 @@ import {
   text,
   textMuted,
   wornGold,
+  wornInk,
   wornPaper,
   trackingTight,
 } from '@/src/theme/tokens';
@@ -48,11 +50,12 @@ import {
 /** States an order doesn't leave by itself: everything else is still on its way. */
 const SETTLED_ORDER_STATES: readonly OrderState[] = ['REVEAL_READY', 'CANCELLED', 'FAILED'];
 
+// Cashback is listed only while FEATURE_CASHBACK is on (no partner attributes a purchase yet).
 const MENU = [
   { label: 'Get more coins', href: '/coins/buy' },
   { label: 'Daily streak', href: '/streaks' },
   { label: 'Refer & earn', href: '/referral' },
-  { label: 'Cashback', href: '/cashback' },
+  ...(FEATURE_CASHBACK ? [{ label: 'Cashback', href: '/cashback' }] : []),
   { label: 'Style quiz', href: '/style-quiz' },
   { label: 'Edit avatar', href: '/(onboarding)/avatar' },
 ] as const;
@@ -96,7 +99,7 @@ export default function ProfileScreen() {
     Linking.openURL(url).catch(() => setPrivacyError(`Couldn’t open ${url}`));
   };
 
-  const { data: ordersData } = useQuery({
+  const ordersQuery = useQuery({
     queryKey: orderKeys.list(userId),
     queryFn: () => fetchOrders(useSessionStore.getState().accessToken ?? ''),
     // Orders move on by themselves (the delivery timers run on the server) and this tab stays
@@ -108,6 +111,7 @@ export default function ProfileScreen() {
       query.state.data?.orders.some((o) => !SETTLED_ORDER_STATES.includes(o.state)) ? 15_000 : false,
   });
 
+  const ordersData = ordersQuery.data;
   const orders = ordersData?.orders ?? [];
   // Every order is listed so each ready haul can be opened; the banner points at the newest one.
   const { newestReady: revealReady, list: listOrders } = profileOrderList(orders);
@@ -180,6 +184,16 @@ export default function ProfileScreen() {
         </View>
       }
       ListEmptyComponent={
+        // A failed load isn't "no orders": say so and offer a retry.
+        !ordersData && ordersQuery.isError ? (
+          <LoadError
+            error={ordersQuery.error}
+            onRetry={() => void ordersQuery.refetch()}
+            title="Couldn’t load your orders"
+          />
+        ) : !ordersData ? (
+          <ActivityIndicator color={wornInk} style={styles.ordersLoader} />
+        ) : (
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No orders yet</Text>
           <Text style={styles.emptyBody}>
@@ -192,6 +206,7 @@ export default function ProfileScreen() {
             block
           />
         </View>
+        )
       }
       renderItem={({ item }) => (
         <Pressable
@@ -246,7 +261,7 @@ export default function ProfileScreen() {
           <Pressable
             accessibilityRole="button"
             // The root layout's auth gate goes to the login screen once the session is cleared.
-            onPress={signOut}
+            onPress={() => void signOut()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>
@@ -292,6 +307,9 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  ordersLoader: {
+    marginVertical: space6,
+  },
   avatarCircle: {
     alignItems: 'center',
     backgroundColor: wornGold,

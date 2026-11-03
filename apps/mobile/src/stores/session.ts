@@ -12,6 +12,7 @@ import { captureException } from '@/src/lib/sentry';
 
 import {
   SESSION_TOKENS_PERSISTED,
+  deleteStoredSessionFromPreviousInstall,
   parseStoredSession,
   readStoredSession,
   saveStoredSession,
@@ -212,6 +213,25 @@ async function takeLegacyTokens(): Promise<StoredSession | null> {
   return SESSION_TOKENS_PERSISTED ? parseStoredSession(JSON.stringify(state)) : null;
 }
 
+/**
+ * Kept in AsyncStorage, which is deleted with the app, so its absence means this is the first
+ * launch of this install. (The session payload under SESSION_STORAGE_KEY, written on every launch
+ * by builds before this marker existed, also marks an install that ran before.)
+ */
+export const INSTALL_MARKER_KEY = 'worn.installed.v1';
+
+/** On the first launch of a fresh install, drop any session a previous install left behind. */
+async function forgetPreviousInstallSession(): Promise<void> {
+  if (!SESSION_TOKENS_PERSISTED) return;
+  const [marker, payload] = await Promise.all([
+    AsyncStorage.getItem(INSTALL_MARKER_KEY),
+    AsyncStorage.getItem(SESSION_STORAGE_KEY),
+  ]);
+  if (marker) return;
+  if (!payload) await deleteStoredSessionFromPreviousInstall();
+  await AsyncStorage.setItem(INSTALL_MARKER_KEY, '1');
+}
+
 let persistence: Promise<void> | null = null;
 
 /**
@@ -233,6 +253,9 @@ export function startSessionTokenPersistence(): Promise<void> {
     });
     let stored: StoredSession | null = null;
     try {
+      await forgetPreviousInstallSession().catch((error: unknown) => {
+        captureException(error, { area: 'session-tokens' });
+      });
       const legacy = await takeLegacyTokens().catch((error: unknown) => {
         captureException(error, { area: 'session-tokens' });
         return null;

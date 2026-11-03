@@ -1,3 +1,4 @@
+import { REVEAL_UNLOCK_COST_COINS } from '@worn/shared';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -102,7 +103,7 @@ function RenderCardView({
             label={
               unlocking
                 ? 'Unlocking…'
-                : `Unlock · ${card.unlockCostCoins ?? 50} coins`
+                : `Unlock · ${card.unlockCostCoins ?? REVEAL_UNLOCK_COST_COINS} coins`
             }
             onPress={() => onUnlock(card.id)}
             size="md"
@@ -206,12 +207,18 @@ export function RevealDeck({ renders, onUnlock, unlockingId, focusId, onRetry, r
         translateX.value = startXRef.current + gestureState.dx;
       },
       onPanResponderRelease: (_e, gestureState) => {
+        // The card changes only when its fly-out finished; an interrupted spring (a new touch
+        // grabbed the card) leaves it where it is.
         if (gestureState.dx < -SWIPE_THRESHOLD) {
-          translateX.value = withSpring(-240, {}, () => runOnJS(swipeEnd)('left'));
+          translateX.value = withSpring(-240, {}, (finished) => {
+            if (finished) runOnJS(swipeEnd)('left');
+          });
           return;
         }
         if (gestureState.dx > SWIPE_THRESHOLD) {
-          translateX.value = withSpring(240, {}, () => runOnJS(swipeEnd)('right'));
+          translateX.value = withSpring(240, {}, (finished) => {
+            if (finished) runOnJS(swipeEnd)('right');
+          });
           return;
         }
         translateX.value = withSpring(0);
@@ -238,14 +245,23 @@ export function RevealDeck({ renders, onUnlock, unlockingId, focusId, onRetry, r
       </Animated.View>
 
       <View style={styles.controls}>
-        <Pressable accessibilityRole="button" disabled={index === 0} onPress={goPrev} style={styles.navBtn}>
+        <Pressable
+          accessibilityLabel="Previous look"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: index === 0 }}
+          disabled={index === 0}
+          onPress={goPrev}
+          style={styles.navBtn}
+        >
           <Text style={styles.navText}>←</Text>
         </Pressable>
         <Text style={styles.counter}>
           {index + 1} / {renders.length}
         </Text>
         <Pressable
+          accessibilityLabel="Next look"
           accessibilityRole="button"
+          accessibilityState={{ disabled: index >= renders.length - 1 }}
           disabled={index >= renders.length - 1}
           onPress={goNext}
           style={styles.navBtn}

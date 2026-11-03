@@ -10,7 +10,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, CoinIcon, SectionHeader } from '@/src/components/ui';
+import { Button, CoinIcon, LoadError, SectionHeader } from '@/src/components/ui';
+import { notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
+import { goBack } from '@/src/lib/goBack';
 import { useCart } from '@/src/hooks/catalog';
 import {
   bg,
@@ -42,7 +45,17 @@ export default function CartScreen() {
 
   const data = query.data;
   const coinTotal = data?.coinTotal ?? 0;
-  const isEmpty = !query.isLoading && (!data || data.items.length === 0);
+  // A failed load isn't an empty haul; that one gets its own state below.
+  const loadFailed = !data && query.isError;
+  const isEmpty = !query.isLoading && !loadFailed && (!data || data.items.length === 0);
+  const removingId = removeMutation.isPending ? removeMutation.variables : null;
+
+  const remove = (variantId: string) => {
+    if (removeMutation.isPending) return;
+    removeMutation.mutate(variantId, {
+      onError: (error) => notify('Couldn’t remove it', errorText(error, 'Try again.')),
+    });
+  };
 
   return (
     <ScrollView
@@ -52,7 +65,7 @@ export default function CartScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
@@ -62,6 +75,12 @@ export default function CartScreen() {
 
       {query.isLoading ? (
         <ActivityIndicator color={wornInk} style={styles.loader} />
+      ) : loadFailed ? (
+        <LoadError
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          title="Couldn’t load your haul"
+        />
       ) : isEmpty ? (
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
@@ -95,11 +114,19 @@ export default function CartScreen() {
                 </View>
               </View>
               <Pressable
+                accessibilityLabel={`Remove ${item.title}`}
                 accessibilityRole="button"
-                onPress={() => void removeMutation.mutateAsync(item.variantId)}
-                style={styles.remove}
+                accessibilityState={{ busy: removingId === item.variantId, disabled: removeMutation.isPending }}
+                disabled={removeMutation.isPending}
+                hitSlop={8}
+                onPress={() => remove(item.variantId)}
+                style={[styles.remove, removeMutation.isPending && styles.removeBusy]}
               >
-                <Text style={styles.removeText}>✕</Text>
+                {removingId === item.variantId ? (
+                  <ActivityIndicator color={wornInk} size="small" />
+                ) : (
+                  <Text style={styles.removeText}>✕</Text>
+                )}
               </Pressable>
             </View>
           ))}
@@ -115,7 +142,7 @@ export default function CartScreen() {
             ) : null}
             <Button
               block
-              disabled={coinTotal <= 0}
+              disabled={coinTotal <= 0 || removeMutation.isPending}
               label="Checkout"
               onPress={() => router.push('/checkout')}
             />
@@ -226,6 +253,9 @@ const styles = StyleSheet.create({
     height: 32,
     justifyContent: 'center',
     width: 32,
+  },
+  removeBusy: {
+    opacity: 0.5,
   },
   removeText: {
     color: textMuted,

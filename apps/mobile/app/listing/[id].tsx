@@ -12,10 +12,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, Chip, CoinIcon } from '@/src/components/ui';
+import { Button, Chip, CoinIcon, isNotFoundError, LoadError } from '@/src/components/ui';
 import { useAddToCart, useListing, useTryon } from '@/src/hooks/catalog';
 import { trackEvent } from '@/src/lib/analytics';
 import { confirmAsync, notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
+import { FEATURE_CASHBACK } from '@/src/lib/features';
+import { goBack } from '@/src/lib/goBack';
 import { listingTagLabels } from '@/src/lib/listingTags';
 import { recordAffiliateClick, type AffiliateLink } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
@@ -71,8 +74,10 @@ function AffiliateButton({
       accessibilityRole="button"
       onPress={() => {
         trackEvent('affiliate_click', { platform, url: link.url });
-        if (accessToken) {
-          void recordAffiliateClick(accessToken, listingId, platform);
+        // A click row is a cashback claim ("Pending" on the Cashback screen): record one only
+        // while cashback is on, since no partner can attribute a purchase yet.
+        if (FEATURE_CASHBACK && accessToken) {
+          void recordAffiliateClick(accessToken, listingId, platform).catch(() => undefined);
         }
         Linking.openURL(link.url).catch(() => {});
       }}
@@ -129,12 +134,19 @@ export default function ListingDetailScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
       {listing.isLoading ? (
         <ActivityIndicator color={wornInk} style={styles.loader} />
+      ) : !listing.data && listing.isError && !isNotFoundError(listing.error) ? (
+        // A timeout or no network isn't a removed piece: say what happened and offer a retry.
+        <LoadError
+          error={listing.error}
+          onRetry={() => void listing.refetch()}
+          title="Couldn’t load this piece"
+        />
       ) : listing.data ? (
         <>
           <View style={styles.hero}>
@@ -213,7 +225,7 @@ export default function ListingDetailScreen() {
                         });
                         return;
                       }
-                      notify('Try-on failed', message);
+                      notify('Try-on failed', errorText(error, 'Try again.'));
                     });
                 }}
                 variant="primary"
@@ -235,7 +247,7 @@ export default function ListingDetailScreen() {
                       if (viewHaul) router.push('/cart');
                     })
                     .catch((error: unknown) => {
-                      notify('Couldn’t add', error instanceof Error ? error.message : 'Try again');
+                      notify('Couldn’t add', errorText(error, 'Try again.'));
                     });
                 }}
                 variant="secondary"
@@ -248,9 +260,9 @@ export default function ListingDetailScreen() {
                 <View style={styles.divider} />
                 <Text style={styles.sectionLabel}>Buy for real</Text>
                 <Text style={styles.affiliateSubtext}>
-                  Partner links: you buy on the retailer’s site, WORN may earn a commission, and
-                  you may earn cashback coins once the purchase is confirmed. Coins have no cash
-                  value.
+                  {FEATURE_CASHBACK
+                    ? 'Partner links: you buy on the retailer’s site, WORN may earn a commission, and you may earn cashback coins once the purchase is confirmed. Coins have no cash value.'
+                    : 'Partner links: you buy on the retailer’s own site and WORN may earn a commission. Your WORN haul and coins stay here; coins have no cash value.'}
                 </Text>
                 <View style={styles.affiliateRow}>
                   {affiliateLinks.map((link, i) => (
@@ -267,7 +279,12 @@ export default function ListingDetailScreen() {
           </View>
         </>
       ) : (
-        <Text style={styles.error}>Listing not found.</Text>
+        <LoadError
+          body="It may have sold out or been taken down."
+          onSecondary={() => router.replace('/(tabs)/feed')}
+          secondaryLabel="Browse the feed"
+          title="Listing not found"
+        />
       )}
     </ScrollView>
   );
@@ -352,10 +369,6 @@ const styles = StyleSheet.create({
     backgroundColor: border,
     height: 1,
     marginVertical: space6,
-  },
-  error: {
-    color: textMuted,
-    paddingHorizontal: space4,
   },
   hero: {
     aspectRatio: 3 / 4,

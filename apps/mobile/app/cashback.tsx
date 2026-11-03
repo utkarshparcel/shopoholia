@@ -1,9 +1,11 @@
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getCashback } from '@/src/api/client';
+import { FEATURE_CASHBACK } from '@/src/lib/features';
+import { goBack } from '@/src/lib/goBack';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -44,7 +46,13 @@ type CashbackEvent = {
   createdAt: string;
 };
 
+/** Cashback is off until partner accounts can attribute purchases: an old link lands on Profile. */
 export default function CashbackScreen() {
+  if (!FEATURE_CASHBACK) return <Redirect href="/(tabs)/profile" />;
+  return <CashbackHistory />;
+}
+
+function CashbackHistory() {
   const accessToken = useSessionStore((s) => s.accessToken);
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -96,7 +104,7 @@ export default function CashbackScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 

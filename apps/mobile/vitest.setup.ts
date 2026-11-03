@@ -22,6 +22,7 @@ vi.mock('@sentry/react-native', () => ({
   init: vi.fn(),
   captureException: vi.fn(),
   captureMessage: vi.fn(),
+  setTag: vi.fn(),
   withScope: vi.fn((cb: (scope: { setTags: (t: Record<string, string>) => void }) => void) => {
     cb({ setTags: vi.fn() });
   }),
@@ -219,12 +220,16 @@ vi.mock('react-native', () => ({
     style,
     disabled,
     accessibilityLabel,
+    accessibilityState,
+    hitSlop,
     ...props
   }: React.PropsWithChildren<{
     onPress?: () => void;
     style?: unknown;
     disabled?: boolean;
     accessibilityLabel?: string;
+    accessibilityState?: { selected?: boolean; busy?: boolean; disabled?: boolean };
+    hitSlop?: unknown;
     children?: React.ReactNode | ((state: { pressed: boolean }) => React.ReactNode);
   }>) => {
     const resolvedStyle = typeof style === 'function' ? style({ pressed: false }) : style;
@@ -238,6 +243,10 @@ vi.mock('react-native', () => ({
         ...props,
         type: 'button',
         'aria-label': accessibilityLabel,
+        // What a screen reader is told, as the browser would expose it.
+        'aria-pressed': accessibilityState?.selected,
+        'aria-busy': accessibilityState?.busy,
+        'data-hitslop': hitSlop === undefined ? undefined : JSON.stringify(hitSlop),
         style: resolvedStyle,
         onClick: disabled ? undefined : onPress,
         disabled,
@@ -316,6 +325,7 @@ vi.mock('react-native-reanimated', () => {
     withTiming: <T,>(value: T) => value,
     withSpring: <T,>(value: T) => value,
     withDelay: <T,>(_ms: number, value: T) => value,
+    withRepeat: <T,>(value: T) => value,
     cancelAnimation: () => {},
     interpolate: (value: number, input: number[], output: number[]) => {
       const t = (value - input[0]) / (input[input.length - 1] - input[0] || 1);

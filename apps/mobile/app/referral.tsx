@@ -11,11 +11,13 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_ORIGIN } from '@worn/shared';
+import { REFERRAL_REWARD_COINS, WEB_ORIGIN } from '@worn/shared';
 
 import { applyReferral, getMyReferral } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
 import { shareText } from '@/src/lib/share';
+import { errorText } from '@/src/lib/errorText';
+import { goBack } from '@/src/lib/goBack';
 import { useSessionStore } from '@/src/stores/session';
 import {
   accent,
@@ -61,6 +63,9 @@ export default function ReferralScreen() {
     [],
   );
 
+  // Bumped by "Try again" to load once more.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   useEffect(() => {
     if (!accessToken) {
       setLoading(false);
@@ -68,6 +73,8 @@ export default function ReferralScreen() {
     }
 
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     getMyReferral(accessToken)
       .then((data) => {
@@ -78,7 +85,7 @@ export default function ReferralScreen() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'Failed to load referral');
+        setError(errorText(e, 'Failed to load referral'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -87,7 +94,7 @@ export default function ReferralScreen() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, loadAttempt]);
 
   if (loading) {
     return (
@@ -131,7 +138,7 @@ export default function ReferralScreen() {
         `Referral applied! ${res.referrerName ? `Welcome from ${res.referrerName}` : ''}`,
       );
     } catch (e: unknown) {
-      setApplyMsg(e instanceof Error ? e.message : 'Failed to apply code');
+      setApplyMsg(errorText(e, 'Failed to apply code'));
     }
   };
 
@@ -143,14 +150,14 @@ export default function ReferralScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
       <View style={styles.hero}>
         <Text style={styles.heroTitle}>Refer & earn</Text>
         <Text style={styles.heroSubtitle}>
-          You earn 100 coins when your friend places their first haul
+          You earn {REFERRAL_REWARD_COINS} coins when your friend places their first haul
         </Text>
       </View>
 
@@ -158,6 +165,7 @@ export default function ReferralScreen() {
         <View style={styles.errorState}>
           <Text style={styles.errorTitle}>Could not load referral</Text>
           <Text style={styles.errorBody}>{error}</Text>
+          <Button label="Try again" onPress={() => setLoadAttempt((n) => n + 1)} variant="secondary" />
         </View>
       ) : (
         <>
@@ -302,6 +310,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   errorState: {
+    gap: 12,
     alignItems: 'center',
     backgroundColor: surface,
     borderRadius: radiusLg,

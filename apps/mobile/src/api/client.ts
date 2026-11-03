@@ -484,12 +484,6 @@ export type CoinBalanceResponse = {
   balance: number;
 };
 
-export type IapValidateResponse = {
-  success: true;
-  coinsGranted: number;
-  balanceAfter: number;
-};
-
 export type GenerateRenderResponse = {
   renders: RenderCard[];
   coinsSpent: number;
@@ -760,22 +754,6 @@ export async function unlockRenders(
     body: JSON.stringify({ renderIds, idempotencyKey }),
   });
   return parseJson<{ renders: RenderCard[]; coinsSpent: number }>(res);
-}
-
-export async function validateIap(
-  accessToken: string,
-  productId: string,
-  receipt: string,
-) {
-  const res = await apiFetch(`${API_URL}/coins/iap/validate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(accessToken),
-    },
-    body: JSON.stringify({ productId, receipt }),
-  });
-  return parseJson<IapValidateResponse>(res);
 }
 
 export async function generateRenders(
@@ -3594,59 +3572,6 @@ export async function fetchEntitlementSnapshot(accessToken: string) {
     headers: authHeaders(accessToken),
   });
   return parseJson<EntitlementSnapshotDto>(res);
-}
-
-/** Simulated trial start — never sends a real App Store / Play receipt. */
-export async function syncEntitlementTrial(
-  accessToken: string,
-  productId: string,
-) {
-  const res = await apiFetch(`${API_URL}/entitlements/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({
-      productId,
-      startTrial: true,
-      receiptOrToken: 'simulated-dev-token',
-    }),
-  });
-  return parseJson<{ snapshot: Awaited<ReturnType<typeof fetchEntitlementSnapshot>> }>(res);
-}
-
-export async function createUpiPaymentIntent(
-  accessToken: string,
-  body: { productId: string; region?: 'IN' | 'US' | 'GLOBAL'; method?: 'upi' | 'iap' | 'card' },
-) {
-  const res = await apiFetch(`${API_URL}/payments/intents`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify(body),
-  });
-  return parseJson<{
-    id: string;
-    provider: string;
-    productId: string;
-    amountMinor: number;
-    currency: string;
-    upiIntentUrl: string | null;
-    status: string;
-    publicKeyHint: string | null;
-  }>(res);
-}
-
-export async function confirmUpiPayment(
-  accessToken: string,
-  intentId: string,
-) {
-  const res = await apiFetch(`${API_URL}/payments/confirm`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({ intentId }),
-  });
-  return parseJson<{
-    intent: { id: string; status: string; upiIntentUrl: string | null };
-    entitlementsGranted: string[];
-  }>(res);
 }
 
 /** N12 / W029 — brand price watches + scan hits. */

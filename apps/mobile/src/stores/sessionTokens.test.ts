@@ -98,6 +98,7 @@ describe('stored session (native)', () => {
 describe('startSessionTokenPersistence', () => {
   it('waits for the stored session, then restores it', async () => {
     secure.items.set(KEY, JSON.stringify(SESSION));
+    await AsyncStorage.setItem('worn.installed.v1', '1'); // this install has run before
     const { useSessionStore, startSessionTokenPersistence } = await load();
     expect(useSessionStore.getState().tokensHydrated).toBe(false);
 
@@ -155,6 +156,31 @@ describe('startSessionTokenPersistence', () => {
     expect(raw).not.toContain('old-a');
     expect(raw).not.toContain('old-r');
     await vi.waitFor(() => expect(secure.items.get(KEY)).toContain('"accessToken":"old-a"'));
+  });
+
+  it('on the first launch after a reinstall, forgets the session the Keychain kept from the last install', async () => {
+    // iOS keeps Keychain items when the app is deleted; AsyncStorage is wiped with the app.
+    secure.items.set(KEY, JSON.stringify(SESSION));
+    const { useSessionStore, startSessionTokenPersistence } = await load();
+
+    await startSessionTokenPersistence();
+
+    expect(useSessionStore.getState().tokensHydrated).toBe(true);
+    expect(useSessionStore.getState().accessToken).toBeNull();
+    expect(secure.items.has(KEY)).toBe(false);
+    expect(await AsyncStorage.getItem('worn.installed.v1')).toBe('1');
+  });
+
+  it('keeps the session of a user updating from a build without the install marker', async () => {
+    secure.items.set(KEY, JSON.stringify(SESSION));
+    // Every earlier launch wrote the surface payload, so this install has run before.
+    await AsyncStorage.setItem('worn-session', JSON.stringify({ state: { activeSurface: 'play' }, version: 0 }));
+    const { useSessionStore, startSessionTokenPersistence } = await load();
+
+    await startSessionTokenPersistence();
+
+    expect(useSessionStore.getState().accessToken).toBe('a1');
+    expect(await AsyncStorage.getItem('worn.installed.v1')).toBe('1');
   });
 
   it('starts signed out when the secure store cannot be read', async () => {

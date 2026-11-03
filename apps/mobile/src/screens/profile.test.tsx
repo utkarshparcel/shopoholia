@@ -70,6 +70,7 @@ vi.mock('react-native', () => ({
     </div>
   ),
   StyleSheet: { create: <T,>(styles: T) => styles },
+  ActivityIndicator: () => <span>Loading…</span>,
   Platform: rn.platform,
   Alert: { alert: rn.alert },
   Linking: { openURL: rn.openURL },
@@ -106,6 +107,14 @@ vi.mock('@/src/components/ui', () => ({
     </button>
   ),
   CoinWallet: ({ balance }: { balance: number }) => <span>{balance} coins</span>,
+  LoadError: ({ title, onRetry }: { title: string; onRetry?: () => void }) => (
+    <div role="alert">
+      {title}
+      <button onClick={onRetry} type="button">
+        Try again
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('@/src/hooks/orders', () => ({
@@ -390,5 +399,29 @@ describe('ProfileScreen: orders', () => {
 
     await waitFor(() => expect(screen.getAllByText('Ready')).toHaveLength(1));
     expect(fetchOrders).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ProfileScreen: menu', () => {
+  it('lists no Cashback entry while cashback is off (no partner can attribute a purchase yet)', async () => {
+    renderProfile();
+    await screen.findByText('Daily streak');
+    expect(screen.queryByText('Cashback')).toBeNull();
+    for (const item of ['Get more coins', 'Refer & earn', 'Style quiz', 'Edit avatar', 'Sign out']) {
+      expect(screen.getByText(item)).toBeTruthy();
+    }
+  });
+});
+
+describe('ProfileScreen: orders that fail to load', () => {
+  it('says the orders could not load, instead of "No orders yet", and retries', async () => {
+    vi.mocked(fetchOrders).mockRejectedValueOnce(new Error('Failed to fetch')).mockResolvedValue({ orders: [] });
+    renderProfile();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t load your orders');
+    expect(screen.queryByText('No orders yet')).toBeNull();
+
+    fireEvent.click(screen.getByText('Try again'));
+    expect(await screen.findByText('No orders yet')).toBeTruthy();
   });
 });
