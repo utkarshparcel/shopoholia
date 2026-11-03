@@ -1941,8 +1941,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listPushEvents(userId) {
-      if (!userId) return [...pushEvents];
-      return pushEvents.filter((e) => e.userId === userId);
+      // Newest first, as Postgres lists them (pushEvents is in insertion order).
+      const listed = userId ? pushEvents.filter((e) => e.userId === userId) : [...pushEvents];
+      return listed
+        .map((event, index) => ({ event, index }))
+        .sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime() || b.index - a.index)
+        .map(({ event }) => event);
     },
 
     async updatePushEvent(id, patch) {
@@ -1973,9 +1977,11 @@ export function createMemoryRepositories(): Repositories {
       if (onlyIf !== undefined && user.pushToken !== onlyIf) return;
       users.set(userId, { ...user, pushToken: null, updatedAt: now() });
     },
-    async updatePushEventStatus(id, status, _expoTicketId) {
+    async updatePushEventStatus(id, status, expoTicketId) {
       const event = pushEvents.find((e) => e.id === id);
-      if (event) event.status = status;
+      if (!event) return;
+      event.status = status;
+      if (expoTicketId !== undefined) event.expoTicketId = expoTicketId ?? null;
     },
 
     async findActiveConsent(userId, scope) {

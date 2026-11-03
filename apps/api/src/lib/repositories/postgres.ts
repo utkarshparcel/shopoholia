@@ -1317,26 +1317,28 @@ export function createPostgresRepositories(db: Db): Repositories {
       const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       if (!existing) throw new Error(`User not found: ${id}`);
 
+      // Only the fields given (null clears a nullable one, as in memory). Writing every column
+      // back from the row read above would undo a concurrent write: a streak claim committed in
+      // between got its streak count and claim time reset, so the day could be claimed again.
+      const set: Partial<typeof users.$inferInsert> = { updatedAt: now() };
+      if (patch.phone !== undefined) set.phone = patch.phone;
+      if (patch.email !== undefined) set.email = patch.email;
+      if (patch.googleSub !== undefined) set.googleSub = patch.googleSub;
+      if (patch.displayName !== undefined) set.displayName = patch.displayName;
+      if (patch.avatarStatus != null) set.avatarStatus = patch.avatarStatus;
+      if (patch.coinBalanceCache != null) set.coinBalanceCache = patch.coinBalanceCache;
+      if (patch.consentFlags != null) set.consentFlags = patch.consentFlags;
+      if (patch.timeZone !== undefined) set.timeZone = patch.timeZone;
+      if (patch.pushToken !== undefined) set.pushToken = patch.pushToken;
+      if (patch.referralCode !== undefined) set.referralCode = patch.referralCode;
+      if (patch.referredBy !== undefined) set.referredBy = patch.referredBy;
+      if (patch.streakCount != null) set.streakCount = patch.streakCount;
+      if (patch.lastStreakClaimAt !== undefined) set.lastStreakClaimAt = patch.lastStreakClaimAt;
+      if (patch.styleProfile !== undefined) set.styleProfile = patch.styleProfile;
+
       const [row] = await db
         .update(users)
-        .set({
-          phone: patch.phone !== undefined ? patch.phone : existing.phone,
-          email: patch.email !== undefined ? patch.email : existing.email,
-          googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
-          displayName: patch.displayName ?? existing.displayName,
-          avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
-          coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,
-          consentFlags: patch.consentFlags ?? existing.consentFlags,
-          // Only when given, so an unrelated update never writes back a stale time zone.
-          ...(patch.timeZone !== undefined ? { timeZone: patch.timeZone } : {}),
-          pushToken: patch.pushToken ?? existing.pushToken,
-          referralCode: patch.referralCode ?? existing.referralCode,
-          referredBy: patch.referredBy ?? existing.referredBy,
-          streakCount: patch.streakCount ?? existing.streakCount,
-          lastStreakClaimAt: patch.lastStreakClaimAt ?? existing.lastStreakClaimAt,
-          styleProfile: patch.styleProfile ?? existing.styleProfile,
-          updatedAt: now(),
-        })
+        .set(set)
         .where(eq(users.id, id))
         .returning();
 
