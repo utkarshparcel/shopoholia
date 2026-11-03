@@ -53,6 +53,14 @@ export function isUserObjectKey(key: string, userId: string): boolean {
   );
 }
 
+/** Key prefixes of catalog images (listing photos, garments, seller product shots). */
+const PUBLIC_CATALOG_PREFIXES = ["house-models/", "garments/", "products/"];
+
+/** True for a catalog image, which may be served from the public bucket URL. */
+export function isPublicCatalogKey(key: string): boolean {
+  return PUBLIC_CATALOG_PREFIXES.some((prefix) => key.startsWith(prefix)) && !key.split("/").includes("..");
+}
+
 export type R2Config = {
   accountId: string;
   accessKeyId: string;
@@ -137,8 +145,9 @@ export function createR2Storage(config: R2Config): StorageClient {
     },
 
     async getSignedUrl(key, expiresInSeconds = SIGNED_URL_SECONDS) {
-      // A user's objects are never served from the public bucket URL.
-      if (config.publicUrl && !key.startsWith("u/")) {
+      // Only catalog images are served from the public bucket URL. Everything else (selfies,
+      // avatar references, try-ons, reveals, receipts, u/ keys) gets a short-lived signed URL.
+      if (config.publicUrl && isPublicCatalogKey(key)) {
         return `${config.publicUrl.replace(/\/$/, "")}/${key}`;
       }
 
