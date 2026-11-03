@@ -88,8 +88,11 @@ function toLedgerJson(l: MoneyLedgerRecord) {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  const code = (err as { code?: string })?.code;
-  if (code === "23505") return true;
+  // drizzle-orm >= 0.44 wraps driver errors in DrizzleQueryError; postgres-js's error is its `cause`.
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
   const msg = (err as Error)?.message ?? "";
   return /duplicate|unique/i.test(msg);
 }
