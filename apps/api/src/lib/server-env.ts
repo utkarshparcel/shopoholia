@@ -78,6 +78,27 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!env.GOOGLE_CLIENT_ID || !env.OAUTH_STATE_SECRET) {
       warnings.push("GOOGLE_CLIENT_ID or OAUTH_STATE_SECRET is not set: Gmail connect is unavailable (503)");
     }
+    if (!env.REDIS_URL?.trim()) {
+      warnings.push(
+        "REDIS_URL is not set: the API worker can't run, so account-deletion retries (stored objects left after a storage error), data exports, store-purchase reconciliation and the Closet jobs never run, and every route that enqueues one answers 503",
+      );
+    }
+    if (!(env.GOOGLE_CLIENT_IDS ?? env.GOOGLE_CLIENT_ID)?.trim()) {
+      warnings.push(
+        "GOOGLE_CLIENT_IDS is not set: Google sign-in answers 503 (phone sign-in is off in production, so only Sign in with Apple on iOS works)",
+      );
+    }
+    if (!(env.APPLE_SIGN_IN_AUDIENCES ?? env.APPLE_BUNDLE_ID)?.trim()) {
+      warnings.push("APPLE_BUNDLE_ID is not set: Sign in with Apple answers 503");
+    }
+    if (!env.FASHN_API_KEY?.trim()) {
+      warnings.push("FASHN_API_KEY is not set: try-on and reveal renders fail, so orders never reach their reveal");
+    }
+    if (env.IAP_ACCEPT_TEST_PURCHASES === "0") {
+      warnings.push(
+        "IAP_ACCEPT_TEST_PURCHASES=0: Sandbox and license-tester purchases are refused, so App Review and TestFlight testers can't buy coins",
+      );
+    }
     if (env.IAP_ALLOW_SIMULATED === "1") warnings.push("IAP_ALLOW_SIMULATED=1 is ignored in production");
     if (env.IAP_ALLOW_XCODE === "1") warnings.push("IAP_ALLOW_XCODE=1 is ignored in production");
   }
