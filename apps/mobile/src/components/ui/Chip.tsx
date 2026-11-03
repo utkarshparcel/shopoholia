@@ -17,10 +17,16 @@ export type ChipProps = PressableProps & {
   active?: boolean;
 };
 
+/**
+ * A toggle chip (feed categories, reveal scenes, combine items). Screen readers hear whether it's
+ * the selected one, and the touch area reaches 44pt even though the chip is drawn ~31pt tall.
+ */
 export function Chip({ label, active = false, style, ...props }: ChipProps) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      hitSlop={{ top: 7, bottom: 7, left: 2, right: 2 }}
       style={(state) => [
         styles.chip,
         active && styles.active,

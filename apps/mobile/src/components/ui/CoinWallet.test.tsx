@@ -22,7 +22,8 @@ describe('CoinWallet', () => {
 describe('CoinIcon', () => {
   it('renders sizes', () => {
     const { rerender } = render(<CoinIcon />);
+    expect(screen.getByTestId('coin-icon-sm')).toBeTruthy();
     rerender(<CoinIcon size="lg" />);
-    expect(true).toBe(true);
+    expect(screen.getByTestId('coin-icon-lg')).toBeTruthy();
   });
 });

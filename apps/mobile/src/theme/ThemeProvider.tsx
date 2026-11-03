@@ -11,6 +11,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { View } from 'react-native';
 
+import { captureException } from '@/src/lib/sentry';
+
 import { bg, theme, type Theme } from './index';
 
 SplashScreen.preventAutoHideAsync();
@@ -26,27 +28,37 @@ type ThemeProviderProps = {
 };
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const [serifLoaded] = useDMSerif({
+  const [serifLoaded, serifError] = useDMSerif({
     DMSerifDisplay_400Regular,
   });
-  const [sansLoaded] = useDMSans({
+  const [sansLoaded, sansError] = useDMSans({
     DMSans_400Regular,
     DMSans_500Medium,
     DMSans_600SemiBold,
   });
-  const [monoLoaded] = useDMMono({
+  const [monoLoaded, monoError] = useDMMono({
     DMMono_400Regular,
   });
 
-  const fontsLoaded = serifLoaded && sansLoaded && monoLoaded;
+  // A font that fails to load (a damaged asset, no disk) settles too: the app opens with the
+  // system font rather than staying on the splash screen forever.
+  const fontError = serifError ?? sansError ?? monoError;
+  const fontsReady =
+    (serifLoaded || Boolean(serifError)) &&
+    (sansLoaded || Boolean(sansError)) &&
+    (monoLoaded || Boolean(monoError));
 
   useEffect(() => {
-    if (fontsLoaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded]);
+    if (fontError) captureException(fontError, { area: 'fonts' });
+  }, [fontError]);
 
-  if (!fontsLoaded) {
+  useEffect(() => {
+    if (fontsReady) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsReady]);
+
+  if (!fontsReady) {
     return <View style={{ flex: 1, backgroundColor: bg }} />;
   }
 

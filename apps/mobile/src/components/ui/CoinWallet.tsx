@@ -24,6 +24,8 @@ export function CoinWallet({ balance, onAdd, style, ...props }: CoinWalletProps)
           <Pressable
             accessibilityLabel="Get more coins"
             accessibilityRole="button"
+            // Drawn 20pt; the touch area is 44pt.
+            hitSlop={12}
             onPress={onAdd}
             style={styles.add}
           >
@@ -43,7 +45,7 @@ type CoinIconProps = {
 export function CoinIcon({ size = 'sm' }: CoinIconProps) {
   const dim = size === 'lg' ? 22 : 15;
   return (
-    <View style={[styles.coin, { height: dim, width: dim }]}>
+    <View style={[styles.coin, { height: dim, width: dim }]} testID={`coin-icon-${size}`}>
       <View style={[styles.coinInner, size === 'lg' && styles.coinInnerLg]} />
     </View>
   );

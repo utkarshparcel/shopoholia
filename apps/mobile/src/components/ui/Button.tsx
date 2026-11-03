@@ -10,7 +10,15 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming, withSpring, Easing } from 'react-native-reanimated';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 import {
   accent,
@@ -168,6 +176,8 @@ export function ButtonComponent({
   return (
     <AnimatedPressable
       accessibilityRole="button"
+      // The label stays the button's name while the spinner replaces the text.
+      accessibilityLabel={label}
       accessibilityState={{ disabled: disabled || loading, busy: loading }}
       disabled={disabled || loading}
       onPressIn={handlePressIn}
@@ -210,16 +220,12 @@ export { ButtonComponent as Button };
 function AnimatedSpinner({ size, color }: { size: ButtonSize; color: ColorValue | undefined }) {
   const rotation = useSharedValue(0);
 
+  // Spins for as long as the button is loading (a one-off timing turned once and stopped).
   React.useEffect(() => {
-    rotation.value = withTiming(1, {
-      duration: 1000,
-      easing: Easing.linear,
-    }, (finished) => {
-      if (finished) {
-        rotation.value = 0;
-      }
-    });
-  }, []);
+    rotation.value = 0;
+    rotation.value = withRepeat(withTiming(1, { duration: 1000, easing: Easing.linear }), -1, false);
+    return () => cancelAnimation(rotation);
+  }, [rotation]);
 
   const spinnerStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotation.value * 360}deg` }],
