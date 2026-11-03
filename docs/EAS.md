@@ -163,6 +163,18 @@ Apple (developer account, App Store Connect):
    `https://api.worncloset.app/webhooks/app-store`.
 5. App Privacy, age rating, review notes: from `docs/STORE_LISTINGS.md`.
 6. Sandbox tester accounts (Users and Access → Sandbox) for your own purchase tests.
+7. Sign in with Apple key, so account deletion revokes the user's Apple tokens (App Review checks
+   this). Apple Developer → Certificates, Identifiers & Profiles → **Keys** → **+**: name it (e.g.
+   "Worn Sign in with Apple"), tick **Sign in with Apple**, **Configure** → primary App ID
+   `com.shopoholia.worn`, save, **Continue**, **Register**, then **Download** the `.p8` file (only
+   downloadable once; keep it in your password manager). Note the key's **Key ID** (10 characters,
+   on the key page) and your **Team ID** (Membership details, top right of the developer site).
+   Set on the API (`docs/DEPLOY.md`): `APPLE_SIGN_IN_KEY_ID` = Key ID, `APPLE_TEAM_ID` = Team ID,
+   `APPLE_SIGN_IN_PRIVATE_KEY` = the `.p8` contents (with `-----BEGIN PRIVATE KEY-----`; newlines
+   or literal `\n`), and `OAUTH_TOKEN_SECRET` if it isn't set yet. Restart the API and the worker;
+   the boot log stops warning "Apple tokens are not revoked". Smoke test: sign in with Apple on a
+   device, delete the account, and check Settings → Apple ID → Sign-In & Security → Sign in with
+   Apple no longer lists Worn.
 
 Google (Play Console, Google Cloud):
 

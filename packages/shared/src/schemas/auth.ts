@@ -34,6 +34,11 @@ export const AppleAuthRequestSchema = z.object({
   identityToken: z.string().min(20),
   nonce: z.string().min(16).max(128),
   fullName: z.string().trim().max(120).nullish(),
+  /**
+   * The credential's one-time authorization code. The API exchanges it for a refresh token so
+   * account deletion can revoke the Apple grant. Optional: older app builds don't send it.
+   */
+  authorizationCode: z.string().min(1).max(2048).nullish(),
 });
 
 export type AppleAuthRequest = z.infer<typeof AppleAuthRequestSchema>;

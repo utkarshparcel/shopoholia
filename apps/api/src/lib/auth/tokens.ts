@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { ONBOARDING_COIN_GRANT } from "@worn/shared";
 import type { Repositories } from "../repositories/types.js";
 import type { OtpService } from "./otp.js";
+import { captureException } from "../sentry.js";
 
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60_000;
 
@@ -79,8 +80,23 @@ export async function loginWithAppleProfile(
   app: FastifyInstance,
   repos: Repositories,
   profile: { appleSub: string; email: string | null; displayName?: string | null },
+  opts: {
+    /**
+     * The encrypted Apple refresh token from this sign-in's code exchange (never rejects; null
+     * when there is none). Stored so account deletion can revoke it; a newer one replaces it.
+     */
+    encryptedRefreshToken?: Promise<string | null>;
+  } = {},
 ) {
   const { user, isNew } = await repos.findOrCreateAppleUser(profile);
+  const encryptedRefreshToken = await opts.encryptedRefreshToken;
+  if (encryptedRefreshToken) {
+    // Best effort: sign-in never fails over the revocation token.
+    await repos.setAppleRefreshToken(user.id, encryptedRefreshToken).catch((err: unknown) => {
+      app.log.warn({ err, userId: user.id }, "apple.refresh_token.not_stored");
+      captureException(err, { tags: { apple: "refresh_token_store" } });
+    });
+  }
   let coinBalance = await repos.getCoinBalance(user.id);
 
   if (isNew) {

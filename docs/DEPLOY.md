@@ -111,6 +111,7 @@ renders fail, and the boot log warns:
 |---|---|
 | `GOOGLE_CLIENT_IDS` | Google sign-in answers 503. Web, iOS and Android client ids, comma-separated (the same ids the EAS build uses, `docs/EAS.md`). Phone sign-in is off in production, so this and Apple are the only ways in. |
 | `APPLE_BUNDLE_ID=com.shopoholia.worn` | Sign in with Apple and App Store purchases answer 503. (`APPLE_SIGN_IN_AUDIENCES` overrides the Sign in with Apple audience, comma-separated, if it ever differs.) |
+| `APPLE_SIGN_IN_KEY_ID`, `APPLE_TEAM_ID`, `APPLE_SIGN_IN_PRIVATE_KEY`, `OAUTH_TOKEN_SECRET` | Deleting an account doesn't revoke the user's Sign in with Apple tokens, which App Review requires. The Sign in with Apple key from Apple Developer → Keys (`docs/EAS.md`, owner checklist): its Key ID, your Team ID, and the downloaded `.p8` file's contents (PEM; one line with literal `\n` works). The client id is `APPLE_BUNDLE_ID` (else the first `APPLE_SIGN_IN_AUDIENCES` entry). `OAUTH_TOKEN_SECRET` encrypts the stored Apple refresh token (and Gmail tokens); a long random string, rotated as in `.env.example`. |
 | `ANDROID_PACKAGE_NAME=com.shopoholia.worn`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play purchases answer 503. |
 | `FASHN_API_KEY` | No AI renders (Worn Play's core): try-on previews and reveal unlock/generate answer 503 (no coins are taken), and every free reveal look shows as failed. See "FASHN renders" below. |
 | `REDIS_URL` + the API worker running | See "Account deletion" below: deletion itself works, but the retries for leftover stored objects, data exports and Play purchase reconciliation never run, and routes that enqueue a job answer 503. Redis with `maxmemory-policy noeviction`. |
@@ -160,6 +161,16 @@ gone, the request stays `RUNNING` with the keys in `privacy_requests.storage_key
 worker's `privacy-erase` job retries them. Without the worker, delete those keys by hand
 (`docs/playbooks/data-deletion.md`). Only when the database itself fails before anything is deleted
 and no retry can be queued does the app get a 503 and keep the user signed in to try again.
+
+Sign in with Apple accounts: when the app signs in it sends Apple's one-time authorization code,
+and the API (with the `APPLE_SIGN_IN_*` settings above) trades it at Apple for a refresh token,
+stored encrypted in `users.apple_refresh_token_enc`. Account deletion revokes that token at Apple
+(`https://appleid.apple.com/auth/revoke`, 5-second timeout) before the rows are deleted. A failed
+exchange never blocks sign-in, and a failed revoke never blocks deletion: the encrypted token waits
+in `privacy_requests.steps.appleTokenPending` (`appleTokenRevoke: "pending"`) and the worker's
+`privacy-erase` retry revokes it. Both failures are logged (`apple.token_exchange.failed`,
+`apple.token_revoke.failed`) and sent to Sentry. Accounts that signed in before this (or from an
+app build that sends no code) have no stored token, so there is nothing to revoke for them.
 
 The API worker (`start:worker`) reads the same settings as the API: give it the same environment,
 `REDIS_URL` included (it refuses to start without Redis).

@@ -296,11 +296,15 @@ export async function signInWithGoogle(idToken: string) {
   }>(res);
 }
 
-/** Sign in with Apple: the credential's identity token plus the raw nonce whose hash Apple got. */
+/**
+ * Sign in with Apple: the credential's identity token plus the raw nonce whose hash Apple got, and
+ * the one-time authorization code (the API trades it for the token it revokes on account deletion).
+ */
 export async function signInWithApple(body: {
   identityToken: string;
   nonce: string;
   fullName?: string | null;
+  authorizationCode?: string | null;
 }) {
   const res = await apiFetch(`${API_URL}/auth/apple`, {
     method: 'POST',

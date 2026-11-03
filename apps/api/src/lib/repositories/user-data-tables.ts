@@ -76,7 +76,7 @@ export type UserTableSpec =
   | { table: PgTable; parent: PgTable; fk: AnyPgColumn; omit?: string[] };
 
 export const USER_DATA_TABLES: UserTableSpec[] = [
-  { table: users, owner: users.id },
+  { table: users, owner: users.id, omit: ["appleRefreshTokenEnc"] },
   { table: avatars, owner: avatars.userId },
   { table: lookbookItems, owner: lookbookItems.userId },
   { table: cashbackEvents, owner: cashbackEvents.userId },

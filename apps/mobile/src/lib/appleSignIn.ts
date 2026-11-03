@@ -60,6 +60,8 @@ export async function signInWithApple(): Promise<AppleSignInResult> {
     identityToken: credential.identityToken,
     nonce,
     fullName: fullNameOf(credential.fullName),
+    // Lets the API revoke the Apple grant when the account is deleted (App Store requirement).
+    authorizationCode: credential.authorizationCode ?? null,
   });
   return { status: 'signed-in', tokens };
 }

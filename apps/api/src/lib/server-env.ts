@@ -2,6 +2,7 @@ import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
 import { resolveEconomyMode } from "./orders/state-machine.js";
 import { hasR2Config } from "./storage/r2.js";
+import { appleRevocationConfigProblem } from "./auth/apple-revoke.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -139,6 +140,8 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!(env.APPLE_SIGN_IN_AUDIENCES ?? env.APPLE_BUNDLE_ID)?.trim()) {
       warnings.push("APPLE_BUNDLE_ID is not set: Sign in with Apple answers 503");
     }
+    const appleRevocation = appleRevocationConfigProblem(env);
+    if (appleRevocation) warnings.push(appleRevocation);
     if (!env.FASHN_API_KEY?.trim()) {
       warnings.push("FASHN_API_KEY is not set: try-on and reveal renders fail, so orders never reach their reveal");
     }

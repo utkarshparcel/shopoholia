@@ -162,6 +162,13 @@
       "when": 1793720799031,
       "tag": "0022_catalog_coin_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793725111412,
+      "tag": "0023_users_apple_refresh_token",
+      "breakpoints": true
     }
   ]
 }
