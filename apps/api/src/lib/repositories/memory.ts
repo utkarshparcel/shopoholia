@@ -1119,10 +1119,29 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async clearCatalog() {
-      listings.clear();
-      variants.clear();
-      variantsByListing.clear();
-      lookbooks.clear();
+      // Listings someone ordered are archived, so order lines keep their variant.
+      const ordered = new Set<string>();
+      for (const item of orderItems.values()) {
+        const variant = variants.get(item.listingVariantId);
+        if (variant) ordered.add(variant.listingId);
+      }
+      cartItems.clear();
+      cartItemsByCart.clear();
+      for (const [id, listing] of listings) {
+        if (ordered.has(id)) {
+          listings.set(id, { ...listing, status: "ARCHIVED" });
+          continue;
+        }
+        listings.delete(id);
+        for (const variantId of variantsByListing.get(id) ?? []) variants.delete(variantId);
+        variantsByListing.delete(id);
+      }
+      for (const [key, preview] of tryonPreviews) {
+        if (preview.listingVariantId && !variants.has(preview.listingVariantId)) tryonPreviews.delete(key);
+      }
+      for (const saved of lookbooks.values()) {
+        for (const listingId of saved.keys()) if (!listings.has(listingId)) saved.delete(listingId);
+      }
     },
 
     async listListings({ cursor, limit, sellerId, category, styleKeywords }: ListListingsInput) {

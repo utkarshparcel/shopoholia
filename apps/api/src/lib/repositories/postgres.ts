@@ -2097,9 +2097,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: listing.category,
             tags: listing.tags,
             coinPrice: listing.coinPrice,
+            realPrice: listing.realPrice ?? null,
             productImageKeys: listing.productImageKeys,
             houseModelRenderKey: listing.houseModelRenderKey,
             affiliateUrl: listing.affiliateUrl,
+            affiliateLinks: listing.affiliateLinks ?? null,
             status: listing.status,
             sortOrder: listing.sortOrder,
             createdAt: listing.createdAt,
@@ -2124,8 +2126,17 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async clearCatalog() {
-      // CASCADE clears cart_items / tryon_previews that reference variants.
-      await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
+      // Never TRUNCATE ... CASCADE: that empties every table referencing the catalog, including
+      // order_items and (through them) renders. Listings someone ordered are archived instead.
+      await db.transaction(async (tx) => {
+        const ordered = sql`(SELECT lv.listing_id FROM listing_variants lv JOIN order_items oi ON oi.listing_variant_id = lv.id)`;
+        await tx.execute(sql`DELETE FROM cart_items`);
+        await tx.execute(
+          sql`UPDATE listings SET status = 'ARCHIVED', updated_at = now() WHERE id IN ${ordered}`,
+        );
+        // Variants, try-on previews and lookbook rows go with the listing (ON DELETE CASCADE).
+        await tx.execute(sql`DELETE FROM listings WHERE id NOT IN ${ordered}`);
+      });
     },
 
     async listListings({
@@ -2329,9 +2340,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: input.category,
             tags: input.tags,
             coinPrice: input.coinPrice,
+            realPrice: input.realPrice ?? null,
             productImageKeys: input.productImageKeys,
             houseModelRenderKey: input.houseModelRenderKey,
             affiliateUrl,
+            affiliateLinks: input.affiliateLinks ?? null,
             status: "ACTIVE",
             sortOrder,
             createdAt: timestamp,
