@@ -87,9 +87,31 @@ jobs:
         env:
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
 
-      - name: Postgres repository tests
-        run: pnpm --filter @worn/api exec vitest run src/lib/repositories/postgres
+      # Every suite that reads DATABASE_URL (repositories, coin races, paid renders, the render
+      # pipeline, the money ledger); without it they skip.
+      - name: Postgres tests
+        run: |
+          pnpm --filter @worn/api exec vitest run src/lib/repositories src/lib/render/pipeline.test.ts
+          pnpm --filter @worn/db exec vitest run src/queries/money.test.ts
         env:
+          DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
+
+      # The documented production start (node dist/index.js) against the migrated database: the
+      # built output must resolve every workspace package and answer /health.
+      - name: Built API boots
+        working-directory: apps/api
+        run: |
+          node dist/index.js > api-boot.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4310/health; then break; fi
+            if ! kill -0 $PID 2>/dev/null; then cat api-boot.log; exit 1; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:4310/health || { cat api-boot.log; exit 1; }
+          kill $PID
+        env:
+          PORT: "4310"
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
 
       - name: Parser-accuracy threshold check (coverage ≥80%, grand-total ≥90%)

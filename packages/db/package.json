@@ -3,10 +3,16 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "db:generate": "node --import ./node_modules/tsx/dist/loader.mjs ./node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -21,6 +27,7 @@
     "postgres": "^3.4.5"
   },
   "devDependencies": {
+    "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^3.2.4",
     "drizzle-kit": "^0.30.4",
     "tsx": "^4.22.4",
