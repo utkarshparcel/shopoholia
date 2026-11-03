@@ -151,7 +151,8 @@ describe("credits", () => {
     expect(account.balanceCacheMinor).toBe(5000);
     expect(account.kind).toBe("GIFT_CARD");
     expect(account.link).toContain("amazon.in");
-    expect(account.link).toContain("tag=shopoholia-21");
+    // No AFFILIATE_AMAZON_TAG in tests: the storefront link is untagged, never a placeholder id.
+    expect(account.link).toBe("https://www.amazon.in/");
 
     const list = await app.inject({
       method: "GET",

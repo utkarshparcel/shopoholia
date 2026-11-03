@@ -116,7 +116,7 @@ describe("U034 missing layer", () => {
     expect(gaps.length).toBeGreaterThanOrEqual(1);
     expect(gaps.length).toBeLessThanOrEqual(3);
     expect(gaps[0]!.gapReason).toMatch(/missing|need|gap/i);
-    expect(gaps[0]!.affiliateUrl).toMatch(/closet/);
+    expect(gaps[0]!.affiliateUrl).toMatch(/^https:\/\/www\.myntra\.com\//);
     const dismissed = detectMissingLayers({
       weather: { tempC: 12 },
       owned: {},

@@ -1,3 +1,5 @@
+import { tagAffiliateUrl, type AffiliateIds } from "../affiliate-ids.js";
+
 export type SeedListingVariant = {
   size: string;
   color: string;
@@ -87,23 +89,30 @@ function searchQuery(title: string): string {
   return encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9 ]/g, ""));
 }
 
-function affiliateUrlForPlatform(platform: string, title: string): string {
+function affiliateUrlForPlatform(
+  platform: (typeof PLATFORMS)[number],
+  title: string,
+  ids: AffiliateIds | undefined,
+): string {
   const q = searchQuery(title);
-  const urls: Record<string, (q: string) => string> = {
-    flipkart: (q) => `https://www.flipkart.com/search?q=${q}&affid=yourshopoholia`,
-    amazon: (q) => `https://www.amazon.in/s?k=${q}&tag=shopoholia-21`,
-    myntra: (q) => `https://www.myntra.com/${q}?ref=shopoholia`,
-    ajio: (q) => `https://www.ajio.com/search/?text=${q}&affiliate=shopoholia`,
-    nykaa: (q) => `https://www.nykaafashion.com/search/?q=${q}&utm_source=shopoholia`,
+  const urls: Record<(typeof PLATFORMS)[number], string> = {
+    flipkart: `https://www.flipkart.com/search?q=${q}`,
+    amazon: `https://www.amazon.in/s?k=${q}`,
+    myntra: `https://www.myntra.com/${q}`,
+    ajio: `https://www.ajio.com/search/?text=${q}`,
+    nykaa: `https://www.nykaafashion.com/search/?q=${q}`,
   };
-  return (urls[platform] ?? urls.flipkart)(q);
+  return tagAffiliateUrl(platform, urls[platform], ids);
 }
 
 function pick<T>(items: readonly T[], index: number): T {
   return items[index % items.length]!;
 }
 
-export function buildSeedListings(count = 50): SeedListing[] {
+export function buildSeedListings(
+  count = 50,
+  opts: { affiliateIds?: AffiliateIds } = {},
+): SeedListing[] {
   const listings: SeedListing[] = [];
 
   for (let i = 0; i < count; i += 1) {
@@ -136,12 +145,12 @@ export function buildSeedListings(count = 50): SeedListing[] {
       variants,
       affiliateLinks: [
         {
-          url: affiliateUrlForPlatform(mainPlatform, title),
+          url: affiliateUrlForPlatform(mainPlatform, title, opts.affiliateIds),
           label: `Buy on ${mainPlatform.charAt(0).toUpperCase() + mainPlatform.slice(1)}`,
           platform: mainPlatform,
         },
         {
-          url: affiliateUrlForPlatform(secondPlatform, title),
+          url: affiliateUrlForPlatform(secondPlatform, title, opts.affiliateIds),
           label: `Buy on ${secondPlatform.charAt(0).toUpperCase() + secondPlatform.slice(1)}`,
           platform: secondPlatform,
         },

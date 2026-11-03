@@ -3,6 +3,7 @@
  * and emit a shopping list with Play / affiliate suggestions.
  */
 
+import { affiliateIdsFromEnv, tagAffiliateUrl, type AffiliateIds } from "@worn/shared";
 import { categorySlot, type GarmentSlot } from "./outfit-goes-with.js";
 
 export type MissingPieceItem = {
@@ -45,18 +46,25 @@ const SLOT_LABEL: Record<GarmentSlot, string> = {
   other: "staples",
 };
 
-/** Build a Play-style affiliate search URL for a gap suggestion. */
-export function affiliateSuggestionUrl(query: string, merchant = "myntra"): string {
+/**
+ * Build a Play-style search URL for a gap suggestion, tagged with the configured affiliate id
+ * (AFFILIATE_* env vars) and untagged when the platform has none.
+ */
+export function affiliateSuggestionUrl(
+  query: string,
+  merchant = "myntra",
+  affiliateIds: AffiliateIds = affiliateIdsFromEnv(process.env),
+): string {
   const q = encodeURIComponent(query.trim() || "wardrobe staple");
   const m = merchant.toLowerCase();
   if (m === "amazon" || m === "amazon.in") {
-    return `https://www.amazon.in/s?k=${q}&tag=shopoholia-21`;
+    return tagAffiliateUrl("amazon", `https://www.amazon.in/s?k=${q}`, affiliateIds);
   }
   if (m === "flipkart") {
-    return `https://www.flipkart.com/search?q=${q}&affid=yourshopoholia`;
+    return tagAffiliateUrl("flipkart", `https://www.flipkart.com/search?q=${q}`, affiliateIds);
   }
   // Default: Myntra fashion search (Play affiliate bridge)
-  return `https://www.myntra.com/${q.replace(/%20/g, "-")}?ref=shopoholia`;
+  return tagAffiliateUrl("myntra", `https://www.myntra.com/${q.replace(/%20/g, "-")}`, affiliateIds);
 }
 
 function countBySlot(items: MissingPieceItem[]): Map<GarmentSlot, MissingPieceItem[]> {

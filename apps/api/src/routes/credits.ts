@@ -21,6 +21,7 @@ import {
   SpendCreditResponseSchema,
   UndoSpendCreditBodySchema,
   UndoSpendCreditResponseSchema,
+  affiliateIdsFromEnv,
   giftCardCapturePrefill,
   merchantDeepLink,
 } from "@worn/shared";
@@ -69,7 +70,7 @@ function toAccountJson(a: MoneyAccountRecord) {
     balanceCacheMinor: a.balanceCacheMinor,
     expiresAt: a.expiresAt ? a.expiresAt.toISOString() : null,
     status: a.status,
-    link: merchantDeepLink(a.merchant),
+    link: merchantDeepLink(a.merchant, affiliateIdsFromEnv(process.env)),
     ...balanceCheckMetaForAccount(a),
   };
 }

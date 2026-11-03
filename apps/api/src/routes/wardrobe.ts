@@ -43,6 +43,7 @@ import {
   canUndoPhotoDumpTriage,
   canUndoWearLog,
   careRulesOrNull,
+  affiliateIdsFromEnv,
   detectMissingLayers,
   extractOcrPlainText,
   isLentOverdue,
@@ -2055,6 +2056,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         occasion: q.occasion,
         owned,
         dismissedIds: await listDismissedMissingLayers(app.deps.repos, userId),
+        affiliateIds: affiliateIdsFromEnv(process.env),
       });
       return { gaps };
     },
