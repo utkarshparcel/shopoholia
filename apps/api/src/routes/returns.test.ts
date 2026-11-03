@@ -469,7 +469,7 @@ describe("returns", () => {
     await app.close();
   });
 
-  it("WV01-DEADLINE-IMAGE-PUSH: enrichDeadlineFromPurchaseItem includes signed imageUrl", async () => {
+  it("WV01-DEADLINE-IMAGE-PUSH: enrichDeadlineFromPurchaseItem carries the item imageKey", async () => {
     const { app } = await buildTestServer();
     const { accessToken, userId } = await login(app);
     const { enrichDeadlineFromPurchaseItem } = await import("../lib/return-jobs.js");
@@ -491,7 +491,7 @@ describe("returns", () => {
       ],
     });
     const item = purchase.items[0]!;
-    const payload = await enrichDeadlineFromPurchaseItem(
+    const payload = enrichDeadlineFromPurchaseItem(
       {
         returnId: "00000000-0000-4000-8000-0000000000r9",
         userId,
@@ -499,10 +499,10 @@ describe("returns", () => {
         merchant: "Amazon",
       },
       item,
-      (key) => app.deps.storage.getSignedUrl(key),
       "INR",
     );
-    expect(payload.imageUrl).toContain("sneakers");
+    // The key is signed by the worker when the push is sent; a URL signed now would expire first.
+    expect(payload.imageKey).toBe("items/sneakers.jpg");
     expect(payload.amountMinor).toBe(45000);
     expect(payload.currency).toBe("INR");
 

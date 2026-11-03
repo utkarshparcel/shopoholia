@@ -26,8 +26,14 @@ export type ReturnDeadlinePayload = {
   userId: string;
   windowDeadline: string;
   merchant: string;
-  /** Optional item image for rich push (NOTIF-RICH / WV01-DEADLINE-IMAGE-PUSH). */
+  /**
+   * Image for rich push (NOTIF-RICH / WV01-DEADLINE-IMAGE-PUSH): a long-lived URL (the brand
+   * placeholder). The item's own image travels as `imageKey` and is signed by the worker when it
+   * sends the push; a URL signed now would have expired by then.
+   */
   imageUrl?: string;
+  /** Storage key of the item image, signed at send time. */
+  imageKey?: string;
   amountMinor?: number;
   currency?: string;
 };
@@ -40,6 +46,7 @@ export function withReturnDeadlineRichFields(
   payload: ReturnDeadlinePayload,
   opts: {
     imageUrl?: string | null;
+    imageKey?: string | null;
     amountMinor?: number | null;
     currency?: string | null;
   } = {},
@@ -47,6 +54,8 @@ export function withReturnDeadlineRichFields(
   const next: ReturnDeadlinePayload = { ...payload };
   const imageUrl = opts.imageUrl?.trim();
   if (imageUrl) next.imageUrl = imageUrl;
+  const imageKey = opts.imageKey?.trim();
+  if (imageKey) next.imageKey = imageKey;
   if (opts.amountMinor != null && opts.amountMinor > 0) {
     next.amountMinor = opts.amountMinor;
     if (opts.currency?.trim()) next.currency = opts.currency.trim();
@@ -55,46 +64,28 @@ export function withReturnDeadlineRichFields(
 }
 
 /**
- * Brand placeholder URL when purchase item has no imageKey (W042).
- * Prefers RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL env, else signs brand key, else static.
+ * Brand placeholder URL (W042): RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL, else the public media
+ * bucket. Never a signed URL: the push goes out days or weeks after it is scheduled.
  */
-export async function resolveDeadlinePlaceholderImageUrl(
-  getSignedUrl?: (key: string) => Promise<string>,
-): Promise<string> {
-  const fromEnv = process.env.RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL?.trim();
-  if (fromEnv) return fromEnv;
-  if (getSignedUrl) {
-    try {
-      const signed = await getSignedUrl(RETURN_DEADLINE_PLACEHOLDER_IMAGE_KEY);
-      if (signed?.trim()) return signed.trim();
-    } catch {
-      // fall through to static brand asset
-    }
-  }
-  return RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL_DEFAULT;
+export function resolveDeadlinePlaceholderImageUrl(): string {
+  return (
+    process.env.RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL?.trim() || RETURN_DEADLINE_PLACEHOLDER_IMAGE_URL_DEFAULT
+  );
 }
 
-/** Resolve signed image URL + amount from a purchase item for deadline push. */
-export async function enrichDeadlineFromPurchaseItem(
+/**
+ * Rich push fields from a purchase item for the deadline push: the item's storage key (signed
+ * by the worker at send time), the long-lived brand placeholder as the fallback image (W042: a
+ * rich push always has one), and the amount.
+ */
+export function enrichDeadlineFromPurchaseItem(
   payload: ReturnDeadlinePayload,
   item: { imageKey: string | null; priceMinor: number } | null | undefined,
-  getSignedUrl: (key: string) => Promise<string>,
   currency?: string | null,
-): Promise<ReturnDeadlinePayload> {
-  let imageUrl: string | null = null;
-  if (item?.imageKey) {
-    try {
-      imageUrl = await getSignedUrl(item.imageKey);
-    } catch {
-      imageUrl = null;
-    }
-  }
-  // W042 — always attach an image so rich push still SENT with brand asset.
-  if (!imageUrl?.trim()) {
-    imageUrl = await resolveDeadlinePlaceholderImageUrl(getSignedUrl);
-  }
+): ReturnDeadlinePayload {
   return withReturnDeadlineRichFields(payload, {
-    imageUrl,
+    imageUrl: resolveDeadlinePlaceholderImageUrl(),
+    imageKey: item?.imageKey ?? null,
     amountMinor: item?.priceMinor ?? null,
     currency,
   });

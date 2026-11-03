@@ -13,7 +13,21 @@ export const RETURN_DEADLINE_EVENT = "RETURN_DEADLINE";
 export type ClosetPushHandlerOpts = {
   now?: Date;
   sendExpo?: typeof sendExpoPush;
+  /** Signs `payload.imageKey` at send time (r2ImageSignerFromEnv); without it the push uses imageUrl. */
+  signImageKey?: ((key: string) => string) | null;
 };
+
+/** The item image signed now, so the link is fresh when the push lands; else the fallback URL. */
+function pushImageUrl(payload: ReturnDeadlinePayload, opts: ClosetPushHandlerOpts): string | undefined {
+  if (payload.imageKey && opts.signImageKey) {
+    try {
+      return opts.signImageKey(payload.imageKey);
+    } catch {
+      // fall back to the long-lived URL
+    }
+  }
+  return payload.imageUrl;
+}
 
 async function loadUser(db: Db, userId: string) {
   const [user] = await db
@@ -80,7 +94,7 @@ export async function processReturnDeadline(
       windowDeadline: payload.windowDeadline,
     },
     rich: {
-      imageUrl: payload.imageUrl,
+      imageUrl: pushImageUrl(payload, opts),
       amountMinor: payload.amountMinor,
       currency: payload.currency,
     },
