@@ -15,6 +15,11 @@ export const users = pgTable("users", {
   googleSub: text("google_sub").unique(),
   /** Sign in with Apple's stable user id (the identity token's `sub`). */
   appleSub: text("apple_sub").unique(),
+  /**
+   * The Sign in with Apple refresh token, encrypted (@worn/shared/token-crypto, OAUTH_TOKEN_SECRET).
+   * Revoked at Apple when the account is deleted (App Store requirement). Never exported.
+   */
+  appleRefreshTokenEnc: text("apple_refresh_token_enc"),
   displayName: text("display_name"),
   avatarStatus: avatarStatusEnum("avatar_status").notNull().default("NONE"),
   coinBalanceCache: integer("coin_balance_cache").notNull().default(0),
