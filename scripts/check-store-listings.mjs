@@ -31,15 +31,27 @@ const gtm = read(gtmDoc);
 
 if (store) {
   const required = [
-    { label: "Play listing copy", re: /Google Play|Play Store|title.*Gift Card/i },
-    { label: "App Store listing copy", re: /App Store|subtitle|Keywords/i },
+    { label: "Worn Play listing", re: /Worn Play/ },
+    { label: "Play listing copy", re: /Google Play — listing copy/ },
+    { label: "App Store listing copy", re: /App Store — listing copy[\s\S]*Keywords/ },
+    { label: "App Review notes (sign-in + sandbox purchase)", re: /App Review[\s\S]*Sign in with Apple[\s\S]*sandbox/i },
     { label: "Data Safety checklist", re: /Data Safety/i },
     { label: "App Privacy / nutrition", re: /nutrition|App Privacy|privacy label/i },
-    { label: "screenshot #1 found-money", re: /Screenshot|#1|found-money|forgotten credit/i },
+    { label: "screenshot plan", re: /Screenshot #1/ },
+    { label: "account deletion", re: /Delete account[\s\S]*privacy#delete-account/ },
     { label: "closed testers ≥12", re: /≥\s*12|>=\s*12|closed tester/i },
     { label: "no store submit in CI", re: /no.*store submit|does \*\*not\*\* submit|never.*submit/i },
     { label: "bundle id", re: /com\.shopoholia\.worn/ },
   ];
+  // The paste-ready store copy (code blocks and the listing tables) must not sell Closet features,
+  // which no release build has.
+  const listing = store.slice(0, store.indexOf("## Screenshot"));
+  const closetOnly = /gift card|store credit|return (window|reminder)|warrant|gmail|found[- ]money/i;
+  const copyBlocks = [...listing.matchAll(/```[\s\S]*?```|^\| \*\*[^|]+\*\* \|.*$/gm)].map((m) => m[0]);
+  for (const block of copyBlocks) {
+    const hit = block.match(closetOnly);
+    if (hit) fail(`docs/STORE_LISTINGS.md store copy mentions a Closet-only feature: "${hit[0]}"`);
+  }
   for (const { label, re } of required) {
     if (!re.test(store)) fail(`docs/STORE_LISTINGS.md missing coverage: ${label}`);
   }

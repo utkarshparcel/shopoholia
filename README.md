@@ -174,7 +174,9 @@ Universal links (iOS associated domains, Android app links) are not set up yet. 
 
 ## Beta deploy (TestFlight + Play internal)
 
-`apps/mobile/eas.json` scaffolds beta profiles. CI runs `pnpm check:eas-gates` (validates profiles + `docs/EAS.md` OTA/crash-free checklist) and `pnpm check:store-listings` (listing copy + Data Safety + screenshot plan) — **no builds or store submits from CI**. Paste-ready metadata: [docs/STORE_LISTINGS.md](docs/STORE_LISTINGS.md). Ops runbooks: [docs/playbooks/](docs/playbooks/) via `GET /admin/ops/playbooks`.
+`apps/mobile/eas.json` scaffolds beta profiles. CI runs `pnpm check:eas-gates` (validates profiles + `docs/EAS.md` OTA/crash-free checklist) and `pnpm check:store-listings` (listing copy + Data Safety + screenshot plan) — **no builds or store submits from CI**. Paste-ready Worn Play metadata, review notes and privacy answers: [docs/STORE_LISTINGS.md](docs/STORE_LISTINGS.md). Ops runbooks: [docs/playbooks/](docs/playbooks/) via `GET /admin/ops/playbooks`.
+
+Before the first build, set `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` and `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` in the EAS `preview` and `production` environments: a release build without the client id of its platform fails (`app.config.js`). The full owner checklist (bundle id decision, Sign in with Apple capability, in-app products, OAuth clients and signing SHA-1s) is at the end of [docs/EAS.md](docs/EAS.md). Every store profile auto-increments the build number (`appVersionSource: remote`).
 
 ```bash
 cd apps/mobile
