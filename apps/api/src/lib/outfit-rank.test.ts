@@ -96,6 +96,33 @@ describe("outfit-rank", () => {
     expect(alt1.hasMore).toBe(false);
   });
 
+  it("pickOutfitSlice fills top, bottom and shoes instead of three shirts", () => {
+    // Equal scores: the three oldest items are shirts.
+    const items = [
+      item("s1", "shirt"),
+      item("s2", "shirt"),
+      item("s3", "shirt"),
+      item("j1", "jeans"),
+      item("k1", "sneakers"),
+    ];
+    const { scored } = rankWardrobeItems({ items, weather: null });
+    const primary = pickOutfitSlice(scored, { altIndex: 0, pickCount: 3 });
+    expect(primary.selected.map((s) => s.id).sort()).toEqual(["j1", "k1", "s1"]);
+
+    const dress = pickOutfitSlice(
+      rankWardrobeItems({
+        items: [item("d1", "dress"), item("t1", "top"), item("b1", "skirt"), item("h1", "heels")],
+        weather: null,
+      }).scored,
+      { pickCount: 3 },
+    );
+    const ids = dress.selected.map((s) => s.id);
+    expect(ids).toContain("d1");
+    expect(ids).toContain("h1");
+    expect(ids).not.toContain("t1");
+    expect(ids).not.toContain("b1");
+  });
+
   it("excludes worn-blocked ids from slice", () => {
     const items = [item("a", "top"), item("b", "bottom"), item("c", "shoes")];
     const { scored } = rankWardrobeItems({
