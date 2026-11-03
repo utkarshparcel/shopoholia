@@ -8,6 +8,7 @@ import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -772,9 +773,13 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listCoinTransactions({ userId, cursor, limit }: ListCoinTransactionsInput) {
+      // Newest first; entries in one millisecond newest first too (the ledger is append-only),
+      // as Postgres orders them by their microsecond timestamps.
       const all = ledger
-        .filter((e) => e.userId === userId)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => entry.userId === userId)
+        .sort((a, b) => b.entry.createdAt.getTime() - a.entry.createdAt.getTime() || b.index - a.index)
+        .map(({ entry }) => entry);
 
       let start = 0;
       if (cursor) {
@@ -1734,7 +1739,7 @@ export function createMemoryRepositories(): Repositories {
           if (render) all.push(render);
         }
       }
-      return all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      return sortRendersForReveal(all);
     },
 
     async listPendingRenders() {

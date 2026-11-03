@@ -86,6 +86,7 @@ import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError }
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -1626,14 +1627,16 @@ export function createPostgresRepositories(db: Db): Repositories {
 
       if (cursor) {
         const [cursorRow] = await db
-          .select()
+          .select({ id: coinLedger.id })
           .from(coinLedger)
-          .where(eq(coinLedger.id, cursor))
+          .where(and(eq(coinLedger.id, cursor), eq(coinLedger.userId, userId)))
           .limit(1);
 
         if (cursorRow) {
+          // Compared in SQL against the cursor row itself: created_at has microseconds (a JS Date
+          // would drop them and skip rows), and postgres-js can't bind a Date in raw sql.
           conditions.push(
-            sql`(${coinLedger.createdAt} < ${cursorRow.createdAt} OR (${coinLedger.createdAt} = ${cursorRow.createdAt} AND ${coinLedger.id} < ${cursorRow.id}))`,
+            sql`(${coinLedger.createdAt}, ${coinLedger.id}) < (SELECT c.created_at, c.id FROM coin_ledger c WHERE c.id = ${cursorRow.id}::uuid)`,
           );
         }
       }
@@ -2864,9 +2867,11 @@ export function createPostgresRepositories(db: Db): Repositories {
         .select()
         .from(renders)
         .where(inArray(renders.orderItemId, itemIds))
-        .orderBy(asc(renders.createdAt));
+        .orderBy(asc(renders.createdAt), asc(renders.id));
 
-      return rows.map(mapRender);
+      // One order's renders share a created_at: ties go by item, scenario and id, the same as
+      // memory, so the reveal's cards keep their places between polls instead of heap order.
+      return sortRendersForReveal(rows.map(mapRender));
     },
 
     async listPendingRenders() {

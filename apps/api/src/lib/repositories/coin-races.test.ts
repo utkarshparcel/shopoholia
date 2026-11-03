@@ -163,6 +163,30 @@ function coinRaceCases(getRepos: () => Repositories) {
     expect(await repos.getCartItems(cart.id)).toEqual([]);
   });
 
+  it("coin history: pages follow the cursor through every entry once", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const other = await newUser(repos);
+    // Back-to-back grants: several land in the same millisecond.
+    for (let i = 0; i < 7; i += 1) {
+      await repos.grantCoins({ userId: user.id, delta: i + 1, type: "GRANT", refType: "test" });
+    }
+    const seen: number[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await repos.listCoinTransactions({ userId: user.id, cursor, limit: 2 });
+      seen.push(...result.transactions.map((tx) => tx.delta));
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    expect(seen).toEqual([7, 6, 5, 4, 3, 2, 1]);
+    // Someone else's entry id is no cursor into this user's history.
+    await repos.grantCoins({ userId: other.id, delta: 1, type: "GRANT", refType: "test" });
+    const [theirEntry] = (await repos.listCoinTransactions({ userId: other.id, limit: 1 })).transactions;
+    const fromTheirs = await repos.listCoinTransactions({ userId: user.id, cursor: theirEntry!.id, limit: 50 });
+    expect(fromTheirs.transactions).toHaveLength(7);
+  });
+
   it("checkout: another user's idempotency key is a conflict, not a crash", async () => {
     const repos = getRepos();
     const [a, b] = [await newUser(repos), await newUser(repos)];
