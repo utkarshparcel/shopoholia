@@ -18,7 +18,7 @@ import {
 } from '@/src/lib/foundMoney';
 import { trackEvent } from '@/src/lib/analytics';
 import { FEATURE_CLOSET } from '@/src/lib/features';
-import { closetAlertText } from '@/src/lib/closetScreenState';
+import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { fontSans, fontSansSemiBold, fsBody, fsCaption, space4, text, textMuted } from '@/src/theme/tokens';
 
 export default function FamilyShareConfirmScreen() {
@@ -40,7 +40,8 @@ export default function FamilyShareConfirmScreen() {
   }, [confirm]);
 
   useEffect(() => {
-    if (!confirm) return;
+    // Expo Router serves this route even with Closet off: credit nothing then.
+    if (!FEATURE_CLOSET || !confirm) return;
     let cancelled = false;
     void attributeReferral(confirm.referralCode, 'family_share')
       .then((res) => {
@@ -64,7 +65,7 @@ export default function FamilyShareConfirmScreen() {
   }, [confirm]);
 
   if (!FEATURE_CLOSET) {
-    return <ClosetScreen title="Family share" subtitle="Closet feature flag off." />;
+    return <ClosetScreen title="Family share" subtitle={CLOSET_OFF_SUBTITLE} />;
   }
 
   const installCta = landingInstallCta ?? landing?.installCta ?? 'Open vault';
