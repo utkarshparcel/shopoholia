@@ -20,6 +20,7 @@ import { closeQueues } from "./lib/queues/enqueue.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import {
   bootConfigProblems,
+  fastifyTrustProxy,
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
@@ -69,7 +70,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: { req: requestLogFields } } : false,
     // Behind the host's proxy the socket peer is the proxy: request.ip must come from
     // X-Forwarded-For, or every user shares one rate-limit bucket.
-    trustProxy: resolveTrustProxy() ?? false,
+    trustProxy: fastifyTrustProxy(resolveTrustProxy()),
     // A slow client gets 2 minutes to send a request (10 MB uploads on a weak mobile link);
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
@@ -120,7 +121,15 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const jwtSecret = resolveJwtSecret();
   if (jwtSecret.warning) app.log.warn(jwtSecret.warning);
   for (const warning of [...boot.errors, ...boot.warnings]) app.log.warn(`[config] ${warning}`);
-  await app.register(jwt, { secret: jwtSecret.secret });
+  // Strict on purpose: fast-jwt accepted unsigned or empty-key tokens when a key was ''/null, and
+  // an unpinned algorithm allows algorithm confusion. HS256 only, a non-empty secret, and every
+  // token must carry an expiry (one signed without `exp` is refused, not treated as eternal).
+  if (jwtSecret.secret.trim().length === 0) throw new Error("JWT secret must not be empty");
+  await app.register(jwt, {
+    secret: jwtSecret.secret,
+    sign: { algorithm: "HS256" },
+    verify: { algorithms: ["HS256"], requiredClaims: ["exp", "sub"] },
+  });
   // Each route group has its own bucket per signed-in user (per IP when signed out), so one screen
   // that calls several groups never trips another group's limit, and users behind one IP don't share.
   const rateLimitKey = (request: FastifyRequest): string => {

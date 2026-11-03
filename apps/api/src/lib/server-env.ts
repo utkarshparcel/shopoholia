@@ -1,3 +1,4 @@
+import proxyAddr from "@fastify/proxy-addr";
 import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
 import { resolveEconomyMode } from "./orders/state-machine.js";
@@ -12,7 +13,8 @@ const DEV_JWT_SECRET = "dev-only-change-me";
  * (.env.example, @worn/config); JWT_SECRET is still read so existing setups keep working.
  */
 export function resolveJwtSecret(env: Env = process.env): { secret: string; warning?: string } {
-  const secret = env.JWT_ACCESS_SECRET || env.JWT_SECRET;
+  // A blank or whitespace-only value counts as unset: tokens are never signed with an empty key.
+  const secret = [env.JWT_ACCESS_SECRET, env.JWT_SECRET].find((value) => value?.trim());
   if (secret) return { secret };
 
   if (env.NODE_ENV === "production") {
@@ -49,6 +51,24 @@ export function resolveTrustProxy(env: Env = process.env): boolean | number | st
   return undefined;
 }
 
+/** Addresses a host's own load balancer connects from: private, loopback or carrier-grade NAT. */
+const isInternalProxyAddress = proxyAddr.compile(["loopback", "linklocal", "uniquelocal", "100.64.0.0/10"]);
+
+/**
+ * resolveTrustProxy's value as Fastify's `trustProxy` option. Fastify 5.12 stopped honouring a bare
+ * hop count (it fails closed, so request.ip became the proxy's and every signed-out caller shared one
+ * rate-limit bucket): a hop count is now a function that trusts at most that many hops, and only
+ * hops whose address is internal, so a client reaching the API directly from the internet can't
+ * spoof X-Forwarded-For. A host whose balancer connects from public addresses sets TRUST_PROXY to
+ * its CIDRs instead.
+ */
+export function fastifyTrustProxy(
+  value: boolean | number | string | undefined,
+): boolean | string | ((address: string, hop: number) => boolean) {
+  if (typeof value !== "number") return value ?? false;
+  return (address, hop) => hop < value && isInternalProxyAddress(address, hop);
+}
+
 /**
  * Browser origins allowed to call the API. Outside production every origin is allowed. In
  * production CORS_ORIGIN is one origin or a comma-separated list (`*` allows all); unset means
@@ -78,7 +98,7 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!env.DATABASE_URL?.trim()) {
       errors.push("DATABASE_URL is not set: every account, order and coin would live in memory and vanish on restart");
     }
-    if (!(env.JWT_ACCESS_SECRET || env.JWT_SECRET)) {
+    if (!(env.JWT_ACCESS_SECRET?.trim() || env.JWT_SECRET?.trim())) {
       errors.push("JWT_ACCESS_SECRET is not set: access tokens can't be signed");
     }
     if ((env.PRIVACY_HMAC_SECRET ?? "").length < 16) {

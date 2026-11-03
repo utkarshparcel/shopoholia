@@ -15,7 +15,7 @@ describe("Gmail OAuth state and callback", () => {
     repos = createMemoryRepositories();
     app = await buildServer({ logger: false, deps: { repos } });
     userId = (await repos.createUser("919811110001")).user.id;
-    token = app.jwt.sign({ sub: userId, phone: "919811110001" });
+    token = app.jwt.sign({ sub: userId, phone: "919811110001" }, { expiresIn: "15m" });
     await repos.grantConsent({ userId, scope: "EMAIL", source: "test" });
   });
 

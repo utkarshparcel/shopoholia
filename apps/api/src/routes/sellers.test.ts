@@ -17,7 +17,7 @@ describe("seller routes", () => {
   it("answer 404 while off, so nobody can publish into the global feed", async () => {
     const app = await buildServer({ logger: false });
     const { user } = await app.deps.repos.createUser("919800000555");
-    const auth = { authorization: `Bearer ${app.jwt.sign({ sub: user.id, phone: "x" })}` };
+    const auth = { authorization: `Bearer ${app.jwt.sign({ sub: user.id, phone: "x" }, { expiresIn: "15m" })}` };
     vi.stubEnv("FEATURE_SELLERS", "0");
     try {
       const register = await app.inject({

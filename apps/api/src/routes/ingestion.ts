@@ -83,7 +83,7 @@ export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 export function oauthStateSecret(env: NodeJS.ProcessEnv = process.env): string | null {
   if (env.OAUTH_STATE_SECRET) return env.OAUTH_STATE_SECRET;
   if (env.NODE_ENV === "production") return null;
-  return env.JWT_ACCESS_SECRET ?? "dev-only-change-me";
+  return env.JWT_ACCESS_SECRET || "dev-only-change-me";
 }
 
 /** Gmail connect needs a client id and a state secret; in production neither has a stand-in. */
