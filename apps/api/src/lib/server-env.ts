@@ -1,5 +1,6 @@
 import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
+import { resolveEconomyMode } from "./orders/state-machine.js";
 import { hasR2Config } from "./storage/r2.js";
 
 type Env = Record<string, string | undefined>;
@@ -32,6 +33,23 @@ export function resolveListenAddress(env: Env = process.env): { port: number; ho
 }
 
 /**
+ * Fastify's `trustProxy`: whose X-Forwarded-For to believe for `request.ip` (rate limits key
+ * signed-out callers and sign-in by it). TRUST_PROXY is a hop count, `true`, `false`, or a
+ * comma-separated list of proxy addresses/CIDRs. Unset, production trusts one hop (the host's load
+ * balancer: Railway, Render and Fly all put one in front) and elsewhere nothing is trusted.
+ * Undefined means the value is not understood.
+ */
+export function resolveTrustProxy(env: Env = process.env): boolean | number | string | undefined {
+  const raw = env.TRUST_PROXY?.trim();
+  if (raw === undefined || raw === "") return env.NODE_ENV === "production" ? 1 : false;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  if (/^[0-9a-fA-F.:/]+(\s*,\s*[0-9a-fA-F.:/]+)*$/.test(raw)) return raw;
+  return undefined;
+}
+
+/**
  * Browser origins allowed to call the API. Outside production every origin is allowed. In
  * production CORS_ORIGIN is one origin or a comma-separated list (`*` allows all); unset means
  * the website (Worn Play and Worn Closet share one origin).
@@ -59,6 +77,31 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
   if (production) {
     if (!env.DATABASE_URL?.trim()) {
       errors.push("DATABASE_URL is not set: every account, order and coin would live in memory and vanish on restart");
+    }
+    if (!(env.JWT_ACCESS_SECRET || env.JWT_SECRET)) {
+      errors.push("JWT_ACCESS_SECRET is not set: access tokens can't be signed");
+    }
+    if ((env.PRIVACY_HMAC_SECRET ?? "").length < 16) {
+      errors.push(
+        "PRIVACY_HMAC_SECRET is not set (at least 16 characters): consent records and poll share links can't be keyed",
+      );
+    }
+    if (env.TRUST_PROXY !== undefined && resolveTrustProxy(env) === undefined) {
+      errors.push(`TRUST_PROXY=${env.TRUST_PROXY} is not understood: use a hop count, true, false or a list of addresses`);
+    }
+    if (!(env.GOOGLE_CLIENT_IDS ?? env.GOOGLE_CLIENT_ID)?.trim()) {
+      warnings.push(
+        "GOOGLE_CLIENT_IDS is not set: Google sign-in fails, and phone sign-in is off in production, so nobody can sign in",
+      );
+    }
+    if (!env.REDIS_URL?.trim()) {
+      warnings.push("REDIS_URL is not set: account deletion and data export answer 503, and the API worker can't start");
+    }
+    if (!env.FASHN_API_KEY?.trim()) {
+      warnings.push("FASHN_API_KEY is not set: try-on and reveal renders are unavailable");
+    }
+    if (resolveEconomyMode(env) === "beta") {
+      warnings.push("WORN_ECONOMY_MODE=beta: orders use the short beta delivery timers (minutes, not hours)");
     }
     if (!hasR2Config(env)) {
       errors.push("R2 storage is not configured (R2_*): uploads would go to an in-memory mock");

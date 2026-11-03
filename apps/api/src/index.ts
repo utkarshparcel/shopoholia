@@ -13,6 +13,7 @@ import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { initServerAnalyticsFromEnv } from "./lib/analytics.js";
 import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
+import { resolveEconomyMode } from "./lib/orders/state-machine.js";
 import { closeQueues } from "./lib/queues/enqueue.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import {
@@ -20,6 +21,7 @@ import {
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
+  resolveTrustProxy,
 } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
@@ -43,6 +45,9 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const deps = await createDefaultDeps(options.deps);
   const app = Fastify({
     logger: options.logger ?? process.env.NODE_ENV !== "test",
+    // Behind the host's proxy the socket peer is the proxy: request.ip must come from
+    // X-Forwarded-For, or every user shares one rate-limit bucket.
+    trustProxy: resolveTrustProxy() ?? false,
     // A slow client gets 2 minutes to send a request (10 MB uploads on a weak mobile link);
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
@@ -160,6 +165,7 @@ async function main() {
   const app = await buildServer();
 
   try {
+    app.log.info(`Delivery timers: ${resolveEconomyMode()} (WORN_ECONOMY_MODE)`);
     const resumed = await resumeInFlightWork(app.deps);
     app.log.info(resumed, "Resumed in-flight orders and renders");
   } catch (error) {

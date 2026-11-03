@@ -4,7 +4,32 @@ import {
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
+  resolveTrustProxy,
 } from "./server-env.js";
+import { resolveEconomyMode } from "./orders/state-machine.js";
+
+describe("resolveTrustProxy", () => {
+  it("trusts the host's one proxy hop in production and nothing elsewhere", () => {
+    expect(resolveTrustProxy({ NODE_ENV: "production" })).toBe(1);
+    expect(resolveTrustProxy({ NODE_ENV: "development" })).toBe(false);
+  });
+
+  it("reads TRUST_PROXY as a hop count, a boolean or an address list", () => {
+    expect(resolveTrustProxy({ NODE_ENV: "production", TRUST_PROXY: "2" })).toBe(2);
+    expect(resolveTrustProxy({ NODE_ENV: "production", TRUST_PROXY: "false" })).toBe(false);
+    expect(resolveTrustProxy({ TRUST_PROXY: "true" })).toBe(true);
+    expect(resolveTrustProxy({ TRUST_PROXY: "10.0.0.0/8, 127.0.0.1" })).toBe("10.0.0.0/8, 127.0.0.1");
+    expect(resolveTrustProxy({ TRUST_PROXY: "lots" })).toBeUndefined();
+  });
+});
+
+describe("resolveEconomyMode", () => {
+  it("runs the real delivery timers in production unless told otherwise", () => {
+    expect(resolveEconomyMode({ NODE_ENV: "production" })).toBe("prod");
+    expect(resolveEconomyMode({ NODE_ENV: "production", WORN_ECONOMY_MODE: "beta" })).toBe("beta");
+    expect(resolveEconomyMode({ NODE_ENV: "development" })).toBe("beta");
+  });
+});
 
 describe("resolveJwtSecret", () => {
   it("reads the documented JWT_ACCESS_SECRET", () => {
@@ -86,15 +111,27 @@ describe("bootConfigProblems", () => {
     R2_BUCKET_NAME: "b",
   };
 
-  const db = { DATABASE_URL: "postgresql://worn@db/worn" };
+  const db = {
+    DATABASE_URL: "postgresql://worn@db/worn",
+    JWT_ACCESS_SECRET: "jwt-secret",
+    PRIVACY_HMAC_SECRET: "privacy-secret-16+",
+  };
 
-  it("in production, an in-memory database, mock storage or mock OCR is an error", () => {
+  it("in production, an in-memory database, missing secrets, mock storage or mock OCR is an error", () => {
     const { errors } = bootConfigProblems({ NODE_ENV: "production" });
     expect(errors).toEqual([
       expect.stringMatching(/DATABASE_URL/),
+      expect.stringMatching(/JWT_ACCESS_SECRET/),
+      expect.stringMatching(/PRIVACY_HMAC_SECRET/),
       expect.stringMatching(/R2/),
       expect.stringMatching(/OCR/),
     ]);
+    expect(
+      bootConfigProblems({ NODE_ENV: "production", ...db, ...r2, OCR_PROVIDER_URL: "https://ocr", PRIVACY_HMAC_SECRET: "short" }).errors,
+    ).toEqual([expect.stringMatching(/PRIVACY_HMAC_SECRET/)]);
+    expect(
+      bootConfigProblems({ NODE_ENV: "production", ...db, ...r2, OCR_PROVIDER_URL: "https://ocr", TRUST_PROXY: "lots" }).errors,
+    ).toEqual([expect.stringMatching(/TRUST_PROXY/)]);
     expect(
       bootConfigProblems({ NODE_ENV: "production", ...db, ...r2, OCR_PROVIDER_URL: "https://ocr", OCR_PROVIDER: "mock" }).errors,
     ).toEqual([expect.stringMatching(/OCR/)]);
@@ -113,6 +150,19 @@ describe("bootConfigProblems", () => {
     );
     const set = bootConfigProblems({ NODE_ENV: "production", CASHBACK_WEBHOOK_SECRET: "c", ADMIN_SECRET: "a" });
     expect(set.warnings.join("\n")).not.toMatch(/CASHBACK_WEBHOOK_SECRET|ADMIN_SECRET/);
+  });
+
+  it("in production, warns when sign-in, deletion, renders or the delivery timers would be off", () => {
+    const { warnings } = bootConfigProblems({ NODE_ENV: "production", WORN_ECONOMY_MODE: "beta" });
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/GOOGLE_CLIENT_IDS/),
+        expect.stringMatching(/REDIS_URL/),
+        expect.stringMatching(/FASHN_API_KEY/),
+        expect.stringMatching(/WORN_ECONOMY_MODE=beta/),
+      ]),
+    );
+    expect(bootConfigProblems({ NODE_ENV: "production" }).warnings.join("\n")).not.toMatch(/WORN_ECONOMY_MODE/);
   });
 
   it("outside production, missing providers are not errors", () => {

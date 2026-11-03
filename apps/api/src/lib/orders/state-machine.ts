@@ -2,10 +2,14 @@ import { ORDER_DELIVERY_LADDER } from "@worn/shared";
 import type { DeliveryTier, OrderState, StateEta } from "@worn/shared";
 import { getTierTimings, type EconomyMode } from "@worn/shared";
 
-function resolveEconomyMode(): EconomyMode {
-  const raw =
-    process.env.WORN_ECONOMY_MODE ??
-    (process.env.NODE_ENV === "production" ? "prod" : "beta");
+/**
+ * Delivery timers: "prod" (Express 2h, Standard 12h, Slow burn 48h) or "beta" (minutes).
+ * WORN_ECONOMY_MODE picks one; unset, production runs the real timers and everything else beta.
+ */
+export function resolveEconomyMode(
+  env: Record<string, string | undefined> = process.env,
+): EconomyMode {
+  const raw = env.WORN_ECONOMY_MODE ?? (env.NODE_ENV === "production" ? "prod" : "beta");
   return raw === "prod" ? "prod" : "beta";
 }
 

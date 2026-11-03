@@ -75,6 +75,7 @@ The API refuses to start in production if any of these is missing:
 | `NODE_ENV=production` | |
 | `DATABASE_URL` | Postgres. Without it everything would live in memory. |
 | `JWT_ACCESS_SECRET` | Signs access tokens: a long random string. |
+| `PRIVACY_HMAC_SECRET` | Keys consent/audit subject refs and poll share links: a random string of at least 16 characters. Never change it once set (old refs and links stop matching). |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Storage. |
 | `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
 
@@ -82,10 +83,14 @@ Set these too (the API starts without them, but the feature answers 503 or refus
 
 | Variable | Without it |
 |---|---|
-| `REDIS_URL` | The API worker can't start. |
+| `REDIS_URL` | Account deletion and data export answer 503, and the API worker can't start. |
+| `GOOGLE_CLIENT_IDS` | Nobody can sign in: phone sign-in is off in production, so Google is the only way in. Web, iOS and Android client ids, comma-separated. |
+| `FASHN_API_KEY` | Try-on and reveal renders are unavailable. |
+| `TRUST_PROXY` | Defaults to `1` in production: one proxy hop (the host's load balancer) in front of the API, so rate limits key on the caller's address from `X-Forwarded-For`. Set the hop count your host uses, `true` behind a fully trusted network, or a comma-separated list of proxy addresses/CIDRs. Set `false` only if clients reach the API directly; otherwise every user shares the proxy's sign-in rate limit (20 a minute). |
+| `WORN_ECONOMY_MODE` | Delivery timers. Production defaults to `prod`, the launch timers (Express 2 h, Standard 12 h, Slow burn 48 h); `beta` gives minutes (Express 2 min, Standard 5 min, Slow burn 8 min) and logs a warning. The boot log names the active mode. |
+| `CATALOG_SEED_FILE` | Optional. The catalog file (JSON lines) an empty production catalog is filled from at boot; the bundled `dist/lib/seed/scraped-catalog.jsonl` is used otherwise. A catalog that has listings is never cleared or reseeded at boot. |
 | `R2_PUBLIC_URL=https://media.worncloset.app` | Image links point nowhere. |
 | `CORS_ORIGIN=https://worncloset.app` | (This is the default.) |
-| `GOOGLE_CLIENT_IDS` | Google sign-in fails. Web, iOS and Android client ids, comma-separated. |
 | `ADMIN_SECRET` | Admin routes are refused. |
 | `CASHBACK_WEBHOOK_SECRET` | Affiliate cashback confirmations are refused. |
 | `APPLE_BUNDLE_ID`, `ANDROID_PACKAGE_NAME`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Coin purchases answer 503. |
@@ -93,6 +98,9 @@ Set these too (the API starts without them, but the feature answers 503 or refus
 | `SENTRY_DSN`, `POSTHOG_KEY` | No error reports or server analytics. |
 
 The boot log lists every missing setting as an error or a warning.
+
+The API worker (`start:worker`) reads the same settings as the API: give it the same environment,
+`REDIS_URL` included (it refuses to start without Redis).
 
 ### The apps
 
