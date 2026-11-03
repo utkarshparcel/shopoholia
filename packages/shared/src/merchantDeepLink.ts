@@ -30,6 +30,20 @@ export function normalizeMerchantKey(merchant: string): string {
     .replace(/\.+$/, "");
 }
 
+/** A label shorter than this can't stand for a longer known merchant ("A" is not Amazon). */
+const MIN_PREFIX_KEY_LENGTH = 4;
+
+/**
+ * Whether a normalized merchant `key` names the `known` merchant: equal, a longer label that
+ * starts with it ("amazonin", "flipkartindia"), or a truncation of it at least four characters
+ * long ("flip"). An empty key matches nothing.
+ */
+export function merchantKeyMatches(key: string, known: string): boolean {
+  if (!key) return false;
+  if (key === known || key.startsWith(known)) return true;
+  return key.length >= MIN_PREFIX_KEY_LENGTH && known.startsWith(key);
+}
+
 /**
  * Returns an affiliate / storefront URL for a merchant, or null when unknown.
  * Prefer known keys (amazon, myntra, flipkart, …); falls back to null rather
@@ -44,7 +58,7 @@ export function merchantDeepLink(merchant: string, affiliateIds?: AffiliateIds):
 
   // Prefix match: "amazonin" / "amazoncom" / "flipkartindia"
   for (const [known, entry] of Object.entries(MERCHANT_HOME)) {
-    if (key.startsWith(known) || known.startsWith(key)) return homeLink(entry, affiliateIds);
+    if (merchantKeyMatches(key, known)) return homeLink(entry, affiliateIds);
   }
 
   return null;

@@ -40,4 +40,17 @@ describe("merchantDeepLink", () => {
     expect(merchantDeepLink("amazon.in")).toContain("amazon.in");
     expect(merchantDeepLink("AMAZON.COM")).toContain("amazon.com");
   });
+
+  it("doesn't let a short or empty label stand for a known merchant", async () => {
+    const { merchantBalanceCapability } = await import("./merchantBalanceCheck.js");
+    const { merchantCancelUrl } = await import("./merchantCancelUrl.js");
+    const { merchantReturnUrl } = await import("./merchantReturnUrl.js");
+    expect(merchantDeepLink("A")).toBeNull();
+    expect(merchantDeepLink("Z")).toBeNull();
+    expect(merchantDeepLink("Flip")).toContain("flipkart.com");
+    expect(merchantReturnUrl("A")).toBeNull();
+    expect(merchantCancelUrl("My")).toBeNull();
+    expect(merchantBalanceCapability("₹")).toMatchObject({ apiCapable: false, mode: "manual", checkUrl: null });
+    expect(merchantBalanceCapability("A").apiCapable).toBe(false);
+  });
 });
