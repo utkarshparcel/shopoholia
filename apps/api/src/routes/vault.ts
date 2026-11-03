@@ -28,6 +28,7 @@ import type {
   PrivacyRequestRecord,
 } from "../lib/repositories/types.js";
 import { disconnectEmailSources } from "../jobs/gmail-token-revoke.js";
+import { privacyErase } from "../jobs/privacy-erase.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -691,24 +692,57 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request, reply) => {
       const userId = request.user!.sub;
-      // Erasure runs as the privacy-erase job (rows, stored objects, Gmail tokens). A repeated
-      // DELETE while one is open returns the same request and enqueues the same job id.
+      // In-app account deletion (App Store 5.1.1(v), Google Play). A repeated DELETE while one is
+      // open returns the same request.
       const { request: req, created } = await app.deps.repos.createPrivacyRequest({
         userId,
         subjectRef: subjectRefFor(userId),
         kind: "ERASE",
       });
-      await enqueueJob(
-        PRIVACY_ERASE_QUEUE,
-        "erase",
-        { requestId: req.id },
-        { jobId: jobIdFrom("privacy-erase", req.id), attempts: 5 },
-      );
       if (created) {
         audit(app.log, "privacy.erase.requested", { userId, requestId: req.id });
         trackServerEvent("vault_deleted", { userId });
       }
-      return reply.code(202).send(toPrivacyRequestJson(req));
+      // The erasure runs here, so the account is gone when the app signs out, whether or not the
+      // worker is running. The privacy-erase job is only the retry: it resumes from the steps the
+      // run recorded (the rows, then the stored objects still left).
+      try {
+        await privacyErase(
+          { requestId: req.id },
+          { repos: app.deps.repos, storage: app.deps.storage, log: request.log },
+        );
+      } catch (err) {
+        request.log.warn({ err, requestId: req.id }, "privacy.erase.inline_failed");
+        const after = await app.deps.repos.getPrivacyRequest(req.id);
+        const rowsDeleted = Boolean(after?.steps.rowsDeleted);
+        try {
+          await enqueueJob(
+            PRIVACY_ERASE_QUEUE,
+            "erase",
+            { requestId: req.id },
+            { jobId: jobIdFrom("privacy-erase", req.id), attempts: 5 },
+          );
+        } catch (enqueueErr) {
+          // The account itself is gone; only stored objects are left, and they stay listed on
+          // the request (storage_keys) for the worker or an operator (docs/DEPLOY.md).
+          if (rowsDeleted) {
+            request.log.error(
+              { err: enqueueErr, requestId: req.id },
+              "privacy.erase.retry_not_queued",
+            );
+          } else {
+            // Nothing was deleted and nothing will retry it: tell the app, which keeps the user
+            // signed in so they can try again (the same request is reused).
+            request.log.error({ err: enqueueErr, requestId: req.id }, "privacy.erase.not_started");
+            return reply.code(503).send({
+              error: "Service Unavailable",
+              message: "Your account couldn’t be deleted right now. Try again in a few minutes.",
+            });
+          }
+        }
+      }
+      const latest = (await app.deps.repos.getPrivacyRequest(req.id)) ?? req;
+      return reply.code(202).send(toPrivacyRequestJson(latest));
     },
   );
 
