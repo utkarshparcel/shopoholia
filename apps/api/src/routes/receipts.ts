@@ -171,6 +171,22 @@ function toWarrantyJson(w: {
   };
 }
 
+const CURRENCY_CODE = /^[A-Z]{3}$/;
+
+/** A receipt has no currency column: the code is kept in ocrJson.currency (INR for older rows). */
+function receiptCurrency(ocrJson: Record<string, unknown>): string {
+  const code = ocrJson.currency;
+  return typeof code === "string" && CURRENCY_CODE.test(code) ? code : "INR";
+}
+
+/** The currency the app sent with the upload (its preferred one), when it is a valid code. */
+function uploadedCurrency(fields: unknown): string | null {
+  const field = (fields as Record<string, unknown> | undefined)?.currency;
+  const value = (Array.isArray(field) ? field[0] : field) as { value?: unknown } | undefined;
+  const code = typeof value?.value === "string" ? value.value.trim().toUpperCase() : "";
+  return CURRENCY_CODE.test(code) ? code : null;
+}
+
 export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
   app.post(
     "/receipts",
@@ -192,8 +208,11 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       const parts = request.files();
 
       let imageKey: string | null = null;
+      let sentCurrency: string | null = null;
       for await (const part of parts) {
         if (part.type !== "file") continue;
+        // Fields sent before the file ride on it.
+        sentCurrency = uploadedCurrency(part.fields) ?? sentCurrency;
         const buffer = await part.toBuffer();
         if (buffer.length === 0) continue;
         const key = `receipts/${userId}/${randomUUID()}.jpg`;
@@ -222,6 +241,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       const ocrJson = {
         ...parsed.raw,
+        currency: sentCurrency ?? receiptCurrency(parsed.raw),
         items: parsed.items,
         confidence,
         warrantyHint: parsed.warrantyHint ?? null,
@@ -245,7 +265,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         toReceiptParsed({
           ...receipt,
           items: parsed.items,
-          currency: "INR",
+          currency: receiptCurrency(receipt.ocrJson),
           imageUrl,
           confidence,
           warrantyHint: parsed.warrantyHint ?? null,
@@ -311,7 +331,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         toReceiptParsed({
           ...updated,
           items,
-          currency: "INR",
+          currency: receiptCurrency(updated.ocrJson),
           imageUrl,
           confidence: readConfidence(updated.ocrJson),
         }),
@@ -369,6 +389,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         items: body.items,
         confidence: readConfidence(existing.ocrJson),
         manuallyCorrected: true,
+        currency: body.currency,
         ...(body.overrideLowConfidence ? { overrideLowConfidence: true } : {}),
       };
       await app.deps.repos.updateReceipt(id, userId, {
@@ -620,7 +641,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         receipts: signed.map((r) =>
           toReceiptResponse({
             ...r,
-            currency: "INR",
+            currency: receiptCurrency(r.ocrJson),
             createdAt: r.createdAt,
             ocrJson: r.ocrJson,
           }),
@@ -665,7 +686,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
         const pdf = buildInvoicePdfBytes({
           merchant: receipt.merchant,
           purchasedAt: receipt.purchasedAt.toISOString().slice(0, 10),
-          totalLabel: formatMinor(receipt.totalMinor, "INR"),
+          totalLabel: formatMinor(receipt.totalMinor, receiptCurrency(receipt.ocrJson)),
           gstin,
           receiptId: receipt.id,
         });

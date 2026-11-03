@@ -1,9 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestServer, login } from "../test-utils.js";
 
-function buildMultipart(fileBuffer: Buffer, filename = "receipt.jpg") {
+function buildMultipart(
+  fileBuffer: Buffer,
+  filename = "receipt.jpg",
+  fields: Record<string, string> = {},
+) {
   const boundary = "----wornreceiptboundary";
+  const fieldParts = Object.entries(fields)
+    .map(
+      ([name, value]) =>
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+    )
+    .join("");
   const head =
+    fieldParts +
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
     `Content-Type: image/jpeg\r\n\r\n`;
@@ -687,5 +698,70 @@ describe("receipts", () => {
     expect(pdfBody.format).toBe("pdf");
     expect(pdfBody.contentType).toBe("application/pdf");
     expect(pdfBody.downloadUrl.startsWith("data:application/pdf;base64,")).toBe(true);
+  });
+
+  describe("currency (S1-27)", () => {
+    async function upload(fields: Record<string, string> = {}) {
+      const m = buildMultipart(Buffer.from("bytes"), "receipt.jpg", fields);
+      return app.inject({
+        method: "POST",
+        url: "/receipts",
+        headers: { authorization: `Bearer ${token}`, "content-type": m.contentType },
+        payload: m.payload,
+      });
+    }
+    async function listCurrencies() {
+      const list = await app.inject({
+        method: "GET",
+        url: "/receipts",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      return (list.json().receipts as { id: string; currency: string }[]).map((r) => [r.id, r.currency]);
+    }
+
+    it("keeps the currency the app sends with the upload, in the upload, PATCH and list responses", async () => {
+      await grantFinancialConsent();
+      const res = await upload({ currency: "USD" });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().currency).toBe("USD");
+      const id = res.json().id;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/receipts/${id}`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { merchant: "Target" },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json().currency).toBe("USD");
+      expect(await listCurrencies()).toEqual([[id, "USD"]]);
+    });
+
+    it("lists a confirmed receipt in the currency it was confirmed in", async () => {
+      await grantFinancialConsent();
+      const id = (await upload()).json().id;
+      const confirm = await app.inject({
+        method: "POST",
+        url: `/receipts/${id}/confirm`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          merchant: "Mock Mart",
+          purchasedAt: new Date().toISOString(),
+          totalMinor: 129900,
+          currency: "GBP",
+          items: [{ title: "Coat", priceMinor: 129900 }],
+          warranties: [],
+        },
+      });
+      expect(confirm.statusCode).toBe(200);
+      expect(confirm.json().currency).toBe("GBP");
+      expect(await listCurrencies()).toEqual([[id, "GBP"]]);
+    });
+
+    it("falls back to INR when the app sends none or an invalid code", async () => {
+      await grantFinancialConsent();
+      expect((await upload()).json().currency).toBe("INR");
+      expect((await upload({ currency: "dollars" })).json().currency).toBe("INR");
+    });
   });
 });

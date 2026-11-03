@@ -4,6 +4,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { enqueueVaultAdd, VAULT_ADD_QUEUE_KEY } from '@/src/lib/vaultAddQueue';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 
 import {
   useAddGiftCard,
@@ -1642,7 +1643,13 @@ describe('receipts / warranties / cashback / balance surface', () => {
 
     expect(checkCreditBalance).toHaveBeenCalled();
     expect(confirmCreditBalance).toHaveBeenCalled();
-    expect(uploadReceipt).toHaveBeenCalled();
+    // S1-27 — the receipt is sent with the user's Closet currency, not left to default to INR.
+    expect(uploadReceipt).toHaveBeenCalledWith(
+      'test-token',
+      'file:///r.jpg',
+      undefined,
+      useClosetPrefsStore.getState().preferredCurrency,
+    );
     expect(confirmReceipt).toHaveBeenCalled();
     expect(claimWarranty).toHaveBeenCalled();
     expect(unclaimWarranty).toHaveBeenCalled();

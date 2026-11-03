@@ -1239,8 +1239,11 @@ export async function uploadReceipt(
   accessToken: string,
   imageUri: string,
   fileName = 'receipt.jpg',
+  currency?: string,
 ) {
   const form = new FormData();
+  // Before the file: the API reads fields that arrive ahead of it. Without one it assumes INR.
+  if (currency) form.append('currency', currency);
   form.append('file', await photoPart(imageUri, fileName));
 
   const res = await apiFetch(`${API_URL}/receipts`, {

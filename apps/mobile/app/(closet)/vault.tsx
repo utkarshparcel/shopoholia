@@ -43,7 +43,7 @@ import {
   delightHapticForCelebrationSource,
 } from '@/src/lib/delightHaptics';
 import { formatClosetDate } from '@/src/lib/format';
-import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { CLOSET_CURRENCIES, useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { scheduleBalanceRecheckReminder } from '@/src/lib/balanceReminder';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
@@ -2140,11 +2140,14 @@ function ReceiptsTab({
   const [merchant, setMerchant] = useState('');
   const [purchasedAt, setPurchasedAt] = useState('');
   const [totalRupees, setTotalRupees] = useState('');
+  /** The receipt's currency: the parsed one, or what the user picks in review. */
+  const [receiptCurrency, setReceiptCurrency] = useState('INR');
   const [editItems, setEditItems] = useState<EditItem[]>([]);
   const [overrideLowConfidence, setOverrideLowConfidence] = useState(false);
 
   function applyParsed(parsed: ReceiptParsed) {
     setPending(parsed);
+    setReceiptCurrency(parsed.currency);
     setMerchant(parsed.merchant);
     // The purchase day on this phone; slicing the ISO string gave the UTC day.
     const purchaseDay = localDayKey(new Date(parsed.purchasedAt));
@@ -2205,7 +2208,7 @@ function ReceiptsTab({
   /** The body to save, or what the user has to fix first. Bad dates used to throw out of the handler. */
   function buildConfirmBody(override: boolean): ConfirmReceiptBody | string | null {
     if (!pending) return null;
-    const currency = pending.currency;
+    const currency = receiptCurrency;
     const items: ConfirmReceiptBody['items'] = [];
     for (const i of editItems) {
       const t = i.priceText.trim();
@@ -2243,7 +2246,7 @@ function ReceiptsTab({
       merchant: merchant.trim() || pending.merchant,
       purchasedAt: dateIso,
       totalMinor,
-      currency: pending.currency,
+      currency,
       items,
       // Always send array so empty = user opted out of category-rule auto (U010).
       warranties,
@@ -2320,9 +2323,27 @@ function ReceiptsTab({
           value={purchasedAt}
           onChangeText={setPurchasedAt}
         />
+        <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="Receipt currency">
+          {(CLOSET_CURRENCIES as readonly string[])
+            .concat(
+              (CLOSET_CURRENCIES as readonly string[]).includes(pending.currency)
+                ? []
+                : [pending.currency],
+            )
+            .map((code) => (
+              <Button
+                key={code}
+                label={code}
+                size="sm"
+                variant={receiptCurrency === code ? 'primary' : 'secondary'}
+                accessibilityState={{ selected: receiptCurrency === code }}
+                onPress={() => setReceiptCurrency(code)}
+              />
+            ))}
+        </View>
         <TextInput
           style={styles.input}
-          placeholder={`Total in ${pending.currency}`}
+          placeholder={`Total in ${receiptCurrency}`}
           placeholderTextColor={textMuted}
           keyboardType="decimal-pad"
           value={totalRupees}
@@ -2339,7 +2360,7 @@ function ReceiptsTab({
             />
             <TextInput
               style={styles.input}
-              placeholder={`Price in ${pending.currency}`}
+              placeholder={`Price in ${receiptCurrency}`}
               placeholderTextColor={textMuted}
               keyboardType="decimal-pad"
               value={item.priceText}

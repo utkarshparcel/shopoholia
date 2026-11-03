@@ -162,6 +162,7 @@ import { useClosetStore } from '@/src/stores/closet';
 import { useRef } from 'react';
 
 import { newIdempotencyKey } from '@/src/lib/idempotency';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { closetKey, sessionToken, useClosetSubscribed, useSessionUserId } from './keys';
 import { ingestionSourcesQuery } from './useIngestion';
 import { useConsentGate } from './useConsent';
@@ -495,7 +496,14 @@ export function useExportReceipt() {
 export function useUploadReceipt() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (imageUri: string) => uploadReceipt(sessionToken(), imageUri),
+    mutationFn: (imageUri: string) =>
+      // The receipt starts in the user's Closet currency; the review form can change it.
+      uploadReceipt(
+        sessionToken(),
+        imageUri,
+        undefined,
+        useClosetPrefsStore.getState().preferredCurrency,
+      ),
     onSuccess: (parsed) => {
       trackEvent('receipt_uploaded', { receiptId: parsed.id });
       queryClient.invalidateQueries({ queryKey: ['receipts'] });

@@ -52,6 +52,10 @@ vi.mock('@/src/api/client', async (importOriginal) => ({
   addCredit: vi.fn(async () => ({ id: 'server-card' })),
 }));
 vi.mock('expo-image-picker', () => ({}));
+vi.mock('@/src/lib/receiptSnap', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  pickReceiptSnapImage: vi.fn(async () => ({ uri: 'file:///receipt.jpg' })),
+}));
 vi.mock('@/src/lib/features', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   FEATURE_CLOSET: true,
@@ -189,5 +193,44 @@ describe('vault offline add queue (S1-26)', () => {
     await screen.findByText('Nykaa (pending sync)');
     expect(screen.queryByText('Mark spent')).toBeNull();
     expect(screen.queryByText('Re-check')).toBeNull();
+  });
+});
+
+describe('vault receipt review currency (S1-27)', () => {
+  it('confirms in the currency the user picks, not always the parsed one', async () => {
+    render(<ClosetVaultScreen />);
+    fireEvent.click(screen.getByLabelText('Receipts'));
+    const upload = h.mutation('useUploadReceipt');
+    upload.mutate.mockImplementation((_uri: string, opts: { onSuccess: (p: unknown) => void }) =>
+      opts.onSuccess({
+        id: '44444444-4444-4444-8444-444444444444',
+        merchant: 'Target',
+        purchasedAt: '2026-11-01T12:00:00.000Z',
+        totalMinor: 2599,
+        currency: 'INR',
+        items: [{ title: 'Tee', priceMinor: 2599 }],
+        confidence: 0.95,
+        warrantyHint: null,
+        claimContactHint: null,
+        purchaseId: null,
+        imageUrl: 'https://img',
+        ocrJson: {},
+        userId: 'user-1',
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Snap a receipt'));
+    });
+    await screen.findByText('Review receipt');
+    fireEvent.click(screen.getByLabelText('USD'));
+    expect(screen.getByPlaceholderText('Total in USD')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Save receipt'));
+    });
+    const confirm = h.mutation('useConfirmReceipt');
+    expect(confirm.mutate).toHaveBeenCalledTimes(1);
+    const body = (confirm.mutate.mock.calls[0]![0] as { body: { currency: string; totalMinor: number } }).body;
+    expect(body.currency).toBe('USD');
+    expect(body.totalMinor).toBe(2599);
   });
 });
