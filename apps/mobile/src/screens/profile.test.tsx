@@ -4,13 +4,21 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProfileScreen from '@/app/(tabs)/profile';
-import { deleteAvatar, fetchOrders, getAvatar, logout, type OrderSummary } from '@/src/api/client';
+import {
+  deleteAvatar,
+  deleteVault,
+  fetchOrders,
+  getAvatar,
+  logout,
+  type OrderSummary,
+} from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 
 type AlertButton = { text: string; style?: string; onPress?: () => void };
 
 const rn = vi.hoisted(() => ({
-  alert: vi.fn<(title: string, message: string, buttons: AlertButton[]) => void>(),
+  alert: vi.fn<(title: string, message?: string, buttons?: AlertButton[]) => void>(),
+  openURL: vi.fn(async (_url: string) => true),
   platform: { OS: 'ios' as 'ios' | 'web' },
   push: vi.fn(),
 }));
@@ -64,6 +72,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: <T,>(styles: T) => styles },
   Platform: rn.platform,
   Alert: { alert: rn.alert },
+  Linking: { openURL: rn.openURL },
 }));
 
 // Whether the tab is showing; tests flip it to switch tabs away and back.
@@ -109,6 +118,7 @@ vi.mock('@/src/api/client', () => ({
   fetchOrders: vi.fn(async () => ({ orders: [] })),
   getAvatar: vi.fn(),
   deleteAvatar: vi.fn(),
+  deleteVault: vi.fn(),
 }));
 
 const READY = { status: 'READY', referencePreviewUrl: 'https://cdn.test/avatar.jpg' };
@@ -128,7 +138,13 @@ function renderProfile() {
 function pressDeleteMyPhotos() {
   fireEvent.click(screen.getByText('Delete my photos'));
   const [title, message, buttons] = rn.alert.mock.lastCall!;
-  return { title, message, buttons };
+  return { title, message: message!, buttons: buttons! };
+}
+
+function pressDeleteAccount() {
+  fireEvent.click(screen.getByText('Delete account'));
+  const [title, message, buttons] = rn.alert.mock.lastCall!;
+  return { title, message: message!, buttons: buttons! };
 }
 
 beforeEach(() => {
@@ -139,6 +155,9 @@ beforeEach(() => {
   rn.platform.OS = 'ios';
   vi.mocked(getAvatar).mockReset().mockResolvedValueOnce(READY).mockResolvedValue(NONE);
   vi.mocked(deleteAvatar).mockReset().mockResolvedValue(undefined);
+  vi.mocked(deleteVault).mockReset().mockResolvedValue(undefined);
+  vi.mocked(logout).mockClear();
+  rn.openURL.mockClear();
   useSessionStore.getState().setSession({ accessToken: 'token-1', refreshToken: 'refresh' });
 });
 
@@ -216,6 +235,98 @@ describe('ProfileScreen: sign out', () => {
 
     expect(useSessionStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
     expect(logout).toHaveBeenCalledWith('refresh');
+  });
+});
+
+describe('ProfileScreen: delete account', () => {
+  it('says what gets deleted and that it is permanent, and does nothing if cancelled', async () => {
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    const { title, message, buttons } = pressDeleteAccount();
+
+    expect(title).toBe('Delete your account?');
+    expect(message).toMatch(/permanently deletes your WORN account/);
+    for (const what of [/avatar/, /photos you uploaded/, /orders/, /lookbook/, /coins/]) {
+      expect(message).toMatch(what);
+    }
+    expect(message).toMatch(/can’t be undone/);
+    expect(message).toMatch(/can’t be\s+refunded/);
+    expect(buttons.map((b) => [b.text, b.style])).toEqual([
+      ['Cancel', 'cancel'],
+      ['Delete account', 'destructive'],
+    ]);
+    await act(async () => {
+      buttons[0]!.onPress?.();
+    });
+    expect(deleteVault).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().accessToken).toBe('token-1');
+  });
+
+  it('deletes the account on the server once confirmed, then signs out', async () => {
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    const { buttons } = pressDeleteAccount();
+    await act(async () => {
+      buttons.find((b) => b.style === 'destructive')!.onPress!();
+    });
+
+    await waitFor(() => expect(useSessionStore.getState().accessToken).toBeNull());
+    expect(deleteVault).toHaveBeenCalledWith('token-1');
+    expect(useSessionStore.getState().refreshToken).toBeNull();
+    expect(rn.alert).toHaveBeenLastCalledWith(
+      'Account deleted',
+      'Your WORN account and its data were deleted.',
+    );
+  });
+
+  it('keeps the user signed in and explains when the deletion fails', async () => {
+    vi.mocked(deleteVault).mockRejectedValueOnce(
+      new Error('Your account couldn’t be deleted right now. Try again in a few minutes.'),
+    );
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    const { buttons } = pressDeleteAccount();
+    await act(async () => {
+      buttons.find((b) => b.style === 'destructive')!.onPress!();
+    });
+
+    await screen.findByText(/Couldn’t delete your account\. Your account couldn’t be deleted right now/);
+    expect(screen.getByText(/privacy@worncloset\.app/)).toBeTruthy();
+    expect(useSessionStore.getState().accessToken).toBe('token-1');
+    expect(screen.getByText('Delete account')).toBeTruthy();
+  });
+
+  it('confirms with the browser dialog on web', async () => {
+    rn.platform.OS = 'web';
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    fireEvent.click(screen.getByText('Delete account'));
+    expect(deleteVault).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Delete account'));
+    await waitFor(() => expect(useSessionStore.getState().accessToken).toBeNull());
+    expect(deleteVault).toHaveBeenCalledWith('token-1');
+    expect(confirm.mock.calls[0]![0]).toMatch(/^Delete your account\?/);
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/^Account deleted/));
+    confirm.mockRestore();
+    alert.mockRestore();
+  });
+});
+
+describe('ProfileScreen: privacy policy', () => {
+  it('opens the public privacy policy', async () => {
+    renderProfile();
+    await screen.findByAltText('Your avatar');
+
+    fireEvent.click(screen.getByText('Privacy policy'));
+
+    expect(rn.openURL).toHaveBeenCalledWith('https://worncloset.app/privacy');
   });
 });
 

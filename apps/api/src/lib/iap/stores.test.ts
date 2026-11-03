@@ -33,7 +33,8 @@ describe("account binding", () => {
 
 describe("App Store verifier", () => {
   const dev = createAppleVerifier({ bundleId: TEST_BUNDLE_ID, production: false, trust: testAppleTrust() });
-  const prod = createAppleVerifier({ bundleId: TEST_BUNDLE_ID, production: true, trust: testAppleTrust() });
+  const prodConfig = { bundleId: TEST_BUNDLE_ID, production: true, trust: testAppleTrust() };
+  const prod = createAppleVerifier(prodConfig);
   const coin = (overrides: Record<string, unknown> = {}) =>
     appleTransaction({ appAccountToken: USER, ...overrides });
   const verify = (verifier: typeof dev, tx: Record<string, unknown>, userId = USER) =>
@@ -60,9 +61,15 @@ describe("App Store verifier", () => {
     expect(dev.stores).toEqual({ app_store: true, play_store: false });
   });
 
-  it("accepts Production in production and refuses Sandbox there", async () => {
-    expect((await verify(prod, coin({ environment: "Production" }))).ok).toBe(true);
-    expect(await verify(prod, coin())).toMatchObject({ ok: false, reason: "invalid_proof" });
+  it("accepts Production and Sandbox in production (App Review buys in Sandbox), recording which", async () => {
+    expect(await verify(prod, coin({ environment: "Production" }))).toMatchObject({
+      ok: true,
+      purchase: { environment: "production" },
+    });
+    expect(await verify(prod, coin())).toMatchObject({ ok: true, purchase: { environment: "sandbox" } });
+    const refusing = createAppleVerifier({ ...prodConfig, acceptTestPurchases: false });
+    expect(await verify(refusing, coin())).toMatchObject({ ok: false, reason: "invalid_proof" });
+    expect((await verify(refusing, coin({ environment: "Production" }))).ok).toBe(true);
   });
 
   it("ties the purchase to the account: missing token 402, another account 409", async () => {
@@ -176,7 +183,7 @@ describe("App Store verifier", () => {
 });
 
 describe("Google Play verifier", () => {
-  function setup(production = false) {
+  function setup(production = false, acceptTestPurchases?: boolean) {
     const fake = createFakePlay();
     const client = createPlayClient({
       serviceAccount: fake.serviceAccount,
@@ -184,7 +191,7 @@ describe("Google Play verifier", () => {
       apiBaseUrl: fake.apiBaseUrl,
       fetchImpl: fake.fetch,
     });
-    const play: PlayStoreConnection = { packageName: TEST_PACKAGE_NAME, production, client };
+    const play: PlayStoreConnection = { packageName: TEST_PACKAGE_NAME, production, client, acceptTestPurchases };
     return { fake, verifier: createPlayVerifier(play) };
   }
   const bought = (overrides: Record<string, unknown> = {}) => ({
@@ -239,13 +246,16 @@ describe("Google Play verifier", () => {
     });
   });
 
-  it("accepts license-tester purchases outside production only", async () => {
+  it("accepts license-tester purchases (recorded as sandbox) unless test purchases are refused", async () => {
     const dev = setup(false);
     dev.fake.products.set("test", bought({ purchaseType: 0 }));
     expect(await dev.verifier.verify(input("test"))).toMatchObject({ ok: true, purchase: { environment: "sandbox" } });
     const prod = setup(true);
     prod.fake.products.set("test", bought({ purchaseType: 0 }));
-    expect(await prod.verifier.verify(input("test"))).toMatchObject({ ok: false, reason: "invalid_proof" });
+    expect(await prod.verifier.verify(input("test"))).toMatchObject({ ok: true, purchase: { environment: "sandbox" } });
+    const refusing = setup(true, false);
+    refusing.fake.products.set("test", bought({ purchaseType: 0 }));
+    expect(await refusing.verifier.verify(input("test"))).toMatchObject({ ok: false, reason: "invalid_proof" });
   });
 
   it("unknown token is not found (402); a Google outage is unavailable (503)", async () => {
@@ -398,7 +408,14 @@ describe("storeConnectionsFromEnv", () => {
       IAP_XCODE_CERT_PEM: xcodePem,
     });
     expect(prod.apple?.production).toBe(true);
+    expect(prod.apple?.acceptTestPurchases).toBe(true);
     expect(prod.apple?.trust.xcodeCert).toBeNull();
+    const refusing = storeConnectionsFromEnv({
+      NODE_ENV: "production",
+      APPLE_BUNDLE_ID: TEST_BUNDLE_ID,
+      IAP_ACCEPT_TEST_PURCHASES: "0",
+    });
+    expect(refusing.apple?.acceptTestPurchases).toBe(false);
   });
 
   it("configures Google Play from the service-account JSON", () => {

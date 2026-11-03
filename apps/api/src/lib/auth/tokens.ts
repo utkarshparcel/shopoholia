@@ -75,6 +75,28 @@ export async function loginWithGoogleProfile(
   return { ...tokens, isNewUser: isNew, coinBalance };
 }
 
+export async function loginWithAppleProfile(
+  app: FastifyInstance,
+  repos: Repositories,
+  profile: { appleSub: string; email: string | null; displayName?: string | null },
+) {
+  const { user, isNew } = await repos.findOrCreateAppleUser(profile);
+  let coinBalance = await repos.getCoinBalance(user.id);
+
+  if (isNew) {
+    const grant = await repos.grantCoins({
+      userId: user.id,
+      delta: ONBOARDING_COIN_GRANT,
+      type: "GRANT",
+      refType: "onboarding",
+    });
+    coinBalance = grant.balanceAfter;
+  }
+
+  const tokens = await issueTokens(app, repos, user.id, identityForUser(user));
+  return { ...tokens, isNewUser: isNew, coinBalance };
+}
+
 export async function refreshAccessToken(
   app: FastifyInstance,
   repos: Repositories,

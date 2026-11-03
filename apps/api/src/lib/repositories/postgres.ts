@@ -458,6 +458,7 @@ function mapUser(row: UserRow): UserRecord {
     phone: row.phone ?? null,
     email: row.email ?? null,
     googleSub: row.googleSub ?? null,
+    appleSub: row.appleSub ?? null,
     displayName: row.displayName,
     avatarStatus: row.avatarStatus as AvatarStatus,
     coinBalanceCache: row.coinBalanceCache,
@@ -1228,6 +1229,11 @@ export function createPostgresRepositories(db: Db): Repositories {
       return row ? mapUser(row) : null;
     },
 
+    async findUserByAppleSub(appleSub) {
+      const [row] = await db.select().from(users).where(eq(users.appleSub, appleSub)).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
     async findUserByEmail(email) {
       const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
       return row ? mapUser(row) : null;
@@ -1312,6 +1318,50 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { user: mapUser(row), isNew: true };
     },
 
+    async findOrCreateAppleUser({ appleSub, email, displayName }) {
+      const existingApple = await repos.findUserByAppleSub(appleSub);
+      if (existingApple) {
+        if (!existingApple.referralCode) {
+          return { user: await assignReferralCode(existingApple.id), isNew: false };
+        }
+        return { user: existingApple, isNew: false };
+      }
+
+      const existingEmail = email ? await repos.findUserByEmail(email) : null;
+      if (existingEmail) {
+        const updated = await repos.updateUser(existingEmail.id, {
+          appleSub,
+          displayName: existingEmail.displayName ?? displayName ?? null,
+        });
+        return { user: updated.referralCode ? updated : await assignReferralCode(updated.id), isNew: false };
+      }
+
+      const userId = randomUUID();
+      const row = await withNewReferralCode((referralCode) =>
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone: null,
+              email: email ? email.toLowerCase() : null,
+              googleSub: null,
+              appleSub,
+              displayName: displayName ?? null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
+
+      return { user: mapUser(row), isNew: true };
+    },
+
     async updateUser(id, patch) {
       const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       if (!existing) throw new Error(`User not found: ${id}`);
@@ -1322,6 +1372,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           phone: patch.phone !== undefined ? patch.phone : existing.phone,
           email: patch.email !== undefined ? patch.email : existing.email,
           googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
+          appleSub: patch.appleSub !== undefined ? patch.appleSub : existing.appleSub,
           displayName: patch.displayName ?? existing.displayName,
           avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
           coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,
@@ -3390,12 +3441,35 @@ export function createPostgresRepositories(db: Db): Repositories {
           await tx.delete(carts).where(inArray(carts.id, cartIds));
         }
 
-        // 8. sellers / listings / variants
+        // 8. sellers / listings / variants. A listing someone else ordered or has in a cart can't
+        // go (their order_items / cart_items point at its variants, ON DELETE RESTRICT): it is
+        // archived and loses its seller with the sellers row (ON DELETE SET NULL). The user's own
+        // orders and cart are gone by now, so any reference left is another user's.
         if (listingIds.length > 0) {
-          await tx
-            .delete(listingVariants)
-            .where(inArray(listingVariants.listingId, listingIds));
-          await tx.delete(listings).where(inArray(listings.id, listingIds));
+          const kept = await tx
+            .selectDistinct({ id: listingVariants.listingId })
+            .from(listingVariants)
+            .where(
+              and(
+                inArray(listingVariants.listingId, listingIds),
+                or(
+                  inArray(listingVariants.id, tx.select({ id: orderItems.listingVariantId }).from(orderItems)),
+                  inArray(listingVariants.id, tx.select({ id: cartItems.listingVariantId }).from(cartItems)),
+                ),
+              ),
+            );
+          const keptIds = new Set(kept.map((k) => k.id));
+          const dropIds = listingIds.filter((id) => !keptIds.has(id));
+          if (dropIds.length > 0) {
+            await tx.delete(listingVariants).where(inArray(listingVariants.listingId, dropIds));
+            await tx.delete(listings).where(inArray(listings.id, dropIds));
+          }
+          if (keptIds.size > 0) {
+            await tx
+              .update(listings)
+              .set({ status: "ARCHIVED", updatedAt: now() })
+              .where(inArray(listings.id, [...keptIds]));
+          }
         }
         if (sellerIds.length > 0) {
           await tx.delete(sellers).where(inArray(sellers.id, sellerIds));
@@ -3474,7 +3548,14 @@ export function createPostgresRepositories(db: Db): Repositories {
         await tx.delete(budgets).where(eq(budgets.userId, userId));
         await tx.delete(spendRollups).where(eq(spendRollups.userId, userId));
 
-        // 16. finally user
+        // 16. Other users' referred_by points at this id (a text column, no FK): cleared, so their
+        // first order doesn't try to pay a referrer who no longer exists.
+        await tx.update(users).set({ referredBy: null }).where(eq(users.referredBy, userId));
+        // Sign-in codes sent to the user's phone (phone number and code hash).
+        const [self] = await tx.select({ phone: users.phone }).from(users).where(eq(users.id, userId));
+        if (self?.phone) await tx.delete(otpCodes).where(eq(otpCodes.phone, self.phone));
+
+        // 17. finally user
         // Refresh tokens and lookbook items go with the user (ON DELETE CASCADE).
         await tx.delete(users).where(eq(users.id, userId));
       });
@@ -3487,7 +3568,35 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(merchantPurchases)
         .where(eq(merchantPurchases.userId, userId));
       const userSellers = db.select({ id: sellers.id }).from(sellers).where(eq(sellers.userId, userId));
-      const userListings = db.select({ id: listings.id }).from(listings).where(inArray(listings.sellerId, userSellers));
+      // Listings other users ordered or carted outlive the erasure (archived, see deleteAllUserData),
+      // and so do their images: only the rest are the user's to delete.
+      const userCarts = db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
+      const variantsKeptForOthers = db
+        .select({ id: listingVariants.listingId })
+        .from(listingVariants)
+        .where(
+          or(
+            inArray(
+              listingVariants.id,
+              db
+                .select({ id: orderItems.listingVariantId })
+                .from(orderItems)
+                .where(sql`${orderItems.orderId} NOT IN ${userOrders}`),
+            ),
+            inArray(
+              listingVariants.id,
+              db
+                .select({ id: cartItems.listingVariantId })
+                .from(cartItems)
+                .where(sql`${cartItems.cartId} NOT IN ${userCarts}`),
+            ),
+          ),
+        );
+      const ownListingFilter = and(
+        inArray(listings.sellerId, userSellers),
+        sql`${listings.id} NOT IN ${variantsKeptForOthers}`,
+      );
+      const userListings = db.select({ id: listings.id }).from(listings).where(ownListingFilter);
       const [
         avatarRows,
         wardrobeRows,
@@ -3503,6 +3612,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         listingRows,
         variantRows,
         exportRows,
+        fitPreviewRows,
       ] = await Promise.all([
         db.select({ a: avatars.referenceImageKey, b: avatars.sourceUploadKeys }).from(avatars).where(eq(avatars.userId, userId)),
         db.select({ a: wardrobeItems.garmentImageKey, b: wardrobeItems.imageKeys }).from(wardrobeItems).where(eq(wardrobeItems.userId, userId)),
@@ -3523,9 +3633,10 @@ export function createPostgresRepositories(db: Db): Repositories {
               sql`(${ingestionDocuments.userId} = ${userId} OR (${ingestionDocuments.userId} IS NULL AND (${ingestionDocuments.parsedJson}->>'__userId' = ${userId} OR ${ingestionDocuments.matchedPurchaseId} IN ${userPurchases})))`,
             ),
           ),
-        db.select({ a: listings.houseModelRenderKey, b: listings.productImageKeys }).from(listings).where(inArray(listings.sellerId, userSellers)),
+        db.select({ a: listings.houseModelRenderKey, b: listings.productImageKeys }).from(listings).where(ownListingFilter),
         db.select({ a: listingVariants.garmentImageKey }).from(listingVariants).where(inArray(listingVariants.listingId, userListings)),
         db.select({ a: privacyRequests.resultKey }).from(privacyRequests).where(eq(privacyRequests.userId, userId)),
+        db.select({ a: fitPreviews.imageKey }).from(fitPreviews).where(eq(fitPreviews.userId, userId)),
       ]);
       const values: Array<string | null | undefined> = [];
       const push = (a?: string | null, b?: string[] | null) => {
@@ -3534,7 +3645,7 @@ export function createPostgresRepositories(db: Db): Repositories {
       };
       for (const r of avatarRows) push(r.a, r.b);
       for (const r of wardrobeRows) push(r.a, r.b);
-      for (const rows of [wearRows, receiptRows, previewRows, renderRows, returnRows, purchaseItemRows, docRows, variantRows, exportRows]) {
+      for (const rows of [wearRows, receiptRows, previewRows, renderRows, returnRows, purchaseItemRows, docRows, variantRows, exportRows, fitPreviewRows]) {
         for (const r of rows) push(r.a);
       }
       for (const r of purchaseRows) {

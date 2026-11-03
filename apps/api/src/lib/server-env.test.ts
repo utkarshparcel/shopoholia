@@ -129,6 +129,27 @@ describe("bootConfigProblems", () => {
     expect(set.warnings.join("\n")).not.toMatch(/CASHBACK_WEBHOOK_SECRET|ADMIN_SECRET/);
   });
 
+  it("in production, warns about what breaks sign-in, account deletion retries, renders and App Review purchases", () => {
+    const { warnings } = bootConfigProblems({ NODE_ENV: "production", IAP_ACCEPT_TEST_PURCHASES: "0" });
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/REDIS_URL is not set: .*account-deletion retries/),
+        expect.stringMatching(/GOOGLE_CLIENT_IDS is not set: Google sign-in/),
+        expect.stringMatching(/APPLE_BUNDLE_ID is not set: Sign in with Apple/),
+        expect.stringMatching(/FASHN_API_KEY is not set/),
+        expect.stringMatching(/App Review and TestFlight testers can't buy coins/),
+      ]),
+    );
+    const set = bootConfigProblems({
+      NODE_ENV: "production",
+      REDIS_URL: "redis://r",
+      GOOGLE_CLIENT_IDS: "a.apps.googleusercontent.com",
+      APPLE_BUNDLE_ID: "app.bundle",
+      FASHN_API_KEY: "k",
+    });
+    expect(set.warnings.join("\n")).not.toMatch(/REDIS_URL|GOOGLE_CLIENT_IDS|Sign in with Apple|FASHN_API_KEY|TestFlight/);
+  });
+
   it("outside production, missing providers are not errors", () => {
     expect(bootConfigProblems({ NODE_ENV: "development" }).errors).toEqual([]);
   });

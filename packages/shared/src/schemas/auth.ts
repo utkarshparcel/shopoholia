@@ -25,6 +25,19 @@ export const GoogleAuthRequestSchema = z.object({
 
 export type GoogleAuthRequest = z.infer<typeof GoogleAuthRequestSchema>;
 
+/**
+ * Sign in with Apple (iOS). `identityToken` is the credential's JWT; `nonce` is the raw nonce the
+ * app generated, whose SHA-256 (hex) it gave Apple, so the server can tie the token to this
+ * sign-in. Apple sends the name only on the first sign-in, so the app passes it along then.
+ */
+export const AppleAuthRequestSchema = z.object({
+  identityToken: z.string().min(20),
+  nonce: z.string().min(16).max(128),
+  fullName: z.string().trim().max(120).nullish(),
+});
+
+export type AppleAuthRequest = z.infer<typeof AppleAuthRequestSchema>;
+
 export const TokenResponseSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string(),

@@ -296,6 +296,25 @@ export async function signInWithGoogle(idToken: string) {
   }>(res);
 }
 
+/** Sign in with Apple: the credential's identity token plus the raw nonce whose hash Apple got. */
+export async function signInWithApple(body: {
+  identityToken: string;
+  nonce: string;
+  fullName?: string | null;
+}) {
+  const res = await apiFetch(`${API_URL}/auth/apple`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return parseJson<{
+    accessToken: string;
+    refreshToken: string;
+    isNewUser?: boolean;
+    coinBalance?: number;
+  }>(res);
+}
+
 export async function getAvatar(accessToken: string) {
   const res = await apiFetch(`${API_URL}/avatar`, {
     headers: { Authorization: `Bearer ${accessToken}` },

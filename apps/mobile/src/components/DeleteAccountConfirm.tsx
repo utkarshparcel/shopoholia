@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 
 import { Button } from '@/src/components/ui';
+import { DELETE_ACCOUNT_MESSAGE_WITH_CLOSET, DELETE_ACCOUNT_TITLE } from '@/src/hooks/account';
 import {
   DELETE_CONFIRM_HINT,
   DELETE_CONFIRM_PHRASE,
@@ -64,11 +65,8 @@ export function DeleteAccountConfirm({
     >
       <View style={styles.backdrop} testID="delete-confirm-modal">
         <View style={styles.sheet}>
-          <Text style={styles.title}>Delete your account?</Text>
-          <Text style={styles.body}>
-            This permanently erases your Vault and Closet data. This cannot be
-            undone.
-          </Text>
+          <Text style={styles.title}>{DELETE_ACCOUNT_TITLE}</Text>
+          <Text style={styles.body}>{DELETE_ACCOUNT_MESSAGE_WITH_CLOSET}</Text>
           <Text style={styles.hint}>{DELETE_CONFIRM_HINT}</Text>
           {email ? (
             <Text style={styles.hint}>Account email: {email}</Text>

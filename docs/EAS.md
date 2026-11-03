@@ -2,16 +2,58 @@
 
 `apps/mobile/eas.json` defines build profiles per Expo EAS Build docs (v56). **CI never submits to the App Store or Play Store** — submit stays manual with Apple/Google credentials.
 
-| Profile | `distribution` | OTA `channel` | Use |
-|---------|----------------|---------------|-----|
-| `development` | `internal` + `developmentClient:true` | — | Local dev client (simulator + device). |
-| `preview` | `internal` | `preview` | Shareable APK / internal ad-hoc for closed testing. |
-| `production` | `store` | `production` | Store-signed bundle for TestFlight / Play (autoIncrement). |
-| `testflight` / `play-internal` | extends preview | `beta` | Convenience aliases used by `README.md`. |
+| Profile | `distribution` | Build number | OTA `channel` | Use |
+|---------|----------------|--------------|---------------|-----|
+| `development` | `internal` + `developmentClient:true` | — | — | Local dev client (simulator + device). |
+| `preview` | `internal` | — | `preview` | Shareable APK / iOS ad-hoc for closed testing. |
+| `production` | `store` | `autoIncrement` | `production` | App Store / Play production builds. |
+| `testflight` | `store` (extends preview) | `autoIncrement` | `beta` | iOS build for TestFlight. |
+| `play-internal` | `store` (extends preview, AAB) | `autoIncrement` | `beta` | Android build for the Play internal / closed track. |
 
-Every release profile (`preview`, `production`, `testflight`, `play-internal`) sets `EXPO_PUBLIC_API_URL=https://api.worncloset.app` in its `env`; `development` leaves it unset and falls back to `http://localhost:3000`. `app.config.js` refuses a release build whose URL is missing, not https, or a local host.
+`cli.appVersionSource` is `remote`: EAS keeps the build number (iOS `CFBundleVersion`, Android
+`versionCode`) and every store profile bumps it, so each upload is accepted. The marketing version
+is `expo.version` in `app.json` (1.0.0); bump it for each store release.
 
-`apps/mobile/app.json` sets `runtimeVersion.policy: "appVersion"` so EAS Update OTA binaries match the native app version.
+Every release profile sets `WORN_RELEASE_BUILD=1` and `EXPO_PUBLIC_API_URL=https://api.worncloset.app`;
+`development` leaves it unset and falls back to `http://localhost:3000`. Closet is off in all of
+them (`EXPO_PUBLIC_FEATURE_CLOSET` unset). `app.config.js` refuses a release build when:
+
+- the API URL is missing, not https, or a local/private/tunnel host, or (production profile) not
+  exactly `https://api.worncloset.app`;
+- the Google client id of the platform being built is missing or malformed
+  (`EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` for iOS, `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` for Android);
+  without it the login has no way in.
+
+It warns (build continues) when `EXPO_PUBLIC_SENTRY_DSN` or `EXPO_PUBLIC_POSTHOG_KEY` is missing.
+
+With Closet off, the Android manifest blocks the calendar, camera, SMS, microphone and
+draw-over-apps permissions, and the iOS purpose strings describe Worn Play (one photo for the
+avatar). The iOS app declares no non-exempt encryption, ships a privacy manifest for the
+required-reason APIs, and has the Sign in with Apple entitlement.
+
+## EAS environment variables (set once per environment)
+
+`eas.json` uses EAS environments: `production` for `production`, `preview` for `preview`,
+`testflight` and `play-internal`. Set these in the Expo dashboard (Project → Environment variables)
+for **both** environments, visibility "Plain text" or "Sensitive" (EXPO_PUBLIC_ values end up in
+the app, so they are not secrets):
+
+| Variable | Value | Needed for |
+|----------|-------|------------|
+| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS OAuth client id (`….apps.googleusercontent.com`), bundle id `com.shopoholia.worn` | iOS builds (required) |
+| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android OAuth client id, package `com.shopoholia.worn`, **SHA-1 of the EAS signing key and of the Play app-signing key** | Android builds (required) |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Web OAuth client id | Web / Expo Go only (optional) |
+| `EXPO_PUBLIC_SENTRY_DSN` | Sentry project DSN | Crash reports (warned when missing) |
+| `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Sentry source-map upload | Only when the DSN is set; without the token the Sentry build step can fail |
+| `EXPO_PUBLIC_POSTHOG_KEY` (+ `EXPO_PUBLIC_POSTHOG_HOST` for EU) | PostHog project key | Analytics (warned when missing) |
+
+All three Google client ids also go into the API's `GOOGLE_CLIENT_IDS` (comma-separated).
+
+Google sign-in on Android uses the redirect `com.shopoholia.worn:/oauthredirect` (the package is
+registered as a URL scheme). Google disables custom URI schemes for new Android OAuth clients: in
+Google Cloud Console → Credentials → the Android client → Advanced settings, **enable "Custom URI
+scheme"**, or sign-in fails with `invalid_request`. (Longer term, Google recommends the Credential
+Manager; switching needs a native Google sign-in library.)
 
 ## Preview build (closed testing / GTM)
 
@@ -22,34 +64,38 @@ eas build --profile preview --platform all
 # Android → internal APK; iOS → ad-hoc / internal distribution
 ```
 
-Share the build URL from the EAS dashboard with closed testers. Prefer `preview` for WhatsApp/Reddit GTM cohorts before store tracks.
+Share the build URL from the EAS dashboard with closed testers.
 
 ## Production + store submit (manual — not CI)
 
 ```bash
-eas build --profile production --platform ios --auto-increment
-eas build --profile production --platform android --auto-increment
-eas submit --profile testflight --platform ios      # after a production/ios build
+eas build --profile production --platform ios
+eas build --profile production --platform android
+eas submit --profile testflight --platform ios      # uses submit.testflight (APPLE_ID, ASC_APP_ID, APPLE_TEAM_ID)
 eas submit --profile play-internal --platform android
 ```
 
-Bundle identifiers: `com.shopoholia.worn` (iOS + Android). Bump `expo.version` or rely on `cli.appVersionSource: remote`.
+The first Android upload must be done by hand in Play Console (the Play API refuses an app with no
+uploaded build); `eas submit` works from the second one.
 
 ## OTA strategy (EAS Update)
 
-Channels are wired in `eas.json` (`preview` → `preview`, `production` → `production`, beta aliases → `beta`).
+**Not set up yet:** `expo-updates` is not installed, so release builds can't receive OTA updates
+and every fix ships as a new build. `app.json` already has `runtimeVersion.policy: "appVersion"`
+and `eas.json` assigns channels, so enabling OTA is: `npx expo install expo-updates`,
+`eas update:configure`, a new build, then:
+
+```bash
+# Publish JS bundle to a channel (requires matching runtimeVersion)
+eas update --channel preview --message "fix: …"
+eas update --channel production --message "fix: …"
+```
 
 | Channel | Who | When to publish |
 |---------|-----|-----------------|
 | `preview` | Internal / closed testers on preview binaries | JS-only fixes during closed testing |
 | `beta` | TestFlight / Play internal track binaries | Staged pre-prod hotfixes |
 | `production` | Store / production binaries | After crash-free gate passes |
-
-```bash
-# Publish JS bundle to a channel (requires matching runtimeVersion)
-eas update --channel preview --message "fix: vault offline banner"
-eas update --channel production --message "fix: return countdown"
-```
 
 Rules:
 
@@ -59,34 +105,22 @@ Rules:
 
 ## Staged rollout notes
 
-1. **Preview cohort** — build `preview`, 5–20 closed testers; watch Sentry Closet tags for 48h.
-2. **Beta track** — `testflight` / `play-internal` builds on channel `beta`; Play staged rollout 10% → 50% → 100% if available; TestFlight external only after internal soak.
-3. **Production** — store submit only after crash-free gate; prefer phased release on Play; App Store phased release when available.
-4. **OTA follow-ups** — ship JS fixes to the same channel as the binary; if crash rate regresses, halt OTA and roll back via EAS Update republish of last-good update group.
+1. **Preview cohort** — build `preview`, 5–20 closed testers; watch Sentry for 48h.
+2. **Beta track** — `testflight` / `play-internal` builds; Play staged rollout 10% → 50% → 100%; TestFlight external only after internal soak.
+3. **Production** — store submit only after the crash-free gate; prefer phased release on both stores.
 
 ## Crash-free ≥99.5% gate checklist
 
-Use Sentry (Closet surface tags from OBS-SENTRY-CLOSET) before promoting preview → beta → production or publishing production OTA:
+Use Sentry (Worn Play events; Closet events carry `worn_surface=closet` and don't occur while Closet is off) before promoting preview → beta → production:
 
-- [ ] Crash-free sessions **≥ 99.5%** over the last **7 days** (or ≥48h for tiny cohorts) for the target release / channel.
-- [ ] No unresolved **P0** Closet issues (auth, vault money, returns, ingestion consent).
-- [ ] Smoke: cold start Closet today + vault found-money + accountant summary on a physical device.
-- [ ] Analytics sink healthy (`accountant_viewed` / `found_money` funnel events arriving).
-- [ ] OTA `runtimeVersion` matches the binary under test (`appVersion` policy).
+- [ ] Crash-free sessions **≥ 99.5%** over the last **7 days** (or ≥48h for tiny cohorts) for the target release.
+- [ ] No unresolved **P0** issues (sign-in, coins and purchases, checkout, reveal, account deletion).
+- [ ] Smoke on a physical device: sign in (Apple on iOS, Google on both), make an avatar, check out a haul, open the reveal, buy the smallest coin pack with a sandbox / license-tester account, delete the account.
+- [ ] Analytics arriving in PostHog (`iap_purchase`, checkout and reveal events).
 
-### Closet Sentry smoke (W100)
+Smoke event: set **`EXPO_PUBLIC_SENTRY_SMOKE=1`** once on a preview build to emit a test event; unset it before production.
 
-Preview / QA triage path:
-
-1. Set `EXPO_PUBLIC_SENTRY_DSN` (and optionally server `SENTRY_DSN`) in the preview env / EAS secrets.
-2. Set **`EXPO_PUBLIC_SENTRY_SMOKE=1`** once on a preview build (or local) — app init emits `worn.smoke.closet` with tag `worn_surface=closet`.
-3. Confirm the event in Sentry Issues / Discover filtered by `worn_surface:closet` (and `closet_screen` on screen errors).
-4. Unset `EXPO_PUBLIC_SENTRY_SMOKE` before shipping production so smoke is not continuous noise.
-5. Server/workers: `SENTRY_SMOKE=1` emits `worn.smoke.api` / `worn.smoke.worker.*` via `@worn/shared` `initNodeSentry`.
-
-**Triage note:** Closet mobile crashes and `captureClosetException` events are tagged `worn_surface=closet`. Prefer filtering that tag for soft-launch crash-free gates; Play surface uses separate tags when present.
-
-**Kill / hold:** crash-free &lt; 99.5%, or any money-number / consent regression → stop staged rollout and do not OTA production.
+**Kill / hold:** crash-free < 99.5%, or any coin-balance / purchase / deletion regression → stop the staged rollout.
 
 ## CI hooks (no store submit)
 
@@ -94,24 +128,54 @@ Preview / QA triage path:
 node scripts/check-eas-gates.mjs
 ```
 
-GitHub Actions runs this on every PR/push. It validates:
+GitHub Actions runs this on every PR/push. It validates the profiles, OTA channels, this doc's
+coverage and `runtimeVersion`. It does **not** call `eas build` or `eas submit` (needs Apple/Google
+creds — never in CI). `apps/mobile/scripts/app-config.test.mjs` (in the mobile test suite) checks
+the release guards, permissions and that every store profile auto-increments.
 
-- `eas.json` has `development` / `preview` / `production` with required distribution + OTA channels
-- `docs/EAS.md` covers preview, OTA, staged rollout, crash-free gate, and that CI does not store-submit
-- `app.json` has `runtimeVersion` for EAS Update
+## Submit credentials
 
-It does **not** call `eas build` or `eas submit` (needs Apple/Google creds — never in CI).
-
-## Required env / secrets
-
-Set in your shell **or** `eas secret:create` before **manual** store submit.
+Set in your shell **or** as EAS secrets before a **manual** submit. No credentials are committed.
 
 | Var | Where | Notes |
 |-----|-------|-------|
-| `EXPO_TOKEN` | CI / local | `eas login` alternative for headless **builds** (optional; not required for gate script). |
+| `EXPO_TOKEN` | CI / local | `eas login` alternative for headless builds. |
 | `APPLE_ID` | `submit.testflight.ios.appleId` | Apple ID email. |
-| `ASC_APP_ID` | `submit.testflight.ios.ascAppId` | App Store Connect App Apple ID. |
-| `APPLE_TEAM_ID` | `submit.testflight.ios.appleTeamId` | Team ID (e.g. `AB12CD34EF`). |
-| `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` | `submit.play-internal.android.serviceAccountKeyPath` | Path to JSON key; `track: internal`. |
+| `ASC_APP_ID` | `submit.testflight.ios.ascAppId` | App Store Connect → App Information → Apple ID (numeric). |
+| `APPLE_TEAM_ID` | `submit.testflight.ios.appleTeamId` | Membership details → Team ID (e.g. `AB12CD34EF`). |
+| `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` | `submit.play-internal.android.serviceAccountKeyPath` | Path to the Play service-account JSON; `track: internal`. |
 
-> No credentials are committed. See [Expo EAS docs](https://docs.expo.dev/versions/v56.0.0/build/introduction/) for `appVersionSource`, `autoIncrement`, and [EAS Update](https://docs.expo.dev/eas-update/introduction/).
+## Owner checklist (accounts and store setup)
+
+Apple (developer account, App Store Connect):
+
+1. Decide the bundle id before anything else (`com.shopoholia.worn` today; it can't change after
+   the first upload). If it changes: `apps/mobile/app.json` (`ios.bundleIdentifier`,
+   `android.package`, the second `scheme` entry), the API's `APPLE_BUNDLE_ID` /
+   `ANDROID_PACKAGE_NAME`, the Google OAuth clients and `docs/STORE_LISTINGS.md`.
+2. `eas init` in `apps/mobile` (adds `extra.eas.projectId`), then `eas credentials` / the first
+   `eas build` registers the App ID with the **Sign in with Apple** and **Push Notifications**
+   capabilities and creates the certificates and the APNs key (EAS uploads it for Expo push).
+3. App Store Connect: create the app; In-App Purchases → four **Consumable** products
+   `worn.coins.100`, `worn.coins.350`, `worn.coins.650`, `worn.coins.1500` with prices, names and a
+   review screenshot; agreements, tax and banking (Paid Apps agreement) must be active for IAP.
+4. App Store Server Notifications V2: Production and Sandbox URL
+   `https://api.worncloset.app/webhooks/app-store`.
+5. App Privacy, age rating, review notes: from `docs/STORE_LISTINGS.md`.
+6. Sandbox tester accounts (Users and Access → Sandbox) for your own purchase tests.
+
+Google (Play Console, Google Cloud):
+
+1. Create the app; Monetize → In-app products → the same four product ids (managed products).
+2. Play app signing: copy the app-signing key **SHA-1** (for the Android OAuth client) from
+   Setup → App signing; also the EAS upload key SHA-1 (`eas credentials`).
+3. Google Cloud: OAuth consent screen (app name, privacy policy URL, `worncloset.app` as an
+   authorized domain), and three OAuth clients: Web, iOS (bundle id), Android (package + SHA-1s,
+   custom URI scheme enabled). Ids → the EAS variables above and the API's `GOOGLE_CLIENT_IDS`.
+4. Service account with Play Console access ("View financial data" and "Manage orders and
+   subscriptions") → the API's `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`; a second key (or the same) for
+   `eas submit` (`GOOGLE_SERVICE_ACCOUNT_KEY_PATH`).
+5. Real-time developer notifications (Pub/Sub) are optional: the API reconciles Play purchases
+   with its worker.
+6. Data safety, account deletion URL, age rating, app access instructions, closed testing with
+   ≥12 testers and license testers: from `docs/STORE_LISTINGS.md`.

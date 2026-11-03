@@ -6,6 +6,9 @@
  *   production, IAP_ALLOW_XCODE=1 with IAP_XCODE_CERT_PEM also accepts StoreKit Testing in Xcode.
  * - Google Play: ANDROID_PACKAGE_NAME and GOOGLE_PLAY_SERVICE_ACCOUNT_JSON (a service account with
  *   access to the app in Play Console).
+ * - Test purchases (App Store Sandbox: TestFlight, sandbox testers and App Review; Google Play
+ *   license testers) are accepted in every environment and recorded as `sandbox`, because App
+ *   Review buys against the production server. IAP_ACCEPT_TEST_PURCHASES=0 refuses them.
  */
 
 import { X509Certificate } from "node:crypto";
@@ -40,11 +43,15 @@ export type AppleStoreConfig = {
   bundleId: string;
   production: boolean;
   trust: AppleJwsTrust;
+  /** Sandbox transactions credit coins (recorded as `sandbox`). Default true. */
+  acceptTestPurchases?: boolean;
 };
 
 export type PlayStoreConnection = {
   packageName: string;
   production: boolean;
+  /** License-tester purchases credit coins (recorded as `sandbox`). Default true. */
+  acceptTestPurchases?: boolean;
   client: PlayClient;
   now?: () => Date;
 };
@@ -60,6 +67,7 @@ export function storeConnectionsFromEnv(
   opts: { fetchImpl?: typeof fetch } = {},
 ): StoreConnections {
   const production = env.NODE_ENV === "production";
+  const acceptTestPurchases = env.IAP_ACCEPT_TEST_PURCHASES !== "0";
   const bundleId = env.APPLE_BUNDLE_ID?.trim();
   const xcodePem =
     !production && env.IAP_ALLOW_XCODE === "1" ? env.IAP_XCODE_CERT_PEM?.replaceAll("\\n", "\n") : undefined;
@@ -67,6 +75,7 @@ export function storeConnectionsFromEnv(
     ? {
         bundleId,
         production,
+        acceptTestPurchases,
         trust: {
           roots: appleRootCertificates(),
           xcodeCert: xcodePem ? new X509Certificate(xcodePem) : null,
@@ -83,6 +92,7 @@ export function storeConnectionsFromEnv(
       ? {
           packageName,
           production,
+          acceptTestPurchases,
           client: createPlayClient({
             serviceAccount,
             allowEndpointOverrides: !production,
@@ -121,7 +131,12 @@ export function createAppleVerifier(config: AppleStoreConfig): PurchaseVerifier 
       return reject("invalid_proof", error instanceof Error ? error.message : "Invalid transaction");
     }
     if (tx.bundleId !== config.bundleId) return reject("invalid_proof", "This purchase is for another app");
-    const environment = appleEnvironment(tx.environment, xcode, config.production);
+    const environment = appleEnvironment(
+      tx.environment,
+      xcode,
+      config.production,
+      config.acceptTestPurchases ?? true,
+    );
     if (!environment) return reject("invalid_proof", TEST_PURCHASE);
     if (!tx.appAccountToken) return reject("invalid_proof", NOT_BOUND);
     if (tx.appAccountToken !== appAccountTokenForUser(userId)) {
@@ -243,7 +258,7 @@ export function createPlayVerifier(play: PlayStoreConnection): PurchaseVerifier 
       if (purchase.purchaseState === 1) return reject("purchase_refunded", "Google Play canceled this purchase");
       if (purchase.purchaseState !== 0) return reject("invalid_proof", "Google Play didn't report a completed purchase");
       const test = purchase.purchaseType === 0;
-      if (test && play.production) return reject("invalid_proof", TEST_PURCHASE);
+      if (test && play.acceptTestPurchases === false) return reject("invalid_proof", TEST_PURCHASE);
       if ((purchase.quantity ?? 1) !== 1) {
         return reject("product_mismatch", "Only single-quantity purchases are supported");
       }
@@ -286,7 +301,7 @@ export function createPlayVerifier(play: PlayStoreConnection): PurchaseVerifier 
       );
       if (accountProblem) return accountProblem;
       const test = sub.testPurchase !== undefined;
-      if (test && play.production) return reject("invalid_proof", TEST_PURCHASE);
+      if (test && play.acceptTestPurchases === false) return reject("invalid_proof", TEST_PURCHASE);
       if (sub.subscriptionState === "SUBSCRIPTION_STATE_PENDING") {
         return reject("purchase_pending", "The payment is still pending");
       }

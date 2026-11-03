@@ -74,7 +74,10 @@ Engage a DPA (or vendor terms that include GDPR Art. 28 / DPDP processor clauses
 | Expo / push relay | Push notifications | Push token, event copy | ☐ |
 | Sentry (if enabled) | Error monitoring | Stack traces; scrub PII | ☐ |
 | Email / waitlist (Loops/beehiiv) | Marketing list | Email | ☐ |
-| Analytics (GA4 / Plausible) | Product analytics | Pseudonymous events; consent-gated EU | ☐ |
+| PostHog (`EXPO_PUBLIC_POSTHOG_KEY`, server `POSTHOG_KEY`) | Product analytics (the sink the app and API actually use) | Events tied to the account id | ☐ |
+| FASHN.ai | AI try-on renders (Worn Play) | User avatar photo + garment image, per render | ☐ |
+| Google (Sign-In, Play Billing) | Sign-in; Android coin purchases | Google account id/email/name; purchase tokens | ☐ (Google terms) |
+| Apple (Sign in with Apple, App Store) | Sign-in; iOS coin purchases | Apple user id, (relay) email, name; signed transactions | ☐ (Apple terms) |
 
 ## In-app data dashboard (product)
 
