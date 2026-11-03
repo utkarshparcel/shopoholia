@@ -366,9 +366,39 @@ export const WAVE_A_WOW_EVENTS = [
 const PII_KEY_RE =
   /^(email|e_mail|phone|mobile|msisdn|password|passwd|secret|token|access_token|refresh_token|authorization|auth|card|card_number|pan|cvv|ssn|aadhaar|address|full_name|firstname|lastname|first_name|last_name|otp)$/i;
 
-const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-const PHONE_RE = /(?:\+\d[\d\s().-]{7,}\d)|(?:\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)/;
-const LONG_DIGIT_RE = /\b\d{12,19}\b/;
+/** Words that make a key personal wherever they appear in it (phoneNumber, mobile_no, user_email). */
+const PII_KEY_WORDS = new Set([
+  "email",
+  "phone",
+  "mobile",
+  "msisdn",
+  "password",
+  "passwd",
+  "otp",
+  "aadhaar",
+  "ssn",
+  "cvv",
+  "address",
+]);
+
+/** The words of a key: camelCase, snake_case, kebab-case and dotted keys all split. */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+}
+
+function isPiiKey(key: string): boolean {
+  return PII_KEY_RE.test(key) || keyWords(key).some((word) => PII_KEY_WORDS.has(word));
+}
+
+// Global: every occurrence in a string is redacted, not only the first.
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+// International (+91 98765 43210), dashed US-style, and bare Indian mobiles (9876543210).
+const PHONE_RE = /(?:\+\d[\d\s().-]{7,}\d)|(?:\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)|(?:\b[6-9]\d{9}\b)/g;
+const LONG_DIGIT_RE = /\b\d{12,19}\b/g;
 
 /**
  * Drop PII keys and redact emails / phones / long digit runs in string props.
@@ -381,7 +411,7 @@ export function sanitizeAnalyticsProperties(
   if (!properties) return {};
   const out: AnalyticsProperties = {};
   for (const [key, value] of Object.entries(properties)) {
-    if (PII_KEY_RE.test(key)) continue;
+    if (isPiiKey(key)) continue;
     if (typeof value === "string") {
       let scrubbed = value.replace(EMAIL_RE, "[redacted_email]");
       // Digit runs (PANs) before phone so 16-digit cards aren't phone-matched.
@@ -426,11 +456,13 @@ export function createHttpAnalyticsSink(
   const posthogKey = options.posthogKey?.trim();
   if (!webhookUrl && !posthogKey) return null;
 
-  const distinctId = options.distinctId ?? "anonymous";
-
   return (name, properties) => {
     const timestamp = new Date().toISOString();
     const safeProps = sanitizeAnalyticsProperties(properties);
+    // One process-wide sink serves every user: the event's own userId names its person.
+    const userId = properties?.userId;
+    const distinctId =
+      typeof userId === "string" && userId ? userId : (options.distinctId ?? "anonymous");
     const run = async () => {
       if (webhookUrl) {
         await fetchFn(webhookUrl, {
