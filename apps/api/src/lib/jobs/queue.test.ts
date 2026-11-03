@@ -4,7 +4,12 @@ import { createStubPushService } from "../push/stub.js";
 import { createMemoryRepositories } from "../repositories/memory.js";
 import type { Repositories } from "../repositories/types.js";
 import { createOrderTransitionHandler, type OrderTransitionJob } from "./order-processing.js";
-import { createMemoryJobQueue, type JobErrorReporter, type JobHandler } from "./queue.js";
+import {
+  createMemoryJobQueue,
+  ORDER_STEP_RETRY_DELAYS_MS,
+  type JobErrorReporter,
+  type JobHandler,
+} from "./queue.js";
 
 type Wrap = (handler: JobHandler<OrderTransitionJob>) => JobHandler<OrderTransitionJob>;
 
@@ -175,6 +180,49 @@ describe("createMemoryJobQueue order ladder", () => {
       ids: { orderId: order.id, targetState: "PACKED" },
     });
     expect(targets).toEqual(["PACKED", "OUT_FOR_DELIVERY", "ARRIVING_SOON", "DELIVERED"]);
+    // The later steps caught up the missed one: the order still arrived.
+    expect((await repos.findOrderById(order.id))?.state).toBe("DELIVERED");
+  });
+
+  it("retries a step that failed for a passing reason, so the last step still delivers", async () => {
+    let failures = 1;
+    const onError = vi.fn();
+    const { repos, queue, onDelivered } = setup({
+      onError,
+      wrap: (handler) => async (job) => {
+        if (job.targetState === "DELIVERED" && failures-- > 0) throw new Error("connection reset");
+        await handler(job);
+      },
+    });
+    const order = await createOrder(repos, new Date(Date.now() - 10 * 60_000));
+
+    const scheduling = queue.scheduleOrderLadder(order.id);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await scheduling;
+    expect((await repos.findOrderById(order.id))?.state).toBe("ARRIVING_SOON");
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await repos.findOrderById(order.id))?.state).toBe("DELIVERED");
+    expect(onDelivered).toHaveBeenCalledExactlyOnceWith(order.id);
+  });
+
+  it("gives up on a step after a bounded number of retries", async () => {
+    const onError = vi.fn();
+    const { repos, queue } = setup({
+      onError,
+      wrap: (handler) => async (job) => {
+        if (job.targetState === "DELIVERED") throw new Error("still down");
+        await handler(job);
+      },
+    });
+    const order = await createOrder(repos, new Date(Date.now() - 10 * 60_000));
+
+    await queue.scheduleOrderLadder(order.id);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(onError).toHaveBeenCalledTimes(ORDER_STEP_RETRY_DELAYS_MS.length + 1);
+    expect((await repos.findOrderById(order.id))?.state).toBe("ARRIVING_SOON");
   });
 
   it("keeps an order's steps running when the reporter itself throws", async () => {
@@ -296,5 +344,43 @@ describe("createMemoryJobQueue background failures", () => {
     await queue.enqueueRender({ renderId: "render-2", orderId: "order-1" });
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("createMemoryJobQueue renders", () => {
+  it("runs at most renderConcurrency renders at once, and each render once", async () => {
+    let running = 0;
+    let peak = 0;
+    const ran: string[] = [];
+    const release: Array<() => void> = [];
+    const queue = createMemoryJobQueue(
+      {
+        avatar: vi.fn(),
+        tryon: vi.fn(),
+        orderTransition: vi.fn(),
+        deliveredRender: vi.fn(),
+        render: async (job) => {
+          running += 1;
+          peak = Math.max(peak, running);
+          ran.push(job.renderId);
+          await new Promise<void>((resolve) => release.push(resolve));
+          running -= 1;
+        },
+      },
+      { repos: createMemoryRepositories(), autoProcess: true, renderConcurrency: 2 },
+    );
+
+    for (const id of ["r1", "r2", "r3", "r4", "r1", "r3"]) {
+      await queue.enqueueRender({ renderId: id, orderId: "o" });
+    }
+    await vi.waitFor(() => expect(ran).toHaveLength(2));
+    expect(peak).toBe(2);
+    while (ran.length < 4 || release.length > 0) {
+      await vi.waitFor(() => expect(release.length).toBeGreaterThan(0));
+      release.shift()!();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(ran.sort()).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(peak).toBe(2);
   });
 });
