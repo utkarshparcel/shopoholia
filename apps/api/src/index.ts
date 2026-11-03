@@ -17,6 +17,8 @@ import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js"
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
 import { resolveEconomyMode } from "./lib/orders/state-machine.js";
 import { closeQueues } from "./lib/queues/enqueue.js";
+import pino from "pino";
+import { redactQueryError } from "./lib/redact-error.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import {
   bootConfigProblems,
@@ -58,6 +60,12 @@ export function requestLogFields(request: {
   };
 }
 
+/** The request log's serializers: requests without query strings, errors without query values. */
+export const logSerializers = {
+  req: requestLogFields,
+  err: (error: unknown) => pino.stdSerializers.err(redactQueryError(error as Error)),
+};
+
 export type BuildServerOptions = {
   deps?: Partial<AppDeps>;
   logger?: boolean;
@@ -67,7 +75,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const boot = bootConfigProblems();
   const deps = await createDefaultDeps(options.deps);
   const app = Fastify({
-    logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: { req: requestLogFields } } : false,
+    logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: logSerializers } : false,
     // Behind the host's proxy the socket peer is the proxy: request.ip must come from
     // X-Forwarded-For, or every user shares one rate-limit bucket.
     trustProxy: fastifyTrustProxy(resolveTrustProxy()),

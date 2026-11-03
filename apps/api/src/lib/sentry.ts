@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/node";
 import { sentrySmokeMessage, wornSentryTags } from "@worn/shared";
+import { redactQueryError, redactQueryText } from "./redact-error.js";
 
 let initialized = false;
 
@@ -16,6 +17,9 @@ export function initSentry(): void {
     tracesSampleRate: 0.2,
     environment: process.env.NODE_ENV ?? "development",
     initialScope: { tags: wornSentryTags({ surface: "api" }) },
+    // Any event (ours or an integration's, e.g. an unhandled rejection) leaves with the query
+    // values of a failed SQL statement redacted from its exception messages.
+    beforeSend: redactSentryEvent,
     integrations: [
       // Request errors are reported by our onError hook (error-reporting.ts), with request tags.
       // Left on, this integration captures route errors first and Sentry then drops the hook's
@@ -40,8 +44,16 @@ export type CaptureOptions = {
 /** No-op until initSentry has run with a DSN. */
 export function captureException(error: unknown, { tags, unhandled }: CaptureOptions = {}): void {
   if (!initialized) return;
-  Sentry.captureException(error, {
+  Sentry.captureException(redactQueryError(error), {
     ...(tags && { captureContext: { tags } }),
     ...(unhandled && { mechanism: { type: "fastify", handled: false } }),
   });
+}
+
+/** Sentry beforeSend: exception messages without a failed query's bound values. */
+export function redactSentryEvent<E extends { exception?: { values?: Array<{ value?: string }> } }>(event: E): E {
+  for (const value of event.exception?.values ?? []) {
+    if (typeof value.value === "string") value.value = redactQueryText(value.value);
+  }
+  return event;
 }

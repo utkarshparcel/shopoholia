@@ -8,6 +8,7 @@ import { createPurchaseVerifier } from "./lib/coin-purchases.js";
 import { storeConnectionsFromEnv } from "./lib/iap/stores.js";
 import { createRenderProvider } from "./lib/render/provider.js";
 import { createPostgresRepositories } from "./lib/repositories/postgres.js";
+import { redactQueryError } from "./lib/redact-error.js";
 import { captureException, initSentry } from "./lib/sentry.js";
 import { createStorageFromEnv, hasR2Config } from "./lib/storage/r2.js";
 
@@ -26,7 +27,11 @@ function requiredEnv(name: string): string {
 
 async function main() {
   initSentry();
-  const log = pino({ name: "worn-worker" });
+  // Errors are logged without query values (see redact-error.ts).
+  const log = pino({
+    name: "worn-worker",
+    serializers: { err: (error: unknown) => pino.stdSerializers.err(redactQueryError(error as Error)) },
+  });
   const redisUrl = requiredEnv("REDIS_URL");
   const db = createDb(requiredEnv("DATABASE_URL"));
   if (process.env.NODE_ENV === "production" && !hasR2Config(process.env)) {
