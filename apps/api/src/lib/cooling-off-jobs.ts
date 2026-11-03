@@ -78,8 +78,9 @@ export async function processCoolingOffRelease(
   const user = await repos.findUserById(payload.userId);
   // Account erased since the hold started: nobody to tell.
   if (!user) return { status: "skipped" as const };
-  // checkout.ts keeps the hold in consentFlags and clears it on a placed order or an override.
-  const hold = readCoolingOffFromFlags(user.consentFlags);
+  // checkout.ts keeps the hold in users.prefs (patchUserPrefs) and clears it on a placed order or
+  // an override; consent_flags never carries it.
+  const hold = readCoolingOffFromFlags(user.prefs);
   if (!hold || hold.releaseAt !== payload.releaseAt) return { status: "skipped" as const };
 
   const copy = coolingOffReleaseCopy(payload.category);
