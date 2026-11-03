@@ -7,6 +7,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { newJobId } from "../lib/jobs/avatar-processing.js";
+import { detectImageType } from "../lib/storage/image-type.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -28,19 +29,27 @@ export const avatarRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const parts = request.files();
-      const uploadKeys: string[] = [];
+      const photos: Array<{ body: Buffer; type: NonNullable<ReturnType<typeof detectImageType>> }> = [];
 
       for await (const part of parts) {
         if (part.type !== "file") continue;
         const buffer = await part.toBuffer();
         if (buffer.length === 0) continue;
+        // The bytes decide, not the client's mimetype: only photos are stored, with our type.
+        const type = detectImageType(buffer);
+        if (!type) {
+          return reply.code(400).send({
+            error: "Bad Request",
+            message: "Photos must be JPEG, PNG, WebP or HEIC images",
+          });
+        }
+        photos.push({ body: buffer, type });
+      }
 
-        const key = `uploads/${userId}/${randomUUID()}.jpg`;
-        await app.deps.storage.put({
-          key,
-          body: buffer,
-          contentType: part.mimetype || "image/jpeg",
-        });
+      const uploadKeys: string[] = [];
+      for (const photo of photos) {
+        const key = `uploads/${userId}/${randomUUID()}.${photo.type.extension}`;
+        await app.deps.storage.put({ key, body: photo.body, contentType: photo.type.contentType });
         uploadKeys.push(key);
       }
 

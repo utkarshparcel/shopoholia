@@ -62,9 +62,12 @@ async function login(app: Awaited<ReturnType<typeof buildServer>>, phone = "9198
   return verify.json() as { accessToken: string };
 }
 
+/** The start of a JPEG (the avatar route checks the bytes, not the declared type). */
+const SELFIE_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
+
 async function readyAvatar(app: Awaited<ReturnType<typeof buildServer>>, token: string) {
   const form = new FormData();
-  form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg", contentType: "image/jpeg" });
+  form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg", contentType: "image/jpeg" });
   await app.inject({
     method: "POST",
     url: "/avatar",
@@ -236,7 +239,7 @@ describe("avatar", () => {
 
   it("uploads avatar and processes job", async () => {
     const form = new FormData();
-    form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg", contentType: "image/jpeg" });
+    form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg", contentType: "image/jpeg" });
 
     const upload = await app.inject({
       method: "POST",
@@ -262,6 +265,41 @@ describe("avatar", () => {
     expect(body.referencePreviewUrl).toContain("references");
   });
 
+  it("refuses a file that isn't a photo, whatever type it claims, and stores nothing", async () => {
+    const put = vi.spyOn(app.deps.storage, "put");
+    const form = new FormData();
+    form.append("photo", SELFIE_JPEG, { filename: "a.jpg", contentType: "image/jpeg" });
+    form.append("photo", Buffer.from("<html><script>alert(1)</script></html>"), {
+      filename: "selfie.jpg",
+      contentType: "image/jpeg",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/avatar",
+      headers: { authorization: `Bearer ${token}`, ...form.getHeaders() },
+      payload: form,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(put).not.toHaveBeenCalled();
+    put.mockRestore();
+  });
+
+  it("stores a photo with the type its bytes have, not the one the client sent", async () => {
+    const put = vi.spyOn(app.deps.storage, "put");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const form = new FormData();
+    form.append("photo", png, { filename: "selfie.jpg", contentType: "text/html" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/avatar",
+      headers: { authorization: `Bearer ${token}`, ...form.getHeaders() },
+      payload: form,
+    });
+    expect(res.statusCode).toBe(202);
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ contentType: "image/png", key: expect.stringMatching(/\.png$/) }));
+    put.mockRestore();
+  });
+
   it("rejects empty upload", async () => {
     const form = new FormData();
     const res = await app.inject({
@@ -275,7 +313,7 @@ describe("avatar", () => {
 
   it("deletes avatar", async () => {
     const form = new FormData();
-    form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg" });
+    form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg" });
     await app.inject({
       method: "POST",
       url: "/avatar",
