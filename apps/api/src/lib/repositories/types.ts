@@ -6,6 +6,7 @@ import type {
   RenderStatus,
   RevealRating,
   StateEta,
+  SettlementRow,
   UserPrefs,
   UserPrefsPatch,
 } from "@worn/shared";
@@ -1562,6 +1563,13 @@ export interface Repositories {
     warranties: WarrantyRecord[];
     created: boolean;
   } | null>;
+  /**
+   * MON-TAKE-RATE: stores a settlement, or returns the one already stored for its
+   * (kind, orderRef), so a retried settle never makes a second payout row.
+   */
+  insertMarketplaceSettlement(row: SettlementRow): Promise<{ row: SettlementRow; created: boolean }>;
+  /** Settlements, oldest first, optionally for one kind or seller. */
+  listMarketplaceSettlements(opts?: { kind?: SettlementRow["kind"]; sellerId?: string }): Promise<SettlementRow[]>;
   /** Idempotency for Play→Closet bridge (orderRef = Play order id). */
   findMerchantPurchaseByOrderRef(
     userId: string,

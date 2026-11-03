@@ -14,6 +14,7 @@ export * from "./jobs.js";
 export * from "./listing-variants.js";
 export * from "./listings.js";
 export * from "./lookbook-items.js";
+export * from "./marketplace.js";
 export * from "./order-items.js";
 export * from "./orders.js";
 export * from "./push-events.js";

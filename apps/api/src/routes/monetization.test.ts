@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTestServer, login } from "../test-utils.js";
-import { __resetSettlementsForTests } from "../lib/take-rate.js";
 
 describe("monetization routes", () => {
   let app: Awaited<ReturnType<typeof buildTestServer>>["app"];
@@ -21,7 +20,6 @@ describe("monetization routes", () => {
       originals[k] = process.env[k];
       delete process.env[k];
     }
-    __resetSettlementsForTests();
     // Dev simulation: a trial without a store purchase (never in production).
     process.env.IAP_ALLOW_SIMULATED = "1";
     process.env.FEATURE_TAKE_RATE = "1";
@@ -108,6 +106,18 @@ describe("monetization routes", () => {
     const list = await app.inject({ method: "GET", url: "/marketplace/settlements", headers: admin });
     expect(list.statusCode).toBe(200);
     expect(list.json().settlements).toHaveLength(1);
+
+    // A retried POST for the same order returns the first row, not a second payout.
+    const retry = await app.inject({
+      method: "POST",
+      url: "/marketplace/settlements",
+      headers: admin,
+      payload: { kind: "resale", orderRef: "disp-route-1", sellerId: "seller-route", orderAmountMinor: 100_000 },
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().id).toBe(settle.json().id);
+    const after = await app.inject({ method: "GET", url: "/marketplace/settlements", headers: admin });
+    expect(after.json().settlements).toHaveLength(1);
   });
 
   it("keeps marketplace settlements from signed-in users without the admin secret", async () => {

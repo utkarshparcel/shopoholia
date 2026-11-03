@@ -162,6 +162,13 @@
       "when": 1793720799031,
       "tag": "0022_catalog_coin_prices",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793728477185,
+      "tag": "0024_marketplace_settlements_merchant_order_ref",
+      "breakpoints": true
     }
   ]
 }

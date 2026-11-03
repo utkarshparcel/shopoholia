@@ -23,6 +23,7 @@ import {
   matchesStyleKeywords,
   normalizeStyleKeywords,
 } from "./listing-feed.js";
+import type { SettlementRow } from "@worn/shared";
 import type {
   BudgetRecord,
   CustomizationTemplateRecord,
@@ -154,6 +155,7 @@ function appendLedger(
 /** The render_scenario enum's declared order, which is how Postgres sorts it. */
 
 export function createMemoryRepositories(): Repositories {
+  const marketplaceSettlementsStore: SettlementRow[] = [];
   const users = new Map<string, UserRecord>();
   const usersByPhone = new Map<string, string>();
   const avatars = new Map<string, AvatarRecord>();
@@ -3477,13 +3479,13 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async createMerchantPurchase(input) {
-      // #38: one purchase per (user, orderRef); a repeat gets the existing one and its lines.
-      // Looked up synchronously so the check and the insert below cannot interleave.
+      // #38: one purchase per (user, merchant, orderRef); a repeat gets the existing one and its
+      // lines. Looked up synchronously so the check and the insert below cannot interleave.
       const existing =
         input.orderRef == null
           ? undefined
           : [...merchantPurchasesStore.values()].find(
-              (p) => p.userId === input.userId && p.orderRef === input.orderRef,
+              (p) => p.userId === input.userId && p.merchant === input.merchant && p.orderRef === input.orderRef,
             );
       if (existing) {
         return { purchase: existing, items: await this.listMerchantPurchaseItems(existing.id), created: false };
@@ -3562,6 +3564,19 @@ export function createMemoryRepositories(): Repositories {
       } finally {
         receiptConfirms.delete(input.receiptId);
       }
+    },
+
+    async insertMarketplaceSettlement(row) {
+      const existing = marketplaceSettlementsStore.find((s) => s.kind === row.kind && s.orderRef === row.orderRef);
+      if (existing) return { row: existing, created: false };
+      marketplaceSettlementsStore.push({ ...row });
+      return { row: { ...row }, created: true };
+    },
+
+    async listMarketplaceSettlements(opts) {
+      return marketplaceSettlementsStore
+        .filter((s) => (!opts?.kind || s.kind === opts.kind) && (!opts?.sellerId || s.sellerId === opts.sellerId))
+        .map((s) => ({ ...s }));
     },
 
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
