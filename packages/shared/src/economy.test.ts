@@ -6,7 +6,24 @@ import {
   FREE_REVEAL_RENDERS_PER_ITEM,
   REVEAL_UNLOCK_COST_COINS,
   RUSH_TO_EXPRESS_COST_COINS,
+  coinPriceForRupees,
 } from "./economy.js";
+
+describe("coinPriceForRupees", () => {
+  it("charges about a coin per ₹10, to the nearest 5, at least 10", () => {
+    expect(coinPriceForRupees(549)).toBe(55);
+    expect(coinPriceForRupees(405)).toBe(40);
+    expect(coinPriceForRupees(1649)).toBe(165);
+    expect(coinPriceForRupees(49)).toBe(10);
+  });
+
+  it("lets the welcome grant buy a first haul of several pieces", () => {
+    // The bundled catalog's shop prices run ₹405 to ₹1,649.
+    const typical = coinPriceForRupees(950);
+    expect(Math.floor(ONBOARDING_COIN_GRANT / typical)).toBeGreaterThanOrEqual(4);
+    expect(Math.floor(ONBOARDING_COIN_GRANT / typical)).toBeLessThanOrEqual(6);
+  });
+});
 import { DeliveryTier, OrderState, StateEtaSchema } from "./schemas/order.js";
 import {
   OtpRequestSchema,

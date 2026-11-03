@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ONBOARDING_COIN_GRANT } from "@worn/shared";
 import { describe, expect, it, vi } from "vitest";
 import { maybeSeedCatalog } from "./deps.js";
 import { createMemoryRepositories } from "./repositories/memory.js";
@@ -95,6 +96,20 @@ describe("scraped catalog prices", () => {
       0,
     );
     expect(listing.realPrice).toBe("₹405");
+    // ...and costs about a coin per ₹10 of it.
+    expect(listing.coinPrice).toBe(40);
+  });
+
+  it("prices the bundled catalog so the welcome grant buys a first haul of several pieces", async () => {
+    const repos = createMemoryRepositories();
+    await maybeSeedCatalog(repos, createMockStorage(), {
+      NODE_ENV: "production",
+      CATALOG_SEED_FILE: BUNDLED_SCRAPED_CATALOG_PATH,
+    });
+    const prices = (await repos.listListings({ limit: 50 })).items.map((item) => item.coinPrice);
+    const average = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+    expect(Math.floor(ONBOARDING_COIN_GRANT / average)).toBeGreaterThanOrEqual(4);
+    expect(Math.max(...prices)).toBeLessThan(ONBOARDING_COIN_GRANT / 2);
   });
 
   it("leaves the partner price unknown when the row has none", () => {

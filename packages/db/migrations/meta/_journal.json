@@ -148,6 +148,13 @@
       "when": 1793610486861,
       "tag": "0020_render_combined_items",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793720799031,
+      "tag": "0021_catalog_coin_prices",
+      "breakpoints": true
     }
   ]
 }

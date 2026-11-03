@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { coinPriceForRupees } from "@worn/shared";
 import { z } from "zod";
 import type {
   ListingRecord,
@@ -53,8 +54,9 @@ export function filterRealCatalogRows(rows: CatalogImportRow[]): CatalogImportRo
   );
 }
 
+/** Scraped `coin_price` is the shop's rupee price; the piece costs coinPriceForRupees of it. */
 function defaultCoinPrice(row: CatalogImportRow, index: number): number {
-  if (row.coin_price) return row.coin_price;
+  if (row.coin_price) return coinPriceForRupees(row.coin_price);
   const base =
     row.source === "shein"
       ? 26

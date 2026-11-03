@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDb } from "@worn/db";
+import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createMemoryRepositories } from "./memory.js";
 import { createPostgresRepositories } from "./postgres.js";
@@ -120,6 +124,58 @@ async function inRollback<T>(body: (repos: Repositories) => Promise<T>): Promise
     });
   return result!;
 }
+
+const repricingMigration = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../../packages/db/migrations/0021_catalog_coin_prices.sql",
+);
+
+describePostgres("0021 catalog coin prices", () => {
+  it("reprices shop listings stored at rupee prices, and their carts, and nothing else", async () => {
+    const db = createDb(databaseUrl!);
+    let after: Record<string, unknown> | undefined;
+    // Inside a transaction that is rolled back: the migration also touches the shared catalog.
+    await db
+      .transaction(async (tx) => {
+        const repos = createPostgresRepositories(tx as unknown as typeof db);
+        const shop = fixture("Old Shop Top");
+        const synthetic = fixture("Synthetic Top");
+        const priced = fixture("Already Priced Top");
+        await repos.seedListings(
+          [
+            { ...shop.listing, tags: ["src:newme"], coinPrice: 549, realPrice: null, affiliateUrl: "https://newme.asia/p/a" },
+            { ...synthetic.listing, tags: ["synthetic"], coinPrice: 40, realPrice: null },
+            { ...priced.listing, tags: ["src:newme"], coinPrice: 55, realPrice: "₹549" },
+          ],
+          [shop.variant, synthetic.variant, priced.variant],
+        );
+        const { user } = await repos.createUser(`+9196${Math.floor(Math.random() * 1e8)}`);
+        const cart = await repos.getOrCreateCart(user.id);
+        await repos.addCartItem({ cartId: cart.id, listingVariantId: shop.variant.id, coinPriceSnapshot: 549, quantity: 1 });
+
+        await tx.execute(sql.raw(readFileSync(repricingMigration, "utf8")));
+
+        after = {
+          shop: await repos.findListingById(shop.listing.id),
+          synthetic: await repos.findListingById(synthetic.listing.id),
+          priced: await repos.findListingById(priced.listing.id),
+          cart: await repos.getCartItems(cart.id),
+        };
+        throw new Rollback();
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof Rollback)) throw error;
+      });
+    const shop = after!.shop as ListingRecord;
+    expect(shop.coinPrice).toBe(55);
+    expect(shop.realPrice).toBe("₹549");
+    expect(shop.affiliateLinks).toEqual([{ url: "https://newme.asia/p/a", label: "newme", platform: "other" }]);
+    expect((after!.synthetic as ListingRecord).coinPrice).toBe(40);
+    expect((after!.synthetic as ListingRecord).realPrice).toBeNull();
+    expect((after!.priced as ListingRecord).coinPrice).toBe(55);
+    expect((after!.cart as Array<{ coinPriceSnapshot: number }>)[0]!.coinPriceSnapshot).toBe(55);
+  });
+});
 
 const links = [{ url: "https://www.amazon.in/dp/B0TEST", label: "Amazon", platform: "amazon" as const }];
 
