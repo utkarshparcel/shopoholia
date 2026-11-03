@@ -512,7 +512,8 @@ describe("outfits", () => {
     expect(body.events).toHaveLength(1);
     expect(body.events[0]!.occasion).toBe("FORMAL");
     expect(body.events[0]!.plannedFor).toBe("2026-09-15");
-    expect(body.events[0]!.remindAt).toBe("2026-09-14T20:00:00.000Z");
+    // 20:00 the evening before in the user's zone (Asia/Kolkata by default), not 20:00 UTC.
+    expect(body.events[0]!.remindAt).toBe("2026-09-14T14:30:00.000Z");
     expect(body.events[0]!.outfit?.occasion).toBe("FORMAL");
     expect(body.events[0]!.reason).toMatch(/interview/i);
   });
@@ -598,7 +599,7 @@ describe("outfits", () => {
     };
     expect(body.kit.name).toBe("Acme panel");
     expect(body.kit.occasion).toBe("FORMAL");
-    expect(body.kit.remindAt).toBe("2026-10-14T20:00:00.000Z");
+    expect(body.kit.remindAt).toBe("2026-10-14T14:30:00.000Z"); // 20:00 IST the evening before
     expect(body.kit.reminderScheduled).toBe(true);
     expect(body.kit.outfit?.plannedFor).toBe("2026-10-15");
 

@@ -3,7 +3,16 @@
  * Maps device calendar titles + start times to wardrobe occasions.
  */
 
+import { addDaysToKey, localDateKey, localParts, resolveTimeZone, zonedTimeToInstant } from "./local-time.js";
 import type { OutfitOccasion } from "./schemas/wardrobe.js";
+
+/**
+ * The zone a calendar helper works in: the user's `timeZone` (default zone when invalid), or UTC
+ * when the caller passes none (pure, deterministic use).
+ */
+function zoneOf(timeZone: string | null | undefined): string {
+  return timeZone === undefined ? "UTC" : resolveTimeZone(timeZone);
+}
 
 export type CalendarEventLike = {
   title?: string | null;
@@ -76,13 +85,14 @@ function asDate(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
 }
 
-/** Format UTC calendar YYYY-MM-DD for week outfit slots. */
-export function plannedForFromEventStart(startAt: string | Date): string {
+/** The event's local calendar day (YYYY-MM-DD) in `timeZone`, for week outfit slots. */
+export function plannedForFromEventStart(startAt: string | Date, timeZone?: string | null): string {
+  const tz = zoneOf(timeZone);
   const d = asDate(startAt);
   if (Number.isNaN(d.getTime())) {
-    return new Date().toISOString().slice(0, 10);
+    return localDateKey(new Date(), tz);
   }
-  return d.toISOString().slice(0, 10);
+  return localDateKey(d, tz);
 }
 
 /**
@@ -93,6 +103,7 @@ export function plannedForFromEventStart(startAt: string | Date): string {
 export function mapEventTitleToOccasion(
   title: string,
   startAt?: string | Date | null,
+  timeZone?: string | null,
 ): { occasion: OutfitOccasion; reason: string } {
   const trimmed = (title ?? "").trim();
   let best: { occasion: OutfitOccasion; label: string; weight: number } | null = null;
@@ -111,20 +122,23 @@ export function mapEventTitleToOccasion(
   if (startAt != null) {
     const start = asDate(startAt);
     if (!Number.isNaN(start.getTime())) {
-      return occasionFromStartTime(start);
+      return occasionFromStartTime(start, timeZone);
     }
   }
   return { occasion: "CASUAL", reason: "No occasion keywords; default casual" };
 }
 
 /**
- * Weekday business hours → WORK; evening → PARTY; else CASUAL.
- * Uses UTC hour/day for deterministic tests (device TZ applied at the edge).
+ * Weekday business hours → WORK; evening → PARTY; else CASUAL. Hour and weekday are local to
+ * `timeZone` (UTC when none is passed).
  */
-export function occasionFromStartTime(start: Date): { occasion: OutfitOccasion; reason: string } {
-  const hour = start.getUTCHours();
-  const day = start.getUTCDay(); // 0 Sun … 6 Sat
-  const weekday = day >= 1 && day <= 5;
+export function occasionFromStartTime(
+  start: Date,
+  timeZone?: string | null,
+): { occasion: OutfitOccasion; reason: string } {
+  const local = localParts(start, zoneOf(timeZone));
+  const hour = local.hour;
+  const weekday = local.weekday >= 1 && local.weekday <= 5; // ISO: 1 Mon … 7 Sun
 
   if (weekday && hour >= 7 && hour < 18) {
     return { occasion: "WORK", reason: "Weekday daytime event → work look" };
@@ -136,10 +150,13 @@ export function occasionFromStartTime(start: Date): { occasion: OutfitOccasion; 
 }
 
 /** Map a calendar event to a planned outfit occasion + date. */
-export function mapCalendarEventToOutfit(event: CalendarEventLike): MappedCalendarOutfit {
+export function mapCalendarEventToOutfit(
+  event: CalendarEventLike,
+  timeZone?: string | null,
+): MappedCalendarOutfit {
   const start = asDate(event.startAt);
-  const plannedFor = plannedForFromEventStart(start);
-  const mapped = mapEventTitleToOccasion(event.title ?? "", start);
+  const plannedFor = plannedForFromEventStart(start, timeZone);
+  const mapped = mapEventTitleToOccasion(event.title ?? "", start, timeZone);
   const startIso = Number.isNaN(start.getTime()) ? new Date().toISOString() : start.toISOString();
   return {
     eventId: event.id ?? null,
@@ -151,24 +168,26 @@ export function mapCalendarEventToOutfit(event: CalendarEventLike): MappedCalend
   };
 }
 
-export function mapCalendarEventsToOutfits(events: CalendarEventLike[]): MappedCalendarOutfit[] {
-  return events.map(mapCalendarEventToOutfit);
+export function mapCalendarEventsToOutfits(
+  events: CalendarEventLike[],
+  timeZone?: string | null,
+): MappedCalendarOutfit[] {
+  return events.map((event) => mapCalendarEventToOutfit(event, timeZone));
 }
 
 /**
- * Night-before reminder fire time: previous calendar day at `localHour` UTC
- * (edge layers may adjust for user TZ; helper stays deterministic).
+ * Night-before reminder fire time: `localHour` (20:00) on the local day before the event, in
+ * `timeZone` (UTC when none is passed). 20:00 local sits before the default 22:00 quiet hours.
  */
 export function nightBeforeReminderAt(
   eventStart: string | Date,
-  opts?: { localHour?: number },
+  opts?: { localHour?: number; timeZone?: string | null },
 ): Date {
+  const tz = zoneOf(opts?.timeZone);
   const start = asDate(eventStart);
   const hour = opts?.localHour ?? CAL_EVENT_REMINDER_LOCAL_HOUR;
-  const remindAt = new Date(start);
-  remindAt.setUTCDate(remindAt.getUTCDate() - 1);
-  remindAt.setUTCHours(hour, 0, 0, 0);
-  return remindAt;
+  const dayBefore = addDaysToKey(localDateKey(start, tz), -1);
+  return zonedTimeToInstant(dayBefore, `${String(hour).padStart(2, "0")}:00`, tz);
 }
 
 /**
@@ -180,24 +199,25 @@ export function shouldScheduleNightBeforeReminder(opts: {
   enabled?: boolean;
   now?: Date;
   localHour?: number;
+  timeZone?: string | null;
 }): boolean {
   if (opts.enabled === false) return false;
   const start = asDate(opts.eventStart);
   if (Number.isNaN(start.getTime())) return false;
   const now = opts.now ?? new Date();
-  const remindAt = nightBeforeReminderAt(start, { localHour: opts.localHour });
+  const remindAt = nightBeforeReminderAt(start, { localHour: opts.localHour, timeZone: opts.timeZone });
   return remindAt.getTime() > now.getTime();
 }
 
 /** Reminder window with delay; null when already past or invalid. */
 export function computeNightBeforeReminder(
   eventStart: string | Date,
-  opts?: { now?: Date; localHour?: number },
+  opts?: { now?: Date; localHour?: number; timeZone?: string | null },
 ): { remindAt: Date; delayMs: number } | null {
   const start = asDate(eventStart);
   if (Number.isNaN(start.getTime())) return null;
   const now = opts?.now ?? new Date();
-  const remindAt = nightBeforeReminderAt(start, { localHour: opts?.localHour });
+  const remindAt = nightBeforeReminderAt(start, { localHour: opts?.localHour, timeZone: opts?.timeZone });
   const delayMs = remindAt.getTime() - now.getTime();
   if (delayMs <= 0) return null;
   return { remindAt, delayMs };

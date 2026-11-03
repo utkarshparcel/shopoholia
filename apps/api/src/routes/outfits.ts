@@ -992,10 +992,11 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       const now = new Date();
       // One read of the closet and history for all (up to 20) events.
       const ctx = commit ? await loadOutfitContext(app, userId, now) : undefined;
+      const timeZone = resolveTimeZone((await app.deps.repos.findUserById(userId))?.timeZone);
 
       const results = [];
       for (const ev of body.events) {
-        const plan = planOutfitFromCalendarEvent(ev, { now, remindNightBefore });
+        const plan = planOutfitFromCalendarEvent(ev, { now, remindNightBefore, timeZone });
         let outfit: any = null;
         if (commit) {
           outfit = await generateOutfitForUser(app, userId, {
@@ -1237,6 +1238,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
       }
       const now = new Date();
+      const timeZone = resolveTimeZone((await app.deps.repos.findUserById(userId))?.timeZone);
       let kit;
       try {
         kit = await interviewKitStore.save({
@@ -1247,6 +1249,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
           eventAt: body.eventAt,
           occasion: body.occasion,
           now,
+          timeZone,
         });
       } catch (err) {
         return reply.code(400).send({
@@ -1256,7 +1259,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const commit = body.commit !== false;
-      const plannedFor = plannedForFromEvent(kit.eventAt);
+      const plannedFor = plannedForFromEvent(kit.eventAt, timeZone);
       let outfit: any = null;
       if (commit) {
         outfit = await app.deps.repos.upsertOutfitForDate({
@@ -1357,7 +1360,8 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
 
       try {
         if (body.eventAt) {
-          kit = (await interviewKitStore.updateEvent(id, userId, body.eventAt)) ?? kit;
+          const timeZone = resolveTimeZone((await app.deps.repos.findUserById(userId))?.timeZone);
+          kit = (await interviewKitStore.updateEvent(id, userId, body.eventAt, { timeZone })) ?? kit;
         }
         if (body.cancelReminder) {
           kit = (await interviewKitStore.cancelReminder(id, userId)) ?? kit;
