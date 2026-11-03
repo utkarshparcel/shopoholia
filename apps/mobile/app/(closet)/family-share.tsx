@@ -36,7 +36,7 @@ export default function FamilyShareConfirmScreen() {
 
   const landing = useMemo(() => {
     if (!confirm) return null;
-    return buildReferralLandingCopy(confirm.referralCode);
+    return buildReferralLandingCopy(confirm.referralCode, 'closet');
   }, [confirm]);
 
   useEffect(() => {

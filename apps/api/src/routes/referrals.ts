@@ -109,7 +109,8 @@ export const referralRoutes: FastifyPluginAsyncZod = async (app) => {
         attributed: true,
         referralCode: code,
         deepLink,
-        landing: buildReferralLandingCopy(code),
+        // Closet's family share attributes with its own source; everything else is a Play referral.
+        landing: buildReferralLandingCopy(code, request.body.source === "family_share" ? "closet" : "play"),
       };
     },
   );
@@ -146,7 +147,8 @@ export const referralRoutes: FastifyPluginAsyncZod = async (app) => {
         attributed: true,
         referralCode: code,
         deepLink,
-        landing: buildReferralLandingCopy(code),
+        // A /r/ link is the Play referral the app shares.
+        landing: buildReferralLandingCopy(code, "play"),
       };
     },
   );

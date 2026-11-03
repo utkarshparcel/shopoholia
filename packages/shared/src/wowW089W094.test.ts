@@ -98,8 +98,16 @@ describe("W089–W094 growth/share/regional", () => {
     expect(asset.svg).not.toMatch(/Myntra|@/);
   });
 
-  it("W094 referral landing explains found-money + install CTA", () => {
-    const landing = buildReferralLandingCopy("HOME99");
+  it("W094 Play referral landing explains the game and where the code goes", () => {
+    const landing = buildReferralLandingCopy("FRIEND7");
+    expect(landing.referralCode).toBe("FRIEND7");
+    expect(landing.body).toMatch(/Profile → Refer & earn/);
+    expect(landing.body).toMatch(/100 coins when you place your first haul/);
+    expect(`${landing.headline} ${landing.body} ${landing.installCta}`).not.toMatch(/Closet|gift card/i);
+  });
+
+  it("W094 Closet family-share landing explains found-money + install CTA", () => {
+    const landing = buildReferralLandingCopy("HOME99", "closet");
     expect(landing.referralCode).toBe("HOME99");
     expect(landing.headline.toLowerCase()).toMatch(/gift card|forgotten/);
     expect(landing.body.toLowerCase()).toMatch(/store credit|gift/);

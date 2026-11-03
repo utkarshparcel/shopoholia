@@ -107,7 +107,7 @@ export default function ReferralScreen() {
   // Never throws: where sharing isn't supported (web without navigator.share) it copies instead.
   const shareCode = async () => {
     await shareText({
-      message: `Join me on WORN! Use my code ${code} when you sign up — I earn coins when you place your first haul. ${WEB_ORIGIN}/r/${code}`,
+      message: `Join me on WORN! After you sign up, enter my code ${code} in Profile → Refer & earn — I earn coins when you place your first haul. ${WEB_ORIGIN}/r/${code}`,
     });
   };
 
