@@ -66,6 +66,11 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!(env.OCR_PROVIDER_URL ?? env.OCR_PROVIDER_ENDPOINT) || env.OCR_PROVIDER === "mock") {
       errors.push("OCR is not configured (OCR_PROVIDER_URL): receipts would be read by the mock");
     }
+    if (!env.FASHN_API_KEY?.trim()) {
+      warnings.push(
+        "FASHN_API_KEY is not set: try-on previews, reveal unlocks and generates are unavailable (503), and every free reveal render fails",
+      );
+    }
     if (!env.WEATHER_API?.trim()) {
       warnings.push("WEATHER_API is not set: weather falls back to the mock (source: mock)");
     }
