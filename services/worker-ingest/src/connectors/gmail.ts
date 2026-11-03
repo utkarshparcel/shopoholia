@@ -53,6 +53,9 @@ interface GmailMessageResource {
   snippet?: string;
 }
 
+/** history.list pages read per sync (500 records each by default). */
+export const MAX_HISTORY_PAGES = 20;
+
 interface GmailHistoryResponse {
   historyId?: string;
   history?: Array<{
@@ -270,16 +273,33 @@ export class GmailConnector implements EmailConnector {
       }
     }
 
-    // Normal incremental path: history.list with startHistoryId
+    // Normal incremental path: history.list with startHistoryId, every page of it. The cursor
+    // moves to the last page's historyId only once all pages are read, so no message is skipped.
     try {
-      const historyUrl = new URL(`${GMAIL_API}/history`);
-      historyUrl.searchParams.set("startHistoryId", cursor);
-      historyUrl.searchParams.set("labelId", "INBOX");
-      historyUrl.searchParams.set("historyTypes", "messageAdded");
+      const pages: GmailHistoryResponse[] = [];
+      let pageToken: string | undefined;
+      let historyRes: Response | undefined;
+      for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
+        const historyUrl = new URL(`${GMAIL_API}/history`);
+        historyUrl.searchParams.set("startHistoryId", cursor);
+        historyUrl.searchParams.set("labelId", "INBOX");
+        historyUrl.searchParams.set("historyTypes", "messageAdded");
+        if (pageToken) historyUrl.searchParams.set("pageToken", pageToken);
 
-      const historyRes = await fetchFn(historyUrl.toString(), {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+        historyRes = await fetchFn(historyUrl.toString(), {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!historyRes.ok) break;
+        const body = (await historyRes.json()) as GmailHistoryResponse;
+        pages.push(body);
+        pageToken = body.nextPageToken;
+        if (!pageToken) break;
+      }
+      if (!historyRes) throw new Error("Gmail history.list returned nothing");
+      if (historyRes.ok && pageToken) {
+        // More pages than one sync reads: keep the cursor so the next sync starts over.
+        throw new Error(`Gmail history.list has more than ${MAX_HISTORY_PAGES} pages`);
+      }
 
       if (!historyRes.ok) {
         // 404 = historyId expired or not found → fallback to full messages.list resync
@@ -297,25 +317,26 @@ export class GmailConnector implements EmailConnector {
         throw new Error(`Gmail history.list failed: ${historyRes.status}`);
       }
 
-      const history = (await historyRes.json()) as GmailHistoryResponse;
       let ids: string[] = [];
-
-      if (Array.isArray(history.history)) {
-        for (const h of history.history) {
-          for (const added of h.messagesAdded ?? []) {
-            if (added.message?.id) ids.push(added.message.id);
+      for (const history of pages) {
+        if (Array.isArray(history.history)) {
+          for (const h of history.history) {
+            for (const added of h.messagesAdded ?? []) {
+              if (added.message?.id) ids.push(added.message.id);
+            }
+            for (const m of h.messages ?? []) {
+              if (m.id) ids.push(m.id);
+            }
           }
-          for (const m of h.messages ?? []) {
+        }
+        if (Array.isArray(history.messages)) {
+          for (const m of history.messages) {
             if (m.id) ids.push(m.id);
           }
         }
       }
-      if (Array.isArray(history.messages)) {
-        for (const m of history.messages) {
-          if (m.id) ids.push(m.id);
-        }
-      }
       ids = [...new Set(ids)];
+      const lastHistoryId = pages.at(-1)?.historyId;
 
       const normalized: RawEmailMessage[] = [];
       for (const id of ids) {
@@ -338,7 +359,7 @@ export class GmailConnector implements EmailConnector {
 
       return {
         messages: normalized,
-        nextCursor: history.historyId ? String(history.historyId) : cursor ?? "",
+        nextCursor: lastHistoryId ? String(lastHistoryId) : cursor ?? "",
       };
     } catch (e) {
       const msg = String(e);

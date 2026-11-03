@@ -46,7 +46,7 @@ import {
 import { ConsoleMetricsSink } from "./parsers/metrics.js";
 import { createDefaultRegistry } from "./parsers/index.js";
 import type { MetricsSink, ParsedPurchase, RawEmailMessage } from "./parsers/types.js";
-import type { EmailConnector } from "./connectors/types.js";
+import { ConsentRequiredError, type EmailConnector } from "./connectors/types.js";
 import {
   autofillCreditFromPurchase,
   createDbCreditAutofillRepos,
@@ -374,7 +374,7 @@ export async function processResync(
     .from(ingestionSources)
     .where(eq(ingestionSources.id, sourceId))
     .limit(1);
-  if (!source) throw new Error(`ingestion source not found: ${sourceId}`);
+  if (!source) throw new SourceGoneError(sourceId);
 
   const [grant] = await deps.db
     .select()
@@ -419,6 +419,42 @@ export async function processResync(
     await deps.persister.updateSourceCursor(source.id, nextCursor);
   }
   return messages.length;
+}
+
+/** The source was disconnected (row deleted): nothing to sync, and its schedule should stop. */
+export class SourceGoneError extends Error {
+  constructor(sourceId: string) {
+    super(`ingestion source not found: ${sourceId}`);
+    this.name = "SourceGoneError";
+  }
+}
+
+/** How often a connected Gmail source is synced. */
+export const SOURCE_SYNC_EVERY_MS = 30 * 60_000;
+
+export function sourceSyncSchedulerId(sourceId: string): string {
+  return `resync:${sourceId}`;
+}
+
+type SyncQueue = Pick<Queue<IngestJobData>, "add" | "upsertJobScheduler" | "removeJobScheduler">;
+
+/**
+ * After a source connects: one resync now (the first read of the mailbox) and a repeating one
+ * every {@link SOURCE_SYNC_EVERY_MS}. Nothing else lists mail for a connected source.
+ * `connectKey` (the spent OAuth code's hash) makes a reconnect sync again at once.
+ */
+export async function scheduleSourceSync(queue: SyncQueue, sourceId: string, connectKey: string): Promise<void> {
+  await queue.add(INGEST_RESYNC_JOB_NAME, { sourceId }, { jobId: jobIdFrom("resync", sourceId, "connect", connectKey) });
+  await queue.upsertJobScheduler(
+    sourceSyncSchedulerId(sourceId),
+    { every: SOURCE_SYNC_EVERY_MS },
+    { name: INGEST_RESYNC_JOB_NAME, data: { sourceId } },
+  );
+}
+
+/** Stops the repeating sync of a source that is gone or whose consent was revoked. */
+export async function unscheduleSourceSync(queue: SyncQueue, sourceId: string): Promise<void> {
+  await queue.removeJobScheduler(sourceSyncSchedulerId(sourceId));
 }
 
 /** DB-backed {@link TokenStore} for a single ingestion source. */
@@ -649,7 +685,16 @@ export function createBullmqIngestWorker(
     // Wait out the source's backoff without spending an attempt.
     const backoffDelay = getBackoffDelay(sourceId);
     if (backoffDelay > 0) deferJob(backoffDelay);
-    await processResync(sourceId, { db, persister, metrics, creditRepos, connectorFactory });
+    try {
+      await processResync(sourceId, { db, persister, metrics, creditRepos, connectorFactory });
+    } catch (err) {
+      // Disconnected or consent revoked: no retry helps, and the repeating sync should stop.
+      if (err instanceof SourceGoneError || err instanceof ConsentRequiredError) {
+        await unscheduleSourceSync(resyncQueue, sourceId);
+        throw new UnrecoverableError(err.message);
+      }
+      throw err;
+    }
     recordSuccess(sourceId);
   };
 
@@ -687,6 +732,8 @@ export function createBullmqIngestWorker(
       id: source.consentGrantId,
       revokedAt: grant?.revokedAt ?? new Date(),
     });
+    // Connected: read the mailbox now and keep syncing it.
+    await scheduleSourceSync(resyncQueue, sourceId, codeHash);
     recordSuccess(sourceId);
   };
 

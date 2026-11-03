@@ -443,4 +443,45 @@ describe("GmailConnector", () => {
     expect(res.messages.length).toBeGreaterThanOrEqual(1);
     expect(Number.isNaN(Date.parse(res.messages[0]!.receivedAt))).toBe(false);
   });
+
+  it("listSince reads every history page before moving the cursor", async () => {
+    process.env.OAUTH_TOKEN_SECRET = "secret-32-bytes-long-abcdefghijklmnop";
+    const connector = makeConnector(createMemoryTokenStore());
+    const historyCalls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes("/token")) return { ok: true, json: async () => TOKEN_JSON } as never;
+      if (url.includes("/history")) {
+        historyCalls.push(url);
+        const second = new URL(url).searchParams.get("pageToken") === "p2";
+        return {
+          ok: true,
+          json: async () =>
+            second
+              ? { historyId: "h30", history: [{ messagesAdded: [{ message: { id: "m2" } }] }] }
+              : { historyId: "h30", nextPageToken: "p2", history: [{ messagesAdded: [{ message: { id: "m1" } }] }] },
+        } as never;
+      }
+      const id = url.split("/messages/")[1]!;
+      return {
+        ok: true,
+        json: async () => ({
+          id,
+          payload: {
+            headers: [
+              { name: "From", value: "no-reply@amazon.in" },
+              { name: "Subject", value: `Your Amazon order ${id} has shipped` },
+            ],
+            body: { data: Buffer.from("Total: Rs. 1,299.00").toString("base64") },
+          },
+        }),
+      } as never;
+    }) as unknown as typeof fetch;
+    (connector as unknown as { config: { fetchImpl?: typeof fetch } }).config.fetchImpl = fetchImpl;
+    await connector.completeOAuth("code", { id: "g", revokedAt: null });
+
+    const { messages, nextCursor } = await connector.listSince("h10", { id: "g", revokedAt: null });
+    expect(historyCalls).toHaveLength(2);
+    expect(messages.map((m) => m.messageId)).toEqual(["m1", "m2"]);
+    expect(nextCursor).toBe("h30");
+  });
 });

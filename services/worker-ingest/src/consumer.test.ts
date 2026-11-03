@@ -15,6 +15,11 @@ import {
   INGEST_QUEUE,
   INGEST_RESYNC_JOB_NAME,
   processResync,
+  scheduleSourceSync,
+  sourceSyncSchedulerId,
+  SOURCE_SYNC_EVERY_MS,
+  SourceGoneError,
+  unscheduleSourceSync,
   processSmsJob,
   type IngestJob,
   type IngestJobData,
@@ -154,6 +159,32 @@ describe("worker-ingest consumer", () => {
     await processResync(SOURCE_ID, { db, persister: ok.persister, connectorFactory: connectorFactory as never });
     expect(ok.persister.updateSourceCursor).toHaveBeenCalledTimes(1);
     expect(ok.persister.updateSourceCursor).toHaveBeenCalledWith(SOURCE_ID, "h200");
+  });
+
+  it("a connected source gets a first resync and a repeating one, removed when it goes", async () => {
+    const queue = {
+      add: vi.fn(async () => ({})),
+      upsertJobScheduler: vi.fn(async () => ({})),
+      removeJobScheduler: vi.fn(async () => true),
+    };
+    await scheduleSourceSync(queue as never, SOURCE_ID, "code-hash");
+    expect(queue.add).toHaveBeenCalledWith(
+      INGEST_RESYNC_JOB_NAME,
+      { sourceId: SOURCE_ID },
+      expect.objectContaining({ jobId: expect.stringContaining(SOURCE_ID) }),
+    );
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      sourceSyncSchedulerId(SOURCE_ID),
+      { every: SOURCE_SYNC_EVERY_MS },
+      { name: INGEST_RESYNC_JOB_NAME, data: { sourceId: SOURCE_ID } },
+    );
+    await unscheduleSourceSync(queue as never, SOURCE_ID);
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith(sourceSyncSchedulerId(SOURCE_ID));
+    // A deleted source reads as gone, so its schedule can be stopped.
+    const { persister } = fakePersister();
+    await expect(
+      processResync(SOURCE_ID, { db: mockDb(), persister, connectorFactory: createDefaultConnectorFactory(mockDb()) }),
+    ).rejects.toBeInstanceOf(SourceGoneError);
   });
 
   it("refuses to build a Gmail connector without Google credentials", () => {
