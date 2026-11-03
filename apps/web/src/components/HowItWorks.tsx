@@ -29,7 +29,7 @@ const STEPS: Step[] = [
   {
     n: '01',
     title: 'Start with 500',
-    copy: 'Sign in with Google and 500 welcome coins land in your wallet, enough for a piece under 500 tonight. Want more? Coin packs are optional in-app purchases.',
+    copy: 'Sign in with Google and 500 welcome coins land in your wallet, enough for a first haul of four to six pieces. Want more? Coin packs are optional in-app purchases.',
     icon: Gift,
     stat: '500 welcome coins',
   },
@@ -43,9 +43,9 @@ const STEPS: Step[] = [
   {
     n: '03',
     title: 'Spend on the haul',
-    copy: 'Every piece has a coin price, 405 to 1,649 in tonight’s edit. Pay with coins at checkout. In a hurry? Rush to Express for 25.',
+    copy: 'Every piece has a coin price, about a tenth of its price in rupees: 41 to 165 in tonight’s edit. Pay with coins at checkout. In a hurry? Rush to Express for 25.',
     icon: ShoppingBag,
-    stat: '405 to 1,649 per piece · Rush 25',
+    stat: '41 to 165 per piece · Rush 25',
   },
   {
     n: '04',

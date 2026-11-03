@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { GoldParticles } from './GoldParticles';
 import { gsap, ScrollTrigger } from '@/lib/gsap';
-import { closetHref } from '@/lib/site';
+import { REQUEST_APP_LABEL, closetHref } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -40,7 +40,7 @@ const DRESSES = [
     name: 'Yellow floral a-line maxi dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/04/021348591258e001/NM-PRC-414-DRS-26-APR-32495-YELLOW(1).webp',
-    caption: '1,049 coins · XS',
+    caption: '105 coins · XS',
   },
   {
     key: 'black',
@@ -49,7 +49,7 @@ const DRESSES = [
     name: 'Black cowl neck midi dress',
     size: 'S',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/04152538fdacdf9c/NM-PRC-374-DRS-26-JUN-34296-BLACK(1).webp',
-    caption: '1,049 coins · S',
+    caption: '105 coins · S',
   },
   {
     key: 'sage',
@@ -58,7 +58,7 @@ const DRESSES = [
     name: 'Sage ruched bodycon mini dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/12073053427750de/NM-PRC-455-DRS-26-JUN-34374-SAGE(1).webp',
-    caption: 'Tonight’s pick · 1,049 coins',
+    caption: 'Tonight’s pick · 105 coins',
   },
   {
     key: 'red',
@@ -67,7 +67,7 @@ const DRESSES = [
     name: 'Red one shoulder ruched dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/05/09102331e3473fe4/NM-IN-56-DRS-24-APR-5058-RED(0).webp',
-    caption: '450 coins · XS',
+    caption: '45 coins · XS',
   },
   {
     key: 'pink',
@@ -76,7 +76,7 @@ const DRESSES = [
     name: 'Light pink sequin halter neck maxi dress',
     size: 'S',
     img: 'https://assets.newme.asia/wp-content/uploads/2025/11/2008454511161b6b/NM-PRC-9997-DRS-25-NOV-26970-LIGHTPINK(1).webp',
-    caption: '1,649 coins · S',
+    caption: '165 coins · S',
   },
   {
     key: 'stripe',
@@ -85,7 +85,7 @@ const DRESSES = [
     name: 'Off white striped maxi dress',
     size: 'XS',
     img: 'https://assets.newme.asia/wp-content/uploads/2026/03/1715592685b4dd97/NM-PRC-178-DRS-26-MAR-31596-OFFWHITE(1).webp',
-    caption: '949 coins · XS',
+    caption: '95 coins · XS',
   },
 ];
 type Dress = (typeof DRESSES)[number];
@@ -1154,7 +1154,7 @@ export function DropStage() {
                 href="#download"
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
               >
-                Request early access <ArrowRight size={14} />
+                {REQUEST_APP_LABEL} <ArrowRight size={14} />
               </a>
               <button
                 type="button"
@@ -1212,7 +1212,7 @@ export function DropStage() {
                   href="#download"
                   className="inline-flex items-center gap-2 rounded-pill border border-worn-paper/25 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.18em] text-worn-paper/80 transition-colors hover:border-worn-gold hover:text-worn-paper"
                 >
-                  Request early access
+                  {REQUEST_APP_LABEL}
                 </a>
               </div>
             </motion.div>
@@ -1267,7 +1267,7 @@ export function DropStage() {
                     href="#download"
                     className="inline-flex items-center gap-2 rounded-pill bg-worn-paper px-5 py-2.5 font-sans text-[13px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint"
                   >
-                    Request early access <ArrowRight size={14} />
+                    {REQUEST_APP_LABEL} <ArrowRight size={14} />
                   </a>
                   {/* icon only here, so it shares the CTA's line instead of pushing the row up into the post */}
                   <button

@@ -7,6 +7,7 @@ import { ArrowRight, Heart } from 'lucide-react';
 import { Magnetic } from './Magnetic';
 import { GoldParticles } from './GoldParticles';
 import { gsap } from '@/lib/gsap';
+import { APP_LIVE, GET_APP_LABEL, LIVE_PLATFORMS } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const WORDS = ['Shop', 'the', 'haul.', 'Skip', 'the', 'bill.'];
@@ -22,22 +23,22 @@ const FEED = [
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/12073053427750de/NM-PRC-455-DRS-26-JUN-34374-SAGE(1).webp',
     title: 'Sage ruched bodycon mini dress',
-    coins: '1,049',
+    coins: '105',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/05/09102331e3473fe4/NM-IN-56-DRS-24-APR-5058-RED(0).webp',
     title: 'Red one shoulder ruched dress',
-    coins: '450',
+    coins: '45',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/04/021348591258e001/NM-PRC-414-DRS-26-APR-32495-YELLOW(1).webp',
     title: 'Yellow floral a-line maxi dress',
-    coins: '1,049',
+    coins: '105',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/03/1715592685b4dd97/NM-PRC-178-DRS-26-MAR-31596-OFFWHITE(1).webp',
     title: 'Off white striped maxi dress',
-    coins: '949',
+    coins: '95',
   },
 ];
 
@@ -253,7 +254,7 @@ export function Hero() {
               className="hero-rise ornament font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep"
               style={delay(0)}
             >
-              Worn Play · Free · Coming to iPhone and Android
+              {APP_LIVE ? `Worn Play · Free on ${LIVE_PLATFORMS}` : 'Worn Play · Free · Coming to iPhone and Android'}
             </p>
 
             {/* split-text headline */}
@@ -293,7 +294,7 @@ export function Hero() {
             <div className="hero-rise mt-9 flex flex-wrap items-center gap-4" style={delay(0.7)}>
               <Magnetic strength={0.3}>
                 <a href="#download" className="btn btn-primary px-8 py-4 text-[15px] shadow-pop">
-                  Get early access
+                  {GET_APP_LABEL}
                   <ArrowRight size={17} strokeWidth={2.2} />
                 </a>
               </Magnetic>

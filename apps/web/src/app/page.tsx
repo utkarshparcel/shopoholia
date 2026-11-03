@@ -10,7 +10,7 @@ import { DownloadCTA } from '@/components/DownloadCTA';
 import { Footer } from '@/components/Footer';
 import { Navigation } from '@/components/Navigation';
 import { FAQ, FAQS } from '@/components/FAQ';
-import { SITE_URL } from '@/lib/site';
+import { APP_LIVE, APP_STORE_URL, PLAY_STORE_URL, SITE_URL } from '@/lib/site';
 
 const TITLE = 'Worn Play — the fashion haul without the bill';
 const DESCRIPTION =
@@ -38,8 +38,13 @@ const STRUCTURED_DATA = [
     description: DESCRIPTION,
     operatingSystem: 'iOS, Android',
     applicationCategory: 'LifestyleApplication',
-    // No `offers` until it is on a store: an Offer says it can be had now, and it can't yet. At launch
-    // add { '@type': 'Offer', price: '0', priceCurrency: 'INR' } (free, priced for the Indian market).
+    // An Offer says it can be had now, so only once a store link is set: free, priced for India.
+    ...(APP_LIVE
+      ? {
+          offers: { '@type': 'Offer', price: '0', priceCurrency: 'INR' },
+          downloadUrl: [APP_STORE_URL, PLAY_STORE_URL].filter(Boolean),
+        }
+      : {}),
     publisher: { '@type': 'Organization', name: 'Worn', url: SITE_URL },
   },
   {

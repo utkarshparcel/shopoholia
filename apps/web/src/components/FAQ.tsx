@@ -1,10 +1,11 @@
 import { Plus } from 'lucide-react';
+import { APP_EVERYWHERE, APP_LIVE, APP_STORE_URL, LIVE_PLATFORMS } from '@/lib/site';
 
 /** The questions people ask before they join the list. Also emitted as FAQPage structured data on `/`. */
 export const FAQS = [
   {
     q: 'Is Worn free?',
-    a: 'Yes. It will be free to download when it launches: you start with 500 coins and earn more from daily streaks and from friends you refer. Coin packs are there if you want more, but you never have to buy one.',
+    a: `Yes. ${APP_LIVE ? 'It’s free to download' : 'It will be free to download when it launches'}: you start with 500 coins and earn more from daily streaks and from friends you refer. Coin packs are there if you want more, but you never have to buy one.`,
   },
   {
     q: 'Do I spend real money on the clothes?',
@@ -20,7 +21,11 @@ export const FAQS = [
   },
   {
     q: 'When can I get it?',
-    a: 'Worn is coming to iPhone and Android. Join the list and we’ll email your invite when early access opens.',
+    a: APP_EVERYWHERE
+      ? 'Now. Worn Play is free on the App Store and Google Play.'
+      : APP_LIVE
+        ? `Now on ${LIVE_PLATFORMS}, free on the ${APP_STORE_URL ? 'App Store' : 'Google Play'}. Worn is coming to ${APP_STORE_URL ? 'Android' : 'iPhone'} too: join the list and we’ll email you when it’s there.`
+        : 'Worn is coming to iPhone and Android. Join the list and we’ll email your invite when early access opens.',
   },
   {
     q: 'What is Worn Closet?',
