@@ -82,24 +82,20 @@ export function markRefundedCelebration(input: {
   };
 }
 
-const PICKUP_HOUR_UTC = 10;
-const PICKUP_HOUR_ALT_UTC = 14;
+const PICKUP_HOUR = 10;
+const PICKUP_HOUR_ALT = 14;
 
 /**
- * W033 — suggest upcoming pickup slots (calendar chips).
- * Uses UTC hours so tests stay deterministic; UI formats with formatClosetDateTime.
+ * W033 — suggest upcoming pickup slots (calendar chips): 10:00 and 14:00 on the user's own clock
+ * (they were UTC hours: 15:30 / 19:30 in India, S2-10). UI formats with formatClosetDateTime.
  */
 export function suggestPickupSlots(now: Date = new Date(), count = 4): string[] {
   const slots: string[] = [];
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
-  );
   // Start from tomorrow so same-day rush slots aren't forced.
   for (let day = 1; slots.length < count && day < 14; day++) {
-    for (const hour of [PICKUP_HOUR_UTC, PICKUP_HOUR_ALT_UTC]) {
+    for (const hour of [PICKUP_HOUR, PICKUP_HOUR_ALT]) {
       if (slots.length >= count) break;
-      const slot = new Date(start.getTime() + day * 86_400_000);
-      slot.setUTCHours(hour, 0, 0, 0);
+      const slot = new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, hour, 0, 0, 0);
       if (slot.getTime() <= now.getTime()) continue;
       slots.push(slot.toISOString());
     }
