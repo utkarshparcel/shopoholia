@@ -57,6 +57,9 @@ export default function StreaksScreen() {
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
   const setCoinBalance = useSessionStore((s) => s.setCoinBalance);
 
+  // Bumped by "Try again" to load once more.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   useEffect(() => {
     if (!accessToken) {
       setLoading(false);
@@ -64,6 +67,8 @@ export default function StreaksScreen() {
     }
 
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     getStreak(accessToken)
       .then((data) => {
@@ -83,7 +88,7 @@ export default function StreaksScreen() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, loadAttempt]);
 
   if (loading) {
     return (
@@ -128,6 +133,7 @@ export default function StreaksScreen() {
         <View style={styles.errorState}>
           <Text style={styles.errorTitle}>Could not load streak</Text>
           <Text style={styles.errorBody}>{error}</Text>
+          <Button label="Try again" onPress={() => setLoadAttempt((n) => n + 1)} variant="secondary" />
         </View>
       ) : (
         <>
@@ -247,6 +253,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   errorState: {
+    gap: 12,
     alignItems: 'center',
     backgroundColor: surface,
     borderRadius: radiusLg,

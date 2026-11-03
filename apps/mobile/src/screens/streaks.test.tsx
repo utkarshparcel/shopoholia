@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import StreaksScreen from '@/app/streaks';
 import { orderKeys } from '@/src/hooks/orders';
 import { useSessionStore } from '@/src/stores/session';
+import { getStreak } from '@/src/api/client';
 
 vi.mock('expo-router', () => ({
   useRouter: () => ({ back: vi.fn(), push: vi.fn(), replace: vi.fn(), canGoBack: () => true }),
@@ -37,5 +38,21 @@ describe('StreaksScreen', () => {
     await screen.findByText('Balance: 525 coins');
     await waitFor(() => expect(useSessionStore.getState().coinBalance).toBe(525));
     expect(client.getQueryData(orderKeys.balance('user-1'))).toEqual({ balance: 525 });
+  });
+});
+
+describe('StreaksScreen load failure', () => {
+  it('says why in plain words and loads again on Try again', async () => {
+    useSessionStore.getState().setSession({ accessToken: jwt('user-1'), refreshToken: 'r' });
+    vi.mocked(getStreak).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <StreaksScreen />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('Could not reach WORN. Check your connection and try again.')).toBeTruthy();
+    fireEvent.click(screen.getByText('Try again'));
+    expect(await screen.findByText('Claim coins')).toBeTruthy();
   });
 });

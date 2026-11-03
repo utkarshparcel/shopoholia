@@ -22,6 +22,7 @@ vi.mock('@/src/api/client', () => ({
 }));
 
 import ReferralScreen from '@/app/referral';
+import { getMyReferral } from '@/src/api/client';
 
 async function renderLoaded() {
   render(<ReferralScreen />);
@@ -80,5 +81,17 @@ describe('ReferralScreen copy', () => {
     });
     expect(mocks.setStringAsync).toHaveBeenCalledWith(expect.stringContaining('/r/WORN42'));
     alert.mockRestore();
+  });
+});
+
+describe('ReferralScreen load failure', () => {
+  it('says why in plain words and loads again on Try again', async () => {
+    vi.mocked(getMyReferral).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<ReferralScreen />);
+
+    expect(await screen.findByText('Could not reach WORN. Check your connection and try again.')).toBeTruthy();
+    expect(screen.queryByText('Failed to fetch')).toBeNull();
+    fireEvent.click(screen.getByText('Try again'));
+    expect(await screen.findByText('WORN42')).toBeTruthy();
   });
 });
