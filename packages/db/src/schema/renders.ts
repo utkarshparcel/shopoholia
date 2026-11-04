@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import {
   renderScenarioEnum,
@@ -24,5 +24,11 @@ export const renders = pgTable("renders", {
   combinedItemIds: uuid("combined_item_ids").array(),
   status: renderStatusEnum("status").notNull().default("QUEUED"),
   costMicros: integer("cost_micros").notNull().default(0),
+  /** The render agent (or the overflow renderer) holding this render while it is RUNNING. */
+  leaseOwner: text("lease_owner"),
+  /** When the lease lapses: a RUNNING render past it goes back to QUEUED. */
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  /** Leases taken so far; past the limit the render fails (and a paid one is refunded). */
+  attempts: integer("attempts").notNull().default(0),
   ...timestamps,
-});
+}, (table) => [index("renders_status_created_idx").on(table.status, table.createdAt)]);

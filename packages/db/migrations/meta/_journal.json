@@ -176,6 +176,13 @@
       "when": 1793728477185,
       "tag": "0024_marketplace_settlements_merchant_order_ref",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793771486685,
+      "tag": "0025_render_agent_leases",
+      "breakpoints": true
     }
   ]
 }

@@ -67,6 +67,7 @@ export { marketplaceSettlements } from "./schema/marketplace.js";
 export { orders } from "./schema/orders.js";
 export { orderItems } from "./schema/order-items.js";
 export { renders } from "./schema/renders.js";
+export { renderAgents } from "./schema/render-agents.js";
 export { tryonPreviews } from "./schema/tryon-previews.js";
 export { pushEvents } from "./schema/push-events.js";
 export { oauthStates } from "./schema/oauth-states.js";

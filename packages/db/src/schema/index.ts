@@ -40,6 +40,7 @@ export * from "./emi.js";
 export * from "./cashback-claims.js";
 export * from "./relations.js";
 export * from "./renders.js";
+export * from "./render-agents.js";
 export * from "./sellers.js";
 export * from "./tryon-previews.js";
 export * from "./users.js";

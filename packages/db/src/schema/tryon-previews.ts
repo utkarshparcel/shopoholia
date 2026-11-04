@@ -27,6 +27,12 @@ export const tryonPreviews = pgTable(
     retryAfter: timestamp("retry_after", { withTimezone: true }),
     provider: text("provider").notNull(),
     costMicros: integer("cost_micros").notNull().default(0),
+    /** The render agent (or the overflow renderer) holding this PROCESSING preview. */
+    leaseOwner: text("lease_owner"),
+    /** When the lease lapses: the preview can be leased again. */
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    /** Leases taken since the preview was last asked for. */
+    attempts: integer("attempts").notNull().default(0),
     ...timestamps,
   },
   (table) => [
