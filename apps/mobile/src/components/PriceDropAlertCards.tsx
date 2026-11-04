@@ -49,6 +49,8 @@ export function PriceDropAlertCards({ enabled = true }: Props) {
   const scan = usePriceDropScan(enabled);
   const createWatch = useCreatePriceWatch();
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+  /** The card whose dismiss reasons are open (inline: an Alert shows 3 buttons on Android, none on web). */
+  const [choosingReasonFor, setChoosingReasonFor] = useState<string | null>(null);
 
   const cards = useMemo(() => {
     const hits = scan.data?.hits ?? [];
@@ -59,26 +61,16 @@ export function PriceDropAlertCards({ enabled = true }: Props) {
 
   if (!enabled || cards.length === 0) return null;
 
-  function dismissWithReason(dismissKey: string, listingId: string, brand: string) {
-    Alert.alert(
-      'Dismiss price drop',
-      'Why are you skipping this tip?',
-      [
-        ...PRICE_DROP_DISMISS_REASONS.map((reason) => ({
-          text: DISMISS_LABELS[reason],
-          onPress: () => {
-            setDismissed((prev) => new Set(prev).add(dismissKey));
-            trackEvent('price_drop_dismiss_reason', {
-              listingId,
-              brand,
-              reason,
-            });
-            trackEvent('price_drop_card_dismiss', { listingId, reason });
-          },
-        })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ],
-    );
+  function dismissWithReason(
+    dismissKey: string,
+    listingId: string,
+    brand: string,
+    reason: PriceDropDismissReason,
+  ) {
+    setDismissed((prev) => new Set(prev).add(dismissKey));
+    setChoosingReasonFor(null);
+    trackEvent('price_drop_dismiss_reason', { listingId, brand, reason });
+    trackEvent('price_drop_card_dismiss', { listingId, reason });
   }
 
   return (
@@ -129,10 +121,29 @@ export function PriceDropAlertCards({ enabled = true }: Props) {
               size="sm"
               variant="ghost"
               onPress={() =>
-                dismissWithReason(card.dismissKey, card.listingId, card.brand)
+                setChoosingReasonFor((key) => (key === card.dismissKey ? null : card.dismissKey))
               }
             />
           </View>
+          {choosingReasonFor === card.dismissKey ? (
+            <View style={styles.reasons} testID={`price-drop-reasons-${card.listingId}`}>
+              <Text style={styles.body}>Why are you skipping this tip?</Text>
+              <View style={styles.row}>
+                {PRICE_DROP_DISMISS_REASONS.map((reason) => (
+                  <Button
+                    key={reason}
+                    label={DISMISS_LABELS[reason]}
+                    size="sm"
+                    variant="secondary"
+                    onPress={() =>
+                      dismissWithReason(card.dismissKey, card.listingId, card.brand, reason)
+                    }
+                  />
+                ))}
+                <Button label="Cancel" size="sm" variant="ghost" onPress={() => setChoosingReasonFor(null)} />
+              </View>
+            </View>
+          ) : null}
         </View>
       ))}
     </View>
@@ -141,6 +152,7 @@ export function PriceDropAlertCards({ enabled = true }: Props) {
 
 const styles = StyleSheet.create({
   wrap: { gap: space3, marginBottom: space4 },
+  reasons: { gap: space3 },
   card: {
     borderColor: border,
     borderRadius: radiusMd,
