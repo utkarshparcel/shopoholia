@@ -40,8 +40,8 @@ the app, so they are not secrets):
 
 | Variable | Value | Needed for |
 |----------|-------|------------|
-| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS OAuth client id (`….apps.googleusercontent.com`), bundle id `com.shopoholia.worn` | iOS builds (required) |
-| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android OAuth client id, package `com.shopoholia.worn`, **SHA-1 of the EAS signing key and of the Play app-signing key** | Android builds (required) |
+| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | iOS OAuth client id (`….apps.googleusercontent.com`), bundle id `com.worncloset.app` | iOS builds (required) |
+| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Android OAuth client id, package `com.worncloset.app`, **SHA-1 of the EAS signing key and of the Play app-signing key** | Android builds (required) |
 | `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Web OAuth client id | Web / Expo Go only (optional) |
 | `EXPO_PUBLIC_SENTRY_DSN` | Sentry project DSN | Crash reports (warned when missing) |
 | `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` | Sentry source-map upload | Only when the DSN is set; without the token the Sentry build step can fail |
@@ -49,7 +49,7 @@ the app, so they are not secrets):
 
 All three Google client ids also go into the API's `GOOGLE_CLIENT_IDS` (comma-separated).
 
-Google sign-in on Android uses the redirect `com.shopoholia.worn:/oauthredirect` (the package is
+Google sign-in on Android uses the redirect `com.worncloset.app:/oauthredirect` (the package is
 registered as a URL scheme). Google disables custom URI schemes for new Android OAuth clients: in
 Google Cloud Console → Credentials → the Android client → Advanced settings, **enable "Custom URI
 scheme"**, or sign-in fails with `invalid_request`. (Longer term, Google recommends the Credential
@@ -149,8 +149,8 @@ Set in your shell **or** as EAS secrets before a **manual** submit. No credentia
 
 Apple (developer account, App Store Connect):
 
-1. Decide the bundle id before anything else (`com.shopoholia.worn` today; it can't change after
-   the first upload). If it changes: `apps/mobile/app.json` (`ios.bundleIdentifier`,
+1. The bundle id and Android package are `com.worncloset.app`. Register exactly that (it can't
+   change after the first upload). If it ever has to change before then: `apps/mobile/app.json` (`ios.bundleIdentifier`,
    `android.package`, the second `scheme` entry), the API's `APPLE_BUNDLE_ID` /
    `ANDROID_PACKAGE_NAME`, the Google OAuth clients and `docs/STORE_LISTINGS.md`.
 2. `eas init` in `apps/mobile` (adds `extra.eas.projectId`), then `eas credentials` / the first
@@ -166,7 +166,7 @@ Apple (developer account, App Store Connect):
 7. Sign in with Apple key, so account deletion revokes the user's Apple tokens (App Review checks
    this). Apple Developer → Certificates, Identifiers & Profiles → **Keys** → **+**: name it (e.g.
    "Worn Sign in with Apple"), tick **Sign in with Apple**, **Configure** → primary App ID
-   `com.shopoholia.worn`, save, **Continue**, **Register**, then **Download** the `.p8` file (only
+   `com.worncloset.app`, save, **Continue**, **Register**, then **Download** the `.p8` file (only
    downloadable once; keep it in your password manager). Note the key's **Key ID** (10 characters,
    on the key page) and your **Team ID** (Membership details, top right of the developer site).
    Set on the API (`docs/DEPLOY.md`): `APPLE_SIGN_IN_KEY_ID` = Key ID, `APPLE_TEAM_ID` = Team ID,

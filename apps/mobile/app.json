@@ -7,12 +7,12 @@
     "icon": "./assets/images/icon.png",
     "scheme": [
       "worn",
-      "com.shopoholia.worn"
+      "com.worncloset.app"
     ],
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.shopoholia.worn",
+      "bundleIdentifier": "com.worncloset.app",
       "usesAppleSignIn": true,
       "config": {
         "usesNonExemptEncryption": false
@@ -57,7 +57,7 @@
       }
     },
     "android": {
-      "package": "com.shopoholia.worn",
+      "package": "com.worncloset.app",
       "permissions": [
         "android.permission.READ_CALENDAR"
       ],

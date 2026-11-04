@@ -276,15 +276,15 @@ describe("bootConfigProblems", () => {
     );
     const configured = bootConfigProblems({
       NODE_ENV: "development",
-      APPLE_BUNDLE_ID: "com.shopoholia.worn",
-      ANDROID_PACKAGE_NAME: "com.shopoholia.worn",
+      APPLE_BUNDLE_ID: "com.worncloset.app",
+      ANDROID_PACKAGE_NAME: "com.worncloset.app",
       GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: "a@b", private_key: "k" }),
     });
     expect(configured.warnings).toEqual([]);
     expect(
       bootConfigProblems({
         NODE_ENV: "development",
-        ANDROID_PACKAGE_NAME: "com.shopoholia.worn",
+        ANDROID_PACKAGE_NAME: "com.worncloset.app",
         GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: "{}",
         IAP_ALLOW_XCODE: "1",
       }).warnings,

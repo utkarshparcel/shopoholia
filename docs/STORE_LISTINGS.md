@@ -19,8 +19,8 @@ Related: [Privacy policy draft](legal/PRIVACY_POLICY_DRAFT.md) · [EAS gates](EA
 
 | Platform | ID |
 |----------|-----|
-| iOS bundle id | `com.shopoholia.worn` |
-| Android package | `com.shopoholia.worn` |
+| iOS bundle id | `com.worncloset.app` |
+| Android package | `com.worncloset.app` |
 | Display name | WORN |
 | In-app products (consumable, both stores) | `worn.coins.100`, `worn.coins.350`, `worn.coins.650`, `worn.coins.1500` |
 
