@@ -41,7 +41,7 @@ if (store) {
     { label: "account deletion", re: /Delete account[\s\S]*privacy#delete-account/ },
     { label: "closed testers ≥12", re: /≥\s*12|>=\s*12|closed tester/i },
     { label: "no store submit in CI", re: /no.*store submit|does \*\*not\*\* submit|never.*submit/i },
-    { label: "bundle id", re: /com\.shopoholia\.worn/ },
+    { label: "bundle id", re: /com\.worncloset\.app/ },
   ];
   // The paste-ready store copy (code blocks and the listing tables) must not sell Closet features,
   // which no release build has.
