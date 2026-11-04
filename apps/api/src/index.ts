@@ -11,7 +11,7 @@ import {
 } from "fastify-type-provider-zod";
 import Fastify, { type FastifyError, type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
+import { agentSweep, createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { initServerAnalyticsFromEnv } from "./lib/analytics.js";
 import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
@@ -207,6 +207,27 @@ export async function buildServer(options: BuildServerOptions = {}) {
   return app;
 }
 
+/** How often the agent queue reclaims lapsed leases, hands jobs to overflow, and checks the agent. */
+const AGENT_SWEEP_MS = 60_000;
+
+/** RENDER_BACKEND=agent: sweep the agent's queue every minute (in the server only, not in tests). */
+function startAgentSweeper(app: Awaited<ReturnType<typeof buildServer>>) {
+  const sweep = agentSweep(app.deps.jobQueue);
+  if (!sweep) return;
+  const { backend, window, overflow } = app.deps.renderConfig;
+  app.log.info(
+    { backend, window: window.kind === "always" ? "always" : window, overflow },
+    "Renders are made by the render agent",
+  );
+  const timer = setInterval(() => {
+    sweep().catch((error: unknown) => {
+      app.log.error(error, "Render agent sweep failed");
+      captureException(error, { tags: { area: "render-agent" } });
+    });
+  }, AGENT_SWEEP_MS);
+  timer.unref();
+}
+
 const { port, host } = resolveListenAddress();
 
 async function main() {
@@ -224,6 +245,7 @@ async function main() {
     app.log.info(`Delivery timers: ${resolveEconomyMode()} (WORN_ECONOMY_MODE)`);
     const resumed = await resumeInFlightWork(app.deps);
     app.log.info(resumed, "Resumed in-flight orders and renders");
+    startAgentSweeper(app);
   } catch (error) {
     app.log.error(error, "Failed to resume in-flight orders and renders");
     captureException(error);

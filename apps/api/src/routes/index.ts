@@ -10,6 +10,7 @@ import { ordersRoutes } from "./orders.js";
 import { pushRoutes } from "./push.js";
 import { meRoutes } from "./me.js";
 import { referralRoutes } from "./referrals.js";
+import { agentRoutes } from "./agent.js";
 import { revealRoutes } from "./reveal.js";
 import { sellersRoutes } from "./sellers.js";
 import { streaksRoutes } from "./streaks.js";
@@ -54,6 +55,7 @@ export const apiRoutes: FastifyPluginAsyncZod = async (app) => {
   await app.register(purchasesRoutes);
   await app.register(coinsRoutes);
   await app.register(revealRoutes);
+  await app.register(agentRoutes);
   await app.register(sellersRoutes);
   await app.register(referralRoutes);
   await app.register(socialPollRoutes);

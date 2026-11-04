@@ -101,6 +101,7 @@ import type {
   SellerRecord,
   TryonPreviewRecord,
   UserRecord,
+  AgentJobLease,
 } from "./types.js";
 
 function now() {
@@ -239,6 +240,23 @@ export function createMemoryRepositories(): Repositories {
   const orderItems = new Map<string, OrderItemRecord>();
   const orderItemsByOrder = new Map<string, string[]>();
   const renders = new Map<string, RenderRecord>();
+  const renderAgents = new Map<string, { version: string; lastHeartbeatAt: Date }>();
+  /** A job's lease view; a render whose order line is gone has none. */
+  const memoryAgentJob = (
+    job: { kind: "render"; record: RenderRecord } | { kind: "tryon"; record: TryonPreviewRecord },
+  ): AgentJobLease | null => {
+    const base = {
+      id: job.record.id,
+      attempts: job.record.attempts ?? 0,
+      leaseOwner: job.record.leaseOwner ?? null,
+      leaseExpiresAt: job.record.leaseExpiresAt ?? null,
+      createdAt: job.record.createdAt,
+    };
+    if (job.kind === "tryon") return { ...base, kind: "tryon", preview: job.record };
+    const item = orderItems.get(job.record.orderItemId);
+    if (!item) return null;
+    return { ...base, kind: "render", render: job.record, orderId: item.orderId };
+  };
   const rendersByOrderItem = new Map<string, string[]>();
   const pushEvents: PushEventRecord[] = [];
   const cashbackEvents = new Map<string, { id: string; userId: string; listingId: string | null; platform: string; clickId: string; coinsEarned: number; status: string; createdAt: Date }>();
@@ -1473,6 +1491,8 @@ export function createMemoryRepositories(): Repositories {
       if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
         return { claimed: false, preview: existing };
       }
+      // A PROCESSING row keeps its lease (an agent may be rendering it); any other starts afresh.
+      const keepLease = existing?.status === "PROCESSING";
       const preview: TryonPreviewRecord = {
         id: existing?.id ?? randomUUID(),
         userId,
@@ -1484,6 +1504,9 @@ export function createMemoryRepositories(): Repositories {
         retryAfter: null,
         provider,
         costMicros: existing?.costMicros ?? 0,
+        leaseOwner: keepLease ? (existing?.leaseOwner ?? null) : null,
+        leaseExpiresAt: keepLease ? (existing?.leaseExpiresAt ?? null) : null,
+        attempts: keepLease ? (existing?.attempts ?? 0) : 0,
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
       };
@@ -1802,6 +1825,9 @@ export function createMemoryRepositories(): Repositories {
           combinedItemIds: row.combinedItemIds ?? null,
           status: row.status,
           costMicros: row.costMicros,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          attempts: 0,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -1849,7 +1875,14 @@ export function createMemoryRepositories(): Repositories {
     async updateRender(id, patch) {
       const existing = renders.get(id);
       if (!existing) return null;
-      const updated: RenderRecord = { ...existing, ...patch, updatedAt: now() };
+      // Only a RUNNING render is held by a lease: any other status lets it go.
+      const releases = patch.status !== undefined && patch.status !== "RUNNING";
+      const updated: RenderRecord = {
+        ...existing,
+        ...patch,
+        ...(releases ? { leaseOwner: null, leaseExpiresAt: null } : {}),
+        updatedAt: now(),
+      };
       renders.set(id, updated);
       return updated;
     },
@@ -1953,7 +1986,13 @@ export function createMemoryRepositories(): Repositories {
       const fail = () => {
         const existing = renders.get(input.renderId);
         if (!existing) return null;
-        const failed: RenderRecord = { ...existing, status: "FAILED", updatedAt: now() };
+        const failed: RenderRecord = {
+          ...existing,
+          status: "FAILED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          updatedAt: now(),
+        };
         renders.set(failed.id, failed);
         return failed;
       };
@@ -1992,11 +2031,140 @@ export function createMemoryRepositories(): Repositories {
       for (const id of new Set(input.renderIds)) {
         const render = renders.get(id);
         if (!render || !itemIds.has(render.orderItemId) || !render.isFree || render.status !== "FAILED") continue;
-        const queued: RenderRecord = { ...render, status: "QUEUED", updatedAt: now() };
+        const queued: RenderRecord = {
+          ...render,
+          status: "QUEUED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          attempts: 0,
+          updatedAt: now(),
+        };
         renders.set(id, queued);
         flipped.push(queued);
       }
       return flipped;
+    },
+
+    async leaseAgentJobs(input) {
+      if (input.max <= 0) return [];
+      const ids = input.ids ? new Set(input.ids) : null;
+      const waitedLongEnough = (updatedAt: Date) =>
+        !input.queuedBefore || updatedAt.getTime() <= input.queuedBefore.getTime();
+      // No await from here to the end: picking and leasing are one step, so parallel calls
+      // never lease the same job.
+      const candidates: Array<{ kind: "render" | "tryon"; id: string; createdAt: Date }> = [];
+      for (const render of renders.values()) {
+        if (!render.unlocked || render.status !== "QUEUED") continue;
+        if (ids && !ids.has(render.id)) continue;
+        if (!waitedLongEnough(render.updatedAt)) continue;
+        candidates.push({ kind: "render", id: render.id, createdAt: render.createdAt });
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (!preview.listingVariantId || preview.status !== "PROCESSING" || preview.leaseOwner) continue;
+        if (ids && !ids.has(preview.id)) continue;
+        if (!waitedLongEnough(preview.updatedAt)) continue;
+        candidates.push({ kind: "tryon", id: preview.id, createdAt: preview.createdAt });
+      }
+      candidates.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+      const leased: AgentJobLease[] = [];
+      for (const candidate of candidates.slice(0, input.max)) {
+        const lease = {
+          leaseOwner: input.owner,
+          leaseExpiresAt: input.leaseExpiresAt,
+          updatedAt: input.now,
+        };
+        if (candidate.kind === "render") {
+          const render = renders.get(candidate.id)!;
+          const updated: RenderRecord = {
+            ...render,
+            ...lease,
+            status: "RUNNING",
+            attempts: (render.attempts ?? 0) + 1,
+          };
+          renders.set(updated.id, updated);
+          const job = memoryAgentJob({ kind: "render", record: updated });
+          if (job) leased.push(job);
+        } else {
+          const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === candidate.id)!;
+          const updated: TryonPreviewRecord = {
+            ...entry[1],
+            ...lease,
+            attempts: (entry[1].attempts ?? 0) + 1,
+          };
+          tryonPreviews.set(entry[0], updated);
+          leased.push(memoryAgentJob({ kind: "tryon", record: updated })!);
+        }
+      }
+      return leased;
+    },
+
+    async listExpiredAgentLeases(at) {
+      const expired: AgentJobLease[] = [];
+      const lapsed = (r: { leaseOwner?: string | null; leaseExpiresAt?: Date | null }) =>
+        Boolean(r.leaseOwner && r.leaseExpiresAt && r.leaseExpiresAt.getTime() < at.getTime());
+      for (const render of renders.values()) {
+        if (render.status !== "RUNNING" || !lapsed(render)) continue;
+        const job = memoryAgentJob({ kind: "render", record: render });
+        if (job) expired.push(job);
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (preview.status !== "PROCESSING" || !preview.listingVariantId || !lapsed(preview)) continue;
+        expired.push(memoryAgentJob({ kind: "tryon", record: preview })!);
+      }
+      return expired;
+    },
+
+    async releaseAgentLease({ kind, id, owner, expiredBy }) {
+      const held = (r: { leaseOwner?: string | null; leaseExpiresAt?: Date | null }) =>
+        r.leaseOwner === owner &&
+        (!expiredBy || (r.leaseExpiresAt !== null && r.leaseExpiresAt !== undefined && r.leaseExpiresAt.getTime() <= expiredBy.getTime()));
+      if (kind === "render") {
+        const render = renders.get(id);
+        if (!render || render.status !== "RUNNING" || !held(render)) return null;
+        const updated: RenderRecord = { ...render, leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+        renders.set(id, updated);
+        return memoryAgentJob({ kind: "render", record: updated });
+      }
+      const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === id);
+      if (!entry || entry[1].status !== "PROCESSING" || !held(entry[1])) return null;
+      const updated: TryonPreviewRecord = { ...entry[1], leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+      tryonPreviews.set(entry[0], updated);
+      return memoryAgentJob({ kind: "tryon", record: updated });
+    },
+
+    async updateTryonPreviewById(id, patch) {
+      const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === id);
+      if (!entry) return null;
+      const updated: TryonPreviewRecord = { ...entry[1], ...patch, updatedAt: now() };
+      tryonPreviews.set(entry[0], updated);
+      return updated;
+    },
+
+    async findTryonPreviewById(id) {
+      return [...tryonPreviews.values()].find((p) => p.id === id) ?? null;
+    },
+
+    async recordAgentHeartbeat({ agentId, version, at }) {
+      renderAgents.set(agentId, { version, lastHeartbeatAt: at });
+    },
+
+    async countWaitingAgentJobs() {
+      let count = 0;
+      for (const render of renders.values()) {
+        if (render.unlocked && (render.status === "QUEUED" || render.status === "RUNNING")) count += 1;
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (preview.listingVariantId && preview.status === "PROCESSING") count += 1;
+      }
+      return count;
+    },
+
+    async latestAgentHeartbeat() {
+      let latest: Date | null = null;
+      for (const agent of renderAgents.values()) {
+        if (!latest || agent.lastHeartbeatAt.getTime() > latest.getTime()) latest = agent.lastHeartbeatAt;
+      }
+      return latest;
     },
 
     async recordRevealRating(input) {

@@ -3,6 +3,7 @@ import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
 import { resolveEconomyMode } from "./orders/state-machine.js";
 import { hasR2Config } from "./storage/r2.js";
+import { parseAgentWindow } from "./render/backend.js";
 import { appleRevocationConfigProblem } from "./auth/apple-revoke.js";
 
 type Env = Record<string, string | undefined>;
@@ -118,8 +119,29 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!env.REDIS_URL?.trim()) {
       warnings.push("REDIS_URL is not set: account deletion and data export answer 503, and the API worker can't start");
     }
-    if (!env.FASHN_API_KEY?.trim()) {
-      warnings.push("FASHN_API_KEY is not set: try-on and reveal renders are unavailable");
+    const renderBackend = env.RENDER_BACKEND?.trim().toLowerCase();
+    // The recommended production renderer is the render agent (RENDER_BACKEND=agent,
+    // RENDER_AGENT_WINDOW=always, RENDER_OVERFLOW=none); FASHN runs only when opted into.
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push(
+        "FASHN_API_KEY is not set: try-on and reveal renders are unavailable. The recommended renderer is the render agent: RENDER_BACKEND=agent with RENDER_AGENT_TOKEN (docs/RENDER_AGENT.md)",
+      );
+    }
+    if (renderBackend === "agent" && !env.RENDER_AGENT_TOKEN?.trim()) {
+      warnings.push(
+        "RENDER_BACKEND=agent but RENDER_AGENT_TOKEN is not set: the render agent can't sign in, so every reveal and try-on waits forever",
+      );
+    } else if (renderBackend === "agent" && (env.RENDER_AGENT_TOKEN?.trim().length ?? 0) < 32) {
+      warnings.push("RENDER_AGENT_TOKEN is short: use a long random secret (openssl rand -hex 32)");
+    }
+    if (renderBackend === "agent" && env.RENDER_AGENT_WINDOW?.trim() && !parseAgentWindow(env.RENDER_AGENT_WINDOW)) {
+      warnings.push(`RENDER_AGENT_WINDOW=${env.RENDER_AGENT_WINDOW} is not understood: use always or HH:MM-HH:MM; using always`);
+    }
+    if (env.RENDER_OVERFLOW?.trim().toLowerCase() === "fashn" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push("RENDER_OVERFLOW=fashn but FASHN_API_KEY is not set: there is no overflow, jobs wait for the render agent");
+    }
+    if (renderBackend === "mock") {
+      warnings.push("RENDER_BACKEND=mock: reveals and try-ons show placeholder images");
     }
     if (resolveEconomyMode(env) === "beta") {
       warnings.push("WORN_ECONOMY_MODE=beta: orders use the short beta delivery timers (minutes, not hours)");
@@ -130,7 +152,7 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!(env.OCR_PROVIDER_URL ?? env.OCR_PROVIDER_ENDPOINT) || env.OCR_PROVIDER === "mock") {
       errors.push("OCR is not configured (OCR_PROVIDER_URL): receipts would be read by the mock");
     }
-    if (!env.FASHN_API_KEY?.trim()) {
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
       warnings.push(
         "FASHN_API_KEY is not set: try-on previews, reveal unlocks and generates are unavailable (503), and every free reveal render fails",
       );

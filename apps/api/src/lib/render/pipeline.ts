@@ -178,7 +178,7 @@ async function storeImage(storage: StorageClient, key: string, bytes: Uint8Array
  * The photo the garments go on: the user's avatar, or for a user without one the first item's
  * house-model photo from the catalog (a real image, unlike a fixed placeholder key).
  */
-async function modelImageFor(deps: RenderJobDeps, order: OrderRecord, firstVariantListingId: string) {
+async function modelImageFor(deps: Pick<RenderJobDeps, "repos">, order: OrderRecord, firstVariantListingId: string) {
   const avatar = await deps.repos.findAvatarByUserId(order.userId);
   if (avatar?.status === "READY" && avatar.referenceImageKey) return avatar.referenceImageKey;
   const listing = await deps.repos.findListingById(firstVariantListingId);
@@ -186,8 +186,16 @@ async function modelImageFor(deps: RenderJobDeps, order: OrderRecord, firstVaria
   throw new RenderInputError("No avatar or house-model photo to render on");
 }
 
-/** One attempt: dresses every item in turn, then the scene. Returns the final image's key. */
-async function renderOnce(deps: RenderJobDeps, render: RenderRecord, orderId: string, order: OrderRecord) {
+/**
+ * What a render dresses: the photo it starts from, then each garment in order (one for a single
+ * item, several for a combine). Throws RenderInputError when either is missing.
+ */
+export async function renderInputs(
+  deps: Pick<RenderJobDeps, "repos">,
+  render: RenderRecord,
+  orderId: string,
+  order: OrderRecord,
+) {
   const itemIds = combinedItemIds(render) ?? [render.orderItemId];
   const garments: Array<{ listingId: string; garmentImageKey: string }> = [];
   for (const orderItemId of itemIds) {
@@ -197,8 +205,14 @@ async function renderOnce(deps: RenderJobDeps, render: RenderRecord, orderId: st
     if (variant) garments.push({ listingId: variant.listingId, garmentImageKey: variant.garmentImageKey });
   }
   if (garments.length === 0) throw new RenderInputError("No garment to render");
+  const modelImageKey = await modelImageFor(deps, order, garments[0]!.listingId);
+  return { modelImageKey, garments };
+}
 
-  let currentModelKey = await modelImageFor(deps, order, garments[0]!.listingId);
+/** One attempt: dresses every item in turn, then the scene. Returns the final image's key. */
+async function renderOnce(deps: RenderJobDeps, render: RenderRecord, orderId: string, order: OrderRecord) {
+  const { modelImageKey, garments } = await renderInputs(deps, render, orderId, order);
+  let currentModelKey = modelImageKey;
   let costMicros = 0;
   // Try-on images this render stored on its way to the final one (one per piece of a combine).
   const stepKeys: string[] = [];

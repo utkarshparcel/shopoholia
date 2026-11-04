@@ -18,6 +18,7 @@ import { requireAuth } from "../lib/auth/guard.js";
 import { renderCardDto } from "../lib/render/dto.js";
 import { USER_GENERATED_PROVIDER } from "../lib/render/pipeline.js";
 import { renderProviderAvailable } from "../lib/render/provider.js";
+import { revealWaitEstimate } from "../lib/render/agent-jobs.js";
 
 const OrderParamsSchema = z.object({
   id: z.string().uuid(),
@@ -59,7 +60,17 @@ export const revealRoutes: FastifyPluginAsyncZod = async (app) => {
         renders.map((render) => renderCardDto(render, app.deps.storage)),
       );
 
-      return { orderId: order.id, renders: cards };
+      // With the render agent, renders can wait (overnight, or while the Mac is down): say until when.
+      const wait = await revealWaitEstimate(
+        { repos: app.deps.repos, config: app.deps.renderConfig },
+        renders,
+      );
+      return {
+        orderId: order.id,
+        renders: cards,
+        rendersWaiting: wait.waiting,
+        expectedReadyAt: wait.expectedReadyAt,
+      };
     },
   );
 

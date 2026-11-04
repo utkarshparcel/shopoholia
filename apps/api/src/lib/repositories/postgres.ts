@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, type SettlementRow } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
@@ -57,6 +57,7 @@ import {
   recipientProfiles,
   recipients,
   renders,
+  renderAgents,
   returnEvents,
   returnRequests,
   sellers,
@@ -133,6 +134,7 @@ import type {
   SellerRecord,
   SellerStatus,
   TryonPreviewRecord,
+  AgentJobLease,
   TryonPreviewStatus,
   FitPreviewRecord,
   PreviewResult,
@@ -599,6 +601,9 @@ function mapTryonPreview(row: TryonPreviewRow): TryonPreviewRecord {
     retryAfter: row.retryAfter ?? null,
     provider: row.provider,
     costMicros: row.costMicros,
+    leaseOwner: row.leaseOwner ?? null,
+    leaseExpiresAt: row.leaseExpiresAt ?? null,
+    attempts: row.attempts ?? 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -708,8 +713,36 @@ function mapRender(row: RenderRow): RenderRecord {
     combinedItemIds: row.combinedItemIds ?? null,
     status: row.status,
     costMicros: row.costMicros,
+    leaseOwner: row.leaseOwner ?? null,
+    leaseExpiresAt: row.leaseExpiresAt ?? null,
+    attempts: row.attempts ?? 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function renderJob(row: RenderRow, orderId: string): AgentJobLease {
+  return {
+    kind: "render",
+    id: row.id,
+    attempts: row.attempts,
+    leaseOwner: row.leaseOwner,
+    leaseExpiresAt: row.leaseExpiresAt,
+    createdAt: row.createdAt,
+    render: mapRender(row),
+    orderId,
+  };
+}
+
+function tryonJob(row: TryonPreviewRow): AgentJobLease {
+  return {
+    kind: "tryon",
+    id: row.id,
+    attempts: row.attempts,
+    leaseOwner: row.leaseOwner,
+    leaseExpiresAt: row.leaseExpiresAt,
+    createdAt: row.createdAt,
+    preview: mapTryonPreview(row),
   };
 }
 
@@ -2579,7 +2612,18 @@ export function createPostgresRepositories(db: Db): Repositories {
         })
         .onConflictDoUpdate({
           target: [tryonPreviews.userId, tryonPreviews.wardrobeItemId],
-          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          set: {
+            status: "PROCESSING",
+            imageKey: null,
+            error: null,
+            retryAfter: null,
+            provider,
+            // A PROCESSING row keeps its lease (an agent may be rendering it); any other starts afresh.
+            leaseOwner: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.leaseOwner} ELSE NULL END`,
+            leaseExpiresAt: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.leaseExpiresAt} ELSE NULL END`,
+            attempts: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.attempts} ELSE 0 END`,
+            updatedAt: timestamp,
+          },
           setWhere: previewClaimable(tryonPreviews, staleBefore, timestamp),
         })
         .returning();
@@ -2987,6 +3031,10 @@ export function createPostgresRepositories(db: Db): Repositories {
           provider: patch.provider !== undefined ? patch.provider : existing.provider,
           status: patch.status !== undefined ? patch.status : existing.status,
           costMicros: patch.costMicros !== undefined ? patch.costMicros : existing.costMicros,
+          // Only a RUNNING render is held by a lease: any other status lets it go.
+          ...(patch.status !== undefined && patch.status !== "RUNNING"
+            ? { leaseOwner: null, leaseExpiresAt: null }
+            : {}),
           updatedAt: now(),
         })
         .where(eq(renders.id, id))
@@ -3134,7 +3182,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         const balance = refund ? await lockedCoinBalance(tx, refund.userId) : 0;
         const [row] = await tx
           .update(renders)
-          .set({ status: "FAILED", updatedAt: now() })
+          .set({ status: "FAILED", leaseOwner: null, leaseExpiresAt: null, updatedAt: now() })
           .where(eq(renders.id, input.renderId))
           .returning();
         if (!row || !refund) return { render: row ? mapRender(row) : null, coinsRefunded: 0 };
@@ -3162,6 +3210,185 @@ export function createPostgresRepositories(db: Db): Repositories {
       });
     },
 
+    async leaseAgentJobs(input) {
+      if (input.max <= 0) return [];
+      if (input.ids && input.ids.length === 0) return [];
+      return db.transaction(async (tx) => {
+        const renderWhere: SQL[] = [eq(renders.unlocked, true), eq(renders.status, "QUEUED")];
+        const tryonWhere: SQL[] = [
+          isNotNull(tryonPreviews.listingVariantId),
+          eq(tryonPreviews.status, "PROCESSING"),
+          isNull(tryonPreviews.leaseOwner),
+        ];
+        if (input.queuedBefore) {
+          renderWhere.push(lte(renders.updatedAt, input.queuedBefore));
+          tryonWhere.push(lte(tryonPreviews.updatedAt, input.queuedBefore));
+        }
+        if (input.ids) {
+          renderWhere.push(inArray(renders.id, input.ids));
+          tryonWhere.push(inArray(tryonPreviews.id, input.ids));
+        }
+        // SKIP LOCKED: a parallel lease takes other rows instead of waiting for (and then
+        // double-leasing) these.
+        const renderRows = await tx
+          .select({ id: renders.id, createdAt: renders.createdAt })
+          .from(renders)
+          .where(and(...renderWhere))
+          .orderBy(asc(renders.createdAt), asc(renders.id))
+          .limit(input.max)
+          .for("update", { skipLocked: true });
+        const tryonRows = await tx
+          .select({ id: tryonPreviews.id, createdAt: tryonPreviews.createdAt })
+          .from(tryonPreviews)
+          .where(and(...tryonWhere))
+          .orderBy(asc(tryonPreviews.createdAt), asc(tryonPreviews.id))
+          .limit(input.max)
+          .for("update", { skipLocked: true });
+        const picked = [
+          ...renderRows.map((row) => ({ kind: "render" as const, ...row })),
+          ...tryonRows.map((row) => ({ kind: "tryon" as const, ...row })),
+        ]
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
+          .slice(0, input.max);
+        const renderIds = picked.filter((job) => job.kind === "render").map((job) => job.id);
+        const tryonIds = picked.filter((job) => job.kind === "tryon").map((job) => job.id);
+        const lease = { leaseOwner: input.owner, leaseExpiresAt: input.leaseExpiresAt, updatedAt: input.now };
+
+        const leasedRenders = renderIds.length
+          ? await tx
+              .update(renders)
+              .set({ ...lease, status: "RUNNING", attempts: sql`${renders.attempts} + 1` })
+              .where(inArray(renders.id, renderIds))
+              .returning()
+          : [];
+        const leasedTryons = tryonIds.length
+          ? await tx
+              .update(tryonPreviews)
+              .set({ ...lease, attempts: sql`${tryonPreviews.attempts} + 1` })
+              .where(inArray(tryonPreviews.id, tryonIds))
+              .returning()
+          : [];
+        const itemOrders = leasedRenders.length
+          ? await tx
+              .select({ id: orderItems.id, orderId: orderItems.orderId })
+              .from(orderItems)
+              .where(inArray(orderItems.id, leasedRenders.map((row) => row.orderItemId)))
+          : [];
+        const orderOf = new Map(itemOrders.map((row) => [row.id, row.orderId]));
+        const jobs = [
+          ...leasedRenders.map((row) => renderJob(row, orderOf.get(row.orderItemId) ?? "")),
+          ...leasedTryons.map(tryonJob),
+        ];
+        return jobs.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+      });
+    },
+
+    async listExpiredAgentLeases(at) {
+      const renderRows = await db
+        .select({ render: renders, orderId: orderItems.orderId })
+        .from(renders)
+        .innerJoin(orderItems, eq(renders.orderItemId, orderItems.id))
+        .where(
+          and(
+            eq(renders.status, "RUNNING"),
+            isNotNull(renders.leaseOwner),
+            lt(renders.leaseExpiresAt, at),
+          ),
+        );
+      const tryonRows = await db
+        .select()
+        .from(tryonPreviews)
+        .where(
+          and(
+            eq(tryonPreviews.status, "PROCESSING"),
+            isNotNull(tryonPreviews.listingVariantId),
+            isNotNull(tryonPreviews.leaseOwner),
+            lt(tryonPreviews.leaseExpiresAt, at),
+          ),
+        );
+      return [...renderRows.map((row) => renderJob(row.render, row.orderId)), ...tryonRows.map(tryonJob)];
+    },
+
+    async releaseAgentLease({ kind, id, owner, expiredBy }) {
+      const released = { leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+      if (kind === "render") {
+        const [row] = await db
+          .update(renders)
+          .set(released)
+          .where(
+            and(
+              eq(renders.id, id),
+              eq(renders.status, "RUNNING"),
+              eq(renders.leaseOwner, owner),
+              expiredBy ? lte(renders.leaseExpiresAt, expiredBy) : undefined,
+            ),
+          )
+          .returning();
+        if (!row) return null;
+        const [item] = await db
+          .select({ orderId: orderItems.orderId })
+          .from(orderItems)
+          .where(eq(orderItems.id, row.orderItemId))
+          .limit(1);
+        return renderJob(row, item?.orderId ?? "");
+      }
+      const [row] = await db
+        .update(tryonPreviews)
+        .set(released)
+        .where(
+          and(
+            eq(tryonPreviews.id, id),
+            eq(tryonPreviews.status, "PROCESSING"),
+            eq(tryonPreviews.leaseOwner, owner),
+            expiredBy ? lte(tryonPreviews.leaseExpiresAt, expiredBy) : undefined,
+          ),
+        )
+        .returning();
+      return row ? tryonJob(row) : null;
+    },
+
+    async updateTryonPreviewById(id, patch) {
+      const [row] = await db
+        .update(tryonPreviews)
+        .set({ ...patch, updatedAt: now() })
+        .where(eq(tryonPreviews.id, id))
+        .returning();
+      return row ? mapTryonPreview(row) : null;
+    },
+
+    async findTryonPreviewById(id) {
+      const [row] = await db.select().from(tryonPreviews).where(eq(tryonPreviews.id, id)).limit(1);
+      return row ? mapTryonPreview(row) : null;
+    },
+
+    async recordAgentHeartbeat({ agentId, version, at }) {
+      await db
+        .insert(renderAgents)
+        .values({ agentId, version, lastHeartbeatAt: at })
+        .onConflictDoUpdate({ target: renderAgents.agentId, set: { version, lastHeartbeatAt: at } });
+    },
+
+    async countWaitingAgentJobs() {
+      const [renderCount] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(renders)
+        .where(and(eq(renders.unlocked, true), inArray(renders.status, ["QUEUED", "RUNNING"])));
+      const [tryonCount] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(tryonPreviews)
+        .where(and(isNotNull(tryonPreviews.listingVariantId), eq(tryonPreviews.status, "PROCESSING")));
+      return (renderCount?.n ?? 0) + (tryonCount?.n ?? 0);
+    },
+
+    async latestAgentHeartbeat() {
+      const [row] = await db
+        .select({ at: renderAgents.lastHeartbeatAt })
+        .from(renderAgents)
+        .orderBy(desc(renderAgents.lastHeartbeatAt))
+        .limit(1);
+      return row?.at ?? null;
+    },
+
     async requeueFailedFreeRenders(input) {
       const uniqueIds = [...new Set(input.renderIds)];
       if (uniqueIds.length === 0) return [];
@@ -3173,7 +3400,7 @@ export function createPostgresRepositories(db: Db): Repositories {
       // Only rows still FAILED flip, so a parallel retry of the same render queues it once.
       const rows = await db
         .update(renders)
-        .set({ status: "QUEUED", updatedAt: now() })
+        .set({ status: "QUEUED", leaseOwner: null, leaseExpiresAt: null, attempts: 0, updatedAt: now() })
         .where(
           and(
             inArray(renders.id, uniqueIds),

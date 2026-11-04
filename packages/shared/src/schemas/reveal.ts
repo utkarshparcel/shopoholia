@@ -32,6 +32,13 @@ export type RenderCard = z.infer<typeof RenderCardSchema>;
 export const RevealResponseSchema = z.object({
   orderId: z.string().uuid(),
   renders: z.array(RenderCardSchema),
+  /**
+   * The renders are waiting for the render agent (it is down, its night window is closed, or the
+   * queue is backed up), so the app shows when they should be ready instead of a spinner.
+   */
+  rendersWaiting: z.boolean().optional(),
+  /** When the waiting renders should be ready; null when there is no estimate ("shortly"). */
+  expectedReadyAt: z.string().datetime().nullable().optional(),
 });
 
 export type RevealResponse = z.infer<typeof RevealResponseSchema>;

@@ -303,6 +303,12 @@ export type TryonPreviewRecord = {
   retryAfter?: Date | null;
   provider: string;
   costMicros: number;
+  /** Who holds the job's lease (the render agent, or the overflow renderer); null when unleased. */
+  leaseOwner?: string | null;
+  /** When the lease lapses. */
+  leaseExpiresAt?: Date | null;
+  /** Leases taken so far. */
+  attempts?: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -381,13 +387,60 @@ export type RenderRecord = {
   combinedItemIds: string[] | null;
   status: RenderStatus;
   costMicros: number;
+  /** Who holds the job's lease (the render agent, or the overflow renderer); null when unleased. */
+  leaseOwner?: string | null;
+  /** When the lease lapses. */
+  leaseExpiresAt?: Date | null;
+  /** Leases taken so far. */
+  attempts?: number;
   createdAt: Date;
   updatedAt: Date;
 };
 
 /** A render to create; `combinedItemIds` defaults to null (one item's render). */
-export type NewRenderRecord = Omit<RenderRecord, "id" | "createdAt" | "updatedAt" | "combinedItemIds"> & {
+export type NewRenderRecord = Omit<
+  RenderRecord,
+  "id" | "createdAt" | "updatedAt" | "combinedItemIds" | "leaseOwner" | "leaseExpiresAt" | "attempts"
+> & {
   combinedItemIds?: string[] | null;
+};
+
+/**
+ * A job the render agent (or the overflow renderer) can lease: a reveal render, or a Play
+ * listing's try-on preview. A QUEUED render or an unleased PROCESSING preview is waiting.
+ */
+export type AgentJobLease =
+  | {
+      kind: "render";
+      id: string;
+      attempts: number;
+      leaseOwner: string | null;
+      leaseExpiresAt: Date | null;
+      createdAt: Date;
+      render: RenderRecord;
+      orderId: string;
+    }
+  | {
+      kind: "tryon";
+      id: string;
+      attempts: number;
+      leaseOwner: string | null;
+      leaseExpiresAt: Date | null;
+      createdAt: Date;
+      preview: TryonPreviewRecord;
+    };
+
+export type AgentJobKind = AgentJobLease["kind"];
+
+export type LeaseAgentJobsInput = {
+  owner: string;
+  max: number;
+  now: Date;
+  leaseExpiresAt: Date;
+  /** Only jobs waiting since this time or earlier (by `updatedAt`). */
+  queuedBefore?: Date;
+  /** Only these job ids. */
+  ids?: string[];
 };
 
 export type PushEventPayload = {
@@ -1118,6 +1171,36 @@ export interface Repositories {
     orderId: string;
     renderIds: string[];
   }): Promise<RenderRecord[]>;
+
+  /**
+   * Atomically leases up to `max` waiting jobs, oldest first: unlocked QUEUED renders (which
+   * become RUNNING) and unleased PROCESSING listing try-ons. Each gets `owner`, `leaseExpiresAt`
+   * and one more attempt. Parallel callers never lease the same job.
+   */
+  leaseAgentJobs(input: LeaseAgentJobsInput): Promise<AgentJobLease[]>;
+  /** Leased jobs (RUNNING renders, PROCESSING try-ons) whose lease lapsed before `now`. */
+  listExpiredAgentLeases(now: Date): Promise<AgentJobLease[]>;
+  /**
+   * Clears the lease if `owner` still holds it (and, with `expiredBy`, only if it lapsed by then),
+   * leaving the job's status as it is for the caller to move on. Null when the lease is not held.
+   */
+  releaseAgentLease(input: {
+    kind: AgentJobKind;
+    id: string;
+    owner: string;
+    expiredBy?: Date;
+  }): Promise<AgentJobLease | null>;
+  /** A leased try-on preview's status change by id (READY, FAILED, or back to waiting). */
+  updateTryonPreviewById(
+    id: string,
+    patch: Partial<Pick<TryonPreviewRecord, "status" | "imageKey" | "error" | "retryAfter" | "provider" | "costMicros">>,
+  ): Promise<TryonPreviewRecord | null>;
+  findTryonPreviewById(id: string): Promise<TryonPreviewRecord | null>;
+  recordAgentHeartbeat(input: { agentId: string; version: string; at: Date }): Promise<void>;
+  /** Jobs the agent has yet to finish: unlocked QUEUED/RUNNING renders and PROCESSING listing try-ons. */
+  countWaitingAgentJobs(): Promise<number>;
+  /** The most recent heartbeat from any render agent, or null if none ever came in. */
+  latestAgentHeartbeat(): Promise<Date | null>;
 
   findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
   findListingsByIds(ids: string[]): Promise<ListingRecord[]>;

@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -18,6 +19,10 @@ export interface StorageClient {
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
   delete(key: string): Promise<void>;
   deleteMany(keys: string[]): Promise<void>;
+  /** A short-lived URL that uploads one object with an HTTP PUT of `contentType` (the render agent). */
+  getSignedPutUrl?(key: string, contentType: string, expiresInSeconds?: number): Promise<string>;
+  /** Whether an object is stored under `key`. */
+  exists?(key: string): Promise<boolean>;
 }
 
 // S3 and R2 cap object keys at 1024 bytes.
@@ -184,6 +189,25 @@ export function createR2Storage(config: R2Config): StorageClient {
       );
     },
 
+    async getSignedPutUrl(key, contentType, expiresInSeconds = SIGNED_URL_SECONDS) {
+      return getSignedUrl(
+        client,
+        new PutObjectCommand({ Bucket: config.bucketName, Key: key, ContentType: contentType }),
+        { expiresIn: Math.min(expiresInSeconds, MAX_PRESIGNED_SECONDS) },
+      );
+    },
+
+    async exists(key) {
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: config.bucketName, Key: key }));
+        return true;
+      } catch (error) {
+        const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+        if (status === 404 || (error as { name?: string }).name === "NotFound") return false;
+        throw error;
+      }
+    },
+
     async delete(key) {
       await client.send(
         new DeleteObjectCommand({
@@ -234,6 +258,12 @@ export function createMockStorage(baseUrl = "https://picsum.photos"): StorageCli
       // without real R2. Seed includes the storage key for stable per-listing images.
       const seed = key.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "worn";
       return `${baseUrl}/seed/${seed}/720/960`;
+    },
+    async getSignedPutUrl(key) {
+      return `mock-storage://put/${encodeURIComponent(key)}`;
+    },
+    async exists(key) {
+      return objects.has(key);
     },
     async delete(key) {
       objects.delete(key);
