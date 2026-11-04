@@ -184,7 +184,7 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     }
     const appleRevocation = appleRevocationConfigProblem(env);
     if (appleRevocation) warnings.push(appleRevocation);
-    if (!env.FASHN_API_KEY?.trim()) {
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
       warnings.push("FASHN_API_KEY is not set: try-on and reveal renders fail, so orders never reach their reveal");
     }
     if (env.IAP_ACCEPT_TEST_PURCHASES === "0") {

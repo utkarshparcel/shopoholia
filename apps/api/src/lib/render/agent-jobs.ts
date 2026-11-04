@@ -167,19 +167,32 @@ export async function leaseJobsForAgent(
 ): Promise<AgentJobView[]> {
   if (deps.config.backend !== "agent") return [];
   await reclaimExpiredLeases(deps, now);
-  const leases = await deps.repos.leaseAgentJobs({
-    owner: input.agentId,
-    max: input.max,
-    now,
-    leaseExpiresAt: new Date(now.getTime() + deps.config.leaseMs),
-  });
+  const views: AgentJobView[] = [];
+  // A job that can't render (no photo or garment) fails here and frees its slot, so lease again
+  // (a few rounds at most) rather than hand the agent nothing while good jobs wait.
+  for (let round = 0; round < LEASE_ROUNDS && views.length < input.max; round += 1) {
+    const leases = await deps.repos.leaseAgentJobs({
+      owner: input.agentId,
+      max: input.max - views.length,
+      now,
+      leaseExpiresAt: new Date(now.getTime() + deps.config.leaseMs),
+    });
+    if (leases.length === 0) break;
+    views.push(...(await viewsFor(deps, leases, input.agentId)));
+  }
+  return views;
+}
+
+const LEASE_ROUNDS = 5;
+
+async function viewsFor(deps: AgentJobsDeps, leases: AgentJobLease[], agentId: string) {
   const views: AgentJobView[] = [];
   for (const job of leases) {
     try {
       views.push(await viewFor(deps, job));
     } catch (error) {
       // A job with no photo or garment can't render on any attempt: it fails now.
-      const released = await deps.repos.releaseAgentLease({ kind: job.kind, id: job.id, owner: input.agentId });
+      const released = await deps.repos.releaseAgentLease({ kind: job.kind, id: job.id, owner: agentId });
       if (!released) continue;
       if (error instanceof RenderInputError) {
         await failJob(deps, released, error.message);

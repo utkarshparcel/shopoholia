@@ -152,6 +152,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
   otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column (erasure deletes the user's phone's codes)",
   job_dead_letters: "worker failure log, ids only; no user column",
   marketplace_settlements: "ops payout ledger per marketplace order, keyed by seller id; no user column",
+  render_agents: "the operator's render agents and their last heartbeat; no user column",
 };
 
 /**

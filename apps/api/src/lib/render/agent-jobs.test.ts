@@ -82,6 +82,17 @@ async function deliveredOrder(repos: Repositories, itemCount = 1) {
   return { user, order, renders };
 }
 
+/** Leases until the queue is empty: a shared test database may hold older waiting jobs. */
+async function leaseAll(deps: Parameters<typeof leaseJobsForAgent>[0], agentId: string, now = new Date()) {
+  const all: Awaited<ReturnType<typeof leaseJobsForAgent>> = [];
+  for (let round = 0; round < 100; round += 1) {
+    const jobs = await leaseJobsForAgent(deps, { agentId, max: 100 }, now);
+    all.push(...jobs);
+    if (jobs.length < 100) break;
+  }
+  return all;
+}
+
 function leaseSuite(name: string, makeRepos: () => Repositories) {
   describe(name, () => {
     it("two concurrent leases never return the same job", async () => {
@@ -109,14 +120,14 @@ function leaseSuite(name: string, makeRepos: () => Repositories) {
       const deps = { repos, storage: createMockStorage(), push: fakePush().push, config: agentConfig() };
       const ours = (await repos.findRendersByOrderId(order.id)).find((r) => r.isFree)!;
       const t0 = new Date();
-      const first = await leaseJobsForAgent(deps, { agentId: "mac-1", max: 100 }, t0);
+      const first = await leaseAll(deps, "mac-1", t0);
       expect(first.map((j) => j.id)).toContain(ours.id);
       // Still leased: another agent doesn't get it.
-      const during = await leaseJobsForAgent(deps, { agentId: "mac-2", max: 100 }, new Date(t0.getTime() + 60_000));
+      const during = await leaseAll(deps, "mac-2", new Date(t0.getTime() + 60_000));
       expect(during.map((j) => j.id)).not.toContain(ours.id);
       // Past the lease (10 minutes), it is back in the queue and leased again.
       const later = new Date(t0.getTime() + 11 * 60_000);
-      const again = await leaseJobsForAgent(deps, { agentId: "mac-2", max: 100 }, later);
+      const again = await leaseAll(deps, "mac-2", later);
       const job = again.find((j) => j.id === ours.id);
       expect(job).toBeDefined();
       expect(job!.attempt).toBe(2);
@@ -132,7 +143,7 @@ function leaseSuite(name: string, makeRepos: () => Repositories) {
       const deps = { repos, storage, push, config: agentConfig() };
       const free = (await repos.findRendersByOrderId(order.id)).filter((r) => r.isFree);
       const ids = new Set(free.map((r) => r.id));
-      const jobs = (await leaseJobsForAgent(deps, { agentId: "mac", max: 100 })).filter((j) => ids.has(j.id));
+      const jobs = (await leaseAll(deps, "mac")).filter((j) => ids.has(j.id));
       expect(jobs).toHaveLength(free.length);
       for (const job of jobs) {
         expect(job.kind).toBe("render");
@@ -184,14 +195,14 @@ function leaseSuite(name: string, makeRepos: () => Repositories) {
 
       let t = new Date();
       for (let attempt = 1; attempt < deps.config.maxAttempts; attempt += 1) {
-        const leased = await leaseJobsForAgent(deps, { agentId: "mac", max: 100 }, t);
+        const leased = await leaseAll(deps, "mac", t);
         expect(leased.find((j) => j.id === locked.id)?.attempt).toBe(attempt);
         const outcome = await failAgentJob(deps, { id: locked.id, agentId: "mac", retryable: true, reason: "timeout" });
         expect(outcome.status).toBe("requeued");
         expect((await repos.findRenderById(locked.id))!.status).toBe("QUEUED");
         t = new Date(t.getTime() + 1000);
       }
-      const last = await leaseJobsForAgent(deps, { agentId: "mac", max: 100 }, t);
+      const last = await leaseAll(deps, "mac", t);
       expect(last.find((j) => j.id === locked.id)?.attempt).toBe(deps.config.maxAttempts);
       const outcome = await failAgentJob(deps, { id: locked.id, agentId: "mac", retryable: true, reason: "timeout" });
       expect(outcome).toEqual({ status: "failed", coinsRefunded: REVEAL_UNLOCK_COST_COINS });
@@ -210,7 +221,7 @@ function leaseSuite(name: string, makeRepos: () => Repositories) {
       const { order } = await deliveredOrder(repos);
       const deps = { repos, storage: createMockStorage(), push: fakePush().push, config: agentConfig() };
       const free = (await repos.findRendersByOrderId(order.id)).filter((r) => r.isFree);
-      await leaseJobsForAgent(deps, { agentId: "mac", max: 100 });
+      await leaseAll(deps, "mac");
       for (const r of free) {
         const outcome = await failAgentJob(deps, { id: r.id, agentId: "mac", retryable: false, reason: "bad input" });
         expect(outcome).toEqual({ status: "failed", coinsRefunded: 0 });
@@ -221,6 +232,37 @@ function leaseSuite(name: string, makeRepos: () => Repositories) {
 }
 
 leaseSuite("agent leases (memory)", () => createMemoryRepositories());
+
+describe("a job that can't render", () => {
+  it("fails at lease time, and the agent gets the next job instead", async () => {
+    const repos = createMemoryRepositories();
+    // The broken order is the older one, so it is leased first.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.now() - 60_000));
+    // No avatar and no house-model photo: nothing to dress.
+    const broken = await deliveredOrder(repos);
+    vi.useRealTimers();
+    await repos.upsertAvatar({
+      userId: broken.user.id,
+      referenceImageKey: null,
+      sourceUploadKeys: [],
+      bodyMeta: {},
+      status: "PROCESSING",
+    });
+    const listing = await repos.findListingById(
+      (await repos.findVariantById((await repos.listOrderItemsByOrderId(broken.order.id))[0]!.listingVariantId))!.listingId,
+    );
+    await repos.seedListings([{ ...listing!, houseModelRenderKey: "" }], []);
+    const good = await deliveredOrder(repos);
+    const deps = { repos, storage: createMockStorage(), push: fakePush().push, config: agentConfig() };
+
+    const jobs = await leaseJobsForAgent(deps, { agentId: "mac", max: 1 });
+    const goodFree = good.renders.find((r) => r.isFree)!;
+    expect(jobs.map((j) => j.id)).toEqual([goodFree.id]);
+    const brokenFree = broken.renders.find((r) => r.isFree)!;
+    expect((await repos.findRenderById(brokenFree.id))!.status).toBe("FAILED");
+  });
+});
 describePostgres("agent leases (postgres)", () => {
   leaseSuite("postgres", () => createPostgresRepositoriesFromUrl(databaseUrl!));
 

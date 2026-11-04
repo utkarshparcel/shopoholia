@@ -187,6 +187,30 @@ describe("bootConfigProblems", () => {
     expect(bootConfigProblems({}).warnings.join("\n")).not.toMatch(/FASHN_API_KEY/);
   });
 
+  it("in production, checks the render agent settings", () => {
+    const token = "r".repeat(64);
+    const warnings = (env: Record<string, string>) =>
+      bootConfigProblems({ NODE_ENV: "production", ...env }).warnings.join("\n");
+    // The recommended setup: agent, always, no overflow, no FASHN key. Nothing to warn about.
+    const recommended = warnings({
+      RENDER_BACKEND: "agent",
+      RENDER_AGENT_WINDOW: "always",
+      RENDER_OVERFLOW: "none",
+      RENDER_AGENT_TOKEN: token,
+    });
+    expect(recommended).not.toMatch(/RENDER_|FASHN_API_KEY/);
+    expect(warnings({ RENDER_BACKEND: "agent" })).toMatch(/RENDER_AGENT_TOKEN is not set/);
+    expect(warnings({ RENDER_BACKEND: "agent", RENDER_AGENT_TOKEN: "short" })).toMatch(/RENDER_AGENT_TOKEN is short/);
+    expect(warnings({ RENDER_BACKEND: "agent", RENDER_AGENT_TOKEN: token, RENDER_OVERFLOW: "fashn" })).toMatch(
+      /RENDER_OVERFLOW=fashn but FASHN_API_KEY is not set/,
+    );
+    expect(warnings({ RENDER_BACKEND: "agent", RENDER_AGENT_TOKEN: token, RENDER_AGENT_WINDOW: "nightly" })).toMatch(
+      /RENDER_AGENT_WINDOW=nightly is not understood/,
+    );
+    // Without the agent, the missing FASHN key points at the recommended renderer.
+    expect(warnings({})).toMatch(/RENDER_BACKEND=agent/);
+  });
+
   it("in production, warns about secrets whose routes would refuse every call", () => {
     const { warnings } = bootConfigProblems({ NODE_ENV: "production" });
     expect(warnings).toEqual(
