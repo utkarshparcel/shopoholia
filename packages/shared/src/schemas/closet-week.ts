@@ -92,7 +92,7 @@ export const BackupSchema = z.object({
   forDay: LocalDateSchema.nullable(), // the day whose look triggered the check
   fitsDays: z.array(LocalDateSchema), // every day it can stand in for
   outfit: ClosetOutfitSchema.nullable(),
-  why: z.string(), // "Monday’s strapless mini shows shoulders, underarms and legs."
+  why: z.string(), // "Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee."
   missing: z.string().nullable(), // when UNAVAILABLE: what the closet lacks
 });
 export type Backup = z.infer<typeof BackupSchema>;

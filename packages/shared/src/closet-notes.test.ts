@@ -221,10 +221,10 @@ describe("backup copy", () => {
   it("writes the site's whys", () => {
     expect(
       backupWhy({ check: "NOT_WAXED", day: "Monday", piece: "strapless mini", plural: false, zones: ["shoulders", "underarms", "legs"] }),
-    ).toBe("Monday’s strapless mini shows shoulders, underarms and legs.");
+    ).toBe("Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.");
     expect(
       backupWhy({ check: "BLOATED", piece: "sage mini", plural: false, fits: ["ruched", "tight"], areas: ["waist", "hips"] }),
-    ).toBe("The sage mini is ruched and tight through the waist and hips.");
+    ).toBe("The sage mini is ruched and tight through the waist and through the hips.");
     expect(backupWhy({ check: "BAD_HAIR" })).toBe("The look was built around hair down and blow-dried.");
     expect(
       backupWhy({ check: "PARTY_DATE", colour: "sage", piece: "sage mini", bag: "straw bag", event: "lunch at 1", tempC: 31 }),
@@ -233,7 +233,7 @@ describe("backup copy", () => {
 
   it("handles plurals, no bag, no colour, no event and no temperature", () => {
     expect(backupWhy({ check: "NOT_WAXED", day: "Saturday", piece: "shorts", plural: true, zones: ["legs"] })).toBe(
-      "Saturday’s shorts show legs.",
+      "Saturday’s shorts end above the knee.",
     );
     expect(backupWhy({ check: "BLOATED", piece: "black jeans", plural: true, fits: ["tight"], areas: ["hips"] })).toBe(
       "The black jeans are tight through the hips.",
@@ -250,9 +250,9 @@ describe("backup copy", () => {
   });
 
   it("says what the closet lacks", () => {
-    expect(backupMissing("NOT_WAXED", ["legs"], "this week")).toBe("Nothing that covers the legs fits this week.");
-    expect(backupMissing("NOT_WAXED", [], "today")).toBe("Nothing that covers the underarms and legs fits today.");
-    expect(backupMissing("BLOATED", [], "this week")).toBe("Nothing loose through the waist and hips fits this week.");
+    expect(backupMissing("NOT_WAXED", ["legs"], "this week")).toBe("Nothing that reaches below the knee fits this week.");
+    expect(backupMissing("NOT_WAXED", [], "today")).toBe("Nothing with sleeves that reaches below the knee fits today.");
+    expect(backupMissing("BLOATED", [], "this week")).toBe("Nothing loose through the waist and through the hips fits this week.");
     expect(backupMissing("BAD_HAIR", [], "today")).toBe("Nothing built for hair up fits today.");
     expect(backupMissing("PARTY_DATE", [], "this week")).toBe("Nothing evening-ready fits this week.");
   });

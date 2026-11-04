@@ -5,6 +5,7 @@
  * near-synonyms, and odd spacing or hyphen characters.
  */
 import { describe, expect, it } from "vitest";
+import { BACKUP_WHY_NONE, backupMissing, backupWhy } from "../closet-notes.js";
 import { ALL_TEMPLATE_SAMPLES, BANNED_WORDS, BODY_PARTS } from "./notes.js";
 
 /** Lint data: forms and near-synonyms of the banned list that the suffix rule below can't reach. */
@@ -121,6 +122,20 @@ describe("copy lint", () => {
   it("copy lint passes on every template", () => {
     const samples = ALL_TEMPLATE_SAMPLES();
     expect(samples.length).toBeGreaterThan(1000);
+    const failures = samples.map((line) => ({ line, findings: lint(line) })).filter((r) => r.findings.length > 0);
+    expect(failures).toEqual([]);
+  });
+
+  it("copy lint passes on the composer's backup lines (closet-notes)", () => {
+    const zoneSets = [["shoulders"], ["underarms"], ["legs"], ["shoulders", "underarms"], ["underarms", "legs"], ["shoulders", "underarms", "legs"], []];
+    const samples: string[] = [...Object.values(BACKUP_WHY_NONE)];
+    for (const zones of zoneSets) {
+      for (const plural of [false, true]) {
+        samples.push(backupWhy({ check: "NOT_WAXED", day: "Monday", piece: plural ? "linen trousers" : "strapless mini", plural, zones }));
+      }
+      for (const when of ["this week", "today"] as const) samples.push(backupMissing("NOT_WAXED", zones, when));
+    }
+    samples.push(backupMissing("BLOATED", [], "today"));
     const failures = samples.map((line) => ({ line, findings: lint(line) })).filter((r) => r.findings.length > 0);
     expect(failures).toEqual([]);
   });

@@ -60,14 +60,14 @@ const DAYS: { date: string; label: string; why: string; card: SitePiece[]; look:
 /** `ClosetBackups` lines and `ClosetStylist` looks: the pieces laid out, and the stylist's note. */
 const BACKUPS: { check: BackupCheck; why: string; fitsDays: string[]; laid: SitePiece[]; look: Record<string, SitePiece>; note: string }[] = [
   {
-    check: "NOT_WAXED", why: "Monday’s strapless mini shows shoulders, underarms and legs.",
+    check: "NOT_WAXED", why: "Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.",
     fitsDays: ["2026-11-09", "2026-11-12", "2026-11-13", "2026-11-15"],
     laid: ["whiteTee", "trousers", "wedges", "hoops"],
     look: { TOP: "whiteTee", BOTTOM: "trousers", FOOTWEAR: "wedges", BAG: "strawBag", EARRINGS: "hoops" },
     note: "Floor-length linen and a crisp tee. It reads as a choice, not a cover-up.",
   },
   {
-    check: "BLOATED", why: "The sage mini is ruched and tight through the waist and hips.",
+    check: "BLOATED", why: "The sage mini is ruched and tight through the waist and through the hips.",
     fitsDays: ["2026-11-09", "2026-11-12", "2026-11-13", "2026-11-15"],
     laid: ["hoops", "creamMidi", "wedges", "strawBag"],
     look: { DRESS: "creamMidi", FOOTWEAR: "wedges", BAG: "strawBag", EARRINGS: "hoops" },

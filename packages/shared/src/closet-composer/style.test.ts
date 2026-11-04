@@ -67,13 +67,13 @@ const SITE_DAYS: [string, Record<string, SitePiece>][] = [
 
 const SITE_BACKUPS: [string, string, string[], Record<string, SitePiece>][] = [
   [
-    "Monday’s strapless mini shows shoulders, underarms and legs.",
+    "Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.",
     "Floor-length linen and a crisp tee. It reads as a choice, not a cover-up.",
     ["2026-11-09", "2026-11-12", "2026-11-13", "2026-11-15"],
     { TOP: "whiteTee", BOTTOM: "trousers", FOOTWEAR: "wedges", BAG: "strawBag", EARRINGS: "hoops" },
   ],
   [
-    "The sage mini is ruched and tight through the waist and hips.",
+    "The sage mini is ruched and tight through the waist and through the hips.",
     "Nothing at the waist today. Cream linen falls from the shoulder, and the wedges keep it dressed.",
     ["2026-11-09", "2026-11-12", "2026-11-13", "2026-11-15"],
     { DRESS: "creamMidi", FOOTWEAR: "wedges", BAG: "strawBag", EARRINGS: "hoops" },
