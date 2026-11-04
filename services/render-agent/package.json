@@ -1,0 +1,27 @@
+{
+  "name": "@worn/render-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Renders WORN reveals and try-ons on the owner's Mac: leases jobs from the API and calls the local mediagen server.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "worn-render-agent": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/index.js",
+    "dry-run": "node dist/index.js --dry-run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}

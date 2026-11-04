@@ -55,17 +55,17 @@ jobs:
         run: pnpm turbo run build --filter=@worn/shared --filter=@worn/api --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
 
       - name: Lint
-        run: pnpm turbo run lint --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
+        run: pnpm turbo run lint --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/render-agent --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
 
       - name: Typecheck
-        run: pnpm turbo run typecheck --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
+        run: pnpm turbo run typecheck --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/config --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/render-agent --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
 
       # The marketing site (worncloset.app): a broken page or route fails the build here, not on deploy.
       - name: Build website
         run: pnpm --filter @worn/web build
 
       - name: Test
-        run: pnpm turbo run test --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
+        run: pnpm turbo run test --filter=@worn/web --filter=@worn/shared --filter=@worn/db --filter=@worn/api --filter=@worn/mobile --filter=@worn/worker-orders --filter=@worn/worker-render --filter=@worn/render-agent --filter=@worn/worker-ingest --filter=@worn/worker-expiry --filter=@worn/worker-wardrobe --filter=@worn/worker-returns --filter=@worn/worker-gifts --filter=@worn/worker-nudge
 
       # The wall-clock budgets, alone on the runner (in the step above every package's tests share the
       # CPU). The budgets were set on a laptop; GitHub's shared runners are about three times slower.
