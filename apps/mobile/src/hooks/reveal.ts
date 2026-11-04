@@ -29,8 +29,14 @@ export function useReveal(orderId: string) {
       return fetchReveal(accessToken, orderId);
     },
     enabled: signedIn && Boolean(orderId),
+    // Waiting renders (overnight, or the render agent is down) are checked every minute; the
+    // push says when they are ready.
     refetchInterval: (query) =>
-      hasRendersInProgress(query.state.data?.renders ?? []) ? 2500 : false,
+      hasRendersInProgress(query.state.data?.renders ?? [])
+        ? query.state.data?.rendersWaiting
+          ? 60_000
+          : 2500
+        : false,
   });
 }
 

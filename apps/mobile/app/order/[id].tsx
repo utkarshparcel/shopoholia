@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { RushToExpress } from '@/src/components/order/RushToExpress';
+import { RevealWaitNote } from '@/src/components/order/RevealWaitNote';
 import { trackPlayBuyInCloset } from '@/src/api/client';
 import { TrackBuySuccessSheet } from '@/src/components/TrackBuySuccessSheet';
 import { Button, isNotFoundError, LoadError, OrderTracker, SectionHeader } from '@/src/components/ui';
@@ -152,6 +153,8 @@ export default function OrderTrackingScreen() {
               ) : null}
             </View>
           ) : null}
+
+          {orderQuery.data.state === 'DELIVERED' ? <RevealWaitNote orderId={orderQuery.data.id} /> : null}
 
           {orderQuery.data.state === 'REVEAL_READY' ? (
             <Button

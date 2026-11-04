@@ -28,6 +28,7 @@ import { errorText } from '@/src/lib/errorText';
 import { shareText } from '@/src/lib/share';
 import { goBack } from '@/src/lib/goBack';
 import { hasRendersInProgress } from '@/src/lib/reveal';
+import { revealWaitCopy } from '@/src/lib/revealWait';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -190,7 +191,11 @@ export default function RevealScreen() {
       </View>
 
       <SectionHeader kicker="Reveal" title="Your haul, on you" />
-      {!revealQuery.data ? null : pendingRenders ? (
+      {!revealQuery.data ? null : pendingRenders && revealQuery.data.rendersWaiting ? (
+        <Text style={styles.pendingHint} testID="reveal-wait">
+          {revealWaitCopy(revealQuery.data.expectedReadyAt)}
+        </Text>
+      ) : pendingRenders ? (
         <Text style={styles.pendingHint}>Still rendering looks — this updates automatically.</Text>
       ) : (
         <Text style={styles.pendingHint}>Swipe the deck to browse your scenes.</Text>

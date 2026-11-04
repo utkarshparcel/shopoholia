@@ -734,6 +734,10 @@ export type RenderCard = {
 export type RevealResponse = {
   orderId: string;
   renders: RenderCard[];
+  /** The renders are waiting for the render agent: show when they should be ready. */
+  rendersWaiting?: boolean;
+  /** When they should be ready; null means "shortly". */
+  expectedReadyAt?: string | null;
 };
 
 export async function fetchReveal(accessToken: string, orderId: string) {
