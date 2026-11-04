@@ -166,6 +166,22 @@ export function multiCardStackA11yLabel(
   return `${n} credits stacked · ${total} found money`;
 }
 
+/**
+ * S3-28 — the stack's label with one total per currency (₹1,200 + $50), never a sum of
+ * balances in different currencies.
+ */
+export function multiCardStackA11yLabelForAccounts(
+  accounts: ReadonlyArray<{ balanceCacheMinor: number; currency?: string | null }>,
+): string {
+  const totals = new Map<string, number>();
+  for (const a of accounts) {
+    const code = a.currency || 'INR';
+    totals.set(code, (totals.get(code) ?? 0) + Math.max(0, a.balanceCacheMinor));
+  }
+  const parts = [...totals].map(([code, minor]) => formatMinor(minor, code));
+  return `${accounts.length} credits stacked · ${parts.join(' + ') || formatMinor(0, 'INR')} found money`;
+}
+
 /** Top layers for the visual stack (soonest expiry first, then balance). */
 export function multiCardStackLayers<T extends ExpiringAccount>(
   accounts: T[],

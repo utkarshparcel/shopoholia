@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { formatMinor } from '@worn/shared';
 
 import {
-  multiCardStackA11yLabel,
+  multiCardStackA11yLabelForAccounts,
   multiCardStackLayers,
   shouldShowMultiCardStack,
   type ExpiringAccount,
@@ -32,18 +32,12 @@ export function MultiCardStack({ accounts, now, limit = 3 }: Props) {
   if (!shouldShowMultiCardStack(accounts.length)) return null;
 
   const layers = multiCardStackLayers(accounts, limit, now);
-  const totalMinor = accounts.reduce((s, a) => s + a.balanceCacheMinor, 0);
-  const currency = accounts[0]?.currency ?? 'INR';
 
   return (
     <View
       style={styles.cardStack}
       accessible
-      accessibilityLabel={multiCardStackA11yLabel(
-        totalMinor,
-        accounts.length,
-        currency,
-      )}
+      accessibilityLabel={multiCardStackA11yLabelForAccounts(accounts)}
       testID="multi-card-stack"
     >
       {layers.map((layer, i) => (
@@ -64,7 +58,7 @@ export function MultiCardStack({ accounts, now, limit = 3 }: Props) {
             {layer.merchant}
           </Text>
           <Text style={styles.stackBalance}>
-            {formatMinor(layer.balanceCacheMinor, layer.currency ?? currency)}
+            {formatMinor(layer.balanceCacheMinor, layer.currency ?? 'INR')}
           </Text>
         </View>
       ))}
