@@ -24,6 +24,9 @@ export type VaultAddQueueSnapshot = {
   lastFlushError: string | null;
 };
 
+/** A flush's result: what is left queued, and how many adds reached the server. */
+export type VaultAddFlushResult = VaultAddQueueSnapshot & { sentCount: number };
+
 /** What is saved: every user's entries, and each user's last flush error. */
 type StoredVaultAddQueue = {
   items: QueuedVaultAdd[];
@@ -71,8 +74,26 @@ async function readStored(): Promise<StoredVaultAddQueue> {
   }
 }
 
+const listeners = new Set<() => void>();
+
+/**
+ * Called after every change to the stored queue, so every screen showing it (the vault header's
+ * queued count and the gift list's pending rows) stays in step whichever one flushed.
+ */
+export function subscribeVaultAddQueue(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyListeners(): void {
+  for (const listener of [...listeners]) listener();
+}
+
 async function writeStored(stored: StoredVaultAddQueue): Promise<void> {
   await AsyncStorage.setItem(VAULT_ADD_QUEUE_KEY, JSON.stringify(stored));
+  notifyListeners();
 }
 
 function snapshotFor(stored: StoredVaultAddQueue, userId: string): VaultAddQueueSnapshot {
@@ -137,16 +158,16 @@ export async function clearVaultAddFlushError(userId: string): Promise<VaultAddQ
 export async function flushVaultAddQueue(
   userId: string,
   addCredit: AddCreditFn,
-): Promise<VaultAddQueueSnapshot> {
+): Promise<VaultAddFlushResult> {
   const stored = await readStored();
   const mine = stored.items.filter((item) => item.userId === userId);
   if (mine.length === 0) {
     if (stored.flushErrors[userId]) {
       const cleared = { ...stored, flushErrors: withFlushError(stored.flushErrors, userId, null) };
       await writeStored(cleared);
-      return snapshotFor(cleared, userId);
+      return { ...snapshotFor(cleared, userId), sentCount: 0 };
     }
-    return snapshotFor(stored, userId);
+    return { ...snapshotFor(stored, userId), sentCount: 0 };
   }
 
   const sentIds = new Set<string>();
@@ -173,12 +194,13 @@ export async function flushVaultAddQueue(
     flushErrors: withFlushError(latest.flushErrors, userId, lastFlushError),
   };
   await writeStored(next);
-  return snapshotFor(next, userId);
+  return { ...snapshotFor(next, userId), sentCount: sentIds.size };
 }
 
 /** Drops every queued add (sign-out, account deletion): nothing of a user is left to send. */
 export async function clearVaultAddQueue(): Promise<void> {
   await AsyncStorage.removeItem(VAULT_ADD_QUEUE_KEY);
+  notifyListeners();
 }
 
 /** Optimistic local account shape for vault list while queued. */

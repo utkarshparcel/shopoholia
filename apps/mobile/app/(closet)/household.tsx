@@ -28,6 +28,7 @@ import {
   usePatchHouseholdVaultMember,
   useSpendHouseholdVault,
 } from '@/src/hooks/closet/useCloset';
+import { useSessionUserId } from '@/src/hooks/closet/keys';
 import { parseAmountInput } from '@/src/lib/amountInput';
 import { CLOSET_OFF_SUBTITLE, closetAlertText } from '@/src/lib/closetScreenState';
 import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
@@ -67,6 +68,7 @@ export default function HouseholdScreen() {
   const patchVault = usePatchHouseholdVaultMember(activeId);
   const spendVault = useSpendHouseholdVault(activeId);
   const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const me = useSessionUserId();
   const { ask, promptElement } = usePrompt();
   const households = data?.households ?? [];
   const activeHousehold = useMemo(
@@ -87,6 +89,23 @@ export default function HouseholdScreen() {
   const items = wardrobe.data?.items ?? [];
   const vaultAccounts = vault.data?.accounts ?? [];
   const vaultMembers = vault.data?.members ?? [];
+  // The server counts a cap in raw minor units, whatever the credit's currency. Caps are typed and
+  // shown in the shared credits' currency when they all share one, not the viewer's preference.
+  const vaultCurrencies = [...new Set(vaultAccounts.map((a) => a.currency))];
+  const capCurrency = vaultCurrencies.length === 1 ? vaultCurrencies[0]! : currency;
+  const mixedVaultCurrencies = vaultCurrencies.length > 1;
+  const ownerId = activeHousehold?.ownerId ?? null;
+  // Only the owner changes access (the API answers anyone else with NOT_OWNER).
+  const canManageAccess = ownerId === null || ownerId === me;
+  let otherMemberNumber = 0;
+  const memberLabels = new Map(
+    vaultMembers.map((m) => {
+      if (m.userId === me) return [m.userId, ownerId === me ? 'You (owner)' : 'You'];
+      if (m.userId === ownerId) return [m.userId, 'Owner'];
+      otherMemberNumber += 1;
+      return [m.userId, `Member ${otherMemberNumber}`];
+    }),
+  );
 
   async function allowSpend(userId: string, label: string) {
     const values = await ask({
@@ -95,17 +114,17 @@ export default function HouseholdScreen() {
       fields: [
         {
           key: 'cap',
-          label: `Spend cap in ${currency}`,
+          label: `Spend cap in ${capCurrency}`,
           defaultValue: DEFAULT_SPEND_CAP_MAJOR,
           keyboardType: 'decimal-pad',
         },
       ],
       confirmLabel: 'Allow spend',
-      validate: (v) => (parseAmountInput(v.cap!, currency) ? null : 'Enter a cap above zero, for example 5000.'),
+      validate: (v) => (parseAmountInput(v.cap!, capCurrency) ? null : 'Enter a cap above zero, for example 5000.'),
     });
     if (!values) return;
     patchVault.mutate(
-      { userId, vaultAccess: 'SPEND', spendCapMinor: parseAmountInput(values.cap!, currency)! },
+      { userId, vaultAccess: 'SPEND', spendCapMinor: parseAmountInput(values.cap!, capCurrency)! },
       {
         onError: (e) => Alert.alert('Could not update', friendlyHouseholdVaultAclCopy(closetAlertText(e))),
       },
@@ -287,33 +306,43 @@ export default function HouseholdScreen() {
             <Text style={styles.muted}>
               Balances only — no card numbers. You {vault.data?.myAccess === 'SPEND' ? 'can spend' : 'can view'}
               {vault.data?.mySpendCapMinor != null
-                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor, currency)}`
+                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor, capCurrency)}`
                 : ''}
             </Text>
+            {mixedVaultCurrencies ? (
+              <Text style={styles.muted} testID="household-vault-mixed-currency">
+                Shared credits are in {vaultCurrencies.join(', ')}. A spend cap counts each amount as
+                spent, without converting it.
+              </Text>
+            ) : null}
             {vaultAclError ? (
               <Text style={styles.muted} testID="household-vault-acl-error">
                 {vaultAclError}
               </Text>
             ) : null}
-            {vaultMembers.map((m, i) => {
-              const label = `member ${i + 1}`;
+            {vaultMembers.map((m) => {
+              const name = memberLabels.get(m.userId) ?? 'Member';
+              const isMe = m.userId === me;
+              const label = name.toLowerCase();
               return (
                 <View key={m.userId} style={styles.row}>
                   <Text style={styles.item}>
-                    Member {i + 1} · {accessLabel(m.vaultAccess)}
+                    {name} · {accessLabel(m.vaultAccess)}
                     {m.vaultAccess === 'SPEND' && m.spendCapMinor != null
-                      ? ` · cap ${formatMinor(m.spendCapMinor, currency)}`
+                      ? ` · cap ${formatMinor(m.spendCapMinor, capCurrency)}`
                       : ''}
                   </Text>
-                  <Button
-                    label={m.vaultAccess === 'SPEND' ? 'Make view-only' : 'Allow spend'}
-                    size="sm"
-                    variant="ghost"
-                    disabled={patchVault.isPending}
-                    onPress={() =>
-                      m.vaultAccess === 'SPEND' ? makeViewOnly(m.userId, label) : void allowSpend(m.userId, label)
-                    }
-                  />
+                  {canManageAccess && !isMe ? (
+                    <Button
+                      label={m.vaultAccess === 'SPEND' ? 'Make view-only' : 'Allow spend'}
+                      size="sm"
+                      variant="ghost"
+                      disabled={patchVault.isPending}
+                      onPress={() =>
+                        m.vaultAccess === 'SPEND' ? makeViewOnly(m.userId, label) : void allowSpend(m.userId, label)
+                      }
+                    />
+                  ) : null}
                 </View>
               );
             })}

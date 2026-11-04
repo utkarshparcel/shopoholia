@@ -6,6 +6,7 @@ import {
   QUIET_HOURS_STEP_MINUTES,
   formatNextSendPreview,
   nudgeQuietHours,
+  quietHoursZoneHint,
 } from '@/src/lib/quietHoursEditor';
 import {
   border,
@@ -58,7 +59,9 @@ export function QuietHoursEditor({
   return (
     <View style={styles.wrap} testID="quiet-hours-editor">
       <Text style={styles.title}>{QUIET_HOURS_EDITOR_TITLE}</Text>
-      <Text style={styles.hint}>No pushes during this window (UTC HH:mm).</Text>
+      <Text style={styles.hint} testID="quiet-hours-hint">
+        {quietHoursZoneHint(timeZone)}
+      </Text>
 
       <View style={styles.row}>
         <Text style={styles.label}>Start</Text>

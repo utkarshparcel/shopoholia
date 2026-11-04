@@ -45,9 +45,13 @@ export function IosForwardWizard({ userKey, onComplete }: IosForwardWizardProps)
       }),
     [userKey],
   );
-  const steps = useMemo(() => getIosForwardWizardSteps(address), [address]);
+  const steps = useMemo(() => (address ? getIosForwardWizardSteps(address) : []), [address]);
   const [stepId, setStepId] = useState<IosForwardWizardStepId>(1);
   const [hint, setHint] = useState<string | null>(null);
+
+  // No forwarding inbox configured for this build: nothing would receive the texts (S2-09).
+  if (!address) return null;
+  const forwardAddress = address;
 
   const step = steps.find((s) => s.step === stepId) ?? steps[0]!;
   const prev = previousIosForwardStep(stepId);
@@ -56,12 +60,12 @@ export function IosForwardWizard({ userKey, onComplete }: IosForwardWizardProps)
   async function shareAddress() {
     try {
       await Share.share({
-        message: address,
+        message: forwardAddress,
         title: 'Worn SMS forwarding address',
       });
       setHint('Forwarding address ready to share or paste.');
     } catch {
-      setHint(address);
+      setHint(forwardAddress);
     }
   }
 

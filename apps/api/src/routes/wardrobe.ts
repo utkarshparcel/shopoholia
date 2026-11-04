@@ -133,6 +133,8 @@ const UploadFieldsSchema = z.object({
   colors: z.array(z.string().max(50)).max(20),
   brand: z.string().max(100).nullable(),
   costMinor: z.number().int().nonnegative().max(1_000_000_000),
+  /** The closet profile it was added from (a kid's closet); none is the user's own. */
+  profileId: z.string().uuid().nullable(),
 });
 
 const OCR_UNAVAILABLE = { error: "ocr_unavailable", message: "Couldn't read the tag right now. Try again later." };
@@ -1564,7 +1566,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         consumes: ["multipart/form-data"],
-        response: { 201: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema },
+        response: { 201: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -1597,11 +1599,14 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         colors: colorsJson,
         brand: fields.brand ?? null,
         costMinor: fields.costMinor ? Number(fields.costMinor) : 0,
+        profileId: fields.profileId || null,
       });
       if (!parsed.success) {
         return reply.code(400).send({ error: "Bad Request", message: "Invalid item fields" });
       }
-      const { category, colors, brand, costMinor } = parsed.data;
+      const { category, colors, brand, costMinor, profileId } = parsed.data;
+      const refError = await foreignRefError(userId, [], [profileId]);
+      if (refError) return reply.code(404).send(refError);
       const { key: imageKey } = await app.deps.storage.put({
         key: userObjectKey(userId, "wardrobe", `${randomUUID()}.jpg`),
         body: file.body,
@@ -1614,6 +1619,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         colors,
         brand,
         costMinor,
+        profileId,
         imageKeys: [imageKey],
         garmentImageKey: imageKey,
       });

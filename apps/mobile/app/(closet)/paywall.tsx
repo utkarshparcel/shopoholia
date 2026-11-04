@@ -7,6 +7,7 @@ import { FEATURE_CLOSET, FEATURE_PAYWALL } from '@/src/lib/features';
 import { trialCtaLabel } from '@/src/lib/paywall';
 import { usePremiumPurchase, type PremiumNotice } from '@/src/lib/purchases/useEntitlements';
 import { trackEvent } from '@/src/lib/analytics';
+import { CLOSET_OFF_SUBTITLE } from '@/src/lib/closetScreenState';
 import {
   border,
   fontSans,
@@ -40,17 +41,14 @@ const NOTICE_COPY: Record<PremiumNotice['kind'], string> = {
 export default function ClosetPaywallScreen() {
   const premium = usePremiumPurchase();
 
+  const enabled = FEATURE_CLOSET && FEATURE_PAYWALL;
   useEffect(() => {
-    trackEvent('paywall_viewed');
-  }, []);
+    if (enabled) trackEvent('paywall_viewed');
+  }, [enabled]);
 
-  if (!FEATURE_CLOSET || !FEATURE_PAYWALL) {
-    return (
-      <ClosetScreen
-        title="Closet Premium"
-        subtitle="Enable EXPO_PUBLIC_FEATURE_CLOSET=1 and EXPO_PUBLIC_FEATURE_PAYWALL=1."
-      />
-    );
+  if (!enabled) {
+    // What a user sees on a deep link with the flags off: never the build's env-var names.
+    return <ClosetScreen title="Closet Premium" subtitle={CLOSET_OFF_SUBTITLE} />;
   }
 
   const offering = premium.offerings?.offerings.find(
@@ -79,9 +77,11 @@ export default function ClosetPaywallScreen() {
           <Text style={styles.body}>Subscriptions aren&apos;t available right now. Please try again later.</Text>
         ) : premium.available ? (
           <Text style={styles.body}>
-            {premium.product?.sample
-              ? `Sample ${premium.product.priceString}/mo after trial`
-              : `${premium.product?.priceString}/mo after trial`}
+            {!premium.product?.priceString
+              ? 'Free for 7 days, then billed monthly. The store shows the price before you confirm.'
+              : premium.product.sample
+                ? `Sample ${premium.product.priceString}/mo after trial`
+                : `${premium.product.priceString}/mo after trial`}
           </Text>
         ) : (
           <Text style={styles.body}>

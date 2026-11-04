@@ -83,7 +83,7 @@ export function ReplaceTwinSheet({ wardrobeItemId, label }: Props) {
             <Text style={styles.title}>Replace with a twin</Text>
             <Text style={styles.muted}>
               {label ? `${label} · ` : ''}
-              Affiliate picks only — tap records cashback; Closet stays separate from Play.
+              Similar pieces from partner stores. We may earn a commission.
             </Text>
             {twins.isLoading ? <Text style={styles.muted}>Loading twins…</Text> : null}
             {!twins.isLoading && rows.length === 0 ? (

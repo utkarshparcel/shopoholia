@@ -164,7 +164,9 @@ export function parseInterviewEventAt(raw: string, fallbackIso?: string): string
   const trimmed = raw.trim();
   if (!trimmed) return fallbackIso ?? null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return `${trimmed}T12:00:00.000Z`;
+    // Midday on the user's clock: noon UTC was 17:30 in India and 08:00 in New York (S2-10).
+    const [y, m, d] = trimmed.split('-').map(Number);
+    return new Date(y!, m! - 1, d!, 12, 0, 0, 0).toISOString();
   }
   const d = new Date(trimmed);
   if (Number.isNaN(d.getTime())) return null;

@@ -139,7 +139,7 @@ describe('vaultAddQueue (W002-OFFLINE-VAULT-ADD)', () => {
     const addCredit = vi.fn(async () => ({ id: 'acct' }));
     const snap = await flushVaultAddQueue(ALICE, addCredit);
     expect(addCredit).not.toHaveBeenCalled();
-    expect(snap).toEqual({ items: [], lastFlushError: null });
+    expect(snap).toEqual({ items: [], lastFlushError: null, sentCount: 0 });
   });
 
   it('clears every queued add', async () => {

@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { IosForwardWizard } from './IosForwardWizard';
 
+const sms = vi.hoisted(() => ({ address: 'forward@inbox.shopoholia.app' as string | null }));
 vi.mock('@/src/lib/sms', () => ({
-  getSmsForwardingAddress: () => 'forward@inbox.shopoholia.app',
+  getSmsForwardingAddress: () => sms.address,
 }));
 
 describe('IosForwardWizard (W011)', () => {
@@ -23,5 +24,13 @@ describe('IosForwardWizard (W011)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByText(/Send a test ping/i)).toBeTruthy();
     expect(screen.getByTestId('ios-forward-wizard').textContent ?? '').not.toMatch(/READ_SMS/i);
+  });
+
+  it('S3-29: is hidden when the build has no forwarding inbox', () => {
+    sms.address = null;
+    const { container } = render(<IosForwardWizard userKey="user-1" />);
+    expect(container.textContent).toBe('');
+    expect(screen.queryByTestId('ios-forward-wizard')).toBeNull();
+    sms.address = 'forward@inbox.shopoholia.app';
   });
 });

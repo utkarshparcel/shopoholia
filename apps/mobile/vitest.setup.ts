@@ -283,6 +283,16 @@ vi.mock('react-native', () => ({
   Alert: {
     alert: vi.fn(),
   },
+  // React Native's own Animated (screens that don't use reanimated): values and a no-op spring.
+  Animated: {
+    Value: class {
+      constructor(public value: number) {}
+    },
+    View: createComponent('div'),
+    spring: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }) }),
+    timing: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }) }),
+    sequence: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }) }),
+  },
   Linking: {
     openURL: vi.fn(async () => true),
     canOpenURL: vi.fn(async () => true),
