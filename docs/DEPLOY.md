@@ -90,6 +90,9 @@ Postgres 16). On an existing database, the newest ones also repair data:
 - `0022_catalog_coin_prices`: shop listings are repriced to about a coin per ₹10 (nearest 5, at
   least 10), get their shop price as the partner price and a partner link; open carts holding them
   are repriced. Order lines keep what they were bought at.
+- `0025_render_agent_leases`: renders and try-on previews get `lease_owner`, `lease_expires_at`
+  and `attempts` (the render agent's leases), and a new `render_agents` table keeps each agent's
+  last heartbeat. Additive only.
 
 ### API environment
 
@@ -113,7 +116,7 @@ renders fail, and the boot log warns:
 | `APPLE_BUNDLE_ID=com.worncloset.app` | Sign in with Apple and App Store purchases answer 503. (`APPLE_SIGN_IN_AUDIENCES` overrides the Sign in with Apple audience, comma-separated, if it ever differs.) |
 | `APPLE_SIGN_IN_KEY_ID`, `APPLE_TEAM_ID`, `APPLE_SIGN_IN_PRIVATE_KEY`, `OAUTH_TOKEN_SECRET` | Deleting an account doesn't revoke the user's Sign in with Apple tokens, which App Review requires. The Sign in with Apple key from Apple Developer → Keys (`docs/EAS.md`, owner checklist): its Key ID, your Team ID, and the downloaded `.p8` file's contents (PEM; one line with literal `\n` works). The client id is `APPLE_BUNDLE_ID` (else the first `APPLE_SIGN_IN_AUDIENCES` entry). `OAUTH_TOKEN_SECRET` encrypts the stored Apple refresh token (and Gmail tokens); a long random string, rotated as in `.env.example`. |
 | `ANDROID_PACKAGE_NAME=com.worncloset.app`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play purchases answer 503. |
-| `FASHN_API_KEY` | No AI renders (Worn Play's core): try-on previews and reveal unlock/generate answer 503 (no coins are taken), and every free reveal look shows as failed. See "FASHN renders" below. |
+| `RENDER_BACKEND=agent`, `RENDER_AGENT_TOKEN` | No AI renders (Worn Play's core). The recommended production renderer is the render agent on the owner's Mac (see "Renders" below and `docs/RENDER_AGENT.md`): `RENDER_BACKEND=agent`, `RENDER_AGENT_WINDOW=always`, `RENDER_OVERFLOW=none`, and a long random `RENDER_AGENT_TOKEN`. Without a token the agent can't sign in and every reveal waits. |
 | `REDIS_URL` + the API worker running | See "Account deletion" below: deletion itself works, but the retries for leftover stored objects, data exports and Play purchase reconciliation never run, and routes that enqueue a job answer 503. Redis with `maxmemory-policy noeviction`. |
 | `R2_PUBLIC_URL=https://media.worncloset.app` | Catalog image links point nowhere. Only catalog images (`house-models/`, `garments/`, `products/`) are linked through it; selfies, avatar references, try-ons, reveals and receipts always get 15-minute signed URLs. A custom domain makes every object in the bucket readable by anyone who knows its key, so keep user photos out of reach: put a Cloudflare WAF/transform rule on `media.` that only allows those three prefixes (or serve the catalog from a separate public bucket). |
 
@@ -134,18 +137,69 @@ Set these too:
 
 The boot log lists every missing setting as an error or a warning.
 
-#### FASHN renders
+#### Renders
 
-Avatars, try-on previews and reveal looks are rendered by [FASHN](https://fashn.ai) (`tryon-max`,
-2k, via `https://api.fashn.ai/v1/run` and `/status`). Create an API key in the FASHN dashboard, buy
+Reveal looks and try-on previews ("Try on me") are made by one of three backends, picked with
+`RENDER_BACKEND`:
+
+| `RENDER_BACKEND` | What renders | When to use |
+|---|---|---|
+| `agent` | The render agent on the owner's Apple-silicon Mac (`services/render-agent`, `docs/RENDER_AGENT.md`). Jobs wait in Postgres; the agent leases them over HTTPS and moves images through signed R2 URLs. Nothing renders in the API process. | **Production (recommended).** |
+| `fashn` | FASHN in the API process (below). | Only if you opt in: it costs per image. |
+| `mock` | Placeholder images. | Development and tests. |
+
+Unset, it is what it was before the agent: `fashn` when `FASHN_API_KEY` is set, otherwise the mock
+(and in production, no renderer at all).
+
+Recommended production settings:
+
+```
+RENDER_BACKEND=agent
+RENDER_AGENT_WINDOW=always
+RENDER_OVERFLOW=none
+RENDER_AGENT_TOKEN=<openssl rand -hex 32>   # the same value goes in the Mac's Keychain
+```
+
+| Variable | Default | What it does |
+|---|---|---|
+| `RENDER_BACKEND` | see above | `agent`, `fashn` or `mock`. |
+| `RENDER_AGENT_TOKEN` | — | The agent's bearer token on `/agent/*`, compared in constant time. Unset: every agent call is refused (401). Use at least 32 random bytes; rotate by changing it here and in the Mac's Keychain. |
+| `RENDER_AGENT_WINDOW` | `always` | When the agent is expected to work: `always`, or a daily range like `23:00-06:30` (overnight). Outside it, jobs wait (or overflow, below). |
+| `RENDER_AGENT_TIME_ZONE` | `Asia/Kolkata` | The window's time zone. |
+| `RENDER_OVERFLOW` | `none` | `fashn` hands jobs to FASHN outside the window, while the agent is silent (no heartbeat for 3 minutes), or when a job is still unleased after `RENDER_OVERFLOW_AFTER_MINUTES`. Needs `FASHN_API_KEY`. `none`: jobs wait for the agent. |
+| `RENDER_OVERFLOW_AFTER_MINUTES` | `15` | With overflow on: how long a job may wait unleased inside the window before FASHN takes it. |
+| `RENDER_AGENT_LEASE_MINUTES` | `10` | How long a lease lasts. A lapsed lease goes back to the queue (checked every minute and on each lease). |
+| `RENDER_AGENT_MAX_ATTEMPTS` | `3` | Leases a job may take. Past them it fails; a paid render (unlock, generate, combine) refunds its coins once. |
+| `RENDER_AGENT_AVG_RENDER_SECONDS` | `60` | Seconds per render, all in, for the reveal's "ready by about…" estimate. |
+| `FASHN_API_KEY` | — | Only for `RENDER_BACKEND=fashn` or `RENDER_OVERFLOW=fashn`. |
+| `FASHN_RESOLUTION` | `1k` | FASHN's output resolution (`1k`, `2k`, `4k`), always in balanced mode. 1k is the cheaper render. |
+
+With the agent:
+
+- The API never accepts images from the agent directly: the agent PUTs to a signed R2 URL, and
+  `complete` checks the object exists before the render is marked done. A free render settling
+  opens the reveal and sends its push exactly as before.
+- When renders wait (the agent is down, the queue is long, or a night window is closed), the
+  reveal response carries `rendersWaiting` and `expectedReadyAt`, and the app says "Delivered —
+  your reveal is being styled and will be ready by about 7 AM. We'll send you a push." (or
+  "shortly" with no estimate) instead of a spinner.
+- The API checks the agent every minute. Inside the window, no heartbeat for 5 minutes while jobs
+  are queued is logged and reported to Sentry (`area: render-agent`), once per outage. There is no
+  boot warning for `RENDER_OVERFLOW=none`: waiting for the agent is the intended setup.
+
+#### FASHN renders (optional overflow)
+
+FASHN is off unless you opt in (`RENDER_BACKEND=fashn`, or `RENDER_OVERFLOW=fashn` with the agent).
+It renders with [FASHN](https://fashn.ai) (`tryon-max`, balanced, `FASHN_RESOLUTION`, default 1k,
+via `https://api.fashn.ai/v1/run` and `/status`). Create an API key in the FASHN dashboard, buy
 credits, and set it as `FASHN_API_KEY` on the API and the API worker.
 
 - FASHN fetches the images itself: the avatar photo and stored renders go as signed R2 URLs, and
   catalog images that are already full URLs go as they are. Both must be reachable from the
   internet.
 - An avatar is the user's uploaded photo, kept as it is (there is no normalisation step).
-- FASHN has no scene endpoint in our client, so each reveal scene (Studio, Golden hour…) is its own
-  try-on render, not a restyled background.
+- FASHN has no scene endpoint in our client, so each reveal scene is its own try-on render, not a
+  restyled background. (Each piece has one free scene, Studio; the other five unlock for coins.)
 - Reveal renders run in the API process, three at a time, retried twice on timeouts, 429s and 5xx.
   A render that still fails is reported to Sentry; a paid one (unlock, generate, combine) refunds
   its coins (a `REFUND` ledger entry, ref `render_failed`), and a free one can be retried from the

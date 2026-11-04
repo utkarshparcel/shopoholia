@@ -76,11 +76,18 @@ notifications in your device settings, or delete your account.
 
 ## 5. Who we share it with
 
-Only with service providers that run WORN for us, under contract, or when the law requires it:
+Only with service providers that run WORN for us, under contract, or when the law requires it.
+
+**Where your renders are made.** The AI try-on images are made on rendering infrastructure we
+operate and control ([OWNER: e.g. "a dedicated computer we own, in India"]). It fetches your avatar
+reference image and the garment image through short-lived links, keeps no copy after each render,
+and sends the finished image only to our storage. No third-party rendering processor receives
+your photos unless overflow rendering is turned on; while it is, FASHN.ai (below) may make some
+renders.
 
 | Provider | What they get | Why |
 |----------|---------------|-----|
-| FASHN.ai ([FASHN LEGAL NAME, COUNTRY]) | Your avatar reference image and the garment image | Generate the AI try-on images |
+| FASHN.ai ([FASHN LEGAL NAME, COUNTRY]) — **only while overflow rendering is enabled** ([OWNER: say whether it is]) | Your avatar reference image and the garment image | Generate some AI try-on images when our own rendering can't keep up |
 | Cloudflare (R2 storage) | Photos, avatar and render images | Store and serve images |
 | [API AND DATABASE HOST, e.g. Railway / Render / Fly.io] | Account and app data | Run the API and database |
 | Google | Sign-in with Google; Google Play billing for Android purchases | Sign-in, payments |
@@ -143,7 +150,7 @@ routes. Threat model / pentest readiness: [`docs/PENTEST_READINESS.md`](../PENTE
 
 ## 9. International transfers
 
-Our providers may process data outside your country ([OWNER: list regions, e.g. US for FASHN.ai,
+Our providers may process data outside your country ([OWNER: list regions, e.g. US for FASHN.ai when overflow rendering is enabled,
 PostHog US cloud, Sentry]). For EU/UK data we will use appropriate safeguards (e.g. SCCs) as
 approved by counsel.
 
