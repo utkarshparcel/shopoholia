@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, type SettlementRow } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { withNewReferralCode } from "../referral-code.js";
 import {
@@ -80,6 +80,7 @@ import {
   wardrobeItems,
   wearLog,
   repairLogs,
+  marketplaceSettlements,
   type Db,
 } from "@worn/db";
 import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
@@ -326,8 +327,23 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
   };
 }
 
+function mapSettlement(row: typeof marketplaceSettlements.$inferSelect): SettlementRow {
+  return {
+    id: row.id,
+    kind: row.kind,
+    orderRef: row.orderRef,
+    sellerId: row.sellerId,
+    orderAmountMinor: row.orderAmountMinor,
+    platformFeeMinor: row.platformFeeMinor,
+    gstOnFeeMinor: row.gstOnFeeMinor,
+    sellerPayoutMinor: row.sellerPayoutMinor,
+    currency: row.currency,
+    completedAt: row.completedAt.toISOString(),
+  };
+}
+
 /**
- * Inserts a purchase and its lines. #38: a repeat (user, orderRef) inserts nothing and gets the
+ * Inserts a purchase and its lines. #38: a repeat (user, merchant, orderRef) inserts nothing and gets the
  * existing purchase and its lines back with `created: false` (also when it races another insert).
  */
 async function insertMerchantPurchaseWithItems(tx: Tx, input: CreateMerchantPurchaseInput) {
@@ -356,7 +372,13 @@ async function insertMerchantPurchaseWithItems(tx: Tx, input: CreateMerchantPurc
     const [existing] = await tx
       .select()
       .from(merchantPurchases)
-      .where(and(eq(merchantPurchases.userId, input.userId), eq(merchantPurchases.orderRef, input.orderRef)))
+      .where(
+        and(
+          eq(merchantPurchases.userId, input.userId),
+          eq(merchantPurchases.merchant, input.merchant),
+          eq(merchantPurchases.orderRef, input.orderRef),
+        ),
+      )
       .limit(1);
     if (!existing) throw new Error("merchant purchase orderRef conflict but no row found");
     const existingItems = await tx
@@ -4486,6 +4508,34 @@ export function createPostgresRepositories(db: Db): Repositories {
                 .where(eq(receipts.id, receipt.id));
             return { purchase, warranties: warrantyRows.map(mapWarranty), created: true };
         });
+    },
+    async insertMarketplaceSettlement(row) {
+      const [inserted] = await db
+        .insert(marketplaceSettlements)
+        .values({ ...row, completedAt: new Date(row.completedAt) })
+        .onConflictDoNothing({ target: [marketplaceSettlements.kind, marketplaceSettlements.orderRef] })
+        .returning();
+      if (inserted) return { row: mapSettlement(inserted), created: true };
+      const [existing] = await db
+        .select()
+        .from(marketplaceSettlements)
+        .where(and(eq(marketplaceSettlements.kind, row.kind), eq(marketplaceSettlements.orderRef, row.orderRef)))
+        .limit(1);
+      if (!existing) throw new Error("marketplace settlement conflict but no row found");
+      return { row: mapSettlement(existing), created: false };
+    },
+    async listMarketplaceSettlements(opts) {
+      const rows = await db
+        .select()
+        .from(marketplaceSettlements)
+        .where(
+          and(
+            opts?.kind ? eq(marketplaceSettlements.kind, opts.kind) : undefined,
+            opts?.sellerId ? eq(marketplaceSettlements.sellerId, opts.sellerId) : undefined,
+          ),
+        )
+        .orderBy(asc(marketplaceSettlements.completedAt), asc(marketplaceSettlements.id));
+      return rows.map(mapSettlement);
     },
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
       const [row] = await db

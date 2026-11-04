@@ -48,6 +48,14 @@ describe("worker-expiry cashback-claim queue (U006)", () => {
     expect(db.inserted[0]!.status).toBe("QUEUED");
     expect(db.inserted[0]!.title).toMatch(/Cashback claim/i);
     expect(String(db.inserted[0]!.body)).toMatch(/Myntra/);
+    expect(String(db.inserted[0]!.body)).toContain("₹250.00");
+  });
+
+  it("shows the claim's own currency and minor units", async () => {
+    const db = mockDb();
+    await processCashbackClaimDeadline({ ...payload, amountMinor: 1_250, currency: "USD" }, db, { now: NOON });
+    expect(String(db.inserted[0]!.body)).toContain("$12.50");
+    expect(String(db.inserted[0]!.body)).not.toContain("₹");
   });
 
   it("skips when claim is gone or already claimed", async () => {

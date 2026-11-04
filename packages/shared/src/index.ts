@@ -809,6 +809,14 @@ export {
   normalizeMerchantKey,
 } from "./merchantDeepLink.js";
 export {
+  AFFILIATE_ENV_VARS,
+  AFFILIATE_PLATFORMS,
+  affiliateIdsFromEnv,
+  tagAffiliateUrl,
+  type AffiliateIds,
+  type AffiliatePlatform,
+} from "./affiliate-ids.js";
+export {
   BALANCE_RECHECK_INTERVAL_MS,
   balanceRecheckCopy,
   balanceRecheckJobId,

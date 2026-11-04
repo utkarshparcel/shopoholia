@@ -3,7 +3,7 @@
  * Logistics booking still happens in-app; these open the merchant return flow.
  */
 
-import { normalizeMerchantKey } from "./merchantDeepLink.js";
+import { merchantKeyMatches, normalizeMerchantKey } from "./merchantDeepLink.js";
 
 const MERCHANT_RETURN_URL: Record<string, string> = {
   amazon: "https://www.amazon.in/gp/css/returns/homepage.html",
@@ -26,7 +26,7 @@ export function merchantReturnUrl(merchant: string): string | null {
   if (MERCHANT_RETURN_URL[key]) return MERCHANT_RETURN_URL[key]!;
 
   for (const [known, url] of Object.entries(MERCHANT_RETURN_URL)) {
-    if (key.startsWith(known) || known.startsWith(key)) return url;
+    if (merchantKeyMatches(key, known)) return url;
   }
 
   return null;

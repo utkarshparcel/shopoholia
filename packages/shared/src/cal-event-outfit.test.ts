@@ -118,3 +118,32 @@ describe("night-before reminder", () => {
     ).toBe(true);
   });
 });
+
+describe("calendar helpers in the user's time zone", () => {
+  const IST = "Asia/Kolkata";
+
+  it("fires the night-before reminder at 20:00 local on the local day before", () => {
+    // 10:30 IST on 15 Sep → 20:00 IST on 14 Sep (14:30Z), outside 22:00–07:00 quiet hours.
+    expect(nightBeforeReminderAt("2026-09-15T05:00:00.000Z", { timeZone: IST }).toISOString()).toBe(
+      "2026-09-14T14:30:00.000Z",
+    );
+    // 04:45 IST on 4 Sep is 23:15Z on 3 Sep: the night before is still 3 Sep local.
+    expect(nightBeforeReminderAt("2026-09-03T23:15:00.000Z", { timeZone: IST }).toISOString()).toBe(
+      "2026-09-03T14:30:00.000Z",
+    );
+    const rem = computeNightBeforeReminder("2026-09-15T05:00:00.000Z", {
+      now: new Date("2026-09-14T10:00:00.000Z"),
+      timeZone: IST,
+    });
+    expect(rem?.remindAt.toISOString()).toBe("2026-09-14T14:30:00.000Z");
+  });
+
+  it("plans the event on its local day and reads local hours for the occasion", () => {
+    expect(plannedForFromEventStart("2026-09-03T23:15:00.000Z", IST)).toBe("2026-09-04");
+    // 09:30 IST Monday 2 Nov 2026 is 04:00Z: a work look, not "evening → party".
+    expect(occasionFromStartTime(new Date("2026-11-02T04:00:00.000Z"), IST).occasion).toBe("WORK");
+    const mapped = mapCalendarEventToOutfit({ title: "Sync", startAt: "2026-11-01T19:00:00.000Z" }, IST);
+    expect(mapped.plannedFor).toBe("2026-11-02");
+    expect(mapped.occasion).toBe("PARTY"); // 00:30 IST
+  });
+});

@@ -33,10 +33,22 @@ const JEWELRY_RE =
 const ACCESSORY_RE =
   /\b(belt|scarf|hat|bag|watch|jewelry|jewellery|tie|cap|necklace|earrings?|bracelet|ring)\b/i;
 
-/** Normalize free-text into a vault accessory category label when applicable. */
+const GARMENT_SLOTS = new Set(["dress", "shoes", "outer", "bottom", "top"]);
+
+/** Whole-word matchers (plural allowed) for each accessory category. */
+const ACCESSORY_WORD_RE = new Map<AccessoryCategory, RegExp>(
+  ACCESSORY_CATEGORIES.map((known) => [known, new RegExp(`\\b${known}s?\\b`, "i")]),
+);
+
+/**
+ * Normalize free-text into a vault accessory category label when applicable. Words are matched
+ * whole ("Baggy jeans" is not a bag), and a garment ("Tie-dye top", "Belted dress") is never an
+ * accessory.
+ */
 export function normalizeAccessoryCategory(raw: string): AccessoryCategory | null {
   const c = raw.trim().toLowerCase();
   if (!c) return null;
+  if (GARMENT_SLOTS.has(categorySlot(raw))) return null;
   if (JEWELRY_RE.test(c) || c === "jewelry" || c === "jewellery") {
     if (/\bearrings?\b/.test(c)) return "earrings";
     if (/\bnecklace|pendant|choker\b/.test(c)) return "necklace";
@@ -45,7 +57,7 @@ export function normalizeAccessoryCategory(raw: string): AccessoryCategory | nul
     return "jewelry";
   }
   for (const known of ACCESSORY_CATEGORIES) {
-    if (c === known || c.includes(known)) return known;
+    if (c === known || ACCESSORY_WORD_RE.get(known)!.test(c)) return known;
   }
   if (ACCESSORY_RE.test(c) || categorySlot(raw) === "accessory") {
     return "jewelry";

@@ -46,13 +46,13 @@ import {
 import { ConsoleMetricsSink } from "./parsers/metrics.js";
 import { createDefaultRegistry } from "./parsers/index.js";
 import type { MetricsSink, ParsedPurchase, RawEmailMessage } from "./parsers/types.js";
-import type { EmailConnector } from "./connectors/types.js";
+import { ConsentRequiredError, type EmailConnector } from "./connectors/types.js";
 import {
   autofillCreditFromPurchase,
   createDbCreditAutofillRepos,
   type CreditAutofillRepos,
 } from "./credit-autofill.js";
-import { autofillEmiFromSignal, type EmiAutofillRepos } from "./emi-autofill.js";
+import { autofillEmiFromSignal, createDbEmiAutofillRepos, type EmiAutofillRepos } from "./emi-autofill.js";
 import { detectEmiSignal } from "./parsers/emi-detect.js";
 import {
   createDbPersister,
@@ -215,9 +215,6 @@ export async function processIngestJob(
       if (deps.documentId) {
         await deps.persister.markDocument(deps.documentId, "UNMATCHED");
       }
-      if (deps.sourceId) {
-        await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
-      }
       return {
         matched: false,
         skippedMuted: true,
@@ -233,9 +230,6 @@ export async function processIngestJob(
     });
     if (deps.documentId) {
       await deps.persister.markDocument(deps.documentId, "MATCHED", purchaseId);
-    }
-    if (deps.sourceId) {
-      await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
     }
 
     let creditAutofill: ProcessIngestResult["creditAutofill"];
@@ -271,9 +265,6 @@ export async function processIngestJob(
   if (deps.documentId) {
     await deps.persister.markDocument(deps.documentId, "PARSED");
   }
-  if (deps.sourceId) {
-    await deps.persister.updateSourceCursor(deps.sourceId, msg.messageId);
-  }
   return {
     matched: false,
     ...(emiAutofill ? { emiAutofill } : {}),
@@ -285,7 +276,8 @@ async function tryEmiAutofill(
   deps: ProcessIngestDeps,
 ): Promise<ProcessIngestResult["emiAutofill"]> {
   if (!deps.userId || !deps.emiRepos) return undefined;
-  const signal = detectEmiSignal(msg.subject, msg.text);
+  const timeZone = (await deps.emiRepos.userTimeZone?.(deps.userId)) ?? undefined;
+  const signal = detectEmiSignal(msg.subject, msg.text, new Date(), timeZone);
   if (!signal) return undefined;
   const filled = await autofillEmiFromSignal(deps.emiRepos, {
     userId: deps.userId,
@@ -315,7 +307,7 @@ export async function processSmsDocument(
   doc: { id: string; parsedJson: Record<string, unknown> },
   persister: IngestPersister,
   metrics?: MetricsSink,
-  opts: { userId?: string; creditRepos?: CreditAutofillRepos } = {},
+  opts: { userId?: string; creditRepos?: CreditAutofillRepos; emiRepos?: EmiAutofillRepos } = {},
 ): Promise<ProcessIngestResult> {
   const msg = smsToRawMessage(doc);
   return processIngestJob(msg, {
@@ -325,6 +317,7 @@ export async function processSmsDocument(
     metrics,
     userId: opts.userId,
     creditRepos: opts.creditRepos,
+    emiRepos: opts.emiRepos,
   });
 }
 
@@ -334,7 +327,7 @@ export async function processSmsJob(
   documentId: string,
   persister: IngestPersister,
   metrics?: MetricsSink,
-  opts: { userId?: string; creditRepos?: CreditAutofillRepos } = {},
+  opts: { userId?: string; creditRepos?: CreditAutofillRepos; emiRepos?: EmiAutofillRepos } = {},
 ): Promise<ProcessIngestResult> {
   const [row] = await db
     .select()
@@ -362,6 +355,7 @@ export interface ResyncDeps {
   persister: IngestPersister;
   metrics?: MetricsSink;
   creditRepos?: CreditAutofillRepos;
+  emiRepos?: EmiAutofillRepos;
   connectorFactory: (source: {
     id: string;
     provider: string;
@@ -383,7 +377,7 @@ export async function processResync(
     .from(ingestionSources)
     .where(eq(ingestionSources.id, sourceId))
     .limit(1);
-  if (!source) throw new Error(`ingestion source not found: ${sourceId}`);
+  if (!source) throw new SourceGoneError(sourceId);
 
   const [grant] = await deps.db
     .select()
@@ -410,14 +404,17 @@ export async function processResync(
     (source.meta ?? null) as Record<string, unknown> | null,
   );
 
+  // The cursor is a Gmail historyId: it moves to `nextCursor` only after the whole batch is in,
+  // so a message that fails leaves it where it was and the next resync reads the batch again
+  // (purchases dedupe on the order). Writing a message id there would break history.list.
   for (const msg of messages) {
     await processIngestJob(msg, {
       persister: deps.persister,
       sourceKind: "EMAIL",
-      sourceId: source.id,
       metrics: deps.metrics,
       userId,
       creditRepos: deps.creditRepos,
+      emiRepos: deps.emiRepos,
       mutedMerchants,
     });
   }
@@ -426,6 +423,42 @@ export async function processResync(
     await deps.persister.updateSourceCursor(source.id, nextCursor);
   }
   return messages.length;
+}
+
+/** The source was disconnected (row deleted): nothing to sync, and its schedule should stop. */
+export class SourceGoneError extends Error {
+  constructor(sourceId: string) {
+    super(`ingestion source not found: ${sourceId}`);
+    this.name = "SourceGoneError";
+  }
+}
+
+/** How often a connected Gmail source is synced. */
+export const SOURCE_SYNC_EVERY_MS = 30 * 60_000;
+
+export function sourceSyncSchedulerId(sourceId: string): string {
+  return `resync:${sourceId}`;
+}
+
+type SyncQueue = Pick<Queue<IngestJobData>, "add" | "upsertJobScheduler" | "removeJobScheduler">;
+
+/**
+ * After a source connects: one resync now (the first read of the mailbox) and a repeating one
+ * every {@link SOURCE_SYNC_EVERY_MS}. Nothing else lists mail for a connected source.
+ * `connectKey` (the spent OAuth code's hash) makes a reconnect sync again at once.
+ */
+export async function scheduleSourceSync(queue: SyncQueue, sourceId: string, connectKey: string): Promise<void> {
+  await queue.add(INGEST_RESYNC_JOB_NAME, { sourceId }, { jobId: jobIdFrom("resync", sourceId, "connect", connectKey) });
+  await queue.upsertJobScheduler(
+    sourceSyncSchedulerId(sourceId),
+    { every: SOURCE_SYNC_EVERY_MS },
+    { name: INGEST_RESYNC_JOB_NAME, data: { sourceId } },
+  );
+}
+
+/** Stops the repeating sync of a source that is gone or whose consent was revoked. */
+export async function unscheduleSourceSync(queue: SyncQueue, sourceId: string): Promise<void> {
+  await queue.removeJobScheduler(sourceSyncSchedulerId(sourceId));
 }
 
 /** DB-backed {@link TokenStore} for a single ingestion source. */
@@ -596,6 +629,8 @@ export function createBullmqIngestWorker(
     }
   };
   const creditRepos = createDbCreditAutofillRepos(db, trackIngest);
+  // U007: EMI-due SMS and emails become emi_plans rows.
+  const emiRepos = createDbEmiAutofillRepos(db, trackIngest);
 
   const resolveUserIdForSource = async (
     sourceId: string,
@@ -656,7 +691,16 @@ export function createBullmqIngestWorker(
     // Wait out the source's backoff without spending an attempt.
     const backoffDelay = getBackoffDelay(sourceId);
     if (backoffDelay > 0) deferJob(backoffDelay);
-    await processResync(sourceId, { db, persister, metrics, creditRepos, connectorFactory });
+    try {
+      await processResync(sourceId, { db, persister, metrics, creditRepos, emiRepos, connectorFactory });
+    } catch (err) {
+      // Disconnected or consent revoked: no retry helps, and the repeating sync should stop.
+      if (err instanceof SourceGoneError || err instanceof ConsentRequiredError) {
+        await unscheduleSourceSync(resyncQueue, sourceId);
+        throw new UnrecoverableError(err.message);
+      }
+      throw err;
+    }
     recordSuccess(sourceId);
   };
 
@@ -694,6 +738,8 @@ export function createBullmqIngestWorker(
       id: source.consentGrantId,
       revokedAt: grant?.revokedAt ?? new Date(),
     });
+    // Connected: read the mailbox now and keep syncing it.
+    await scheduleSourceSync(resyncQueue, sourceId, codeHash);
     recordSuccess(sourceId);
   };
 
@@ -715,6 +761,7 @@ export function createBullmqIngestWorker(
       await processSmsJob(db, data.documentId, persister, metrics, {
         userId: data.userId,
         creditRepos,
+        emiRepos,
       });
       return;
     }
@@ -735,6 +782,7 @@ export function createBullmqIngestWorker(
         metrics,
         userId,
         creditRepos,
+        emiRepos,
         mutedMerchants,
       });
       if (data.sourceId) recordSuccess(data.sourceId);

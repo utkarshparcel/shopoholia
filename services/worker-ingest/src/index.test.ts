@@ -54,7 +54,8 @@ describe("processIngestJob", () => {
     expect(opts).toEqual({ sourceKind: "EMAIL", rawDocId: "doc-1" });
 
     expect(calls.mark).toHaveBeenCalledWith("doc-1", "MATCHED", "pid-1");
-    expect(calls.cursor).toHaveBeenCalledWith("src-1", amazonMsg.messageId);
+    // The source cursor is a Gmail historyId; only a finished resync moves it.
+    expect(calls.cursor).not.toHaveBeenCalled();
 
     expect(metrics.events).toHaveLength(1);
     expect(metrics.events[0]!.matched).toBe(true);

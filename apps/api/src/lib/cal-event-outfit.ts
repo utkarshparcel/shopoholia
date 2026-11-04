@@ -22,16 +22,19 @@ export type OccasionMapResult = {
   plannedFor: string;
 };
 
-/** YYYY-MM-DD from event start (UTC date key — matches week calendar slots). */
-export function plannedForFromEvent(startAt: Date | string): string {
-  return plannedForFromEventStart(startAt);
+/** YYYY-MM-DD from event start: the local day in the user's `timeZone` (week calendar slots). */
+export function plannedForFromEvent(startAt: Date | string, timeZone?: string | null): string {
+  return plannedForFromEventStart(startAt, timeZone);
 }
 
 /**
  * Map calendar event title (+ optional time-of-day) to an outfit occasion.
  */
-export function mapCalendarEventToOccasion(event: CalendarEventLike): OccasionMapResult {
-  const mapped = mapCalendarEventToOutfit(event);
+export function mapCalendarEventToOccasion(
+  event: CalendarEventLike,
+  timeZone?: string | null,
+): OccasionMapResult {
+  const mapped = mapCalendarEventToOutfit(event, timeZone);
   return {
     occasion: mapped.occasion,
     reason: mapped.reason,
@@ -49,11 +52,12 @@ export type NightBeforeReminder = {
  */
 export function computeNightBeforeReminder(
   eventStart: Date | string,
-  opts?: { now?: Date; hour?: number },
+  opts?: { now?: Date; hour?: number; timeZone?: string | null },
 ): NightBeforeReminder | null {
   return sharedComputeNightBeforeReminder(eventStart, {
     now: opts?.now,
     localHour: opts?.hour,
+    timeZone: opts?.timeZone,
   });
 }
 
@@ -67,14 +71,21 @@ export type CalEventOutfitPlan = OccasionMapResult & {
 /** Build outfit plan metadata for one calendar event (no wardrobe I/O). */
 export function planOutfitFromCalendarEvent(
   event: CalendarEventLike,
-  opts?: { now?: Date; remindNightBefore?: boolean; reminderHour?: number },
+  opts?: {
+    now?: Date;
+    remindNightBefore?: boolean;
+    reminderHour?: number;
+    /** The user's zone: the planned day, occasion and 20:00 reminder are local to it. */
+    timeZone?: string | null;
+  },
 ): CalEventOutfitPlan {
-  const mapped = mapCalendarEventToOutfit(event);
+  const mapped = mapCalendarEventToOutfit(event, opts?.timeZone);
   let remindAt: string | null = null;
   if (opts?.remindNightBefore) {
     const rem = computeNightBeforeReminder(event.startAt, {
       now: opts.now,
       hour: opts.reminderHour,
+      timeZone: opts.timeZone,
     });
     remindAt = rem?.remindAt.toISOString() ?? null;
   }

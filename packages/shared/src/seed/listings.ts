@@ -1,3 +1,5 @@
+import { tagAffiliateUrl, type AffiliateIds } from "../affiliate-ids.js";
+
 export type SeedListingVariant = {
   size: string;
   color: string;
@@ -32,40 +34,42 @@ const BRANDS = [
   "COS",
 ] as const;
 
-const PIECES = [
-  "wool-blend trench coat",
-  "draped silk midi dress",
-  "leather crossbody bag",
-  "cropped wool blazer",
-  "cashmere crewneck",
-  "pleated wide-leg trousers",
-  "suede ankle boots",
-  "quilted liner jacket",
-  "ribbed knit tank",
-  "structured tote",
-  "satin slip skirt",
-  "double-breasted coat",
-  "merino turtleneck",
-  "canvas shoulder bag",
-  "tailored vest",
-  "poplin shirt dress",
-  "leather belt bag",
-  "chunky knit cardigan",
-  "high-rise denim",
-  "silk scarf top",
-] as const;
+type SeedCategory = "Outerwear" | "Dresses" | "Bags" | "Tops" | "Bottoms" | "Shoes" | "Accessories";
 
-const CATEGORIES = [
-  "Outerwear",
-  "Dresses",
-  "Bags",
-  "Tops",
-  "Bottoms",
-  "Shoes",
-  "Accessories",
-] as const;
+/** Each piece with the category it belongs in, so the feed's category filter is right. */
+const PIECES: ReadonlyArray<{ name: string; category: SeedCategory }> = [
+  { name: "wool-blend trench coat", category: "Outerwear" },
+  { name: "draped silk midi dress", category: "Dresses" },
+  { name: "leather crossbody bag", category: "Bags" },
+  { name: "cropped wool blazer", category: "Outerwear" },
+  { name: "cashmere crewneck", category: "Tops" },
+  { name: "pleated wide-leg trousers", category: "Bottoms" },
+  { name: "suede ankle boots", category: "Shoes" },
+  { name: "quilted liner jacket", category: "Outerwear" },
+  { name: "ribbed knit tank", category: "Tops" },
+  { name: "structured tote", category: "Bags" },
+  { name: "satin slip skirt", category: "Bottoms" },
+  { name: "double-breasted coat", category: "Outerwear" },
+  { name: "merino turtleneck", category: "Tops" },
+  { name: "canvas shoulder bag", category: "Bags" },
+  { name: "tailored vest", category: "Tops" },
+  { name: "poplin shirt dress", category: "Dresses" },
+  { name: "leather belt bag", category: "Bags" },
+  { name: "chunky knit cardigan", category: "Tops" },
+  { name: "high-rise denim", category: "Bottoms" },
+  { name: "silk twill scarf", category: "Accessories" },
+];
 
-const SIZES = ["XS", "S", "M", "L", "XL"] as const;
+/** Sizes that fit the category: shoe sizes for shoes, one size for bags and accessories. */
+const SIZES_BY_CATEGORY: Record<SeedCategory, readonly string[]> = {
+  Outerwear: ["XS", "S", "M", "L", "XL"],
+  Dresses: ["XS", "S", "M", "L", "XL"],
+  Tops: ["XS", "S", "M", "L", "XL"],
+  Bottoms: ["XS", "S", "M", "L", "XL"],
+  Shoes: ["UK 4", "UK 5", "UK 6", "UK 7", "UK 8"],
+  Bags: ["One size"],
+  Accessories: ["One size"],
+};
 const COLORS = ["Black", "Ivory", "Navy", "Camel", "Olive", "Rose", "Sand"] as const;
 
 const TAG_POOL = ["New", "Trending", "Editor's pick", "Low stock", "Bestseller"] as const;
@@ -87,36 +91,44 @@ function searchQuery(title: string): string {
   return encodeURIComponent(title.toLowerCase().replace(/[^a-z0-9 ]/g, ""));
 }
 
-function affiliateUrlForPlatform(platform: string, title: string): string {
+function affiliateUrlForPlatform(
+  platform: (typeof PLATFORMS)[number],
+  title: string,
+  ids: AffiliateIds | undefined,
+): string {
   const q = searchQuery(title);
-  const urls: Record<string, (q: string) => string> = {
-    flipkart: (q) => `https://www.flipkart.com/search?q=${q}&affid=yourshopoholia`,
-    amazon: (q) => `https://www.amazon.in/s?k=${q}&tag=shopoholia-21`,
-    myntra: (q) => `https://www.myntra.com/${q}?ref=shopoholia`,
-    ajio: (q) => `https://www.ajio.com/search/?text=${q}&affiliate=shopoholia`,
-    nykaa: (q) => `https://www.nykaafashion.com/search/?q=${q}&utm_source=shopoholia`,
+  const urls: Record<(typeof PLATFORMS)[number], string> = {
+    flipkart: `https://www.flipkart.com/search?q=${q}`,
+    amazon: `https://www.amazon.in/s?k=${q}`,
+    myntra: `https://www.myntra.com/${q}`,
+    ajio: `https://www.ajio.com/search/?text=${q}`,
+    nykaa: `https://www.nykaafashion.com/search/?q=${q}`,
   };
-  return (urls[platform] ?? urls.flipkart)(q);
+  return tagAffiliateUrl(platform, urls[platform], ids);
 }
 
 function pick<T>(items: readonly T[], index: number): T {
   return items[index % items.length]!;
 }
 
-export function buildSeedListings(count = 50): SeedListing[] {
+export function buildSeedListings(
+  count = 50,
+  opts: { affiliateIds?: AffiliateIds } = {},
+): SeedListing[] {
   const listings: SeedListing[] = [];
 
   for (let i = 0; i < count; i += 1) {
     const brand = pick(BRANDS, i);
-    const piece = pick(PIECES, i + 3);
-    const category = pick(CATEGORIES, i);
+    const { name: piece, category } = pick(PIECES, i + 3);
+    const sizes = SIZES_BY_CATEGORY[category];
     const variantCount = 2 + (i % 3);
     const variants: SeedListingVariant[] = [];
 
     for (let v = 0; v < variantCount; v += 1) {
+      // One-size pieces vary by colour only.
       variants.push({
-        size: pick(SIZES, i + v),
-        color: pick(COLORS, i + v * 2),
+        size: pick(sizes, i + v),
+        color: pick(COLORS, i + v * (sizes.length === 1 ? 1 : 2)),
       });
     }
 
@@ -136,12 +148,12 @@ export function buildSeedListings(count = 50): SeedListing[] {
       variants,
       affiliateLinks: [
         {
-          url: affiliateUrlForPlatform(mainPlatform, title),
+          url: affiliateUrlForPlatform(mainPlatform, title, opts.affiliateIds),
           label: `Buy on ${mainPlatform.charAt(0).toUpperCase() + mainPlatform.slice(1)}`,
           platform: mainPlatform,
         },
         {
-          url: affiliateUrlForPlatform(secondPlatform, title),
+          url: affiliateUrlForPlatform(secondPlatform, title, opts.affiliateIds),
           label: `Buy on ${secondPlatform.charAt(0).toUpperCase() + secondPlatform.slice(1)}`,
           platform: secondPlatform,
         },

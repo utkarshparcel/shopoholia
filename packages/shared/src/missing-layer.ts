@@ -2,6 +2,8 @@
  * U034 — weather / occasion missing layer → Closet-framed shop list (1–3).
  */
 
+import { tagAffiliateUrl, type AffiliateIds } from "./affiliate-ids.js";
+
 export type MissingLayerWeather = {
   tempC?: number | null;
   condition?: string | null;
@@ -32,9 +34,9 @@ export type OwnedSlotCounts = {
   accessory?: number;
 };
 
-function shopUrl(query: string): string {
+function shopUrl(query: string, ids: AffiliateIds | undefined): string {
   const q = encodeURIComponent(query.trim() || "layer");
-  return `https://www.myntra.com/${q.replace(/%20/g, "-")}?ref=shopoholia-closet`;
+  return tagAffiliateUrl("myntra", `https://www.myntra.com/${q.replace(/%20/g, "-")}`, ids);
 }
 
 /**
@@ -46,7 +48,10 @@ export function detectMissingLayers(opts: {
   occasion?: MissingLayerOccasion;
   owned?: OwnedSlotCounts;
   dismissedIds?: string[] | null;
+  /** Configured affiliate ids; the shop links are untagged without them. */
+  affiliateIds?: AffiliateIds;
 }): MissingLayerSuggestion[] {
+  const shop = (query: string) => shopUrl(query, opts.affiliateIds);
   const owned = opts.owned ?? {};
   const dismissed = new Set(opts.dismissedIds ?? []);
   const temp = opts.weather?.tempC ?? 24;
@@ -60,7 +65,7 @@ export function detectMissingLayers(opts: {
       gapReason: `Cool weather (${temp}°C) — missing outer layer`,
       suggestion: "Light jacket or cardigan",
       slot: "outer",
-      affiliateUrl: shopUrl("light jacket"),
+      affiliateUrl: shop("light jacket"),
     });
   }
   if ((condition.includes("rain") || condition.includes("humid")) && (owned.outer ?? 0) < 1) {
@@ -69,7 +74,7 @@ export function detectMissingLayers(opts: {
       gapReason: `Weather is ${condition || "wet"} — need rain layer`,
       suggestion: "Rain jacket or umbrella-friendly shell",
       slot: "outer",
-      affiliateUrl: shopUrl("rain jacket"),
+      affiliateUrl: shop("rain jacket"),
     });
   }
   if (temp >= 30 && (owned.layer ?? 0) < 1) {
@@ -78,7 +83,7 @@ export function detectMissingLayers(opts: {
       gapReason: `Hot day (${temp}°C) — breathable base layer gap`,
       suggestion: "Breathable cotton tee or tank",
       slot: "layer",
-      affiliateUrl: shopUrl("cotton tee"),
+      affiliateUrl: shop("cotton tee"),
     });
   }
   if ((occasion === "FORMAL" || occasion === "WORK") && (owned.layer ?? 0) < 1) {
@@ -87,7 +92,7 @@ export function detectMissingLayers(opts: {
       gapReason: `${occasion.toLowerCase()} occasion — missing polished layer`,
       suggestion: "Blazer or structured shirt",
       slot: "layer",
-      affiliateUrl: shopUrl("blazer"),
+      affiliateUrl: shop("blazer"),
     });
   }
   if ((occasion === "PARTY" || occasion === "FORMAL") && (owned.shoes ?? 0) < 1) {
@@ -96,7 +101,7 @@ export function detectMissingLayers(opts: {
       gapReason: `${occasion.toLowerCase()} — dress shoes gap`,
       suggestion: "Dress shoes or heels",
       slot: "shoes",
-      affiliateUrl: shopUrl("dress shoes"),
+      affiliateUrl: shop("dress shoes"),
     });
   }
   if (occasion === "SPORT" && (owned.layer ?? 0) < 1) {
@@ -105,7 +110,7 @@ export function detectMissingLayers(opts: {
       gapReason: "Sport occasion — active layer gap",
       suggestion: "Athletic top or joggers pair",
       slot: "layer",
-      affiliateUrl: shopUrl("athletic top"),
+      affiliateUrl: shop("athletic top"),
     });
   }
 

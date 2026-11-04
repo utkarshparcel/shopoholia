@@ -10,7 +10,11 @@ import {
   type SettlementRow,
 } from "@worn/shared";
 
-const settlements: SettlementRow[] = [];
+/** Where settlements live: Postgres in production (shared by the API and workers), memory in dev. */
+export type SettlementRepos = {
+  insertMarketplaceSettlement(row: SettlementRow): Promise<{ row: SettlementRow; created: boolean }>;
+  listMarketplaceSettlements(opts?: { kind?: MarketplaceKind; sellerId?: string }): Promise<SettlementRow[]>;
+};
 
 /** Default estimated order amounts when catalog price is absent (scaffold). */
 export const DEFAULT_TAILORING_ORDER_MINOR = 150_000; // ₹1,500
@@ -31,15 +35,13 @@ export type SettleCompletedOrderInput = {
   applyGst?: boolean;
 };
 
-export function settleCompletedOrder(
+/** Settles a completed order once: a repeat for the same (kind, orderRef) returns the first row. */
+export async function settleCompletedOrder(
+  repos: SettlementRepos,
   input: SettleCompletedOrderInput,
-): SettlementRow | null {
+): Promise<SettlementRow | null> {
   if (!takeRateFeatureEnabled()) return null;
   if (input.orderAmountMinor <= 0) return null;
-
-  // Idempotent on orderRef
-  const existing = settlements.find((s) => s.orderRef === input.orderRef);
-  if (existing) return existing;
 
   const breakdown = computeTakeRate({
     orderAmountMinor: input.orderAmountMinor,
@@ -59,28 +61,19 @@ export function settleCompletedOrder(
     currency: input.currency ?? "INR",
     completedAt: (input.completedAt ?? new Date()).toISOString(),
   };
-  settlements.push(row);
-  return row;
+  return (await repos.insertMarketplaceSettlement(row)).row;
 }
 
-export function listSettlements(opts?: {
-  kind?: MarketplaceKind;
-  sellerId?: string;
-}): SettlementRow[] {
-  return settlements.filter((s) => {
-    if (opts?.kind && s.kind !== opts.kind) return false;
-    if (opts?.sellerId && s.sellerId !== opts.sellerId) return false;
-    return true;
-  });
+export function listSettlements(
+  repos: SettlementRepos,
+  opts?: { kind?: MarketplaceKind; sellerId?: string },
+): Promise<SettlementRow[]> {
+  return repos.listMarketplaceSettlements(opts);
 }
 
-export function exportSettlementsCsv(opts?: {
-  kind?: MarketplaceKind;
-  sellerId?: string;
-}): string {
-  return settlementsToCsv(listSettlements(opts));
-}
-
-export function __resetSettlementsForTests(): void {
-  settlements.length = 0;
+export async function exportSettlementsCsv(
+  repos: SettlementRepos,
+  opts?: { kind?: MarketplaceKind; sellerId?: string },
+): Promise<string> {
+  return settlementsToCsv(await listSettlements(repos, opts));
 }

@@ -25,12 +25,15 @@ export function isLentOut(item: LentItemLike): boolean {
   return Boolean((item.lentTo ?? "").trim());
 }
 
-/** True when lent and dueOn is on/before asOf (YYYY-MM-DD). */
+/**
+ * True when lent and dueOn is strictly before asOf (YYYY-MM-DD): an item due back today is due,
+ * not overdue. The same rule as `filterLentDue(..., "overdue")` and the overdue banner.
+ */
 export function isLentOverdue(item: LentItemLike, asOf: string): boolean {
   if (!isLentOut(item)) return false;
   const due = (item.lentDueOn ?? "").trim();
   if (!DATE_RE.test(due) || !DATE_RE.test(asOf)) return false;
-  return due <= asOf;
+  return due < asOf;
 }
 
 export function applyLend(

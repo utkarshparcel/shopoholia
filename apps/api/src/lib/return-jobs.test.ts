@@ -96,6 +96,16 @@ describe("selectRefundAccount", () => {
     expect(picked?.id).toBe("sc");
   });
 
+  it("never books store credit to another merchant's account or to cash", () => {
+    const accounts = [
+      { id: "ajio", kind: "STORE_CREDIT", merchant: "Ajio", status: "ACTIVE" },
+      { id: "cash", kind: "CASH", merchant: "worn", status: "ACTIVE" },
+    ];
+    expect(selectRefundAccount(accounts, "Myntra", "STORE_CREDIT")).toBeNull();
+    expect(selectRefundAccount(accounts, "ajio ", "STORE_CREDIT")?.id).toBe("ajio");
+    expect(selectRefundAccount(accounts, null, "STORE_CREDIT")).toBeNull();
+  });
+
   it("ignores frozen accounts and returns null when nothing matches", () => {
     expect(
       selectRefundAccount(
@@ -107,6 +117,30 @@ describe("selectRefundAccount", () => {
 });
 
 describe("reconcileRefund", () => {
+  it("opens a store-credit account for the return's merchant instead of using another's", async () => {
+    const postMoneyLedger = vi.fn(async () => ({ balanceAfter: 500 }));
+    const createMoneyAccount = vi.fn(async () => ({ id: "myntra-sc" }));
+    await reconcileRefund(
+      {
+        postMoneyLedger,
+        listMoneyAccounts: async () => [
+          { id: "ajio", kind: "STORE_CREDIT", merchant: "Ajio", status: "ACTIVE" },
+        ],
+        createMoneyAccount,
+      },
+      "u1",
+      "r1",
+      500,
+      "Myntra",
+      "STORE_CREDIT",
+    );
+    expect(createMoneyAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "STORE_CREDIT", merchant: "Myntra" }),
+    );
+    expect(postMoneyLedger).toHaveBeenCalledWith(expect.objectContaining({ accountId: "myntra-sc" }));
+  });
+
+
   it("no-ops for non-positive refund", async () => {
     const postMoneyLedger = vi.fn();
     await reconcileRefund(
@@ -327,23 +361,25 @@ describe("withReturnDeadlineRichFields", () => {
     expect(withReturnDeadlineRichFields(base, { imageUrl: "  ", amountMinor: 0 })).toEqual(base);
   });
 
-  it("enrichDeadlineFromPurchaseItem signs imageKey", async () => {
-    const payload = await enrichDeadlineFromPurchaseItem(
+  it("enrichDeadlineFromPurchaseItem carries the imageKey for send-time signing, not a signed URL", () => {
+    const payload = enrichDeadlineFromPurchaseItem(
       {
         returnId: "r1",
         userId: "u1",
         windowDeadline: "2026-09-01T00:00:00.000Z",
         merchant: "Amazon",
       },
-      { imageKey: "items/tee.jpg", priceMinor: 1200 },
-      async (key) => `https://cdn.test/${key}`,
+      { imageKey: "u/u1/items/tee.jpg", priceMinor: 1200 },
       "INR",
     );
     expect(payload).toMatchObject({
-      imageUrl: "https://cdn.test/items/tee.jpg",
+      imageKey: "u/u1/items/tee.jpg",
+      // The long-lived fallback, used when the worker can't sign the key.
+      imageUrl: "https://media.worncloset.app/brand/worn-return-deadline.png",
       amountMinor: 1200,
       currency: "INR",
     });
+    expect(payload.imageUrl).not.toMatch(/X-Amz-|signed/);
   });
 
   it("enrichDeadlineFromPurchaseItem uses brand placeholder when no image (W042)", async () => {
@@ -353,13 +389,9 @@ describe("withReturnDeadlineRichFields", () => {
       windowDeadline: "2026-09-01T00:00:00.000Z",
       merchant: "Amazon",
     };
-    const payload = await enrichDeadlineFromPurchaseItem(
-      base,
-      { imageKey: null, priceMinor: 999 },
-      async (key) => `https://cdn.test/${key}`,
-      "INR",
-    );
-    expect(payload.imageUrl).toBe("https://cdn.test/brand/worn-return-deadline.png");
+    const payload = enrichDeadlineFromPurchaseItem(base, { imageKey: null, priceMinor: 999 }, "INR");
+    expect(payload.imageUrl).toBe("https://media.worncloset.app/brand/worn-return-deadline.png");
+    expect(payload.imageKey).toBeUndefined();
     expect(payload.amountMinor).toBe(999);
     expect(payload.currency).toBe("INR");
   });
@@ -371,13 +403,13 @@ describe("withReturnDeadlineRichFields", () => {
       windowDeadline: "2026-09-01T00:00:00.000Z",
       merchant: "Amazon",
     };
-    const payload = await enrichDeadlineFromPurchaseItem(base, null, async (key) => `signed:${key}`);
-    expect(payload.imageUrl).toBe("signed:brand/worn-return-deadline.png");
+    const payload = enrichDeadlineFromPurchaseItem(base, null);
+    expect(payload.imageUrl).toBe("https://media.worncloset.app/brand/worn-return-deadline.png");
   });
 
   it("publishes rich payload with placeholder image still SENT (W042)", async () => {
     process.env.REDIS_URL = "redis://127.0.0.1:63807";
-    const enriched = await enrichDeadlineFromPurchaseItem(
+    const enriched = enrichDeadlineFromPurchaseItem(
       {
         returnId: "r3",
         userId: "u1",
@@ -385,9 +417,6 @@ describe("withReturnDeadlineRichFields", () => {
         merchant: "Flipkart",
       },
       { imageKey: null, priceMinor: 500 },
-      async () => {
-        throw new Error("no sign");
-      },
     );
     expect(enriched.imageUrl).toBe("https://media.worncloset.app/brand/worn-return-deadline.png");
     const result = await scheduleReturnDeadlineReminder(enriched);

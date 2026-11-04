@@ -1,3 +1,4 @@
+import { categorySlot, type GarmentSlot } from "./outfit-goes-with.js";
 import type { WeatherCtx } from "./weather.js";
 
 export type RankableWardrobeItem = {
@@ -100,9 +101,51 @@ export function rankWardrobeItems(input: {
   return { scored, pool, whyHints };
 }
 
+/** Slots an outfit holds at most one of. A dress stands in for the top and the bottom. */
+const SINGLE_SLOTS: ReadonlySet<GarmentSlot> = new Set(["top", "bottom", "dress", "shoes"]);
+
+function slotTaken(slot: GarmentSlot, taken: Set<GarmentSlot>): boolean {
+  if (!SINGLE_SLOTS.has(slot)) return false;
+  if (taken.has(slot)) return true;
+  if (slot === "dress") return taken.has("top") || taken.has("bottom");
+  if (slot === "top" || slot === "bottom") return taken.has("dress");
+  return false;
+}
+
+/**
+ * One outfit from the ranked `pool` (best first): the best top, bottom and shoes (or dress and
+ * shoes when the best-ranked core piece is a dress), then the best remaining pieces that don't
+ * repeat a single slot. Returned in rank order.
+ */
+function composeOutfit(pool: ScoredOutfitItem[], pickCount: number): ScoredOutfitItem[] {
+  const picked = new Set<ScoredOutfitItem>();
+  const taken = new Set<GarmentSlot>();
+  const slotOf = (s: ScoredOutfitItem) => categorySlot(s.item.category);
+  const take = (s: ScoredOutfitItem) => {
+    picked.add(s);
+    taken.add(slotOf(s));
+  };
+
+  const firstCore = pool.find((s) => ["top", "bottom", "dress"].includes(slotOf(s)));
+  const coreSlots: GarmentSlot[] =
+    firstCore && slotOf(firstCore) === "dress" ? ["dress", "shoes"] : ["top", "bottom", "shoes"];
+  for (const slot of coreSlots) {
+    if (picked.size >= pickCount) break;
+    const best = pool.find((s) => !picked.has(s) && slotOf(s) === slot);
+    if (best) take(best);
+  }
+  for (const s of pool) {
+    if (picked.size >= pickCount) break;
+    if (picked.has(s) || slotTaken(slotOf(s), taken)) continue;
+    take(s);
+  }
+  return pool.filter((s) => picked.has(s));
+}
+
 /**
  * Pick the `altIndex`-th disjoint outfit of up to `pickCount` pieces from a ranked list,
- * excluding `excludeIds` (e.g. already-worn-blocked).
+ * excluding `excludeIds` (e.g. already-worn-blocked). Each outfit fills garment slots (never
+ * three shirts): see composeOutfit.
  * altIndex 0 = primary; 1 = next alternative, etc.
  */
 export function pickOutfitSlice(
@@ -117,11 +160,16 @@ export function pickOutfitSlice(
   const pickCount = opts.pickCount ?? 3;
   const exclude = opts.excludeIds ?? new Set<string>();
 
-  const eligible = scored.filter((s) => !exclude.has(s.item.id) && s.score > -50);
-  const start = altIndex * pickCount;
-  const slice = eligible.slice(start, start + pickCount).map((s) => s.item);
-  const hasMore = eligible.length > start + pickCount;
-  return { selected: slice, altIndex, hasMore };
+  let remaining = scored.filter((s) => !exclude.has(s.item.id) && s.score > -50);
+  let outfit: ScoredOutfitItem[] = [];
+  for (let i = 0; i <= altIndex; i += 1) {
+    outfit = composeOutfit(remaining, pickCount);
+    const used = new Set(outfit);
+    remaining = remaining.filter((s) => !used.has(s));
+    if (outfit.length === 0) break;
+  }
+  const hasMore = outfit.length > 0 && composeOutfit(remaining, pickCount).length > 0;
+  return { selected: outfit.map((s) => s.item), altIndex, hasMore };
 }
 
 export function buildWhyThis(input: {

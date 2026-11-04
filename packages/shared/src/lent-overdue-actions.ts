@@ -24,7 +24,8 @@ export function applyLentOverdueAction(
     return {
       ok: true,
       action: "nudge",
-      message: `Nudge sent to ${who} — please return by ${item.lentDueOn ?? "soon"}.`,
+      // Nothing reaches the borrower (a free-text name): this is a reminder for the owner.
+      message: `Reminder set — ask ${who} to return it by ${item.lentDueOn ?? "soon"}.`,
     };
   }
   if (action === "returned") {

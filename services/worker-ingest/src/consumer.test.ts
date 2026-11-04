@@ -15,6 +15,11 @@ import {
   INGEST_QUEUE,
   INGEST_RESYNC_JOB_NAME,
   processResync,
+  scheduleSourceSync,
+  sourceSyncSchedulerId,
+  SOURCE_SYNC_EVERY_MS,
+  SourceGoneError,
+  unscheduleSourceSync,
   processSmsJob,
   type IngestJob,
   type IngestJobData,
@@ -122,6 +127,64 @@ describe("worker-ingest consumer", () => {
     await expect(
       processResync(SOURCE_ID, { db, persister, connectorFactory: createDefaultConnectorFactory(db) }),
     ).rejects.toMatchObject({ name: "UnrecoverableError", message: 'no email connector for provider "outlook"' });
+  });
+
+  it("a resync moves the cursor to the batch's historyId only once every message is in", async () => {
+    const amazon = (id: string) => ({
+      messageId: id,
+      from: "no-reply@amazon.in",
+      to: "me@example.com",
+      subject: "Your Amazon.in order has been placed",
+      text: `Order #403-${id}-1234567 Order total: Rs. 1,299.00`,
+      receivedAt: "2026-10-20T10:00:00.000Z",
+    });
+    const source = { id: SOURCE_ID, provider: "gmail", consentGrantId: "g-1", cursor: "h100", encryptedToken: null, meta: {} };
+    const connectorFactory = () => ({
+      listSince: async () => ({ messages: [amazon("111"), amazon("222"), amazon("333")], nextCursor: "h200" }),
+    });
+
+    // Message 2 fails: the batch stops and the cursor stays at h100, never a message id.
+    const failing = fakePersister();
+    failing.insert.mockImplementation(async (p: { orderRef?: string }) => {
+      if (p.orderRef?.includes("222")) throw new Error("db down");
+      return "pid";
+    });
+    const db = mockDb({ source, grant: { id: "g-1", revokedAt: null, userId: "u-1" } });
+    await expect(
+      processResync(SOURCE_ID, { db, persister: failing.persister, connectorFactory: connectorFactory as never }),
+    ).rejects.toThrow(/db down/);
+    expect(failing.persister.updateSourceCursor).not.toHaveBeenCalled();
+
+    const ok = fakePersister();
+    await processResync(SOURCE_ID, { db, persister: ok.persister, connectorFactory: connectorFactory as never });
+    expect(ok.persister.updateSourceCursor).toHaveBeenCalledTimes(1);
+    expect(ok.persister.updateSourceCursor).toHaveBeenCalledWith(SOURCE_ID, "h200");
+  });
+
+  it("a connected source gets a first resync and a repeating one, removed when it goes", async () => {
+    const queue = {
+      add: vi.fn(async () => ({})),
+      upsertJobScheduler: vi.fn(async () => ({})),
+      removeJobScheduler: vi.fn(async () => true),
+    };
+    await scheduleSourceSync(queue as never, SOURCE_ID, "code-hash");
+    expect(queue.add).toHaveBeenCalledWith(
+      INGEST_RESYNC_JOB_NAME,
+      { sourceId: SOURCE_ID },
+      expect.objectContaining({ jobId: expect.stringContaining(SOURCE_ID) }),
+    );
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      sourceSyncSchedulerId(SOURCE_ID),
+      { every: SOURCE_SYNC_EVERY_MS },
+      { name: INGEST_RESYNC_JOB_NAME, data: { sourceId: SOURCE_ID } },
+    );
+    await unscheduleSourceSync(queue as never, SOURCE_ID);
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith(sourceSyncSchedulerId(SOURCE_ID));
+    // A deleted source reads as gone, so its schedule can be stopped.
+    const { persister } = fakePersister();
+    await expect(
+      processResync(SOURCE_ID, { db: mockDb(), persister, connectorFactory: createDefaultConnectorFactory(mockDb()) }),
+    ).rejects.toBeInstanceOf(SourceGoneError);
   });
 
   it("refuses to build a Gmail connector without Google credentials", () => {

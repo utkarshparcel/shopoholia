@@ -21,6 +21,7 @@ import {
   SpendCreditResponseSchema,
   UndoSpendCreditBodySchema,
   UndoSpendCreditResponseSchema,
+  affiliateIdsFromEnv,
   giftCardCapturePrefill,
   merchantDeepLink,
 } from "@worn/shared";
@@ -45,6 +46,7 @@ import {
   CREDIT_SNOOZE_DEFAULT_MS,
   scheduleExpiryReminder,
   snoozeCreditReminder,
+  capCreditSnooze,
 } from "../lib/expiry.js";
 import type {
   MoneyAccountRecord,
@@ -69,7 +71,7 @@ function toAccountJson(a: MoneyAccountRecord) {
     balanceCacheMinor: a.balanceCacheMinor,
     expiresAt: a.expiresAt ? a.expiresAt.toISOString() : null,
     status: a.status,
-    link: merchantDeepLink(a.merchant),
+    link: merchantDeepLink(a.merchant, affiliateIdsFromEnv(process.env)),
     ...balanceCheckMetaForAccount(a),
   };
 }
@@ -748,7 +750,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const nowMs = Date.now();
-      const snoozedUntil = request.body.until
+      let snoozedUntil = request.body.until
         ? new Date(request.body.until)
         : new Date(nowMs + CREDIT_SNOOZE_DEFAULT_MS);
 
@@ -760,6 +762,8 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const status = await snoozeCreditReminder(account, snoozedUntil);
+      // The reminder fires no later than a day before the credit expires.
+      if (account.expiresAt) snoozedUntil = capCreditSnooze(snoozedUntil, account.expiresAt);
       audit(app.log, "money.credit.expiry_handled", {
         userId,
         accountId: id,

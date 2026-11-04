@@ -280,6 +280,52 @@ describe("U015 household vault spend cap", () => {
     });
     expect(reused.statusCode).toBe(409);
 
+    // SPEND from the owner doesn't reach a third member's own credit.
+    const third = await login(app, "919810000118");
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { userId: third.userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/households/join",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { inviteCode: household.inviteCode },
+    });
+    const thirdCredit = await app.inject({
+      method: "POST",
+      url: "/credits",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { kind: "GIFT_CARD", merchant: "Ajio", currency: "INR", balanceMinor: 30000 },
+    });
+    expect(thirdCredit.statusCode).toBe(201);
+    const thirdAccountId = (thirdCredit.json() as { id: string }).id;
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: 100000 },
+    });
+    const othersCredit = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: {
+        accountId: thirdAccountId,
+        amountMinor: 100,
+        idempotencyKey: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      },
+    });
+    expect(othersCredit.statusCode).toBe(403);
+    const thirdAccounts = await app.inject({
+      method: "GET",
+      url: "/credits",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+    });
+    expect(JSON.stringify(thirdAccounts.json())).toContain("30000");
+
     // Outsiders see no household at all.
     const outsider = await login(app, "919810000117");
     for (const req of [

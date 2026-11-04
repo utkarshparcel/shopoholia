@@ -703,7 +703,7 @@ describe("wardrobe", () => {
     };
     expect(body.gaps.length).toBeGreaterThan(0);
     expect(body.gaps[0]!.affiliateUrl).toMatch(/^https?:\/\//);
-    expect(body.gaps[0]!.affiliateUrl).toContain("shopoholia");
+    expect(body.gaps[0]!.affiliateUrl).not.toContain("shopoholia");
     expect(body.summary.length).toBeGreaterThan(0);
   });
 

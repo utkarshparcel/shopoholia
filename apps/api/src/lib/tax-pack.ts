@@ -1,15 +1,21 @@
 /**
  * N44-TAX-PACK — yearly workwear tax pack (invoices + spend CSV/ZIP).
- * Filters by calendar year or explicit from/to date range.
+ * Filters by calendar year, Indian financial year (Apr–Mar) or explicit from/to date range, with
+ * day boundaries in the user's time zone. Spend is dated by the purchase, not by when the item
+ * was added to the closet.
  */
 
-import { readReceiptGstin } from "@worn/shared";
+import { addDaysToKey, localDayRange, readReceiptGstin, resolveTimeZone } from "@worn/shared";
 import { isWorkwearItem, type WorkwearItemLike } from "./workwear-rotation.js";
 
 export type TaxPackRangeInput = {
   year?: number;
+  /** Indian financial year starting 1 April of this year (fy=2025 → 2025-04-01…2026-03-31). */
+  fy?: number;
   from?: string; // YYYY-MM-DD or ISO
   to?: string;
+  /** IANA zone for day boundaries (the user's `timeZone`); UTC when absent, the default zone when invalid. */
+  timeZone?: string | null;
 };
 
 export type TaxPackRange = {
@@ -60,6 +66,8 @@ export type TaxPackBuildInput = {
   }>;
   /** purchaseItemId → purchaseId */
   purchaseIdByItemId?: Map<string, string>;
+  /** purchaseId → when it was bought; dates a linked item's spend instead of its createdAt. */
+  purchasedAtByPurchaseId?: Map<string, Date>;
 };
 
 export type TaxPackResult = {
@@ -76,28 +84,38 @@ export type TaxPackResult = {
   invoicesCsv: string;
 };
 
-function parseDayBoundary(raw: string, endOfDay: boolean): Date | null {
+/** First and last instant of local day `dateKey` (YYYY-MM-DD) in `tz`, inclusive. */
+function localDayBounds(dateKey: string, tz: string): { start: Date; last: Date } {
+  const { start, end } = localDayRange(dateKey, tz);
+  return { start, last: new Date(end.getTime() - 1) };
+}
+
+function parseDayBoundary(raw: string, endOfDay: boolean, tz: string): Date | null {
   const day = raw.slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+  if (raw.length > 10 || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     const d = new Date(raw);
     if (Number.isNaN(d.getTime())) return null;
     return d;
   }
   const [y, m, d] = day.split("-").map(Number) as [number, number, number];
-  if (endOfDay) {
-    return new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
-  }
-  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return null;
+  const bounds = localDayBounds(day, tz);
+  return endOfDay ? bounds.last : bounds.start;
 }
 
-/** Resolve calendar-year or explicit from/to into an inclusive UTC range. */
+/**
+ * Resolve a calendar year, an Indian financial year or explicit from/to days into an inclusive
+ * range whose day boundaries are local to `timeZone`.
+ */
 export function resolveTaxPackRange(input: TaxPackRangeInput): TaxPackRange | { error: string } {
+  const tz = input.timeZone == null ? "UTC" : resolveTimeZone(input.timeZone);
   if (input.from || input.to) {
     if (!input.from || !input.to) {
       return { error: "from and to are both required when using a custom range" };
     }
-    const from = parseDayBoundary(input.from, false);
-    const to = parseDayBoundary(input.to, true);
+    const from = parseDayBoundary(input.from, false, tz);
+    const to = parseDayBoundary(input.to, true, tz);
     if (!from || !to) return { error: "from/to must be YYYY-MM-DD or ISO datetime" };
     if (from.getTime() > to.getTime()) return { error: "from must be on or before to" };
     return {
@@ -108,16 +126,35 @@ export function resolveTaxPackRange(input: TaxPackRangeInput): TaxPackRange | { 
     };
   }
 
-  const year = input.year ?? new Date().getUTCFullYear();
+  if (input.fy != null) {
+    const fy = input.fy;
+    if (!Number.isInteger(fy) || fy < 2000 || fy > 2100) {
+      return { error: "fy must be an integer between 2000 and 2100" };
+    }
+    if (input.year != null) return { error: "use either year or fy, not both" };
+    return {
+      from: localDayBounds(`${fy}-04-01`, tz).start,
+      to: localDayBounds(addDaysToKey(`${fy + 1}-04-01`, -1), tz).last,
+      label: `FY${fy}-${String((fy + 1) % 100).padStart(2, "0")}`,
+      year: null,
+    };
+  }
+
+  const year = input.year ?? Number(localYear(new Date(), tz));
   if (!Number.isInteger(year) || year < 2000 || year > 2100) {
     return { error: "year must be an integer between 2000 and 2100" };
   }
   return {
-    from: new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0)),
-    to: new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999)),
+    from: localDayBounds(`${year}-01-01`, tz).start,
+    to: localDayBounds(`${year}-12-31`, tz).last,
     label: String(year),
     year,
   };
+}
+
+/** The local calendar year of `now` in `tz`. */
+function localYear(now: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric" }).format(now);
 }
 
 export function isDateInRange(d: Date, from: Date, to: Date): boolean {
@@ -151,14 +188,19 @@ export function buildWorkwearTaxPack(input: TaxPackBuildInput): TaxPackResult {
   const workwearPurchaseIds = new Set<string>();
   const purchaseIdByItemId = input.purchaseIdByItemId ?? new Map<string, string>();
 
+  const purchasedAtByPurchaseId = input.purchasedAtByPurchaseId ?? new Map<string, Date>();
   for (const it of workwear) {
-    if (!isDateInRange(it.createdAt, range.from, range.to)) continue;
+    // The purchase date when the item came from a purchase; a manual item only has createdAt.
+    const linkedPurchaseId = it.purchaseItemId ? purchaseIdByItemId.get(it.purchaseItemId) : undefined;
+    const purchasedAt =
+      (linkedPurchaseId ? purchasedAtByPurchaseId.get(linkedPurchaseId) : undefined) ?? it.createdAt;
+    if (!isDateInRange(purchasedAt, range.from, range.to)) continue;
     spend.push({
       wardrobeItemId: it.id,
       category: it.category,
       brand: it.brand ?? null,
       costMinor: it.costMinor,
-      purchasedAt: it.createdAt.toISOString(),
+      purchasedAt: purchasedAt.toISOString(),
       tags: (it.tags ?? []).map((t) => String(t)),
     });
     if (it.purchaseItemId) {

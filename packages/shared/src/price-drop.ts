@@ -24,19 +24,27 @@ export function normalizeBrandKey(brand: string): string {
   return brand.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-/** Match listing title/tags against a wardrobe brand (case-insensitive substring). */
+/** `text` contains `key` as whole words ("zara" in "Zara linen shirt", not in "Bazaar"). */
+function containsWords(text: string, key: string): boolean {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(text);
+}
+
+/**
+ * Match listing title/tags against a wardrobe brand (case-insensitive, whole words). A tag
+ * matches only when it names the brand: a tag that is merely part of the brand ("New" for New
+ * Balance, "M" for H&M, an empty tag) does not.
+ */
 export function listingMatchesBrand(
   brand: string,
   listing: { title: string; tags?: string[] | null },
 ): boolean {
   const key = normalizeBrandKey(brand);
   if (!key) return false;
-  const title = listing.title.toLowerCase();
-  if (title.includes(key)) return true;
+  if (containsWords(normalizeBrandKey(listing.title), key)) return true;
   for (const tag of listing.tags ?? []) {
-    if (normalizeBrandKey(tag).includes(key) || key.includes(normalizeBrandKey(tag))) {
-      return true;
-    }
+    const tagKey = normalizeBrandKey(tag);
+    if (tagKey && containsWords(tagKey, key)) return true;
   }
   return false;
 }

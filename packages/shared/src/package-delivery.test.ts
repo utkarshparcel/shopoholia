@@ -114,4 +114,18 @@ describe("U018 carrier detect from tracking paste", () => {
   it("returns null for short junk", () => {
     expect(detectCarrierFromTracking("abc")).toBeNull();
   });
+
+  it("reads 'will be delivered by' as a shipped order with an ETA, not a delivery", () => {
+    const r = detectDeliveryFromText(
+      "Your Myntra order has shipped",
+      "Your order will be delivered by 8 Nov 2026",
+    );
+    expect(r.deliveryStatus).toBe("SHIPPED");
+    expect(r.etaAt).toBe("2026-11-08T12:00:00.000Z");
+    expect(detectDeliveryFromText("Order confirmed", "It is expected to be delivered on 9 Nov 2026").deliveryStatus).toBe(
+      "ORDERED",
+    );
+    expect(detectDeliveryFromText("Delivered", "Your package was delivered today").deliveryStatus).toBe("DELIVERED");
+    expect(detectDeliveryFromText("Update", "Your order has been delivered").deliveryStatus).toBe("DELIVERED");
+  });
 });

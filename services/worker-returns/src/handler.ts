@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import {
+  localDateKey,
   resolveTimeZone,
   runClosetPushDelivery,
   type ProcessPushResult,
@@ -13,7 +14,21 @@ export const RETURN_DEADLINE_EVENT = "RETURN_DEADLINE";
 export type ClosetPushHandlerOpts = {
   now?: Date;
   sendExpo?: typeof sendExpoPush;
+  /** Signs `payload.imageKey` at send time (r2ImageSignerFromEnv); without it the push uses imageUrl. */
+  signImageKey?: ((key: string) => string) | null;
 };
+
+/** The item image signed now, so the link is fresh when the push lands; else the fallback URL. */
+function pushImageUrl(payload: ReturnDeadlinePayload, opts: ClosetPushHandlerOpts): string | undefined {
+  if (payload.imageKey && opts.signImageKey) {
+    try {
+      return opts.signImageKey(payload.imageKey);
+    } catch {
+      // fall back to the long-lived URL
+    }
+  }
+  return payload.imageUrl;
+}
 
 async function loadUser(db: Db, userId: string) {
   const [user] = await db
@@ -49,21 +64,27 @@ export async function processReturnDeadline(
   const user = await loadUser(db, payload.userId);
   // Account erased since the return was logged: nobody to tell.
   if (!user) return { status: "skipped" };
-  const daysLeft = Math.ceil(
-    (new Date(payload.windowDeadline).getTime() - (opts.now ?? new Date()).getTime()) /
+  const now = opts.now ?? new Date();
+  const deadline = new Date(payload.windowDeadline);
+  // A quiet-hours delay can carry the job past the deadline: the window is shut, say nothing.
+  if (deadline.getTime() <= now.getTime()) return { status: "skipped" };
+  const tz = resolveTimeZone(user.timeZone);
+  // Calendar days on the user's wall clock: a deadline 3 hours away is "today", not "tomorrow".
+  const daysLeft = Math.round(
+    (Date.parse(`${localDateKey(deadline, tz)}T00:00:00Z`) - Date.parse(`${localDateKey(now, tz)}T00:00:00Z`)) /
       86_400_000,
   );
   const title =
-    daysLeft <= 1
-      ? "Return window closes tomorrow"
-      : `Return window closes in ${daysLeft} days`;
+    daysLeft <= 0
+      ? "Return window closes today"
+      : daysLeft === 1
+        ? "Return window closes tomorrow"
+        : `Return window closes in ${daysLeft} days`;
   // The date on the user's wall clock, not the server's.
-  const body = `Your return for ${payload.merchant} closes on ${new Date(
-    payload.windowDeadline,
-  ).toLocaleDateString("en-IN", {
+  const body = `Your return for ${payload.merchant} closes on ${deadline.toLocaleDateString("en-IN", {
     day: "numeric",
     month: "short",
-    timeZone: resolveTimeZone(user.timeZone),
+    timeZone: tz,
   })}. Initiate now.`;
 
   return runClosetPushDelivery({
@@ -80,7 +101,7 @@ export async function processReturnDeadline(
       windowDeadline: payload.windowDeadline,
     },
     rich: {
-      imageUrl: payload.imageUrl,
+      imageUrl: pushImageUrl(payload, opts),
       amountMinor: payload.amountMinor,
       currency: payload.currency,
     },

@@ -6,6 +6,7 @@ import {
   PayEmiBodySchema,
   addEmiMonths,
   detectEmiSignal,
+  resolveTimeZone,
   nextDueSchedule,
   remainingAfterPayment,
   type CreateEmiPlanBody,
@@ -119,7 +120,8 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const body = request.body as z.infer<typeof FromSmsBodySchema>;
       const subject = body.subject ?? (body.from ? `SMS from ${body.from}` : "SMS");
-      const signal = detectEmiSignal(subject, body.body);
+      const user = await app.deps.repos.findUserById(userId);
+      const signal = detectEmiSignal(subject, body.body, new Date(), resolveTimeZone(user?.timeZone));
       if (!signal) {
         return reply.code(400).send({
           error: "Bad Request",

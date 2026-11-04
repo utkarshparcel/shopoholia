@@ -264,7 +264,7 @@ function refundRepos(app: FastifyInstance) {
 
 async function scheduleDeadlineWithImage(
   app: FastifyInstance,
-  base: Omit<ReturnDeadlinePayload, "imageUrl" | "amountMinor" | "currency"> & {
+  base: Omit<ReturnDeadlinePayload, "imageUrl" | "imageKey" | "amountMinor" | "currency"> & {
     purchaseItemId?: string | null;
     currency?: string | null;
   },
@@ -277,7 +277,7 @@ async function scheduleDeadlineWithImage(
       item = null;
     }
   }
-  const payload = await enrichDeadlineFromPurchaseItem(
+  const payload = enrichDeadlineFromPurchaseItem(
     {
       returnId: base.returnId,
       userId: base.userId,
@@ -285,7 +285,6 @@ async function scheduleDeadlineWithImage(
       merchant: base.merchant,
     },
     item,
-    (key) => app.deps.storage.getSignedUrl(key),
     base.currency,
   );
   await scheduleReturnDeadlineReminder(payload);

@@ -1,3 +1,4 @@
+import type { SettlementRepos } from "./take-rate.js";
 import { enqueueJob, jobIdFrom } from "./queues/enqueue.js";
 
 export const TAILORING_QUEUE = "tailoring-orders";
@@ -75,6 +76,8 @@ export async function processTailoringTransition(
     ) => Promise<{ id: string; state: string; tailorSellerId?: string | null } | null>;
     updateTailoringOrderState: (id: string, state: string) => Promise<{ id: string } | null>;
     recordPushEvent: (input: Record<string, unknown>) => Promise<unknown>;
+    insertMarketplaceSettlement: SettlementRepos["insertMarketplaceSettlement"];
+    listMarketplaceSettlements: SettlementRepos["listMarketplaceSettlements"];
   },
 ) {
   const order = await repos.findTailoringOrder(payload.orderId, payload.userId);
@@ -93,7 +96,7 @@ export async function processTailoringTransition(
   }
   if (step.to === "DELIVERED") {
     const { settleCompletedOrder, DEFAULT_TAILORING_ORDER_MINOR } = await import("./take-rate.js");
-    settleCompletedOrder({
+    await settleCompletedOrder(repos, {
       kind: "tailoring",
       orderRef: `tailor:${order.id}`,
       sellerId: order.tailorSellerId ?? "tailor-unassigned",

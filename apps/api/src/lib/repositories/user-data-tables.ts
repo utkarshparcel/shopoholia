@@ -151,6 +151,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
   oauth_states: "one-time OAuth nonces, deleted by the callback; go with the user",
   otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column (erasure deletes the user's phone's codes)",
   job_dead_letters: "worker failure log, ids only; no user column",
+  marketplace_settlements: "ops payout ledger per marketplace order, keyed by seller id; no user column",
 };
 
 /**

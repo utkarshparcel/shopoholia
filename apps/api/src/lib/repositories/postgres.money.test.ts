@@ -97,6 +97,45 @@ function moneyWriteCases(getRepos: () => Repositories) {
     expect((await repos.createMerchantPurchase(purchaseInput(other.id, { orderRef }))).created).not.toBe(false);
   });
 
+  it("the same order ref from two merchants is two purchases", async () => {
+    const repos = getRepos();
+    const user = await newUser(repos);
+    const orderRef = String(randomInt(10 ** 9, 10 ** 10));
+    const swiggy = await repos.createMerchantPurchase(purchaseInput(user.id, { orderRef, merchant: "Swiggy" }));
+    const zomato = await repos.createMerchantPurchase(purchaseInput(user.id, { orderRef, merchant: "Zomato" }));
+    expect(zomato.created).not.toBe(false);
+    expect(zomato.purchase.id).not.toBe(swiggy.purchase.id);
+    expect(zomato.purchase.merchant).toBe("Zomato");
+    const again = await repos.createMerchantPurchase(purchaseInput(user.id, { orderRef, merchant: "Zomato" }));
+    expect(again.created).toBe(false);
+    expect(again.purchase.id).toBe(zomato.purchase.id);
+  });
+
+  it("marketplace settlements are stored once per (kind, orderRef)", async () => {
+    const repos = getRepos();
+    const orderRef = `tailor:${randomUUID()}`;
+    const row = {
+      kind: "tailoring" as const,
+      orderRef,
+      sellerId: `seller-${randomUUID()}`,
+      orderAmountMinor: 150_000,
+      platformFeeMinor: 15_000,
+      gstOnFeeMinor: 2_700,
+      sellerPayoutMinor: 135_000,
+      currency: "INR",
+      completedAt: "2026-10-20T10:00:00.000Z",
+    };
+    const [a, b] = await Promise.all([
+      repos.insertMarketplaceSettlement({ ...row, id: randomUUID() }),
+      repos.insertMarketplaceSettlement({ ...row, id: randomUUID() }),
+    ]);
+    expect([a.created, b.created].sort()).toEqual([false, true]);
+    expect(a.row.id).toBe(b.row.id);
+    const listed = await repos.listMarketplaceSettlements({ sellerId: row.sellerId });
+    expect(listed).toEqual([{ ...row, id: a.row.id }]);
+    expect(await repos.listMarketplaceSettlements({ sellerId: row.sellerId, kind: "resale" })).toEqual([]);
+  });
+
   it("receipt confirm: a double tap makes one purchase and one set of warranties", async () => {
     const repos = getRepos();
     const user = await newUser(repos);

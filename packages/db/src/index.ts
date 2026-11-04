@@ -63,6 +63,7 @@ export { paymentIntents } from "./schema/payment-intents.js";
 export { listings } from "./schema/listings.js";
 export { listingVariants } from "./schema/listing-variants.js";
 export { lookbookItems } from "./schema/lookbook-items.js";
+export { marketplaceSettlements } from "./schema/marketplace.js";
 export { orders } from "./schema/orders.js";
 export { orderItems } from "./schema/order-items.js";
 export { renders } from "./schema/renders.js";

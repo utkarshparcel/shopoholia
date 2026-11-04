@@ -67,7 +67,7 @@ share links (`/r/<code>` and the rest, below) are rewrites in `next.config.js` t
 |---|---|---|
 | API | `pnpm --filter @worn/api build && pnpm --filter @worn/api start` | **One instance only**: order delivery timers run inside this process (they resume after a restart). |
 | API worker | `pnpm --filter @worn/api start:worker` | **Run it at launch.** Retries of account deletion (stored objects left after a storage error), data exports, Google Play purchase reconciliation, cooling-off and Closet jobs, via Redis (BullMQ). |
-| Closet workers | `services/worker-*` (`pnpm --filter <name> start`) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
+| Closet workers | `pnpm --filter <name> build && pnpm --filter <name> start` for `@worn/worker-ingest`, `-expiry`, `-wardrobe`, `-returns`, `-gifts` and `-nudge` (`start` runs `dist/main.js`, the BullMQ consumer; see infra/README.md for each one's queues and settings) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
 | Postgres 16 | managed | Run `pnpm --filter @worn/db db:migrate` with `DATABASE_URL` before each API release. |
 | Redis 7 | managed | `maxmemory-policy noeviction` (BullMQ requires it). |
 | Cloudflare R2 | bucket + custom domain `media.worncloset.app` | Catalog images, avatars, renders. |
@@ -102,7 +102,7 @@ The API refuses to start in production if any of these is missing:
 | `JWT_ACCESS_SECRET` | Signs access tokens: a long random string. |
 | `PRIVACY_HMAC_SECRET` | Keys the pseudonymous ids kept after account deletion, consent/audit subject refs and poll share links: a random string of at least 16 characters. Never change it once set (old refs and links stop matching). |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Storage. |
-| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
+| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_URL=https://vision.googleapis.com/v1/images:annotate`, `OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
 
 Required for the app to pass store review. The API starts without them, but sign-in, purchases or
 renders fail, and the boot log warns:
