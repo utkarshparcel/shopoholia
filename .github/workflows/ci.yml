@@ -93,7 +93,7 @@ jobs:
         run: |
           # One file at a time: these suites share one database, and catalog tests that archive listings
           # can otherwise race another file's fixtures.
-          pnpm --filter @worn/api exec vitest run --no-file-parallelism src/lib/repositories src/lib/render/pipeline.test.ts
+          pnpm --filter @worn/api exec vitest run --no-file-parallelism src/lib/repositories src/lib/render/pipeline.test.ts src/lib/render/pipeline.failures.test.ts src/lib/render/agent-jobs.test.ts
           pnpm --filter @worn/db exec vitest run src/queries/money.test.ts
         env:
           DATABASE_URL: postgresql://worn:worn@localhost:5432/worn
