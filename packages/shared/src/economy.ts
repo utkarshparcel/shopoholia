@@ -97,7 +97,7 @@ export function coinPriceForRupees(rupees: number): number {
 
 export const AFFILIATE_CASHBACK_COINS = 25;
 
-export const FREE_REVEAL_RENDERS_PER_ITEM = 2;
+export const FREE_REVEAL_RENDERS_PER_ITEM = 1;
 
 export const REVEAL_UNLOCK_COST_COINS = 50;
 export const REVEAL_GENERATE_COST_COINS = 50;

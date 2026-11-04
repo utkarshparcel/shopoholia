@@ -133,7 +133,7 @@ describe('what coins buy', () => {
     const economy = await import('@worn/shared');
     show({ status: 'ready', packs: [pack()] });
     expect(
-      screen.getByText(`Unlock premium scenes (${economy.REVEAL_UNLOCK_COST_COINS} coins each)`),
+      screen.getByText(`Unlock the other five scenes (${economy.REVEAL_UNLOCK_COST_COINS} coins each)`),
     ).toBeInTheDocument();
     expect(
       screen.getByText(`Combine items into full looks (${economy.REVEAL_COMBINE_COST_COINS} coins)`),

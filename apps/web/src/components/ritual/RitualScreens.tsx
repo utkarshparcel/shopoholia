@@ -234,11 +234,11 @@ export function WaitMock() {
   );
 }
 
-/* 05 — the reveal: two scenes free, the rest unlock for coins */
+/* 05 — the reveal: one scene free, the rest unlock for coins */
 export function RevealMock() {
   const scenes = [
     { label: 'Studio', img: render('sage-studio') },
-    { label: 'Golden hour', img: render('sage-beach') },
+    { label: 'Golden hour' },
     { label: 'Street' },
     { label: 'Editorial dark' },
     { label: 'Night' },
@@ -269,7 +269,7 @@ export function RevealMock() {
         ))}
       </div>
       <div className="mx-3 mt-3 flex items-center justify-between rounded-xl border border-worn-gold/40 bg-worn-gold-tint px-3 py-2">
-        <span className="text-[9px] font-semibold">2 scenes free</span>
+        <span className="text-[9px] font-semibold">1 scene free</span>
         <span className="text-[9px] text-worn-gold-deep">Unlock · 50 coins</span>
       </div>
     </>

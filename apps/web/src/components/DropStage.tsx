@@ -112,7 +112,7 @@ type Scene = { id: string; label: string; caption: string; floor: string };
 /* the app's six reveal scenes, in the app's order */
 const SCENES: Scene[] = [
   { id: 'studio', label: 'Studio', caption: 'Studio — clean light, free with every piece.', floor: 'rgba(250,248,245,0.16)' },
-  { id: 'beach', label: 'Golden hour', caption: 'Golden hour — warm light, also free.', floor: 'rgba(255,150,70,0.24)' },
+  { id: 'beach', label: 'Golden hour', caption: 'Golden hour — warm light, 50 coins.', floor: 'rgba(255,150,70,0.24)' },
   { id: 'cafe', label: 'Street', caption: 'Street — out in the city, 50 coins.', floor: 'rgba(255,190,110,0.22)' },
   { id: 'rooftop', label: 'Editorial dark', caption: 'Editorial dark — the moody one, 50 coins.', floor: 'rgba(255,140,100,0.16)' },
   { id: 'night', label: 'Night', caption: 'Night — neon and rain, 50 coins.', floor: 'rgba(120,140,255,0.18)' },
@@ -1158,7 +1158,7 @@ export function DropStage() {
                   <Check size={14} className="shrink-0 text-worn-gold" /> Saved to your lookbook
                 </li>
                 <li className="flex items-center gap-2">
-                  <Sparkles size={14} className="shrink-0 text-worn-gold" /> 2 free scenes · 4 at 50 coins
+                  <Sparkles size={14} className="shrink-0 text-worn-gold" /> 1 free scene · 5 at 50 coins
                 </li>
                 <li className="flex items-center gap-2">
                   <Camera size={14} className="shrink-0 text-worn-gold" /> 6 scenes · 1 piece · 0 parcels
@@ -1275,7 +1275,7 @@ export function DropStage() {
                   className="flex flex-wrap items-center justify-center gap-2"
                 >
                   <span className="inline-flex items-center gap-1.5 rounded-pill border border-worn-gold/50 bg-worn-gold/10 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-worn-gold">
-                    <Sparkles size={12} /> 2 free scenes · 0 parcels
+                    <Sparkles size={12} /> 1 free scene · 0 parcels
                   </span>
                   <a
                     href="#download"

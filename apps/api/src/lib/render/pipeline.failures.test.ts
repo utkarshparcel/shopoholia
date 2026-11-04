@@ -256,7 +256,8 @@ function failureCases(getRepos: () => Repositories) {
 
   it("stops after the bounded retries, and doesn't retry a refusal that can't pass", async () => {
     const repos = getRepos();
-    const { order, renders } = await deliveredOrder(repos);
+    // One free scene per piece: two pieces give two free renders.
+    const { order, renders } = await deliveredOrder(repos, { itemCount: 2 });
     const [studio, golden] = renders.filter((r) => r.isFree);
     const down = failingProvider(Array.from({ length: 10 }, () => new Error("timeout")));
     await expect(processRenderJob(deps(repos, down), studio!.id, order.id)).rejects.toBeInstanceOf(RenderFailedError);
@@ -271,7 +272,7 @@ function failureCases(getRepos: () => Repositories) {
 
   it("opens the reveal once every free render is done or failed", async () => {
     const repos = getRepos();
-    const { order, renders } = await deliveredOrder(repos);
+    const { order, renders } = await deliveredOrder(repos, { itemCount: 2 });
     const [studio, golden] = renders.filter((r) => r.isFree);
     await processRenderJob(deps(repos, createMockRenderProvider()), studio!.id, order.id);
     await expect(

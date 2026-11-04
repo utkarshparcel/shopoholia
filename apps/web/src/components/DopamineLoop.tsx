@@ -38,7 +38,7 @@ const STEPS = [
   {
     n: '5',
     title: 'Unbox it',
-    copy: 'Your haul arrives as photos of you wearing it, in six scenes. Two are free.',
+    copy: 'Your haul arrives as photos of you wearing it, in six scenes. One is free.',
   },
 ];
 

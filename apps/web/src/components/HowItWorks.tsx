@@ -50,7 +50,7 @@ const STEPS: Step[] = [
   {
     n: '04',
     title: 'Spend on the reveal',
-    copy: 'Two scenes come free. Unlock Street, Editorial dark, Night or Candid for 50 each. A new render is 50. Combine up to four pieces into one look for 75.',
+    copy: 'Studio comes free. Unlock Golden hour, Street, Editorial dark, Night or Candid for 50 each. A new render is 50. Combine up to four pieces into one look for 75.',
     icon: Sparkles,
     stat: 'Scene 50 · Render 50 · Combine 75',
   },

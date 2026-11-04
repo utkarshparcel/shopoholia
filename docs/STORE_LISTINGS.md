@@ -60,7 +60,7 @@ What you can do
 • Fill virtual hauls with pieces from partner stores
 • Watch the delivery timeline and open your reveal
 • Save looks to your lookbook
-• Generate new scenes or combine pieces into full looks with coins
+• Get one free scene of every piece, and unlock more scenes, generate new ones or combine pieces into full looks with coins
 • Keep a daily streak and invite friends for bonus coins
 • Buy any piece for real on the partner's site when you love it
 
@@ -175,7 +175,7 @@ changes.
 | Personal info → Name | Yes | No | No | Account management | Google profile name; Apple name if shared |
 | Personal info → Email address | Yes | No | No | Account management | Google email / Apple (relay) email |
 | Personal info → User IDs | Yes | No | No | Account management, Analytics | Account id; Google / Apple account ids |
-| Photos and videos → Photos | Yes | No* | Yes (needed for try-on) | App functionality | Avatar photo and AI renders (*processed by our AI service provider, which Play counts as a service provider, not "sharing") |
+| Photos and videos → Photos | Yes | No* | Yes (needed for try-on) | App functionality | Avatar photo and AI renders (*rendered on infrastructure we operate; only if overflow rendering is enabled does an AI service provider process them, which Play counts as a service provider, not "sharing") |
 | Financial info → Purchase history | Yes | No | No | App functionality | Coin purchase records (store transaction id, product, time). No card data |
 | App activity → App interactions | Yes | No | No | Analytics, App functionality | Hauls, reveals, lookbook, streaks, partner-link clicks; PostHog events |
 | App activity → Other user-generated content | Yes | No | Yes | App functionality | Style-quiz answers, reveal ratings |

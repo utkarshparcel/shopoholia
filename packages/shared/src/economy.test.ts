@@ -41,7 +41,7 @@ import {
 describe("economy constants", () => {
   it("exports tunable economy values", () => {
     expect(ONBOARDING_COIN_GRANT).toBe(500);
-    expect(FREE_REVEAL_RENDERS_PER_ITEM).toBe(2);
+    expect(FREE_REVEAL_RENDERS_PER_ITEM).toBe(1);
     expect(REVEAL_UNLOCK_COST_COINS).toBe(50);
     expect(RUSH_TO_EXPRESS_COST_COINS).toBe(25);
   });

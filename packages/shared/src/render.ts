@@ -29,9 +29,10 @@ export type RenderScenario =
   | "NIGHT"
   | "CANDID";
 
-export const FREE_RENDER_SCENARIOS = ["STUDIO", "GOLDEN_HOUR"] as const satisfies readonly RenderScenario[];
+export const FREE_RENDER_SCENARIOS = ["STUDIO"] as const satisfies readonly RenderScenario[];
 
 export const PAYWALLED_RENDER_SCENARIOS = [
+  "GOLDEN_HOUR",
   "STREET",
   "EDITORIAL_DARK",
   "NIGHT",

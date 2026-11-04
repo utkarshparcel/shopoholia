@@ -108,7 +108,8 @@ describe("resumeInFlightWork", () => {
     const deps = bootDeps();
     const order = await createOrder(deps, { state: "DELIVERED" });
     const renders = await seedOrderRenders(deps.repos, order.id);
-    const [freeA, freeB] = renders.filter((r) => r.isFree);
+    // One free scene per piece: the free one was cut off, an unlocked paid one is still queued.
+    const [freeA] = renders.filter((r) => r.isFree);
     const [paidUnlocked, paidLocked] = renders.filter((r) => !r.isFree);
     await deps.repos.updateRender(freeA!.id, { status: "RUNNING" });
     await deps.repos.updateRender(paidUnlocked!.id, { unlocked: true });
@@ -116,16 +117,14 @@ describe("resumeInFlightWork", () => {
     const summary = await resumeInFlightWork(deps);
     await deps.jobQueue.flushRenderJobs!();
 
-    expect(summary.renders).toBe(3);
+    expect(summary.renders).toBe(2);
     const after = await deps.repos.findRendersByIds([
       freeA!.id,
-      freeB!.id,
       paidUnlocked!.id,
       paidLocked!.id,
     ]);
     const statusById = new Map(after.map((r) => [r.id, r.status]));
     expect(statusById.get(freeA!.id)).toBe("DONE");
-    expect(statusById.get(freeB!.id)).toBe("DONE");
     expect(statusById.get(paidUnlocked!.id)).toBe("DONE");
     expect(statusById.get(paidLocked!.id)).toBe("QUEUED");
     expect(await stateOf(deps, order.id)).toBe("REVEAL_READY");

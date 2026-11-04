@@ -244,9 +244,10 @@ export default function BuyCoinsScreen() {
 
       <View style={styles.perksCard}>
         <Text style={styles.perksTitle}>What you can do with coins</Text>
+        <Text style={styles.perkText}>Every piece in a haul comes with one free Studio scene.</Text>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
-          <Text style={styles.perkText}>Unlock premium scenes ({REVEAL_UNLOCK_COST_COINS} coins each)</Text>
+          <Text style={styles.perkText}>Unlock the other five scenes ({REVEAL_UNLOCK_COST_COINS} coins each)</Text>
         </View>
         <View style={styles.perkRow}>
           <Text style={styles.perkIcon}>✦</Text>
