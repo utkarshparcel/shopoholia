@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X, Download } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
+import { SectionsMenu } from './SectionsMenu';
 import { SiteSwitch } from './SiteSwitch';
 
 /* How far the page has to move in one direction before the header reacts (stops jitter) */
 const SCROLL_THRESHOLD = 8;
-/* Within this of the top the header always shows, transparent */
+/* Within this of the top the header always shows */
 const TOP_ZONE = 20;
 
 const navLinks = [
@@ -18,16 +18,34 @@ const navLinks = [
   { href: '#faq', label: 'FAQ' },
 ];
 
+/* The coin tick from the app icon, sized and coloured like the Closet header's tag */
+function CoinGlyph() {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5 text-worn-gold-deep"
+      aria-hidden="true"
+    >
+      <circle cx="16" cy="16" r="14" strokeWidth="2.2" />
+      <path d="M10 16 L14 20 L22 12" strokeWidth="2.8" />
+    </svg>
+  );
+}
+
+/**
+ * Play's header: the same floating glass bar as the Closet page (ClosetHeader), with Play's links
+ * and call to action. Unlike Closet's it still gets out of the way on the way down and comes back
+ * on the way up: Play's pinned stages (the demo, the Coins track) fill the window, and a bar that
+ * stayed would sit over their top edge. It also hides during in-page jumps (data-autohide), so a
+ * pinned stage lands exactly where its pin starts (see SmoothScroll).
+ */
 export function Navigation() {
-  const [scrolled, setScrolled] = useState(false);
   const [hidden, setHidden] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const headerRef = useRef<HTMLElement>(null);
-  // Whether closing the menu should hand focus back to its button (not after following a link)
-  const returnFocus = useRef(false);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -42,7 +60,6 @@ export function Navigation() {
     let lastY = window.scrollY;
     const handleScroll = () => {
       const y = window.scrollY;
-      setScrolled(y > TOP_ZONE);
       // An in-page jump (SmoothScroll marks <html> while it glides): stay out of the way, whichever
       // way it goes, so the target lands clear of the header. The next scroll up brings it back.
       if (document.documentElement.hasAttribute('data-anchor-jump')) {
@@ -65,150 +82,55 @@ export function Navigation() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const closeMenu = useCallback((focusButton: boolean) => {
-    returnFocus.current = focusButton;
-    setMobileOpen(false);
-  }, []);
-
-  // Open: focus the first link. Closed by Escape or the button: focus goes back to the button.
-  // Tabbing (or clicking) out of the header into the page closes it too, leaving focus where it
-  // went, so the open menu never sits over the content a keyboard user is now in.
-  useEffect(() => {
-    if (mobileOpen) {
-      menuRef.current?.querySelector<HTMLElement>('a, button')?.focus();
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          closeMenu(true);
-        }
-      };
-      const onFocusIn = (e: FocusEvent) => {
-        if (e.target instanceof Node && !headerRef.current?.contains(e.target)) closeMenu(false);
-      };
-      document.addEventListener('keydown', onKey);
-      document.addEventListener('focusin', onFocusIn);
-      return () => {
-        document.removeEventListener('keydown', onKey);
-        document.removeEventListener('focusin', onFocusIn);
-      };
-    }
-    if (returnFocus.current) {
-      returnFocus.current = false;
-      menuButtonRef.current?.focus();
-    }
-  }, [mobileOpen, closeMenu]);
-
-  const visible = !hidden || mobileOpen;
-
   return (
     <motion.header
-      ref={headerRef}
-      initial={{ y: 0 }}
-      // its own full height (border included), not a fixed 100px: the header is taller than that when
-      // its bar wraps or the menu is open, and a fixed offset left a strip of it showing
-      animate={{ y: visible ? 0 : '-100%' }}
-      transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 300, damping: 30 }}
+      initial={{ y: 0, opacity: 1 }}
+      // its own full height (the card plus the space above it), and faded so the card's shadow goes too
+      animate={hidden ? { y: '-120%', opacity: 0 } : { y: 0, opacity: 1 }}
+      transition={
+        reducedMotion
+          ? { duration: 0 }
+          : { y: { type: 'spring', stiffness: 300, damping: 30 }, opacity: { duration: 0.2, ease: 'easeOut' } }
+      }
       // keyboard users tabbing into a hidden header get it back
       onFocusCapture={() => setHidden(false)}
       // hides itself during in-page jumps, so SmoothScroll doesn't leave room for it
       data-autohide=""
-      className={`fixed top-0 left-0 right-0 z-40 transition-colors duration-300 ease-out ${
-        scrolled || mobileOpen ? 'bg-worn-paper/90 backdrop-blur-md border-b border-worn-rule' : 'bg-transparent'
-      }`}
+      className="fixed inset-x-0 top-0 z-40"
       role="banner"
     >
-      <nav className="section section-py py-4" aria-label="Main navigation">
-        <div className="flex items-center justify-between">
-          {/* Logo */}
-          <Link
-            href="/"
-            className="flex items-center gap-2 text-worn-ink font-display text-display-m tracking-tight"
-            aria-label="Worn - Home"
-          >
-            <span className="relative">
-              <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-                <circle cx="16" cy="16" r="14" stroke="#c8a87a" strokeWidth="2"/>
-                <path d="M10 16 L14 20 L22 12" stroke="#c8a87a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </span>
-            Worn
+      <div className="mx-auto max-w-[1200px] px-3 pt-3 sm:px-6 sm:pt-4">
+        <div className="glass flex h-[60px] items-center justify-between gap-3 rounded-2xl px-4 sm:px-5">
+          {/* Wordmark */}
+          <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Worn - Home">
+            <CoinGlyph />
+            <span className="font-display text-[19px] leading-none tracking-[-0.01em] text-worn-ink">Worn</span>
           </Link>
 
-          {/* Desktop nav: from lg only. Four links, the product switch and the button need ~880px; at md
-              they wrapped and pushed into the logo, so tablets get the menu button instead. */}
-          <div className="hidden lg:flex items-center gap-8">
+          {/* Section anchors (lg up; SectionsMenu covers md to lg) */}
+          <nav aria-label="Main navigation" className="hidden lg:flex items-center">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-body font-medium text-worn-ink-soft hover:text-worn-ink transition-colors duration-fast"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-caption font-medium tracking-wide text-worn-muted transition-colors duration-200 hover:text-worn-ink xl:px-3"
               >
                 {link.label}
               </Link>
             ))}
+          </nav>
+
+          {/* Right side */}
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <SectionsMenu items={navLinks} label="Main navigation" />
             <SiteSwitch current="play" />
-            <Link
-              href="#download"
-              className="btn-primary btn-md"
-            >
-              <Download className="w-4 h-4" aria-hidden="true" />
-              Get early access
+            <Link href="#download" className="btn-primary btn-md !min-h-[44px] !px-4 !py-2 text-caption sm:!min-h-[40px]">
+              <span className="sm:hidden">Join</span>
+              <span className="hidden sm:inline">Get early access</span>
             </Link>
           </div>
-
-          {/* Phones and tablets: the product switch stays visible beside the menu */}
-          <div className="flex items-center gap-2 lg:hidden">
-            <SiteSwitch current="play" />
-            <button
-              ref={menuButtonRef}
-              className="p-2 rounded-md text-worn-ink hover:bg-worn-warm transition-colors"
-              onClick={() => (mobileOpen ? closeMenu(true) : setMobileOpen(true))}
-              aria-expanded={mobileOpen}
-              aria-controls="mobile-menu"
-              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-            >
-              {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
         </div>
-
-        {/* Mobile menu */}
-        <AnimatePresence mode="wait">
-          {mobileOpen && (
-            <motion.div
-              ref={menuRef}
-              id="mobile-menu"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              // framer-motion durations are in seconds
-              transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeOut' }}
-              className="lg:hidden overflow-hidden border-t border-worn-rule bg-worn-paper py-4"
-            >
-              <div className="flex flex-col gap-4">
-                {navLinks.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className="text-body-l font-medium text-worn-ink-soft hover:text-worn-ink"
-                    onClick={() => closeMenu(false)}
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-                <Link
-                  href="#download"
-                  className="btn-primary btn-md text-center mt-2"
-                  onClick={() => closeMenu(false)}
-                >
-                  <Download className="w-4 h-4 inline-block mr-2" aria-hidden="true" />
-                  Get early access
-                </Link>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </nav>
+      </div>
     </motion.header>
   );
 }
