@@ -17,9 +17,3 @@ export const CONTACT_EMAIL = 'hello@worncloset.app';
 export function closetHref(hash = ''): string {
   return `${CLOSET_PATH}${hash}`;
 }
-
-/**
- * The Google Apps Script web app that adds waitlist sign-ups to a Sheet (see waitlist/README.md).
- * Unset, the sign-up buttons fall back to an email to CONTACT_EMAIL.
- */
-export const WAITLIST_URL = process.env.NEXT_PUBLIC_WAITLIST_URL?.trim() || '';

@@ -1,18 +1,26 @@
 'use client';
 
 import { useId, useState, type FormEvent } from 'react';
-import { ArrowRight, Check, Mail } from 'lucide-react';
-import { CONTACT_EMAIL, WAITLIST_URL } from '@/lib/site';
+import { ArrowRight, Check } from 'lucide-react';
+import { CONTACT_EMAIL } from '@/lib/site';
 
 type List = 'play' | 'closet';
+type Field = 'name' | 'email' | 'phone';
 type State =
   | { kind: 'idle' }
   | { kind: 'sending' }
   | { kind: 'done' }
-  // `mail`: end the message with a mailto link to CONTACT_EMAIL, the way round a failed sign-up
-  | { kind: 'error'; message: string; mail?: boolean };
+  // `field`: the input the message is about. `mail`: end the message with a mailto link to
+  // CONTACT_EMAIL, the way round a failed sign-up.
+  | { kind: 'error'; message: string; field?: Field; mail?: boolean };
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/* Digits with the usual separators; 7 to 15 digits covers real numbers (E.164 tops out at 15). */
+const PHONE = /^\+?[\d\s().-]+$/;
+const phoneOk = (value: string) => {
+  const digits = value.replace(/\D/g, '').length;
+  return PHONE.test(value) && digits >= 7 && digits <= 15;
+};
 
 const COPY: Record<List, { button: string; subject: string; done: string }> = {
   play: {
@@ -27,47 +35,54 @@ const COPY: Record<List, { button: string; subject: string; done: string }> = {
   },
 };
 
+const FIELD =
+  'min-h-[44px] w-full min-w-0 rounded-pill border border-worn-paper/15 bg-worn-paper/10 px-4 text-[15px] text-worn-paper placeholder:text-worn-paper/50 transition-colors focus:border-worn-gold focus:outline-none aria-[invalid=true]:border-worn-gold';
+
 /**
- * Early-access sign-up for the dark CTA sections. Sign-ups go to a Google Sheet through an Apps Script
- * web app; until NEXT_PUBLIC_WAITLIST_URL is set it stays the old email button.
+ * Early-access sign-up for the dark CTA sections: name, email and phone, posted to /api/join, where
+ * the site's Worker (apps/web/worker) emails the details to the founders' inbox.
  */
 export function WaitlistForm({ list }: { list: List }) {
   const id = useId();
   const copy = COPY[list];
-  const [email, setEmail] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle' });
-
-  if (!WAITLIST_URL) {
-    return (
-      <a
-        href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(copy.subject)}`}
-        className="inline-flex min-h-[48px] items-center gap-2 rounded-pill bg-worn-paper px-7 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold"
-      >
-        <Mail className="h-4 w-4" aria-hidden="true" /> {copy.button}
-      </a>
-    );
-  }
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const value = email.trim();
-    if (!EMAIL.test(value)) {
-      setState({ kind: 'error', message: 'Enter an email address like name@example.com.' });
-      return;
-    }
+    const form = e.currentTarget;
+    const data = new FormData(form);
+    const value = (key: string) => String(data.get(key) ?? '').trim();
+    const name = value('name');
+    const email = value('email');
+    const phone = value('phone');
+    const reject = (field: Field, message: string) => {
+      setState({ kind: 'error', field, message });
+      (form.elements.namedItem(field) as HTMLInputElement | null)?.focus();
+    };
+    if (!name) return reject('name', 'Tell us your name.');
+    if (!EMAIL.test(email)) return reject('email', 'Enter an email address like name@example.com.');
+    if (!phoneOk(phone)) return reject('phone', 'Enter a phone number with its country code, like +91 98765 43210.');
     setState({ kind: 'sending' });
     try {
-      // A plain form post: no preflight, and Apps Script answers it with CORS headers.
-      const body = new URLSearchParams({
-        email: value,
-        list,
-        page: window.location.pathname,
-        referrer: document.referrer,
-        website: String(new FormData(e.currentTarget).get('website') ?? ''),
+      const res = await fetch('/api/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          email,
+          phone,
+          list,
+          page: window.location.pathname,
+          referrer: document.referrer,
+          website: value('website'),
+        }),
       });
-      const res = await fetch(WAITLIST_URL, { method: 'POST', body });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!data.ok) throw new Error(data.error || 'not added');
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (body.error === 'rate_limited') {
+        setState({ kind: 'error', message: 'Too many sign-ups from here just now. Try again in a minute.' });
+        return;
+      }
+      if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setState({ kind: 'done' });
     } catch {
       setState({
@@ -86,34 +101,66 @@ export function WaitlistForm({ list }: { list: List }) {
     );
   }
 
+  const invalid = (field: Field) => state.kind === 'error' && state.field === field;
+
   return (
-    <form onSubmit={submit} noValidate className="w-full max-w-[480px]">
-      <div className="flex flex-col gap-2 rounded-[28px] border border-worn-paper/20 bg-worn-paper/10 p-1.5 backdrop-blur sm:flex-row sm:rounded-pill">
+    <form
+      onSubmit={submit}
+      onChange={() => state.kind === 'error' && setState({ kind: 'idle' })}
+      noValidate
+      className="w-full max-w-[480px]"
+    >
+      <div className="grid gap-2 rounded-[28px] border border-worn-paper/20 bg-worn-paper/10 p-2 backdrop-blur sm:grid-cols-2">
+        <label htmlFor={`${id}-name`} className="sr-only">
+          Your name
+        </label>
+        <input
+          id={`${id}-name`}
+          name="name"
+          type="text"
+          autoComplete="name"
+          required
+          placeholder="Your name"
+          aria-invalid={invalid('name')}
+          aria-describedby={`${id}-note`}
+          className={FIELD}
+        />
+        <label htmlFor={`${id}-phone`} className="sr-only">
+          Phone number, with country code
+        </label>
+        <input
+          id={`${id}-phone`}
+          name="phone"
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          required
+          placeholder="Phone, with country code"
+          aria-invalid={invalid('phone')}
+          aria-describedby={`${id}-note`}
+          className={FIELD}
+        />
         <label htmlFor={`${id}-email`} className="sr-only">
           Email address
         </label>
         <input
           id={`${id}-email`}
+          name="email"
           type="email"
           inputMode="email"
           autoComplete="email"
           required
           placeholder="you@example.com"
-          value={email}
-          onChange={(e) => {
-            setEmail(e.target.value);
-            if (state.kind === 'error') setState({ kind: 'idle' });
-          }}
-          aria-invalid={state.kind === 'error'}
+          aria-invalid={invalid('email')}
           aria-describedby={`${id}-note`}
-          className="min-h-[44px] min-w-0 flex-1 bg-transparent px-4 text-[15px] text-worn-paper placeholder:text-worn-paper/50 focus:outline-none"
+          className={`${FIELD} sm:col-span-2`}
         />
         {/* Bots fill every field; people never see this one. */}
         <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" className="hidden" />
         <button
           type="submit"
           disabled={state.kind === 'sending'}
-          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-pill bg-worn-paper px-6 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold disabled:opacity-70"
+          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-pill bg-worn-paper px-6 text-[15px] font-semibold text-worn-ink transition-colors hover:bg-worn-gold-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-worn-gold disabled:opacity-70 sm:col-span-2"
         >
           {state.kind === 'sending' ? 'Adding you…' : copy.button}
           <ArrowRight className="h-4 w-4" aria-hidden="true" />
