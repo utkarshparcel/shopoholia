@@ -2,6 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ImageResponse } from 'next/og';
 
+// Static export (Next 15 wants this on every metadata route under output: 'export').
+export const dynamic = 'force-static';
+
 export const alt = 'Worn Closet: for everything you already bought';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
