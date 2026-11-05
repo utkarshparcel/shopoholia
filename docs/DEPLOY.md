@@ -18,7 +18,7 @@ which needs the Apple and Google developer accounts.
    `apps/web/wrangler.jsonc` uploads that folder plus the Worker as `worn-web`. The Worker only
    runs for `/api/*` (`run_worker_first`); everything else is served straight from the assets.
    Response headers live in `apps/web/public/_headers`. To ship by hand: `pnpm --filter @worn/web
-   exec wrangler login` once per machine, then `pnpm --filter @worn/web deploy` (runs
+   exec wrangler login` once per machine, then `pnpm --filter @worn/web run deploy` (runs
    `next build && wrangler deploy`). Pushes to `main` that touch `apps/web` deploy on their own
    through `.github/workflows/deploy-web.yml` once the repository has the `CLOUDFLARE_API_TOKEN`
    secret: in the Cloudflare dashboard, My Profile, API Tokens, create a token from the "Edit
