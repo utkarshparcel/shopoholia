@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "worn-web",
+  "compatibility_date": "2026-10-15",
+  // Keep the workers.dev URL alive next to the custom domain (a custom domain turns it off by default).
+  "workers_dev": true,
+  "preview_urls": true,
+  // Assets-only Worker: `next build` writes the static export to ./out.
+  "assets": {
+    "directory": "./out",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  // worncloset.app is a zone in the same account; www redirects to it with a zone Redirect Rule.
+  "routes": [{ "pattern": "worncloset.app", "custom_domain": true }]
+}

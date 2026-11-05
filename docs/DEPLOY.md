@@ -12,19 +12,33 @@ which needs the Apple and Google developer accounts.
 
 `apps/web` is a static Next.js site (every page is prerendered; no server code, no middleware).
 
-1. **Host.** Vercel is the simplest fit for Next.js: import the repo, set the root directory to
-   `apps/web`, framework Next.js, install command `pnpm install --frozen-lockfile`, build command
-   `pnpm build`. Cloudflare Pages works too but needs the Next.js adapter.
-2. **Environment variables** (Production, and Preview if you want):
+1. **Host.** Cloudflare Workers, static assets only. `apps/web/next.config.js` sets
+   `output: 'export'`, so `next build` writes the whole site to `apps/web/out`, and
+   `apps/web/wrangler.jsonc` uploads that folder as the `worn-web` Worker (no server code).
+   Response headers live in `apps/web/public/_headers`. To ship: `pnpm --filter @worn/web exec
+   wrangler login` once per machine, then `pnpm --filter @worn/web deploy` (runs
+   `next build && wrangler deploy`).
+2. **Environment variables** are read at build time, so export them in the shell that runs the
+   deploy:
    - `NEXT_PUBLIC_WAITLIST_URL`: the Google Apps Script web app URL (set-up steps in
      [`apps/web/waitlist/README.md`](../apps/web/waitlist/README.md)). Without it the sign-up
      forms fall back to an email button.
    - `NEXT_PUBLIC_SITE_URL` only if the site is not served from `https://worncloset.app`.
-3. **Domains.** Add `worncloset.app` and `www.worncloset.app` to the host and redirect `www` to the
-   apex. Create the DNS records the host gives you.
-4. **Email.** Forward `hello@` and `privacy@worncloset.app` to a real inbox (Cloudflare Email
-   Routing if the DNS is on Cloudflare, otherwise ImprovMX). The site and the privacy policy use
-   both addresses.
+3. **Domains.** The Worker is always reachable at `https://worn-web.worn-web.workers.dev`.
+   `worncloset.app` is a zone in the same Cloudflare account (Free plan, active since 2026-11-05).
+   The domain stays registered at GoDaddy, which points at Cloudflare's nameservers
+   `cody.ns.cloudflare.com` and `imani.ns.cloudflare.com` (GoDaddy: Domain, Nameservers, Change,
+   "I'll use my own nameservers"). `wrangler.jsonc` binds the apex to the Worker as a custom domain
+   (`routes`), a zone Redirect Rule (template "Redirect from WWW to root") sends `www` to the apex,
+   and the zone setting "Always Use HTTPS" is on.
+4. **Email.** Cloudflare Email Routing (free) is enabled on the zone and forwards `hello@` and
+   `privacy@worncloset.app` to the account inbox; the MX, SPF and DKIM records it needs are in the
+   zone. The site and the privacy policy use both addresses. To reply *as* `hello@worncloset.app`
+   for free, add it in Gmail under Settings, Accounts and Import, "Send mail as" (SMTP server
+   `smtp.gmail.com`, port 587, the Gmail address plus a Google App Password; the confirmation code
+   arrives through the forwarding). So that this mail is not quarantined, the zone's `_dmarc` TXT
+   has to be relaxed to `v=DMARC1; p=none;` and the root SPF TXT extended to
+   `v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all` (still to do).
 5. **Check after deploy:** `/`, `/closet`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`,
    `/closet/opengraph-image` all load; submit one email through each form and see the row in the
    Sheet; paste the URL into a chat app to see the share card.
