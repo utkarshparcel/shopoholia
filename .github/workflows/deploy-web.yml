@@ -1,0 +1,63 @@
+name: Deploy website
+
+# Ships apps/web to Cloudflare (the worn-web Worker behind worncloset.app) on every push to main that
+# touches it. Needs the CLOUDFLARE_API_TOKEN repository secret, an API token made from Cloudflare's
+# "Edit Cloudflare Workers" template (docs/DEPLOY.md). Until that secret exists the deploy is skipped
+# with a notice rather than failing.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  token:
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Website not deployed::Add the CLOUDFLARE_API_TOKEN repository secret and worncloset.app deploys from here (docs/DEPLOY.md). Until then run: pnpm --filter @worn/web deploy"
+          fi
+
+  deploy:
+    needs: token
+    if: needs.token.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter @worn/web...
+
+      - name: Build and deploy
+        run: pnpm --filter @worn/web deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 4afc06ff2064a21afb5799c5ac1145f9
