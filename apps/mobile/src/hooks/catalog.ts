@@ -78,6 +78,8 @@ export function tryonFailedMessage(retryAfter: string | null | undefined, now = 
 /**
  * Requests a try-on and, while it's still processing, asks again every 2s for up to a minute.
  * Asking again is safe: the API reports on the job it already started instead of starting another.
+ * A preview waiting for the render agent (`rendersWaiting`) resolves at once, still PROCESSING,
+ * with `expectedReadyAt` for the screen to show.
  */
 export function useTryon(listingId: string, variantId: string | null) {
   const accessToken = useSessionStore((s) => s.accessToken);
@@ -102,7 +104,9 @@ export function useTryon(listingId: string, variantId: string | null) {
       try {
         const deadline = Date.now() + TRYON_POLL_LIMIT_MS;
         let result = await requestTryon(accessToken, listingId, variantId);
-        while (result.status === 'PROCESSING' && !stopped) {
+        // Waiting for the render agent (overnight, or while it is down): asking every 2s won't
+        // help, so stop and let the screen say when it should be ready.
+        while (result.status === 'PROCESSING' && !result.rendersWaiting && !stopped) {
           if (Date.now() >= deadline) {
             throw new Error('Your try-on is taking longer than usual. Try again in a little while.');
           }

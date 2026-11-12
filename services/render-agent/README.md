@@ -22,8 +22,33 @@ leasing jobs. Use `--dry-run` to test everything else.
 | `RENDER_AGENT_WORK_DIR` | `$TMPDIR/worn-render-agent` | Per-job temp folders, deleted after each job. |
 | `RENDER_AGENT_POLL_SECONDS` | `30` | Lease poll interval when idle. Heartbeat every 60 s. |
 
-`--dry-run` (or `RENDER_AGENT_DRY_RUN=1`) uses a fake engine that copies the model photo: it leases
-real jobs and completes them with the model photo, so use it against a staging API only.
+`--dry-run` (or `RENDER_AGENT_DRY_RUN=1`) uses a fake engine that mirrors the model photo left to
+right (so it passes the quality checks below): it leases real jobs and completes them with that
+image, so use it against a staging API only.
+
+## Quality checks before upload
+
+Every render is checked on the Mac before it is PUT to R2 (`src/quality.ts`). One that fails is
+never uploaded: the agent reports `POST /agent/renders/:id/fail` with `retryable: true` and a reason
+`quality:<check>: <detail>`, so the API re-queues it until the job has used its attempts (then it
+fails, and a paid render is refunded).
+
+| Check | Fails when |
+|---|---|
+| `quality:format` | the bytes are not a JPEG or PNG (magic bytes), the header has no readable dimensions, the image doesn't decode (truncated or corrupt), or it is a PNG for a JPEG upload (the signed PUT names the content type) |
+| `quality:dimensions` | the short side is under `MIN_SHORT_SIDE_PX` (512) |
+| `quality:blank` | the image is near-uniform: the brightness spread across 64×64 block averages is under `MIN_LUMA_STDDEV` (6 of 255), e.g. all black, all white, or flat grey with compression noise |
+| `quality:unchanged` | it is the model photo again: byte for byte, or the same shape with a mean block difference of at most `MAX_UNCHANGED_MEAN_DIFF` (1 of 255), which catches a re-encode or a resize |
+
+The decoders are pure JS (`jpeg-js`, `pngjs`): no native modules, so the install stays `pnpm install`.
+
+**Future work (not built; each needs an ML model on the Mac):**
+
+- **Face similarity**: compare a face embedding of the render with the model photo's, and fail
+  (`quality:identity`) when the person no longer looks like themselves.
+- **Safety**: an image classifier for nudity or other unsafe output before anything leaves the Mac.
+- **Garment fidelity**: colour and pattern of the dressed garment against the garment photo
+  (plan §4.7).
 
 ## Mac setup (owner)
 

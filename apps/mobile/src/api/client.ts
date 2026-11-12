@@ -403,6 +403,10 @@ export type TryonResponse = {
   status: 'READY' | 'PROCESSING' | 'FAILED';
   previewUrl: string | null;
   retryAfter?: string | null;
+  /** PROCESSING, but waiting for the render agent (overnight, or while it is down). */
+  rendersWaiting?: boolean;
+  /** When a waiting preview should be ready; null when there is no estimate ("shortly"). */
+  expectedReadyAt?: string | null;
 };
 
 function authHeaders(accessToken: string) {

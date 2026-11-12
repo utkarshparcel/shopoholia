@@ -31,7 +31,9 @@ the other five unlock for 50 coins.
    for each: the job id, its kind (`render` or `tryon`), the scene, signed GET URLs for the model
    photo and the garment photo(s) in order, and a signed PUT URL with its content type.
 3. The agent downloads the inputs to a private temp folder under random names, calls mediagen,
-   PUTs the JPEG to R2, and calls `POST /agent/renders/:id/complete`. The API checks the object is
+   checks the output (a real JPEG, at least 512 px on its short side, not blank, not the model
+   photo again; a failure is reported retryable as `quality:<check>` and never uploaded), PUTs the
+   JPEG to R2, and calls `POST /agent/renders/:id/complete`. The API checks the object is
    in R2, marks the render `DONE`, and (for a free render) opens the reveal and sends the push,
    the same path as before.
 4. On an error the agent calls `POST /agent/renders/:id/fail` with `retryable`. A retryable
@@ -73,6 +75,12 @@ are waiting for the agent:
 The app shows "Delivered — your reveal is being styled and will be ready by about 7 AM. We'll send
 you a push." on the order and reveal screens, in the user's locale and time zone.
 
+A listing try-on preview (`POST /listings/:id/tryon`) answers 202 `PROCESSING` with the same
+`rendersWaiting` and `expectedReadyAt`, from the same estimate (`agentWaitEstimate`). While it is
+waiting the app stops polling and shows "Your try-on is being styled and will be ready by about
+7 AM. Tap Try on me again to see it." ("shortly" with no time) under the button. A preview sends
+no push.
+
 `RENDER_OVERFLOW=fashn` (with `FASHN_API_KEY`) hands a job to FASHN, through the old in-process
 pipeline at 1k balanced, when it is queued outside the window, when the agent has been silent for
 3 minutes, or when it is still unleased after `RENDER_OVERFLOW_AFTER_MINUTES` (15). With `none`
@@ -89,6 +97,7 @@ Every setting is in `docs/DEPLOY.md` ("Renders"). Mac setup: `services/render-ag
   API isn't documented here, so the agent refuses to lease jobs until someone fills in its
   endpoint, request format (model photo, garment photos, prompt, seed, steps), how the output
   comes back, its clean-up call, and tunes the six scene prompts. `--dry-run` tests the whole loop
-  with a fake engine that copies the model photo.
-- Quality checks before upload (face similarity, colour, safety) are in the plan (§4.7) and not
-  built.
+  with a fake engine that mirrors the model photo.
+- The quality checks before upload cover format, size, blank and unchanged output
+  (`services/render-agent/README.md`). Face similarity, garment colour and safety (plan §4.7) need
+  an ML model and are not built.

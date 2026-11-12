@@ -328,6 +328,23 @@ export function renderWaitEstimate(
   return { waiting: true, expectedReadyAt: new Date(estimate).toISOString() };
 }
 
+/**
+ * The wait estimate for work that is `pending` for the agent now; reads the last heartbeat and
+ * the queue depth only when it is. Shared by the reveal and the try-on preview.
+ */
+export async function agentWaitEstimate(
+  deps: Pick<AgentJobsDeps, "repos" | "config">,
+  pending: boolean,
+  now = new Date(),
+): Promise<{ waiting: boolean; expectedReadyAt: string | null }> {
+  if (deps.config.backend !== "agent" || !pending) return { waiting: false, expectedReadyAt: null };
+  const [lastHeartbeatAt, queueDepth] = await Promise.all([
+    deps.repos.latestAgentHeartbeat(),
+    deps.repos.countWaitingAgentJobs(),
+  ]);
+  return renderWaitEstimate(deps.config, { now, lastHeartbeatAt, pending, queueDepth });
+}
+
 /** The wait estimate for one order's reveal. */
 export async function revealWaitEstimate(
   deps: Pick<AgentJobsDeps, "repos" | "config">,
@@ -335,12 +352,16 @@ export async function revealWaitEstimate(
   now = new Date(),
 ) {
   const pending = orderRenders.some((r) => r.unlocked && (r.status === "QUEUED" || r.status === "RUNNING"));
-  if (deps.config.backend !== "agent" || !pending) return { waiting: false, expectedReadyAt: null };
-  const [lastHeartbeatAt, queueDepth] = await Promise.all([
-    deps.repos.latestAgentHeartbeat(),
-    deps.repos.countWaitingAgentJobs(),
-  ]);
-  return renderWaitEstimate(deps.config, { now, lastHeartbeatAt, pending, queueDepth });
+  return agentWaitEstimate(deps, pending, now);
+}
+
+/** The wait estimate for a listing try-on preview, while it is still PROCESSING. */
+export async function tryonWaitEstimate(
+  deps: Pick<AgentJobsDeps, "repos" | "config">,
+  preview: { status: string },
+  now = new Date(),
+) {
+  return agentWaitEstimate(deps, preview.status === "PROCESSING", now);
 }
 
 /** Hands overflow-leased jobs to the in-process queue (FASHN). */

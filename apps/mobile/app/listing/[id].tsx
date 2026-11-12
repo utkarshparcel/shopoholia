@@ -20,6 +20,7 @@ import { errorText } from '@/src/lib/errorText';
 import { FEATURE_CASHBACK } from '@/src/lib/features';
 import { goBack } from '@/src/lib/goBack';
 import { listingTagLabels } from '@/src/lib/listingTags';
+import { tryonWaitCopy } from '@/src/lib/revealWait';
 import { recordAffiliateClick, type AffiliateLink } from '@/src/api/client';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -112,6 +113,8 @@ export default function ListingDetailScreen() {
     () => variants.find((variant) => variant.id === selectedVariantId) ?? null,
     [variants, selectedVariantId],
   );
+  // Waiting for the render agent: say when it should be ready instead of a spinner.
+  const tryonWaiting = tryon.data?.status === 'PROCESSING' && tryon.data.rendersWaiting === true;
   const previewUrl =
     tryon.data?.status === 'READY' ? tryon.data.previewUrl : listing.data?.houseModelImageUrl;
   const affiliateLinks = listing.data?.affiliateLinks ?? [];
@@ -159,7 +162,7 @@ export default function ListingDetailScreen() {
             ) : (
               <View style={styles.heroFallback} />
             )}
-            {tryon.isPending || tryon.data?.status === 'PROCESSING' ? (
+            {tryon.isPending || (tryon.data?.status === 'PROCESSING' && !tryonWaiting) ? (
               <View style={styles.tryonOverlay}>
                 <ActivityIndicator color="#fff" />
                 <Text style={styles.tryonOverlayText}>Styling your look…</Text>
@@ -231,6 +234,11 @@ export default function ListingDetailScreen() {
                 variant="primary"
                 block
               />
+              {tryonWaiting ? (
+                <Text style={styles.tryonWait} testID="listing-tryon-wait">
+                  {tryonWaitCopy(tryon.data?.expectedReadyAt)}
+                </Text>
+              ) : null}
               <Button
                 disabled={!selectedVariant || addMutation.isPending}
                 label={addMutation.isPending ? 'Adding…' : 'Add to haul'}
@@ -451,6 +459,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15,14,12,0.45)',
     gap: 8,
     justifyContent: 'center',
+  },
+  tryonWait: {
+    color: textMuted,
+    fontFamily: fontSans,
+    fontSize: fsCaption,
+    textAlign: 'center',
   },
   tryonOverlayText: {
     color: '#fff',
