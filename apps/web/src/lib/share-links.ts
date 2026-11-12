@@ -1,7 +1,8 @@
 /**
  * The links the app shares (packages/shared/src: family-share.ts, swap-circle.ts, household.ts,
- * ask-friend.ts, return-poll.ts) and what their landing pages say. next.config.js rewrites each
- * `/<prefix>/<code>` to the static page at `/<prefix>`, which reads the code from the address.
+ * ask-friend.ts, return-poll.ts) and what their landing pages say. public/_redirects maps each
+ * `/<prefix>/<code>` onto the static page at `/<prefix>` (Cloudflare, status 200), which reads the
+ * code from the address.
  *
  * No imports: the tests run this file in plain Node.
  */

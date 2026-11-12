@@ -11,10 +11,11 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * S1-29 — the links the app shares (household, swap circle, family found-money) must land on
- * pages the website serves. apps/web serves them through rewrites of `/<x>/:code`.
+ * pages the website serves. The site is a static export on Cloudflare, which maps `/<x>/:code`
+ * onto the page in apps/web/public/_redirects.
  */
-const webConfig = fs.readFileSync(path.resolve(__dirname, '../../../web/next.config.js'), 'utf8');
-const servedPrefixes = [...webConfig.matchAll(/source:\s*'\/([a-z]+)\/:code'/g)].map((m) => m[1]);
+const redirects = fs.readFileSync(path.resolve(__dirname, '../../../web/public/_redirects'), 'utf8');
+const servedPrefixes = [...redirects.matchAll(/^\/([a-z]+)\/:code\s+\/\1\s+200\s*$/gm)].map((m) => m[1]);
 
 function pathOf(url: string | null): string[] {
   const u = new URL(url!);
