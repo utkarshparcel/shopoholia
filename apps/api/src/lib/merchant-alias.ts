@@ -7,6 +7,9 @@ import {
   computeExchangeWindowDeadline,
   computeReturnWindowDeadline,
 } from "@worn/shared";
+import type { Repositories } from "./repositories/types.js";
+
+type AliasRepos = Pick<Repositories, "upsertMerchantAlias" | "listMerchantAliases">;
 
 export type MerchantAlias = {
   alias: string;
@@ -42,52 +45,36 @@ export function isUnknownMerchant(merchant: string | null | undefined): boolean 
   return UNKNOWN_LABELS.has(key) || key.length === 0;
 }
 
-/** In-memory per-user alias map (tests + memory repo path). */
-const aliasesByUser = new Map<string, Map<string, MerchantAlias>>();
-
-export function listMerchantAliases(userId: string): MerchantAlias[] {
-  const m = aliasesByUser.get(userId);
-  if (!m) return [];
-  return [...m.values()].sort((a, b) => a.alias.localeCompare(b.alias));
+/** The user's aliases (stored in `merchant_aliases`), by alias. */
+export async function listMerchantAliases(repos: AliasRepos, userId: string): Promise<MerchantAlias[]> {
+  const rows = await repos.listMerchantAliases(userId);
+  return rows.map((r) => ({ alias: r.alias, canonical: r.canonical, createdAt: r.createdAt.toISOString() }));
 }
 
-export function upsertMerchantAlias(
+export async function upsertMerchantAlias(
+  repos: AliasRepos,
   userId: string,
   alias: string,
   canonical: string,
-): MerchantAlias {
+): Promise<MerchantAlias> {
   const key = normalizeMerchantKey(alias);
   const canon = canonical.trim();
   if (!key || !canon) {
     throw new Error("alias and canonical are required");
   }
-  let map = aliasesByUser.get(userId);
-  if (!map) {
-    map = new Map();
-    aliasesByUser.set(userId, map);
-  }
-  const row: MerchantAlias = {
-    alias: key,
-    canonical: canon,
-    createdAt: new Date().toISOString(),
-  };
-  map.set(key, row);
-  return row;
+  const row = await repos.upsertMerchantAlias(userId, key, canon);
+  return { alias: row.alias, canonical: row.canonical, createdAt: row.createdAt.toISOString() };
 }
 
-export function resolveMerchantAlias(
+export async function resolveMerchantAlias(
+  repos: AliasRepos,
   userId: string,
   merchant: string | null | undefined,
-): string | null {
+): Promise<string | null> {
   if (!merchant?.trim()) return null;
   const key = normalizeMerchantKey(merchant);
-  const hit = aliasesByUser.get(userId)?.get(key);
+  const hit = (await repos.listMerchantAliases(userId)).find((a) => a.alias === key);
   return hit?.canonical ?? merchant.trim();
-}
-
-export function clearMerchantAliases(userId?: string): void {
-  if (userId) aliasesByUser.delete(userId);
-  else aliasesByUser.clear();
 }
 
 export function buildUnknownMerchantQueue(
@@ -151,11 +138,12 @@ export const CANONICAL_MERCHANT_PICKS = [
   "Zara",
 ] as const;
 
-export function merchantPickerOptions(
+export async function merchantPickerOptions(
+  repos: AliasRepos,
   userId: string,
   extras: string[] = [],
-): string[] {
-  const aliases = listMerchantAliases(userId).map((a) => a.canonical);
+): Promise<string[]> {
+  const aliases = (await repos.listMerchantAliases(userId)).map((a) => a.canonical);
   const set = new Set<string>([
     ...CANONICAL_MERCHANT_PICKS,
     ...aliases,

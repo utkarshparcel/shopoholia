@@ -1,24 +1,26 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildGiftDeadlineBoard,
-  clearGiftBudgetLocks,
   computeGiftDeadlineReminderDelayMs,
   GIFT_DEADLINE_LEAD_DAYS,
   giftDeadlineReminderJobId,
+  listGiftBudgetLocks,
   lockShortlistOfThree,
   setGiftBudgetLock,
 } from "./gift-deadline.js";
+import { createMemoryRepositories } from "./repositories/memory.js";
 
 describe("U049 gift-deadline", () => {
-  beforeEach(() => clearGiftBudgetLocks());
-
-  it("builds deadline board with shortlist 3 + budget lock + T-7/T-2", () => {
+  it("builds deadline board with shortlist 3 + budget lock + T-7/T-2", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000331");
+    const mom = await repos.createRecipient({ userId: user.id, name: "Mom", relationship: "FAMILY", region: "IN" });
     expect([...GIFT_DEADLINE_LEAD_DAYS]).toEqual([7, 2]);
     const short = lockShortlistOfThree(["a", "b", "c", "d"], 500000);
     expect(short.shortlistIds).toEqual(["a", "b", "c"]);
 
-    setGiftBudgetLock({
-      recipientId: "r1",
+    await setGiftBudgetLock(repos, user.id, {
+      recipientId: mom.id,
       occasion: "BIRTHDAY",
       date: "2026-09-10T00:00:00.000Z",
       budgetLockMinor: 500000,
@@ -28,16 +30,18 @@ describe("U049 gift-deadline", () => {
     const board = buildGiftDeadlineBoard(
       [
         {
-          recipientId: "r1",
+          recipientId: mom.id,
           recipientName: "Mom",
           occasion: "BIRTHDAY",
           label: "Mom bday",
           date: "2026-09-10T00:00:00.000Z",
         },
       ],
+      await listGiftBudgetLocks(repos, user.id),
       new Date("2026-08-27T00:00:00.000Z"),
     );
     expect(board[0]?.budgetLockMinor).toBe(500000);
+    expect(board[0]?.currency).toBe("INR");
     expect(board[0]?.shortlistCount).toBe(3);
     expect(board[0]?.reminderLeads).toEqual([7, 2]);
 
@@ -50,5 +54,35 @@ describe("U049 gift-deadline", () => {
     expect(giftDeadlineReminderJobId("r1", "BIRTHDAY", "2026-09-10T00:00:00.000Z", 7)).toContain(
       "T-7",
     );
+  });
+
+  it("one lock per recipient, occasion and day: a repeat replaces it", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000332");
+    const dad = await repos.createRecipient({ userId: user.id, name: "Dad", relationship: "FAMILY", region: "IN" });
+    const input = { recipientId: dad.id, occasion: "BIRTHDAY", date: "2026-12-01T00:00:00.000Z" };
+    await setGiftBudgetLock(repos, user.id, { ...input, budgetLockMinor: 100_000, currency: "USD", shortlistIds: ["x"] });
+    const second = await setGiftBudgetLock(repos, user.id, { ...input, budgetLockMinor: 250_000, currency: "USD" });
+    expect(second).toMatchObject({ budgetLockMinor: 250_000, currency: "USD", shortlistIds: [] });
+    expect(await repos.listGiftBudgetLocks(user.id)).toHaveLength(1);
+    // Another day of the same occasion is its own lock.
+    await setGiftBudgetLock(repos, user.id, { ...input, date: "2027-12-01T00:00:00.000Z", budgetLockMinor: 1 });
+    expect(await repos.listGiftBudgetLocks(user.id)).toHaveLength(2);
+  });
+
+  it("refuses a lock on someone else's recipient", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000333");
+    const { user: other } = await repos.createUser("+919800000334");
+    const theirs = await repos.createRecipient({ userId: other.id, name: "Sis", relationship: "FAMILY", region: "IN" });
+    const lock = await setGiftBudgetLock(repos, user.id, {
+      recipientId: theirs.id,
+      occasion: "BIRTHDAY",
+      date: "2026-12-01T00:00:00.000Z",
+      budgetLockMinor: 1,
+    });
+    expect(lock).toBeNull();
+    expect(await repos.listGiftBudgetLocks(user.id)).toEqual([]);
+    expect(await repos.listGiftBudgetLocks(other.id)).toEqual([]);
   });
 });

@@ -3,44 +3,36 @@
  */
 
 import type { ReconcileMismatch } from "./money-reconcile.js";
+import type { Repositories } from "./repositories/types.js";
 
 export type UserReconcileMismatch = ReconcileMismatch & {
   investigated: boolean;
   investigatedAt: string | null;
 };
 
-/** Per-user investigated account ids. */
-const investigated = new Map<string, Map<string, string>>();
-
-export function markReconcileInvestigated(
+/** Marks the user's account investigated (`money_accounts.reconcile_investigated_at`); null if not theirs. */
+export async function markReconcileInvestigated(
+  repos: Pick<Repositories, "markMoneyAccountReconcileInvestigated">,
   userId: string,
   accountId: string,
   now: Date = new Date(),
-): { accountId: string; investigatedAt: string } {
-  let map = investigated.get(userId);
-  if (!map) {
-    map = new Map();
-    investigated.set(userId, map);
-  }
-  const at = now.toISOString();
-  map.set(accountId, at);
-  return { accountId, investigatedAt: at };
+): Promise<{ accountId: string; investigatedAt: string } | null> {
+  const at = await repos.markMoneyAccountReconcileInvestigated(accountId, userId, now);
+  return at ? { accountId, investigatedAt: at.toISOString() } : null;
 }
 
-export function clearReconcileInvestigated(userId?: string): void {
-  if (userId) investigated.delete(userId);
-  else investigated.clear();
-}
-
-export function annotateUserMismatches(
+export async function annotateUserMismatches(
+  repos: Pick<Repositories, "listReconcileInvestigatedAccounts">,
   userId: string,
   mismatches: ReconcileMismatch[],
-): UserReconcileMismatch[] {
-  const map = investigated.get(userId);
+): Promise<UserReconcileMismatch[]> {
+  const map = new Map(
+    (await repos.listReconcileInvestigatedAccounts(userId)).map((r) => [r.accountId, r.investigatedAt.toISOString()]),
+  );
   return mismatches
     .filter((m) => m.userId === userId)
     .map((m) => {
-      const at = map?.get(m.accountId) ?? null;
+      const at = map.get(m.accountId) ?? null;
       return {
         ...m,
         investigated: Boolean(at),

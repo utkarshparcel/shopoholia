@@ -84,10 +84,8 @@ import { categorySlot, rankGoesWith } from "../lib/outfit-goes-with.js";
 import { detectMissingPieces } from "../lib/missing-piece.js";
 import {
   appendLentWasteNote,
-  clearPhotoDumpTriageAt,
   dismissMissingLayer,
   getLaundryRules,
-  getPhotoDumpTriageAt,
   listDismissedMissingLayers,
   setLaundryRules,
   setPhotoDumpTriageAt,
@@ -2142,7 +2140,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       let wasteNote: string | null = null;
       if (decision.action === "lost") {
         wasteNote = decision.wasteNote;
-        appendLentWasteNote(userId, decision.wasteNote);
+        await appendLentWasteNote(app.deps.repos, userId, id, decision.wasteNote);
         audit(app.log, "wardrobe.lend.lost", { userId, itemId: id, wasteNote });
         trackServerEvent("wardrobe_lent_lost", { userId, itemId: id });
       } else {
@@ -2200,7 +2198,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(400).send({ error: "Bad Request", message: "Not a photo-dump item" });
       }
       const decidedAt = new Date();
-      setPhotoDumpTriageAt(id, decidedAt.toISOString());
+      await setPhotoDumpTriageAt(app.deps.repos, userId, id, decidedAt);
       audit(app.log, "wardrobe.photo_dump.triage", { userId, itemId: id, decision });
       trackServerEvent("photo_dump_triaged", { userId, itemId: id, decision });
 
@@ -2261,7 +2259,12 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       );
       let updated = restored;
       if (!restored) {
-        const at = getPhotoDumpTriageAt(id);
+        // null: not the caller's item (discarded or not).
+        const marks = await app.deps.repos.getWardrobeItemMarks(id, userId);
+        if (!marks) {
+          return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+        }
+        const at = marks.photoDumpTriagedAt?.toISOString() ?? null;
         if (!at || !canUndoPhotoDumpTriage(at)) {
           return reply.code(400).send({ error: "Bad Request", message: "Triage undo window expired" });
         }
@@ -2274,7 +2277,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags: undoPhotoDumpTriageTags(restored.tags) });
       }
       if (!updated) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
-      clearPhotoDumpTriageAt(id);
+      await setPhotoDumpTriageAt(app.deps.repos, userId, id, null);
       audit(app.log, "wardrobe.photo_dump.triage_undo", { userId, itemId: id });
       trackServerEvent("photo_dump_triage_undone", { userId, itemId: id });
       return { ok: true as const, item: await signedWardrobeJson(updated) };

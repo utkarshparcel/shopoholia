@@ -16,6 +16,7 @@ import {
   entitlementEvents,
   entitlementGrants,
   fitPreviews,
+  giftBudgetLocks,
   giftOrders,
   groupGiftContributions,
   householdMembers,
@@ -28,8 +29,10 @@ import {
   itemMetrics,
   listings,
   listingVariants,
+  lentWasteNotes,
   lookbookItems,
   measurementProfiles,
+  merchantAliases,
   merchantPurchaseItems,
   merchantPurchases,
   moneyAccounts,
@@ -37,6 +40,7 @@ import {
   orderItems,
   orders,
   outfits,
+  parserTrainingFixtures,
   paymentIntents,
   privacyRequests,
   pushEvents,
@@ -142,6 +146,10 @@ export const USER_DATA_TABLES: UserTableSpec[] = [
   { table: brandPriceWatches, owner: brandPriceWatches.userId },
   { table: emiPlans, owner: emiPlans.userId },
   { table: cashbackClaims, owner: cashbackClaims.userId },
+  { table: merchantAliases, owner: merchantAliases.userId },
+  { table: giftBudgetLocks, owner: giftBudgetLocks.userId },
+  { table: parserTrainingFixtures, owner: parserTrainingFixtures.userId },
+  { table: lentWasteNotes, owner: lentWasteNotes.userId },
 ];
 
 /** Tables left out of the export, with the reason. */
@@ -153,6 +161,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
   job_dead_letters: "worker failure log, ids only; no user column",
   marketplace_settlements: "ops payout ledger per marketplace order, keyed by seller id; no user column",
   render_agents: "the operator's render agents and their last heartbeat; no user column",
+  parser_break_flags: "ops flags for merchants whose email/SMS parser is broken, shown to everyone; no user column",
 };
 
 /**

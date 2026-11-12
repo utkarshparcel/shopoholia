@@ -23,7 +23,7 @@ import {
   matchesStyleKeywords,
   normalizeStyleKeywords,
 } from "./listing-feed.js";
-import type { SettlementRow } from "@worn/shared";
+import type { DispositionPickupBooking, SettlementRow } from "@worn/shared";
 import type {
   BudgetRecord,
   CustomizationTemplateRecord,
@@ -56,6 +56,12 @@ import type {
   FitPreviewRecord,
   PreviewResult,
   UpdateWardrobeItemInput,
+  MerchantAliasRecord,
+  ParserBreakFlagRecord,
+  GiftBudgetLockRecord,
+  ParserTrainingFixtureRecord,
+  LentWasteNoteRecord,
+  WardrobeItemMarks,
 } from "./types.js";
 import type {
   AvatarRecord,
@@ -157,6 +163,18 @@ function appendLedger(
 
 export function createMemoryRepositories(): Repositories {
   const marketplaceSettlementsStore: SettlementRow[] = [];
+  // Closet state that lived in module-level maps (S6-13); the user-owned ones go with the user.
+  const merchantAliasesStore = new Map<string, MerchantAliasRecord & { userId: string }>();
+  const parserBreakFlagsStore = new Map<string, ParserBreakFlagRecord>();
+  const giftBudgetLocksStore = new Map<string, GiftBudgetLockRecord>();
+  const parserTrainingFixturesStore: ParserTrainingFixtureRecord[] = [];
+  const lentWasteNotesStore: LentWasteNoteRecord[] = [];
+  /** By wardrobe item id. */
+  const wardrobeItemMarksStore = new Map<string, WardrobeItemMarks & { userId: string }>();
+  /** By money account id. */
+  const reconcileInvestigatedStore = new Map<string, { userId: string; investigatedAt: Date }>();
+  /** By disposition listing id. */
+  const dispositionPickupBookingsStore = new Map<string, { userId: string; booking: DispositionPickupBooking }>();
   const users = new Map<string, UserRecord>();
   /** users.apple_refresh_token_enc, kept off UserRecord like in Postgres. */
   const appleRefreshTokens = new Map<string, string>();
@@ -2477,7 +2495,13 @@ export function createMemoryRepositories(): Repositories {
         "ingestion_documents",
         [...ingestionDocuments.values()].filter((d) => (d.userId ?? ingestionDocumentUser.get(d.id)) === userId),
       );
-      put("money_accounts", mine(moneyAccounts.values()));
+      put(
+        "money_accounts",
+        mine(moneyAccounts.values()).map((a) => ({
+          ...a,
+          reconcileInvestigatedAt: reconcileInvestigatedStore.get(a.id)?.investigatedAt ?? null,
+        })),
+      );
       put("money_ledger", mine(moneyLedger.values()));
       const purchases = mine(merchantPurchasesStore.values());
       put("merchant_purchases", purchases);
@@ -2490,12 +2514,28 @@ export function createMemoryRepositories(): Repositories {
       );
       put("receipts", mine(receiptsStore.values()));
       put("warranties", mine(warrantiesStore.values()));
-      put("wardrobe_items", mine(wardrobeItemsStore.values()));
+      put(
+        "wardrobe_items",
+        mine(wardrobeItemsStore.values()).map((w) => {
+          const marks = wardrobeItemMarksStore.get(w.id);
+          return {
+            ...w,
+            keepSnoozedUntil: marks?.keepSnoozedUntil ?? null,
+            photoDumpTriagedAt: marks?.photoDumpTriagedAt ?? null,
+          };
+        }),
+      );
       put("outfits", mine(outfitsStore.values()));
       put("wear_log", mine(wearLogsStore.values()));
       put("item_metrics", mine(itemMetricsStore.values()));
       put("repair_logs", mine(repairLogsStore.values()));
-      put("disposition_listings", mine(dispositionStore.values()));
+      put(
+        "disposition_listings",
+        mine(dispositionStore.values()).map((d) => ({
+          ...d,
+          pickupBooking: dispositionPickupBookingsStore.get(d.id)?.booking ?? null,
+        })),
+      );
       put("budgets", mine(budgetsStore.values()));
       put("spend_rollups", mine(spendRollupsStore.values()));
       const returns = mine(returnRequestsStore.values());
@@ -2537,6 +2577,13 @@ export function createMemoryRepositories(): Repositories {
       put("emi_plans", mine(emiPlansStore.values()));
       put("cashback_claims", mine(cashbackClaimsStore.values()));
       put("cashback_events", mine(cashbackEvents.values()));
+      put(
+        "merchant_aliases",
+        [...merchantAliasesStore.values()].filter((a) => a.userId === userId),
+      );
+      put("gift_budget_locks", mine(giftBudgetLocksStore.values()));
+      put("parser_training_fixtures", mine(parserTrainingFixturesStore));
+      put("lent_waste_notes", mine(lentWasteNotesStore));
       return { tables, truncated };
     },
 
@@ -2754,6 +2801,25 @@ export function createMemoryRepositories(): Repositories {
       }
       for (const [id, wi] of wardrobeItemsStore) {
         if (wi.userId === userId) wardrobeItemsStore.delete(id);
+      }
+
+      // Closet state (S6-13).
+      for (const [key, a] of merchantAliasesStore) {
+        if (a.userId === userId) merchantAliasesStore.delete(key);
+      }
+      for (const [key, l] of giftBudgetLocksStore) {
+        if (l.userId === userId) giftBudgetLocksStore.delete(key);
+      }
+      for (let i = parserTrainingFixturesStore.length - 1; i >= 0; i--) {
+        if (parserTrainingFixturesStore[i]!.userId === userId) parserTrainingFixturesStore.splice(i, 1);
+      }
+      for (let i = lentWasteNotesStore.length - 1; i >= 0; i--) {
+        if (lentWasteNotesStore[i]!.userId === userId) lentWasteNotesStore.splice(i, 1);
+      }
+      for (const store of [wardrobeItemMarksStore, reconcileInvestigatedStore, dispositionPickupBookingsStore]) {
+        for (const [key, v] of store) {
+          if (v.userId === userId) store.delete(key);
+        }
       }
 
       // 5. push, cashback, coins, iap
@@ -5190,6 +5256,7 @@ export function createMemoryRepositories(): Repositories {
       return [...tailoringOrdersStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime());
     },
     async updateTailoringOrderState(id, state) {
+        pickupNudgeSentAt: null,
       const r = tailoringOrdersStore.get(id);
       if (!r) return null;
       if (r.state !== state && (r.state === "DELIVERED" || r.state === "CANCELLED")) return null;
@@ -5416,3 +5483,120 @@ export function createMemoryRepositories(): Repositories {
   };
   return repos;
 }
+    // --- Closet state (S6-13) ---
+    async upsertMerchantAlias(userId, alias, canonical) {
+      const key = `${userId}:${alias}`;
+      const prev = merchantAliasesStore.get(key);
+      const at = now();
+      const row = { userId, alias, canonical, createdAt: prev?.createdAt ?? at, updatedAt: at };
+      merchantAliasesStore.set(key, row);
+      const { userId: _u, ...out } = row;
+      return out;
+    },
+    async listMerchantAliases(userId) {
+      return [...merchantAliasesStore.values()]
+        .filter((a) => a.userId === userId)
+        .map(({ userId: _u, ...a }) => a)
+        .sort((a, b) => (a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0));
+    },
+    async setParserBreakFlag(flag) {
+      parserBreakFlagsStore.set(flag.merchantKey, { ...flag });
+    },
+    async clearParserBreakFlag(merchantKey) {
+      parserBreakFlagsStore.delete(merchantKey);
+    },
+    async listParserBreakFlags() {
+      return [...parserBreakFlagsStore.values()]
+        .map((f) => ({ ...f }))
+        .sort((a, b) => a.setAt.getTime() - b.setAt.getTime());
+    },
+    async upsertGiftBudgetLock(input) {
+      const recipient = recipientsStore.get(input.recipientId);
+      if (!recipient || recipient.userId !== input.userId) return null;
+      const key = `${input.recipientId}:${input.occasion}:${input.occasionDay}`;
+      const prev = giftBudgetLocksStore.get(key);
+      const row: GiftBudgetLockRecord = { ...input, shortlistIds: [...input.shortlistIds], id: prev?.id ?? randomUUID() };
+      giftBudgetLocksStore.set(key, row);
+      return { ...row, shortlistIds: [...row.shortlistIds] };
+    },
+    async listGiftBudgetLocks(userId) {
+      return [...giftBudgetLocksStore.values()]
+        .filter((l) => l.userId === userId)
+        .map((l) => ({ ...l, shortlistIds: [...l.shortlistIds] }));
+    },
+    async insertParserTrainingFixture(fixture) {
+      const row = structuredClone(fixture);
+      parserTrainingFixturesStore.push(row);
+      return structuredClone(row);
+    },
+    async listParserTrainingFixtures(opts) {
+      const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 1000);
+      return parserTrainingFixturesStore
+        .filter((f) => !opts?.exportStatus || f.exportStatus === opts.exportStatus)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((f) => structuredClone(f));
+    },
+    async appendLentWasteNote(input) {
+      const row: LentWasteNoteRecord = { id: randomUUID(), ...input, createdAt: now() };
+      lentWasteNotesStore.push(row);
+      return { ...row };
+    },
+    async listLentWasteNotes(userId) {
+      return lentWasteNotesStore.filter((n) => n.userId === userId).map((n) => ({ ...n }));
+    },
+    async markMoneyAccountReconcileInvestigated(accountId, userId, at) {
+      const account = moneyAccounts.get(accountId);
+      if (!account || account.userId !== userId) return null;
+      reconcileInvestigatedStore.set(accountId, { userId, investigatedAt: at });
+      return at;
+    },
+    async listReconcileInvestigatedAccounts(userId) {
+      return [...reconcileInvestigatedStore]
+        .filter(([id, v]) => v.userId === userId && moneyAccounts.has(id))
+        .map(([accountId, v]) => ({ accountId, investigatedAt: v.investigatedAt }));
+    },
+    async setWardrobeItemMarks(id, userId, patch) {
+      const item = wardrobeItemsStore.get(id);
+      if (!item || item.userId !== userId) return false;
+      const prev = wardrobeItemMarksStore.get(id);
+      wardrobeItemMarksStore.set(id, {
+        userId,
+        keepSnoozedUntil: patch.keepSnoozedUntil !== undefined ? patch.keepSnoozedUntil : (prev?.keepSnoozedUntil ?? null),
+        photoDumpTriagedAt:
+          patch.photoDumpTriagedAt !== undefined ? patch.photoDumpTriagedAt : (prev?.photoDumpTriagedAt ?? null),
+      });
+      return true;
+    },
+    async getWardrobeItemMarks(id, userId) {
+      const item = wardrobeItemsStore.get(id);
+      if (!item || item.userId !== userId) return null;
+      const marks = wardrobeItemMarksStore.get(id);
+      return { keepSnoozedUntil: marks?.keepSnoozedUntil ?? null, photoDumpTriagedAt: marks?.photoDumpTriagedAt ?? null };
+    },
+    async updateTailoringOrderPickup(id, userId, patch) {
+      const r = tailoringOrdersStore.get(id);
+      if (!r || r.userId !== userId) return null;
+      const dayChanged = patch.expectedPickupOn !== undefined && patch.expectedPickupOn !== (r.expectedPickupOn ?? null);
+      const updated: TailoringOrderRecord = {
+        ...r,
+        expectedPickupOn: patch.expectedPickupOn ?? r.expectedPickupOn ?? null,
+        pickupNudgeSentAt:
+          patch.pickupNudgeSentAt !== undefined ? patch.pickupNudgeSentAt : dayChanged ? null : (r.pickupNudgeSentAt ?? null),
+        updatedAt: now(),
+      };
+      tailoringOrdersStore.set(id, updated);
+      return updated;
+    },
+    async setDispositionPickupBooking(id, userId, booking) {
+      const listing = dispositionStore.get(id);
+      if (!listing || listing.userId !== userId) return false;
+      dispositionPickupBookingsStore.set(id, { userId, booking: { ...booking } });
+      return true;
+    },
+    async getDispositionPickupBooking(id, userId) {
+      const row = dispositionPickupBookingsStore.get(id);
+      if (!row || row.userId !== userId || !dispositionStore.has(id)) return null;
+      return { ...row.booking };
+    },
+

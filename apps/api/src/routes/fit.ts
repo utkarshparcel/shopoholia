@@ -50,13 +50,6 @@ import {
   getRegionPackDefaults,
   listRegionPackDefaults,
 } from "../lib/region-pack-defaults.js";
-import {
-  getMeasureMeta,
-  getTailorPickup,
-  markTailorPickupNudgeSent,
-  setMeasureMeta,
-  setTailorPickup,
-} from "../lib/closet-ops-prefs.js";
 import type {
   CustomizationTemplateRecord,
   MeasurementProfileRecord,
@@ -76,15 +69,14 @@ function ownsFabricKey(key: string, userId: string): boolean {
 const FABRIC_NOT_FOUND = { error: "Not Found", message: "Fabric photo not found" };
 
 function toMeasurementJson(r: MeasurementProfileRecord) {
-  const meta = getMeasureMeta(r.id);
   return {
     id: r.id,
     userId: r.userId,
     region: r.region,
     unit: r.unit,
     points: r.points,
-    changeNote: r.changeNote ?? meta?.changeNote ?? null,
-    previousId: r.previousId ?? meta?.previousId ?? null,
+    changeNote: r.changeNote ?? null,
+    previousId: r.previousId ?? null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   };
@@ -103,7 +95,6 @@ function toTemplateJson(r: CustomizationTemplateRecord) {
 }
 
 function toTailoringJson(r: TailoringOrderRecord) {
-  const pickup = getTailorPickup(r.id);
   return {
     id: r.id,
     userId: r.userId,
@@ -115,7 +106,7 @@ function toTailoringJson(r: TailoringOrderRecord) {
     tailorSellerId: r.tailorSellerId,
     measurementSnapshot: r.measurementSnapshot,
     state: r.state,
-    expectedPickupOn: r.expectedPickupOn ?? pickup?.expectedPickupOn ?? null,
+    expectedPickupOn: r.expectedPickupOn ?? null,
     timeline: tailorStatusTimeline(r.state),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
@@ -170,13 +161,6 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
         points: body.points,
         changeNote: body.changeNote ?? null,
       });
-      if (body.changeNote) {
-        setMeasureMeta(created.id, {
-          changeNote: body.changeNote,
-          previousId: null,
-          familyId: created.id,
-        });
-      }
       trackServerEvent("measurement_saved", { userId, measurementId: created.id });
       return reply.code(201).send(toMeasurementJson(created));
     },
@@ -211,12 +195,6 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
         points: body.points,
         changeNote: note,
         previousId: prev.id,
-      });
-      const prevMeta = getMeasureMeta(prev.id);
-      setMeasureMeta(created.id, {
-        changeNote: note,
-        previousId: prev.id,
-        familyId: prevMeta?.familyId ?? prev.id,
       });
       audit(app.log, "fit.measurement.updated", {
         userId,
@@ -543,9 +521,6 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
         measurementSnapshot: snapshot,
         expectedPickupOn: body.expectedPickupOn ?? null,
       });
-      if (body.expectedPickupOn) {
-        setTailorPickup(order.id, body.expectedPickupOn);
-      }
       await scheduleTailoringTransitions({ orderId: order.id, userId });
       trackServerEvent("tailoring_ordered", {
         userId,
@@ -751,14 +726,16 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const { id } = request.params as { id: string };
       const body = request.body as { expectedPickupOn?: string; asOf?: string };
-      const order = await app.deps.repos.findTailoringOrder(id, userId);
-      if (!order) {
+      const found = await app.deps.repos.findTailoringOrder(id, userId);
+      if (!found) {
         return reply.code(404).send({ error: "Not Found", message: "Tailoring order not found" });
       }
-      if (body.expectedPickupOn) setTailorPickup(id, body.expectedPickupOn);
-      const pickup = getTailorPickup(id);
-      const expected =
-        body.expectedPickupOn ?? order.expectedPickupOn ?? pickup?.expectedPickupOn ?? null;
+      // A new pickup day is stored (and clears the nudge sent for the old day).
+      const order = body.expectedPickupOn
+        ? ((await app.deps.repos.updateTailoringOrderPickup(id, userId, { expectedPickupOn: body.expectedPickupOn })) ??
+          found)
+        : found;
+      const expected = order.expectedPickupOn ?? null;
       if (!expected) {
         return {
           sent: false,
@@ -772,7 +749,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       const should = shouldSendTailorPickupNudge({
         expectedPickupOn: expected,
         asOf,
-        alreadySent: pickup?.nudgeSent,
+        alreadySent: order.pickupNudgeSentAt != null,
         state: order.state,
       });
       if (!should) {
@@ -793,10 +770,10 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       } catch {
         // best-effort
       }
-      markTailorPickupNudgeSent(id);
+      const sentOrder = await app.deps.repos.updateTailoringOrderPickup(id, userId, { pickupNudgeSentAt: new Date() });
       audit(app.log, "fit.tailor.pickup_nudge", { userId, orderId: id, expectedPickupOn: expected });
       trackServerEvent("tailor_pickup_nudged", { userId, orderId: id });
-      return { sent: true, order: toTailoringJson(order) };
+      return { sent: true, order: toTailoringJson(sentOrder ?? order) };
     },
   );
 

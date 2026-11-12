@@ -2,6 +2,8 @@
  * U049 — Occasion gift deadline board: shortlist 3 + budget lock + T-7/T-2.
  */
 
+import type { GiftBudgetLockRecord, Repositories } from "./repositories/types.js";
+
 export const GIFT_DEADLINE_LEAD_DAYS = [7, 2] as const;
 
 export type GiftBudgetLock = {
@@ -27,44 +29,59 @@ export type GiftDeadlineBoardRow = {
   reminderLeads: number[];
 };
 
-const locks = new Map<string, GiftBudgetLock>();
-
-function lockKey(recipientId: string, occasion: string, date: string): string {
-  return `${recipientId}:${occasion}:${date.slice(0, 10)}`;
+function lockKey(recipientId: string, occasion: string, day: string): string {
+  return `${recipientId}:${occasion}:${day}`;
 }
 
-export function setGiftBudgetLock(input: {
-  recipientId: string;
-  occasion: string;
-  date: string;
-  budgetLockMinor: number;
-  currency?: string;
-  shortlistIds?: string[];
-  now?: Date;
-}): GiftBudgetLock {
-  const row: GiftBudgetLock = {
+function toGiftBudgetLock(r: GiftBudgetLockRecord): GiftBudgetLock {
+  return {
+    recipientId: r.recipientId,
+    occasion: r.occasion,
+    date: r.occasionDate.toISOString(),
+    budgetLockMinor: r.budgetLockMinor,
+    currency: r.currency,
+    lockedAt: r.lockedAt.toISOString(),
+    shortlistIds: [...r.shortlistIds],
+  };
+}
+
+/**
+ * Stores the lock in `gift_budget_locks` (one per recipient, occasion and day; a repeat replaces
+ * it). null when the recipient is not the user's.
+ */
+export async function setGiftBudgetLock(
+  repos: Pick<Repositories, "upsertGiftBudgetLock">,
+  userId: string,
+  input: {
+    recipientId: string;
+    occasion: string;
+    date: string;
+    budgetLockMinor: number;
+    currency?: string;
+    shortlistIds?: string[];
+    now?: Date;
+  },
+): Promise<GiftBudgetLock | null> {
+  const row = await repos.upsertGiftBudgetLock({
+    userId,
     recipientId: input.recipientId,
     occasion: input.occasion,
-    date: input.date,
+    occasionDay: input.date.slice(0, 10),
+    occasionDate: new Date(input.date),
     budgetLockMinor: Math.max(0, Math.trunc(input.budgetLockMinor)),
     currency: input.currency ?? "INR",
-    lockedAt: (input.now ?? new Date()).toISOString(),
     shortlistIds: (input.shortlistIds ?? []).slice(0, 3),
-  };
-  locks.set(lockKey(row.recipientId, row.occasion, row.date), row);
-  return row;
+    lockedAt: input.now ?? new Date(),
+  });
+  return row ? toGiftBudgetLock(row) : null;
 }
 
-export function getGiftBudgetLock(
-  recipientId: string,
-  occasion: string,
-  date: string,
-): GiftBudgetLock | null {
-  return locks.get(lockKey(recipientId, occasion, date)) ?? null;
-}
-
-export function clearGiftBudgetLocks(): void {
-  locks.clear();
+/** The user's locks, keyed for `buildGiftDeadlineBoard`. */
+export async function listGiftBudgetLocks(
+  repos: Pick<Repositories, "listGiftBudgetLocks">,
+  userId: string,
+): Promise<GiftBudgetLock[]> {
+  return (await repos.listGiftBudgetLocks(userId)).map(toGiftBudgetLock);
 }
 
 export function utcDaysUntil(dateIso: string, now: Date = new Date()): number {
@@ -109,12 +126,14 @@ export function buildGiftDeadlineBoard(
     label?: string | null;
     date: string;
   }>,
+  locks: GiftBudgetLock[],
   now: Date = new Date(),
 ): GiftDeadlineBoardRow[] {
+  const byKey = new Map(locks.map((l) => [lockKey(l.recipientId, l.occasion, l.date.slice(0, 10)), l]));
   const out: GiftDeadlineBoardRow[] = [];
   for (const r of rows) {
     const days = utcDaysUntil(r.date, now);
-    const lock = getGiftBudgetLock(r.recipientId, r.occasion, r.date);
+    const lock = byKey.get(lockKey(r.recipientId, r.occasion, r.date.slice(0, 10)));
     out.push({
       recipientId: r.recipientId,
       recipientName: r.recipientName,

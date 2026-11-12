@@ -1,16 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildParserTrainingFixture,
-  clearParserTrainingState,
   listParserFixtureExportJobs,
   listParserTrainingFixtures,
   parserFeedbackAnalyticsPayload,
   stripRawBodyFields,
 } from "./parser-training.js";
+import { createMemoryRepositories } from "./repositories/memory.js";
 
 describe("U041 parser-training", () => {
-  beforeEach(() => clearParserTrainingState());
-
   it("strips raw body fields from fixture payloads", () => {
     const safe = stripRawBodyFields({
       merchant: "Myntra",
@@ -25,9 +23,13 @@ describe("U041 parser-training", () => {
     expect(safe.subject).toBe("Order");
   });
 
-  it("builds fixture stub + queues export without raw body in analytics", () => {
-    const stub = buildParserTrainingFixture({
-      documentId: "00000000-0000-4000-8000-0000000000aa",
+  it("stores the fixture stub + queues export without raw body in analytics", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000341");
+    const doc = await repos.createIngestionDocument({ userId: user.id, kind: "EMAIL", rawKey: "", parsedJson: {} });
+    const stub = await buildParserTrainingFixture(repos, {
+      userId: user.id,
+      documentId: doc.id,
       kind: "EMAIL",
       beforeParsed: {
         merchant: "Unknown Merchant",
@@ -52,7 +54,28 @@ describe("U041 parser-training", () => {
     const analytics = parserFeedbackAnalyticsPayload(stub);
     expect(analytics.merchantHint).toBe("Myntra");
     expect(analytics).not.toHaveProperty("body");
-    expect(listParserTrainingFixtures()).toHaveLength(1);
-    expect(listParserFixtureExportJobs()[0]?.status).toBe("QUEUED");
+    expect(await listParserTrainingFixtures(repos)).toEqual([stub]);
+    expect((await listParserFixtureExportJobs(repos))[0]).toMatchObject({ fixtureId: stub.id, status: "QUEUED" });
+    // Stored with the user, so the vault export and erasure reach it.
+    const stored = await repos.listParserTrainingFixtures();
+    expect(stored).toEqual([expect.objectContaining({ id: stub.id, userId: user.id, documentId: doc.id })]);
+    expect(JSON.stringify(stored)).not.toMatch(/raw should never leak|still raw/);
+  });
+
+  it("a fixture without export is stored as SKIPPED and is not an export job", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000342");
+    const doc = await repos.createIngestionDocument({ userId: user.id, kind: "SMS", rawKey: "", parsedJson: {} });
+    const stub = await buildParserTrainingFixture(repos, {
+      userId: user.id,
+      documentId: doc.id,
+      kind: "SMS",
+      beforeParsed: null,
+      afterParsed: { merchant: "Ajio" },
+      correctedFields: ["merchant"],
+      enqueueExport: false,
+    });
+    expect(stub.exportQueued).toBe(false);
+    expect(await listParserFixtureExportJobs(repos)).toEqual([]);
   });
 });
