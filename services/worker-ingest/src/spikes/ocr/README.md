@@ -28,8 +28,11 @@ a deterministic fixture so the entire receipt → `merchant_purchases` →
 `warranties` → reminder pipeline is exercisable and testable with zero external
 dependencies. The API selects the provider in `createOcrClientFromEnv`.
 
-`OCR_PROVIDER=hosted` → `HostedOcrClient` (apps/api/src/lib/ocr/hosted.ts) is a
-stub behind `// TODO(OCR-SPIKE)` that throws until the spike resolves.
+`OCR_PROVIDER=hosted` → `HostedOcrClient` (apps/api/src/lib/ocr/hosted.ts) is
+implemented: it calls the configured provider URL (`generic` or `google-vision`
+response mapping) with a 10 s timeout. The hosted-vs-on-device decision is
+recorded as resolved in that file's header comment; the questions below are the
+original inputs to it.
 
 ## Open questions to close the spike
 1. Median receipt image size + expected monthly upload volume → hosted $/mo.

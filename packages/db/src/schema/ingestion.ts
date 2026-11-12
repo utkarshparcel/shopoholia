@@ -13,7 +13,7 @@ export const ingestionSources = pgTable(
   "ingestion_sources",
   {
     id: id(),
-    /** Owner. Nullable until FIX/privacy/backfill.sql has filled old rows; every new row sets it. */
+    /** Owner. Nullable until packages/db/scripts/privacy-backfill.sql has filled old rows; every new row sets it. */
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     kind: ingestionKindEnum("kind").notNull(),
     provider: text("provider").notNull(),
@@ -44,7 +44,7 @@ export const ingestionDocuments = pgTable(
   "ingestion_documents",
   {
     id: id(),
-    /** Owner. Nullable until FIX/privacy/backfill.sql has filled old rows; every new row sets it. */
+    /** Owner. Nullable until packages/db/scripts/privacy-backfill.sql has filled old rows; every new row sets it. */
     userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     kind: ingestionKindEnum("kind").notNull(),
     rawKey: text("raw_key").notNull(),

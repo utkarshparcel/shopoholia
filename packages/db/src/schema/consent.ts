@@ -38,7 +38,7 @@ export const consentGrants = pgTable(
  * Append-only consent history: one row per grant and per withdrawal, written in the same
  * transaction as the consent_grants change. Rows are never deleted. Erasure nulls `user_id`
  * (ON DELETE SET NULL) and `subject_ref` (a keyed HMAC of the old user id) keeps the proof.
- * Triggers in FIX/privacy/backfill.sql reject DELETE and any UPDATE other than nulling user_id.
+ * Triggers in packages/db/scripts/privacy-backfill.sql reject DELETE and any UPDATE other than nulling user_id.
  */
 export const consentRecords = pgTable(
   "consent_records",

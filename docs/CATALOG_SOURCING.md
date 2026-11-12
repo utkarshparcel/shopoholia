@@ -142,49 +142,23 @@ DATABASE_URL=postgres://... pnpm --filter @worn/api import-catalog -- --file /pa
 pnpm --filter @worn/api import-catalog -- --file shein.jsonl --limit 1000
 ```
 
-### Build 100k dataset (scrapers + merge)
+### Build the dataset (merge + import)
 
-
-> **Pagination note (Jun 2026):** Newme shop listing is Next.js CSR — plain `fetch` only returns page 1 products (~30) in `__NEXT_DATA__` even when `?page=N` is set. The scraper still walks shop pages for link discovery; **full ~9k catalog requires Playwright** (or a licensed feed). After a proof batch (`--limit 100`), re-run without `--limit` only after Playwright pagination is wired — otherwise you will re-scan duplicate pages.
-
-> **Legal:** Scrapers are internal R&D tools with 2s rate limits. Output lives in `tmp/catalog/` (gitignored). Prefer Bright Data for Shein scale.
+> [redacted: internal scraper notes, commands and R&D outputs for specific retailers. Not for sharing; see owner. Production sourcing is the licensed or affiliate paths above.]
 
 ```bash
-# 1. Newme full catalog (~5–6k SKUs, ~3–6h @ 2s/req)
-pnpm --filter @worn/api scrape-newme
-
-# Validate with a small batch first
-pnpm --filter @worn/api scrape-newme -- --limit 20
-
-# Resume overnight full catalog (~3–6h, auto-checkpoint every product)
-pnpm --filter @worn/api scrape-newme
-
-# 2. Shein Playwright attempt (likely blocked; writes failure report)
-pnpm --filter @worn/api scrape-shein -- --limit 100
-
-# 3. Merge sources + optional synthetic backfill to --target 100000
+# Merge licensed/affiliate sources + optional synthetic backfill to --target 100000
 pnpm --filter @worn/api build-dataset
 
 # Custom target / no synthetic padding
 pnpm --filter @worn/api build-dataset -- --target 10000 --no-synthetic
 
-# 4. Import merged file
+# Import merged file
 pnpm --filter @worn/api import-catalog -- --file tmp/catalog/merged-100k.jsonl --dry-run
 DATABASE_URL=postgres://... pnpm --filter @worn/api import-catalog -- --file tmp/catalog/merged-100k.jsonl
 ```
 
-**Outputs:**
-
-| File | Description |
-|------|-------------|
-| `tmp/catalog/newme.jsonl` | Newme scraper rows (~6k max) |
-| `tmp/catalog/shein.jsonl` | Shein scraper rows (if any) |
-| `tmp/catalog/merged-100k.jsonl` | Unified import-catalog JSONL |
-| `tmp/catalog/manifest.json` | Honest source breakdown + gap to 100k |
-| `tmp/catalog/*.checkpoint.json` | Resume state for scrapers |
-| `tmp/catalog/shein-scrape-report.json` | Shein blockers + recommendation |
-
-**Hitting 100k honestly:** Newme caps at ~6k. DIY Shein scrape is blocked (403). Add `tmp/catalog/shein.jsonl` from **Bright Data** (~$250/100k), plus optional `amazon.jsonl` / `flipkart.jsonl` from affiliate APIs, then re-run `build-dataset --no-synthetic`.
+Outputs land in `tmp/catalog/` (gitignored): `merged-100k.jsonl` (unified import-catalog JSONL) and `manifest.json` (honest source breakdown and gap to 100k).
 
 ### What the importer does
 
@@ -215,57 +189,13 @@ The importer does **not** download images. After import:
 
 ## Scrape feasibility probes (R&D)
 
-> **Legal disclaimer:** Probes below are **internal R&D only** — 1–2 rate-limited requests per site. They do not constitute permission to scrape. Production catalog ingestion requires legal review and licensed/affiliate paths where available.
-
-### Run probes
-
-```bash
-# Install Playwright browser (first time only)
-pnpm --filter @worn/api exec playwright install chromium
-
-# Run all probes; writes JSON to tmp/scrape-probes/
-pnpm --filter @worn/api scrape-probes
-```
-
-Scripts live in `apps/api/scripts/scrape-probes/`:
-
-| Script | Target |
-|--------|--------|
-| `probe-newme.ts` | newme.asia shop page + 1 product |
-| `probe-shein.ts` | shein.in search + product |
-| `probe-myntra.ts` | Myntra women tops search |
-| `probe-ajio.ts` | Ajio search |
-| `probe-amazon-in.ts` | Amazon IN fashion search (prefer Creators API) |
-| `probe-flipkart.ts` | Flipkart fashion search (prefer Affiliate API) |
-| `run-all.ts` | Master runner + summary table |
-
-Each probe writes `tmp/scrape-probes/{site}-result.json` with:
-
-- `site`, `success`, `method` (`fetch` \| `playwright`), `latencyMs`
-- `fieldsExtracted`: `{ title, price, images[], url }`
-- `antiBotSignals`: `{ captcha, forbidden403, empty, blocked, cloudflare }`
-- `error`, `catalogEstimate` (SKU hint + rough full-catalog time)
-
-Successful probes also write `tmp/scrape-probes/{site}-catalog-sample.jsonl` (one import-catalog-shaped row).
-
-### Probe results template (fill after run)
-
-| Site | Feasible? | Method | Blockers | Est. full catalog | Recommended path |
-|------|-----------|--------|----------|-------------------|------------------|
-| **Newme** | **Yes** | fetch | — | ~3–6h for ~6k SKUs @ 1 req/2s | SSR shop HTML has product names + images; partnership feed still preferred |
-| **Shein** | **No** | fetch → playwright | 403 / anti-bot; Playwright needed | Weeks DIY; hours via dataset | **Bright Data dataset (~$250/100k)** |
-| **Myntra** | **No** | fetch | CSR listing grid; category URL only | Not viable at scale | Affiliate deep links (Cuelinks) |
-| **Ajio** | **No** | fetch → playwright | React SPA; needs browser | Days+ with proxies | Affiliate networks |
-| **Amazon IN** | **Partial** | fetch | Search page title only; use PA-API | Hours via API | **Amazon Creators / PA-API** |
-| **Flipkart** | **Partial** | fetch | `unusual traffic` in HTML; page title generic | Hours via API | **Flipkart Affiliate API** |
-
-_Last run: 2026-06-18 — from `tmp/scrape-probes/*-result.json`. Re-run after `pnpm --filter @worn/api scrape-probes` to refresh._
+[redacted: internal retailer scrape-feasibility probe notes and results. Not for sharing; see owner. Production catalog ingestion requires legal review and licensed or affiliate data.]
 
 ---
 
 ## References
 
-- Prior WORN research: seller-upload + affiliate APIs ranked above scraping; bulk Myntra/Shein scrape = ToS violation.
+- Prior WORN research: seller-upload + affiliate APIs ranked above scraping. [redacted: retailer terms assessment]
 - [Bright Data Shein Datasets](https://brightdata.com/products/datasets/shein) — 45.3M+ records, from $0.0025/record.
 - [Newme shop](https://newme.asia/shop) — pagination confirms ~270 pages.
 - Importer: `apps/api/scripts/import-catalog.ts`.
