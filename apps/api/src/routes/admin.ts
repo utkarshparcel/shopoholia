@@ -299,7 +299,7 @@ export const adminRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireAdminSecret],
       schema: {
         tags: ["admin", "concierge"],
-        params: ConciergeUserParamsSchema.extend({ itemId: z.string().uuid() }),
+        params: ConciergeUserParamsSchema.extend({ itemId: z.uuid() }),
         body: ConciergeSortBodySchema,
         response: {
           200: ConciergeSortResponseSchema,

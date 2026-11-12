@@ -6,15 +6,15 @@ export const ClosetEntitlementSchema = z.enum(CLOSET_ENTITLEMENTS);
 export const EntitlementGrantSchema = z.object({
   entitlementId: ClosetEntitlementSchema,
   productId: z.string().min(1),
-  expiresAt: z.string().datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
   isTrial: z.boolean(),
   source: z.enum(["app_store", "play_store", "upi", "dev"]),
 });
 
 export const EntitlementSnapshotSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   grants: z.array(EntitlementGrantSchema),
-  asOf: z.string().datetime(),
+  asOf: z.iso.datetime(),
 });
 
 export const EntitlementSyncBodySchema = z.object({

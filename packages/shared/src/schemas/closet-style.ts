@@ -100,7 +100,7 @@ export const StyleProfileInputSchema = z
 /** `PUT /closet/style/likes`. */
 export const StyleLikesBodySchema = LikesSchema;
 
-const positive = z.number().finite().positive();
+const positive = z.number().positive();
 
 /** What the phone measured from the photo: ratios only are read, so any one unit. */
 export const PhotoMeasuresSchema = z.object({
@@ -120,7 +120,7 @@ export const MeasurementSourceSchema = z.enum(["TAPE", "PHOTO", "EDITED"]);
 export type MeasurementSource = z.infer<typeof MeasurementSourceSchema>;
 
 const cm = (point: MeasurementPoint) =>
-  z.number().finite().min(MEASUREMENT_RANGES_CM[point][0]).max(MEASUREMENT_RANGES_CM[point][1]).optional();
+  z.number().min(MEASUREMENT_RANGES_CM[point][0]).max(MEASUREMENT_RANGES_CM[point][1]).optional();
 
 const FIELD_OF: Readonly<Record<MeasurementPoint, "heightCm" | "bustCm" | "waistCm" | "hipCm" | "shoulderCm">> = {
   height: "heightCm",

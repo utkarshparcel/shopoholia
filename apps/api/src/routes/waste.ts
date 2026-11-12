@@ -221,7 +221,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         querystring: z.object({
           limit: z.coerce.number().int().min(1).max(20).optional(),
         }),
@@ -266,7 +266,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         body: ReplaceTwinClickBodySchema,
         response: {
           200: ReplaceTwinClickResponseSchema,
@@ -321,7 +321,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         response: {
           200: WearChallengeStartResponseSchema,
           401: ErrorSchema,
@@ -388,7 +388,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         body: DisposeBodySchema,
         response: { 200: DisposeResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },

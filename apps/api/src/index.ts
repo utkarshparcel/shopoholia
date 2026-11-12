@@ -38,7 +38,7 @@ installZod3Messages();
 
 const HealthResponseSchema = z.object({
   status: z.literal("ok"),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
 });
 
 /** Route groups with tighter rate limits (money, vault data, sign-in). */

@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const BrandPriceWatchSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   brand: z.string().min(1),
   /** Baseline price in minor units (from wardrobe cost or user set). */
   watchedPriceMinor: z.number().int().nonnegative(),
@@ -10,8 +10,8 @@ export const BrandPriceWatchSchema = z.object({
   thresholdPct: z.number().min(0).max(100),
   lastSeenPriceMinor: z.number().int().nonnegative().nullable(),
   active: z.boolean(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 
 export const CreateBrandPriceWatchBodySchema = z.object({
@@ -25,9 +25,9 @@ export const BrandPriceWatchListResponseSchema = z.object({
 });
 
 export const PriceDropHitSchema = z.object({
-  watchId: z.string().uuid(),
+  watchId: z.uuid(),
   brand: z.string(),
-  listingId: z.string().uuid(),
+  listingId: z.uuid(),
   listingTitle: z.string(),
   watchedPriceMinor: z.number().int().nonnegative(),
   currentPriceMinor: z.number().int().nonnegative(),

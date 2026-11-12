@@ -1,21 +1,21 @@
 import { z } from "zod";
 
 export const AffiliateLinkSchema = z.object({
-  url: z.string().url(),
+  url: z.url(),
   label: z.string(),
   platform: z.enum(["flipkart", "amazon", "myntra", "ajio", "nykaa", "other"]),
 });
 
 export const ListingCardSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   title: z.string(),
   category: z.string(),
   coinPrice: z.number().int().nonnegative(),
   realPrice: z.string().nullable().optional(),
-  houseModelImageUrl: z.string().url(),
-  sellerId: z.string().uuid().nullable().optional(),
+  houseModelImageUrl: z.url(),
+  sellerId: z.uuid().nullable().optional(),
   sellerName: z.string().nullable().optional(),
-  affiliateUrl: z.string().url().nullable().optional(),
+  affiliateUrl: z.url().nullable().optional(),
   affiliateLinks: z.array(AffiliateLinkSchema).nullable().optional(),
 });
 
@@ -24,7 +24,7 @@ export type AffiliateLink = z.infer<typeof AffiliateLinkSchema>;
 export const FeedQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
-  seller_id: z.string().uuid().optional(),
+  seller_id: z.uuid().optional(),
   /** Exact category name, as returned by GET /feed/categories. */
   category: z.string().min(1).max(200).optional(),
 });
@@ -44,10 +44,10 @@ export const FeedCategoriesResponseSchema = z.object({
 });
 
 export const ListingVariantSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   size: z.string(),
   color: z.string(),
-  garmentImageUrl: z.string().url(),
+  garmentImageUrl: z.url(),
 });
 
 export const ListingDetailSchema = ListingCardSchema.extend({
@@ -56,11 +56,11 @@ export const ListingDetailSchema = ListingCardSchema.extend({
 });
 
 export const ListingParamsSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
 });
 
 export const TryonRequestSchema = z.object({
-  variantId: z.string().uuid(),
+  variantId: z.uuid(),
 });
 
 export const TryonResponseSchema = z.object({
@@ -69,8 +69,8 @@ export const TryonResponseSchema = z.object({
    * again before `retryAfter` doesn't start a new one.
    */
   status: z.enum(["READY", "PROCESSING", "FAILED"]),
-  previewUrl: z.string().url().nullable(),
-  retryAfter: z.string().datetime().nullable().optional(),
+  previewUrl: z.url().nullable(),
+  retryAfter: z.iso.datetime().nullable().optional(),
 });
 
 export type ListingCard = z.infer<typeof ListingCardSchema>;

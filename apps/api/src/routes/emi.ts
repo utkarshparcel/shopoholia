@@ -154,7 +154,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: EmiScheduleResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -185,7 +185,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PayEmiBodySchema,
         response: { 200: EmiPlanSchema, 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
       },

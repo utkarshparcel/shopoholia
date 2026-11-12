@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 export const ExchangeWindowSchema = z.object({
-  purchaseId: z.string().uuid(),
+  purchaseId: z.uuid(),
   merchant: z.string(),
   orderRef: z.string().nullable(),
-  purchasedAt: z.string().datetime(),
-  returnWindowDeadline: z.string().datetime().nullable(),
-  exchangeWindowDeadline: z.string().datetime().nullable(),
+  purchasedAt: z.iso.datetime(),
+  returnWindowDeadline: z.iso.datetime().nullable(),
+  exchangeWindowDeadline: z.iso.datetime().nullable(),
   /** True when exchange window differs from return window for this merchant. */
   windowsDiffer: z.boolean(),
   daysLeftExchange: z.number().int().nullable(),

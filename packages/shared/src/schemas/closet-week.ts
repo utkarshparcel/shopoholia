@@ -33,15 +33,15 @@ export const NoteReasonSchema = z.object({
 export type NoteReason = z.infer<typeof NoteReasonSchema>;
 
 /** Slot → wardrobe item id. `itemIds` is derived from it. */
-export const OutfitSlotsSchema = z.partialRecord(ItemSlotSchema, z.string().uuid());
+export const OutfitSlotsSchema = z.partialRecord(ItemSlotSchema, z.uuid());
 export type OutfitSlots = z.infer<typeof OutfitSlotsSchema>;
 
 /** An `outfits` row with the §3.1 columns. Named apart from the universe's `OutfitSchema`. */
 export const ClosetOutfitSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: OutfitKindSchema,
   slots: OutfitSlotsSchema,
-  itemIds: z.array(z.string().uuid()),
+  itemIds: z.array(z.uuid()),
   occasion: ClosetOccasionSchema.nullable(),
   plannedFor: LocalDateSchema.nullable(),
   backupCheck: BackupCheckSchema.nullable(),
@@ -63,10 +63,10 @@ export const ClosetRenderStatusSchema = z.enum(["QUEUED", "LEASED", "DONE", "REJ
 export type ClosetRenderStatus = z.infer<typeof ClosetRenderStatusSchema>;
 
 export const RenderRefSchema = z.object({
-  renderId: z.string().uuid(),
+  renderId: z.uuid(),
   status: ClosetRenderStatusSchema,
-  url: z.string().url().nullable(),
-  urlExpiresAt: z.string().datetime().nullable(),
+  url: z.url().nullable(),
+  urlExpiresAt: z.iso.datetime().nullable(),
   label: z.literal("Preview"),
 });
 export type RenderRef = z.infer<typeof RenderRefSchema>;
@@ -99,14 +99,14 @@ export type Backup = z.infer<typeof BackupSchema>;
 
 export const WeekPlanSchema = z.object({
   plan: z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     isoWeek: z.string(),
     status: WeekStatusSchema,
     version: z.number().int(),
   }),
   days: z.array(DayPlanSchema).length(7),
   backups: z.array(BackupSchema).length(4),
-  renders: z.record(z.string().uuid(), RenderRefSchema), // outfitId → preview status / URL
+  renders: z.record(z.uuid(), RenderRefSchema), // outfitId → preview status / URL
 });
 export type WeekPlan = z.infer<typeof WeekPlanSchema>;
 
@@ -123,9 +123,9 @@ export type WeekGenerateBody = z.infer<typeof WeekGenerateBodySchema>;
 
 /** `PATCH /outfits/week/:date`. */
 export const DayPatchSchema = z.union([
-  z.object({ swap: z.object({ slot: ItemSlotSchema, itemId: z.string().uuid() }) }).strict(),
-  z.object({ replaceWith: z.string().uuid() }).strict(),
-  z.object({ lock: z.boolean() }).strict(),
+  z.strictObject({ swap: z.object({ slot: ItemSlotSchema, itemId: z.uuid() }) }),
+  z.strictObject({ replaceWith: z.uuid() }),
+  z.strictObject({ lock: z.boolean() }),
 ]);
 export type DayPatch = z.infer<typeof DayPatchSchema>;
 

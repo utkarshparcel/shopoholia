@@ -281,7 +281,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["receipts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PatchReceiptBodySchema,
         response: {
           200: ReceiptParsedSchema,
@@ -345,7 +345,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["receipts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ConfirmReceiptBodySchema,
         response: {
           200: ReceiptResponseSchema,
@@ -656,7 +656,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["receipts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: z.object({
           format: ReceiptExportFormatSchema.default("image"),
         }),
@@ -746,7 +746,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["warranties"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: ClaimWarrantyResponseSchema,
           404: ErrorSchema,
@@ -827,7 +827,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["warranties"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: WarrantySchema,
           400: ErrorSchema,
@@ -872,7 +872,7 @@ export const receiptsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["warranties"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: SnoozeWarrantyBodySchema,
         response: {
           200: SnoozeWarrantyResponseSchema,

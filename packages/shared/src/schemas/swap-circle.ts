@@ -12,36 +12,36 @@ export const SwapListingStatusSchema = z.enum([
 export type SwapListingStatus = z.infer<typeof SwapListingStatusSchema>;
 
 export const SwapCircleMemberSchema = z.object({
-  id: z.string().uuid(),
-  circleId: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  circleId: z.uuid(),
+  userId: z.uuid(),
   role: SwapCircleRoleSchema,
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type SwapCircleMember = z.infer<typeof SwapCircleMemberSchema>;
 
 export const SwapCircleSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string().min(1).max(80),
-  ownerId: z.string().uuid(),
+  ownerId: z.uuid(),
   inviteCode: z.string().min(4).max(16),
   memberCount: z.number().int().nonnegative().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type SwapCircle = z.infer<typeof SwapCircleSchema>;
 
 export const SwapListingSchema = z.object({
-  id: z.string().uuid(),
-  circleId: z.string().uuid(),
-  ownerUserId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
-  dispositionListingId: z.string().uuid().nullable(),
+  id: z.uuid(),
+  circleId: z.uuid(),
+  ownerUserId: z.uuid(),
+  wardrobeItemId: z.uuid(),
+  dispositionListingId: z.uuid().nullable(),
   status: SwapListingStatusSchema,
-  borrowerUserId: z.string().uuid().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  borrowerUserId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type SwapListing = z.infer<typeof SwapListingSchema>;
 
@@ -56,7 +56,7 @@ export const JoinSwapCircleBodySchema = z.object({
 export type JoinSwapCircleBody = z.infer<typeof JoinSwapCircleBodySchema>;
 
 export const CreateSwapListingBodySchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
 });
 export type CreateSwapListingBody = z.infer<typeof CreateSwapListingBodySchema>;
 
@@ -74,7 +74,7 @@ export type SwapCircleDetailResponse = z.infer<typeof SwapCircleDetailResponseSc
 
 export const SwapInviteResponseSchema = z.object({
   inviteCode: z.string().min(4).max(16),
-  inviteUrl: z.string().url(),
+  inviteUrl: z.url(),
   deepLink: z.string().min(1),
 });
 export type SwapInviteResponse = z.infer<typeof SwapInviteResponseSchema>;

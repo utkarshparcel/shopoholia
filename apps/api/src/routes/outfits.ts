@@ -414,7 +414,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const rawIds = (request.query as { itemIds?: string }).itemIds;
-      const uuid = z.string().uuid();
+      const uuid = z.uuid();
       const requestedIds = rawIds
         ? [...new Set(rawIds.split(",").map((s) => s.trim()))].filter((s) => uuid.safeParse(s).success).slice(0, 20)
         : [];
@@ -600,7 +600,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["outfits"],
         body: z.object({
-          outfitId: z.string().uuid().optional(),
+          outfitId: z.uuid().optional(),
           alt: z.number().int().min(0).max(20).optional(),
         }),
         response: {
@@ -1335,7 +1335,7 @@ export const outfitsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["outfits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: InterviewKitPatchBodySchema,
         response: {
           200: InterviewKitResponseSchema,

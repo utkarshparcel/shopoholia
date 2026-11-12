@@ -117,7 +117,7 @@ export const ClosetItemFieldsSchema = z.object({
   title: z.string().max(80).nullable().optional().default(null),
   slot: ItemSlotSchema.nullable().optional().default(null),
   /** Ties a co-ord set together, and a saree to its blouse. */
-  setId: z.string().uuid().nullable().optional().default(null),
+  setId: z.uuid().nullable().optional().default(null),
   sizeLabel: z.string().max(20).nullable().optional().default(null),
   sizeSystem: SizeSystemSchema.nullable().optional().default(null),
   materials: z.array(z.string()).max(3).optional().default([]),

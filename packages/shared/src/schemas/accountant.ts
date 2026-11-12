@@ -7,13 +7,13 @@ export const BudgetPeriodSchema = z.enum(["MONTHLY", "QUARTERLY"]);
 export type BudgetPeriod = z.infer<typeof BudgetPeriodSchema>;
 
 export const BudgetSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   category: BudgetCategorySchema,
   period: BudgetPeriodSchema,
   limitMinor: z.number().int().nonnegative(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type Budget = z.infer<typeof BudgetSchema>;
 
@@ -57,7 +57,7 @@ export const SetCpwGoalBodySchema = z.object({
 export type SetCpwGoalBody = z.infer<typeof SetCpwGoalBodySchema>;
 
 export const CpwGoalItemSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   brand: z.string().nullable().optional(),
   category: z.string().optional(),
   costMinor: z.number().int().nonnegative(),
@@ -66,7 +66,7 @@ export const CpwGoalItemSchema = z.object({
 export type CpwGoalItem = z.infer<typeof CpwGoalItemSchema>;
 
 export const SetCpwGoalResponseSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   targetCpwMinor: z.number().int().positive(),
   cpwGoal: CpwGoalSchema,
   pushQueued: z.boolean().optional().default(false),
@@ -110,12 +110,12 @@ export const AccountantSummarySchema = z.object({
 export type AccountantSummary = z.infer<typeof AccountantSummarySchema>;
 
 export const AccountantLedgerEntrySchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.enum(["PURCHASE", "LEDGER", "REPAIR"]),
   description: z.string(),
   amountMinor: z.number().int(),
-  createdAt: z.string().datetime(),
-  refId: z.string().uuid().nullable().optional(),
+  createdAt: z.iso.datetime(),
+  refId: z.uuid().nullable().optional(),
   /** Ledger refType when kind=LEDGER (e.g. return.refund:UPI for U012 filter). */
   refType: z.string().nullable().optional(),
 });
@@ -135,8 +135,8 @@ export type ClosetSeason = z.infer<typeof ClosetSeasonSchema>;
 export const SeasonRoiRowSchema = z.object({
   season: ClosetSeasonSchema,
   label: z.string().min(1),
-  start: z.string().datetime(),
-  end: z.string().datetime(),
+  start: z.iso.datetime(),
+  end: z.iso.datetime(),
   wears: z.number().int().nonnegative(),
   itemsWorn: z.number().int().nonnegative(),
   costWornMinor: z.number().int().nonnegative(),
@@ -157,29 +157,29 @@ export type AccountantSeasonRoi = z.infer<typeof AccountantSeasonRoiSchema>;
 
 /** N44 — workwear tax pack (yearly invoices + spend). */
 export const TaxPackSpendRowSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   category: z.string(),
   brand: z.string().nullable(),
   costMinor: z.number().int().nonnegative(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   tags: z.array(z.string()),
 });
 export type TaxPackSpendRow = z.infer<typeof TaxPackSpendRowSchema>;
 
 export const TaxPackInvoiceRowSchema = z.object({
-  receiptId: z.string().uuid(),
+  receiptId: z.uuid(),
   merchant: z.string(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   totalMinor: z.number().int().nonnegative(),
   gstin: z.string().nullable(),
-  purchaseId: z.string().uuid().nullable(),
+  purchaseId: z.uuid().nullable(),
   imageKey: z.string(),
 });
 export type TaxPackInvoiceRow = z.infer<typeof TaxPackInvoiceRowSchema>;
 
 export const TaxPackResponseSchema = z.object({
-  from: z.string().datetime(),
-  to: z.string().datetime(),
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
   label: z.string().min(1),
   year: z.number().int().nullable(),
   totalSpendMinor: z.number().int().nonnegative(),

@@ -18,23 +18,23 @@ export const DeliveryTier = z.enum(["EXPRESS", "STANDARD", "SLOW_BURN"]);
 
 export type DeliveryTier = z.infer<typeof DeliveryTier>;
 
-export const StateEtaSchema = z.partialRecord(OrderState, z.string().datetime().optional());
+export const StateEtaSchema = z.partialRecord(OrderState, z.iso.datetime().optional());
 
 export type StateEta = z.infer<typeof StateEtaSchema>;
 
 export const CreateOrderBodySchema = z.object({
   tier: DeliveryTier,
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
   /** Confirm override of N34 24h apparel cooling-off soft lock. */
   coolingOffOverride: z.boolean().optional(),
 });
 
 export const OrderSummarySchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   tier: DeliveryTier,
   state: OrderState,
   coinTotal: z.number().int().nonnegative(),
-  placedAt: z.string().datetime(),
+  placedAt: z.iso.datetime(),
   stateEta: StateEtaSchema.optional(),
   /** True when paying rushCostCoins would move the order's remaining steps earlier. */
   rushAvailable: z.boolean(),
@@ -60,10 +60,10 @@ export const OrderSummarySchema = z.object({
       z.object({
         candidateTitle: z.string(),
         candidateBrand: z.string().nullable().optional(),
-        listingId: z.string().uuid().optional(),
+        listingId: z.uuid().optional(),
         matches: z.array(
           z.object({
-            wardrobeItemId: z.string().uuid(),
+            wardrobeItemId: z.uuid(),
             wardrobeLabel: z.string(),
             wardrobeBrand: z.string().nullable(),
             score: z.number(),
@@ -85,7 +85,7 @@ export const RushOrderResponseSchema = z.object({
 });
 
 export const OrderParamsSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
 });
 
 export type CreateOrderBody = z.infer<typeof CreateOrderBodySchema>;

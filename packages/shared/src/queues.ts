@@ -337,5 +337,5 @@ export const IngestDeadLetterJobSchema = z.object({
 export type IngestDeadLetterJob = z.infer<typeof IngestDeadLetterJobSchema>;
 
 /** Scheduler template for the daily retention sweep (the run time comes from the scheduler). */
-export const RetentionSweepJobSchema = z.object({}).passthrough();
+export const RetentionSweepJobSchema = z.looseObject({});
 export type RetentionSweepJob = z.infer<typeof RetentionSweepJobSchema>;

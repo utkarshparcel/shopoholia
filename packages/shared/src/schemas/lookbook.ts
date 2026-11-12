@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ListingCardSchema } from "./listing.js";
 
 export const LookbookParamsSchema = z.object({
-  listingId: z.string().uuid(),
+  listingId: z.uuid(),
 });
 
 /** The signed-in user's saved listings, most recently saved first. */

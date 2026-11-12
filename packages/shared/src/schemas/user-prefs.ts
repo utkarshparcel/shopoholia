@@ -44,34 +44,30 @@ const userPrefsShape = {
   dismissedMissingLayerIds: z.array(z.string().min(1).max(64)).max(50),
 };
 
-export const UserPrefsSchema = z
-  .object({
-    notifications: userPrefsShape.notifications.optional(),
-    coolingOff: userPrefsShape.coolingOff.optional(),
-    capsuleItemIds: userPrefsShape.capsuleItemIds.optional(),
-    emailConnected: userPrefsShape.emailConnected.optional(),
-    laundryRules: userPrefsShape.laundryRules.optional(),
-    cpwThreshold: userPrefsShape.cpwThreshold.optional(),
-    dismissedMissingLayerIds: userPrefsShape.dismissedMissingLayerIds.optional(),
-  })
-  .passthrough();
+export const UserPrefsSchema = z.looseObject({
+  notifications: userPrefsShape.notifications.optional(),
+  coolingOff: userPrefsShape.coolingOff.optional(),
+  capsuleItemIds: userPrefsShape.capsuleItemIds.optional(),
+  emailConnected: userPrefsShape.emailConnected.optional(),
+  laundryRules: userPrefsShape.laundryRules.optional(),
+  cpwThreshold: userPrefsShape.cpwThreshold.optional(),
+  dismissedMissingLayerIds: userPrefsShape.dismissedMissingLayerIds.optional(),
+});
 export type UserPrefs = z.infer<typeof UserPrefsSchema>;
 
 /**
  * A patch for `patchUserPrefs`: a key with a value replaces that key, a key set to `null` is
  * deleted, and a missing key is left alone. Values replace whole keys (no deep merge).
  */
-export const UserPrefsPatchSchema = z
-  .object({
-    notifications: userPrefsShape.notifications.nullable().optional(),
-    coolingOff: userPrefsShape.coolingOff.nullable().optional(),
-    capsuleItemIds: userPrefsShape.capsuleItemIds.nullable().optional(),
-    emailConnected: userPrefsShape.emailConnected.nullable().optional(),
-    laundryRules: userPrefsShape.laundryRules.nullable().optional(),
-    cpwThreshold: userPrefsShape.cpwThreshold.nullable().optional(),
-    dismissedMissingLayerIds: userPrefsShape.dismissedMissingLayerIds.nullable().optional(),
-  })
-  .strict();
+export const UserPrefsPatchSchema = z.strictObject({
+  notifications: userPrefsShape.notifications.nullable().optional(),
+  coolingOff: userPrefsShape.coolingOff.nullable().optional(),
+  capsuleItemIds: userPrefsShape.capsuleItemIds.nullable().optional(),
+  emailConnected: userPrefsShape.emailConnected.nullable().optional(),
+  laundryRules: userPrefsShape.laundryRules.nullable().optional(),
+  cpwThreshold: userPrefsShape.cpwThreshold.nullable().optional(),
+  dismissedMissingLayerIds: userPrefsShape.dismissedMissingLayerIds.nullable().optional(),
+});
 export type UserPrefsPatch = z.infer<typeof UserPrefsPatchSchema>;
 
 /** Split a patch into the keys to set and the keys to delete; `undefined` values are skipped. */

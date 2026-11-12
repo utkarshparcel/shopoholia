@@ -11,16 +11,16 @@ export type GiftOrderStatus = z.infer<typeof GiftOrderStatusSchema>;
 
 export const ImportantDateSchema = z.object({
   occasion: z.string().min(1),
-  date: z.string().datetime(),
+  date: z.iso.datetime(),
   label: z.string().optional(),
 });
 export type ImportantDate = z.infer<typeof ImportantDateSchema>;
 
 /** Wishlist ref: listing id, URL, or free-text title. */
 export const WishlistRefSchema = z.object({
-  listingId: z.string().uuid().nullable().optional().default(null),
+  listingId: z.uuid().nullable().optional().default(null),
   title: z.string().min(1).max(200),
-  url: z.string().url().nullable().optional().default(null),
+  url: z.url().nullable().optional().default(null),
   note: z.string().max(500).nullable().optional().default(null),
 });
 export type WishlistRef = z.infer<typeof WishlistRefSchema>;
@@ -43,38 +43,38 @@ export function normalizeWishlist(items: unknown): WishlistRef[] {
 }
 
 export const RecipientProfileSchema = z.object({
-  id: z.string().uuid(),
-  recipientId: z.string().uuid(),
+  id: z.uuid(),
+  recipientId: z.uuid(),
   sizes: z.record(z.string(), z.string()),
   tasteTags: z.array(z.string()),
   wishlist: z.array(WishlistRefSchema),
   importantDates: z.array(ImportantDateSchema),
   notes: z.string().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type RecipientProfile = z.infer<typeof RecipientProfileSchema>;
 
 export const RecipientSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   name: z.string().min(1),
   relationship: RecipientRelationshipSchema,
   region: z.string().min(1),
   profile: RecipientProfileSchema.nullable().optional(),
   /** Soonest upcoming occasion from profile.importantDates (ISO). */
-  nextOccasionDate: z.string().datetime().nullable().optional(),
+  nextOccasionDate: z.iso.datetime().nullable().optional(),
   nextOccasionLabel: z.string().nullable().optional(),
   /** Whole days until nextOccasionDate (0 = today). */
   daysUntil: z.number().int().nullable().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type Recipient = z.infer<typeof RecipientSchema>;
 
 export const FestivalSeedSchema = z.object({
   occasion: z.string().min(1),
-  date: z.string().datetime(),
+  date: z.iso.datetime(),
   label: z.string().min(1),
 });
 export type FestivalSeed = z.infer<typeof FestivalSeedSchema>;
@@ -112,12 +112,12 @@ export const RecipientsResponseSchema = z.object({
 export type RecipientsResponse = z.infer<typeof RecipientsResponseSchema>;
 
 export const RecipientIdeasResponseSchema = z.object({
-  recipientId: z.string().uuid(),
+  recipientId: z.uuid(),
   /** Coin budget cap applied to ranking (null = no cap). */
   budgetCap: z.number().int().nonnegative().nullable().optional(),
   ideas: z.array(
     z.object({
-      id: z.string().uuid(),
+      id: z.uuid(),
       title: z.string(),
       category: z.string(),
       coinPrice: z.number().int(),
@@ -130,10 +130,10 @@ export const RecipientIdeasResponseSchema = z.object({
 export type RecipientIdeasResponse = z.infer<typeof RecipientIdeasResponseSchema>;
 
 export const CreateGiftOrderBodySchema = z.object({
-  recipientId: z.string().uuid(),
-  listingId: z.string().uuid().optional(),
+  recipientId: z.uuid(),
+  listingId: z.uuid().optional(),
   occasion: GiftOccasionSchema.optional(),
-  affiliateLink: z.string().url().optional().nullable(),
+  affiliateLink: z.url().optional().nullable(),
   wrapMessage: z.string().max(1000).optional().nullable(),
   groupTargetMinor: z.number().int().positive().optional().nullable(),
   groupCurrency: z.string().min(1).max(8).optional().nullable(),
@@ -141,10 +141,10 @@ export const CreateGiftOrderBodySchema = z.object({
 export type CreateGiftOrderBody = z.infer<typeof CreateGiftOrderBodySchema>;
 
 export const GiftOrderSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  recipientId: z.string().uuid(),
-  listingId: z.string().uuid().nullable(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  recipientId: z.uuid(),
+  listingId: z.uuid().nullable(),
   occasion: GiftOccasionSchema.nullable(),
   status: GiftOrderStatusSchema,
   affiliateLink: z.string().nullable(),
@@ -152,8 +152,8 @@ export const GiftOrderSchema = z.object({
   groupTargetMinor: z.number().int().nullable(),
   groupCurrency: z.string().nullable(),
   contributedMinor: z.number().int().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type GiftOrder = z.infer<typeof GiftOrderSchema>;
 
@@ -165,19 +165,19 @@ export const CreateGroupContributeBodySchema = z.object({
   note: z.string().max(500).optional().nullable(),
   contributorName: z.string().max(120).optional().nullable(),
   /** One key per contribution tap; a retry with the same key returns the first contribution. */
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
 });
 export type CreateGroupContributeBody = z.infer<typeof CreateGroupContributeBodySchema>;
 
 export const GroupGiftContributionSchema = z.object({
-  id: z.string().uuid(),
-  giftOrderId: z.string().uuid(),
-  contributorUserId: z.string().uuid().nullable(),
+  id: z.uuid(),
+  giftOrderId: z.uuid(),
+  contributorUserId: z.uuid().nullable(),
   contributorName: z.string().nullable(),
   amountMinor: z.number().int(),
   note: z.string().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type GroupGiftContribution = z.infer<typeof GroupGiftContributionSchema>;
 

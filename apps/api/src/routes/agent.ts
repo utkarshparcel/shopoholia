@@ -18,10 +18,10 @@ const AgentIdSchema = z
   .regex(/^[A-Za-z0-9._-]{1,64}$/)
   .default("render-agent");
 
-const JobParamsSchema = z.object({ id: z.string().uuid() });
+const JobParamsSchema = z.object({ id: z.uuid() });
 
 const AgentJobSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.enum(["render", "tryon"]),
   scenario: RenderScenarioSchema.nullable(),
   attempt: z.number().int(),
