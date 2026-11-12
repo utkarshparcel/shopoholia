@@ -314,7 +314,7 @@ export const RevealRatingBodySchema = z.object({
 export type RevealRatingBody = z.infer<typeof RevealRatingBodySchema>;
 
 export const RevealRatingResponseSchema = z.object({
-  orderId: z.string().uuid(),
+  orderId: z.uuid(),
   rating: RevealRatingSchema,
   recorded: z.literal(true),
 });

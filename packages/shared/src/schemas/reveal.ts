@@ -17,10 +17,10 @@ export const RenderStatusSchema = z.enum(["QUEUED", "RUNNING", "DONE", "FAILED"]
 export type RenderStatus = z.infer<typeof RenderStatusSchema>;
 
 export const RenderCardSchema = z.object({
-  id: z.string().uuid(),
-  orderItemId: z.string().uuid(),
+  id: z.uuid(),
+  orderItemId: z.uuid(),
   scenario: RenderScenarioSchema,
-  imageUrl: z.string().url().nullable(),
+  imageUrl: z.url().nullable(),
   isFree: z.boolean(),
   unlocked: z.boolean(),
   status: RenderStatusSchema,
@@ -30,7 +30,7 @@ export const RenderCardSchema = z.object({
 export type RenderCard = z.infer<typeof RenderCardSchema>;
 
 export const RevealResponseSchema = z.object({
-  orderId: z.string().uuid(),
+  orderId: z.uuid(),
   renders: z.array(RenderCardSchema),
   /**
    * The renders are waiting for the render agent (it is down, its night window is closed, or the
@@ -38,14 +38,14 @@ export const RevealResponseSchema = z.object({
    */
   rendersWaiting: z.boolean().optional(),
   /** When the waiting renders should be ready; null when there is no estimate ("shortly"). */
-  expectedReadyAt: z.string().datetime().nullable().optional(),
+  expectedReadyAt: z.iso.datetime().nullable().optional(),
 });
 
 export type RevealResponse = z.infer<typeof RevealResponseSchema>;
 
 export const UnlockBodySchema = z.object({
-  renderIds: z.array(z.string().uuid()).min(1),
-  idempotencyKey: z.string().uuid().optional(),
+  renderIds: z.array(z.uuid()).min(1),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export type UnlockBody = z.infer<typeof UnlockBodySchema>;
@@ -65,9 +65,9 @@ export type UnlockResponse = z.infer<typeof UnlockResponseSchema>;
  * the key returns the first call's render and charges nothing, whatever the repeat's body asks for.
  */
 export const GenerateRenderBodySchema = z.object({
-  orderItemIds: z.array(z.string().uuid()).min(1).max(REVEAL_COMBINE_MAX_ITEMS),
+  orderItemIds: z.array(z.uuid()).min(1).max(REVEAL_COMBINE_MAX_ITEMS),
   scenario: RenderScenarioSchema,
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export const GenerateRenderResponseSchema = z.object({
@@ -81,7 +81,7 @@ export type GenerateRenderResponse = z.infer<typeof GenerateRenderResponseSchema
 
 /** Free renders of the order that FAILED, to render again. Paid ones are refunded instead. */
 export const RetryRendersBodySchema = z.object({
-  renderIds: z.array(z.string().uuid()).min(1).max(50),
+  renderIds: z.array(z.uuid()).min(1).max(50),
 });
 
 export const RetryRendersResponseSchema = z.object({

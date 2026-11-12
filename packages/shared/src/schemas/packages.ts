@@ -12,20 +12,20 @@ export const PackageDeliveryStatusSchema = z.enum([
 export type PackageDeliveryStatus = z.infer<typeof PackageDeliveryStatusSchema>;
 
 export const PackageSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   merchant: z.string(),
   orderRef: z.string().nullable(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   currency: z.string(),
   totalMinor: z.number().int().nonnegative(),
   deliveryStatus: PackageDeliveryStatusSchema,
-  etaAt: z.string().datetime().nullable(),
+  etaAt: z.iso.datetime().nullable(),
   trackingCode: z.string().nullable(),
   /** U018 — carrier detected from tracking paste. */
   carrier: z.string().nullable().optional(),
-  deliveredAt: z.string().datetime().nullable(),
-  returnWindowDeadline: z.string().datetime().nullable(),
-  exchangeWindowDeadline: z.string().datetime().nullable(),
+  deliveredAt: z.iso.datetime().nullable(),
+  returnWindowDeadline: z.iso.datetime().nullable(),
+  exchangeWindowDeadline: z.iso.datetime().nullable(),
   /** U023 — user note for failed-delivery address fix. */
   deliveryAddressNote: z.string().nullable().optional(),
   /** U024 — R2 object keys for delivery/damage proof photos. */
@@ -36,7 +36,7 @@ export const PackageSchema = z.object({
   coolingOff: z
     .object({
       active: z.boolean(),
-      releaseAt: z.string().datetime(),
+      releaseAt: z.iso.datetime(),
       remainingMs: z.number().int().nonnegative(),
       cancelUrl: z.string().nullable(),
       checklist: z.array(
@@ -50,15 +50,15 @@ export const PackageSchema = z.object({
     .nullable()
     .optional(),
   /** U030 — household assignee. */
-  assigneeUserId: z.string().uuid().nullable().optional(),
+  assigneeUserId: z.uuid().nullable().optional(),
   assigneeLabel: z.string().nullable().optional(),
 });
 export type Package = z.infer<typeof PackageSchema>;
 
 /** U030 — assign package to household member. */
 export const AssignPackageBodySchema = z.object({
-  assigneeUserId: z.string().uuid().nullable(),
-  householdId: z.string().uuid().optional(),
+  assigneeUserId: z.uuid().nullable(),
+  householdId: z.uuid().optional(),
 });
 export type AssignPackageBody = z.infer<typeof AssignPackageBodySchema>;
 
@@ -71,10 +71,10 @@ export const BrokenItemRouterResponseSchema = z.object({
     label: z.string(),
   }),
   secondaryHint: z.string().nullable().optional(),
-  purchaseId: z.string().uuid(),
-  returnWindowDeadline: z.string().datetime().nullable(),
-  warrantyId: z.string().uuid().nullable(),
-  warrantyCoverageUntil: z.string().datetime().nullable(),
+  purchaseId: z.uuid(),
+  returnWindowDeadline: z.iso.datetime().nullable(),
+  warrantyId: z.uuid().nullable(),
+  warrantyCoverageUntil: z.iso.datetime().nullable(),
 });
 export type BrokenItemRouterResponse = z.infer<typeof BrokenItemRouterResponseSchema>;
 
@@ -85,7 +85,7 @@ export type PackagesListResponse = z.infer<typeof PackagesListResponseSchema>;
 
 export const UpdatePackageBodySchema = z.object({
   deliveryStatus: PackageDeliveryStatusSchema.optional(),
-  etaAt: z.string().datetime().nullable().optional(),
+  etaAt: z.iso.datetime().nullable().optional(),
   trackingCode: z.string().nullable().optional(),
   /** U018 — optional carrier label from client detect. */
   carrier: z.string().max(32).nullable().optional(),
@@ -128,7 +128,7 @@ export const RtoStartRefundBodySchema = z.object({
 export type RtoStartRefundBody = z.infer<typeof RtoStartRefundBodySchema>;
 
 export const RtoRecoveryBoardRowSchema = z.object({
-  purchaseId: z.string().uuid(),
+  purchaseId: z.uuid(),
   merchant: z.string(),
   orderRef: z.string().nullable(),
   totalMinor: z.number().int().nonnegative(),
@@ -137,12 +137,12 @@ export const RtoRecoveryBoardRowSchema = z.object({
   trackingCode: z.string().nullable(),
   deliveryAddressNote: z.string().nullable().optional(),
   deliveryProofKeys: z.array(z.string()).optional(),
-  failedAt: z.string().datetime().nullable(),
+  failedAt: z.iso.datetime().nullable(),
   checklist: z.array(RtoChecklistStepSchema),
-  returnId: z.string().uuid().nullable(),
+  returnId: z.uuid().nullable(),
   refundTrack: z
     .object({
-      returnId: z.string().uuid(),
+      returnId: z.uuid(),
       merchant: z.string().nullable(),
       itemTitle: z.string().nullable(),
       tracking: z.string().nullable(),
@@ -154,12 +154,12 @@ export const RtoRecoveryBoardRowSchema = z.object({
           state: z.enum(["done", "current", "todo"]),
         }),
       ),
-      etaAt: z.string().datetime().nullable(),
+      etaAt: z.iso.datetime().nullable(),
       daysLeft: z.number().int().nullable(),
       refundMinor: z.number().int().nullable(),
       ledgerCredited: z.boolean(),
       ledgerAmountMinor: z.number().int().nullable(),
-      ledgerCreditedAt: z.string().datetime().nullable(),
+      ledgerCreditedAt: z.iso.datetime().nullable(),
     })
     .nullable(),
 });

@@ -23,8 +23,8 @@ export const SeasonSchema = z.enum(["summer", "winter", "monsoon"]);
 export type Season = z.infer<typeof SeasonSchema>;
 
 export const WardrobeItemSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   source: WardrobeSourceSchema,
   category: z.string().min(1),
   colors: z.array(z.string()),
@@ -32,7 +32,7 @@ export const WardrobeItemSchema = z.object({
   costMinor: z.number().int().nonnegative(),
   imageKeys: z.array(z.string()),
   garmentImageKey: z.string().nullable(),
-  purchaseItemId: z.string().uuid().nullable(),
+  purchaseItemId: z.uuid().nullable(),
   laundryStatus: LaundryStatusSchema,
   closetStatus: ClosetStatusSchema.optional().default("ACTIVE"),
   tags: z.array(z.string()).optional().default([]),
@@ -57,9 +57,9 @@ export const WardrobeItemSchema = z.object({
     .optional()
     .default(null),
   /** N27 — closet profile this item belongs to (null = default/unscoped). */
-  profileId: z.string().uuid().nullable().optional().default(null),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  profileId: z.uuid().nullable().optional().default(null),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
   imageUrls: z.array(z.string()).optional(),
   garmentImageUrl: z.string().nullable().optional(),
 });
@@ -73,12 +73,12 @@ export const CreateWardrobeItemBodySchema = z.object({
   costMinor: z.number().int().nonnegative().optional().default(0),
   imageKeys: z.array(z.string()).optional().default([]),
   garmentImageKey: z.string().optional().nullable(),
-  purchaseItemId: z.string().uuid().optional().nullable(),
+  purchaseItemId: z.uuid().optional().nullable(),
   laundryStatus: LaundryStatusSchema.optional().default("CLEAN"),
   closetStatus: ClosetStatusSchema.optional().default("ACTIVE"),
   tags: z.array(z.string()).optional().default([]),
   careRules: CareRulesSchema.nullable().optional(),
-  profileId: z.string().uuid().nullable().optional(),
+  profileId: z.uuid().nullable().optional(),
 });
 export type CreateWardrobeItemBody = z.infer<typeof CreateWardrobeItemBodySchema>;
 
@@ -106,18 +106,18 @@ export const UpdateWardrobeItemBodySchema = z
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .nullable()
       .optional(),
-    profileId: z.string().uuid().nullable().optional(),
+    profileId: z.uuid().nullable().optional(),
   })
-  .refine((b) => Object.keys(b).length > 0, { message: "At least one field required" });
+  .refine((b) => Object.keys(b).length > 0, { error: "At least one field required" });
 export type UpdateWardrobeItemBody = z.infer<typeof UpdateWardrobeItemBodySchema>;
 
 /** `PATCH /wardrobe/items`: one patch applied to up to 200 of the caller's items. */
 export const BulkUpdateWardrobeItemsBodySchema = z.object({
   ids: z
-    .array(z.string().uuid())
+    .array(z.uuid())
     .min(1)
     .max(200)
-    .refine((ids) => new Set(ids).size === ids.length, { message: "ids must be unique" }),
+    .refine((ids) => new Set(ids).size === ids.length, { error: "ids must be unique" }),
   patch: UpdateWardrobeItemBodySchema,
 });
 export type BulkUpdateWardrobeItemsBody = z.infer<typeof BulkUpdateWardrobeItemsBodySchema>;
@@ -145,16 +145,16 @@ export const RepairKindSchema = z.enum(["REPAIR", "ALTERATION", "HEM", "ZIP", "O
 export type RepairKind = z.infer<typeof RepairKindSchema>;
 
 export const RepairLogSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  wardrobeItemId: z.uuid(),
   costMinor: z.number().int().nonnegative(),
   repairedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   kind: RepairKindSchema,
   note: z.string().nullable(),
-  tailorOrderId: z.string().uuid().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  tailorOrderId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type RepairLog = z.infer<typeof RepairLogSchema>;
 
@@ -163,7 +163,7 @@ export const CreateRepairLogBodySchema = z.object({
   repairedOn: z.string().min(1),
   kind: RepairKindSchema.optional(),
   note: z.string().max(500).nullable().optional(),
-  tailorOrderId: z.string().uuid().nullable().optional(),
+  tailorOrderId: z.uuid().nullable().optional(),
 });
 export type CreateRepairLogBody = z.infer<typeof CreateRepairLogBodySchema>;
 
@@ -175,7 +175,7 @@ export type RepairLogsResponse = z.infer<typeof RepairLogsResponseSchema>;
 export const SeasonalSwapBodySchema = z.object({
   season: SeasonSchema,
   /** Optional: also stamp these item ids with season:* tag before swap. */
-  tagItemIds: z.array(z.string().uuid()).max(200).optional(),
+  tagItemIds: z.array(z.uuid()).max(200).optional(),
 });
 export type SeasonalSwapBody = z.infer<typeof SeasonalSwapBodySchema>;
 
@@ -196,11 +196,11 @@ export const TravelPackBodySchema = z
     lat: z.number().optional(),
     lon: z.number().optional(),
   })
-  .refine((b) => b.endDate >= b.startDate, { message: "endDate must be on or after startDate" });
+  .refine((b) => b.endDate >= b.startDate, { error: "endDate must be on or after startDate" });
 export type TravelPackBody = z.infer<typeof TravelPackBodySchema>;
 
 export const TravelPackItemSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   category: z.string(),
   brand: z.string().nullable(),
   slot: z.enum(["top", "bottom", "shoes", "outer", "dress", "accessory", "other"]),
@@ -216,7 +216,7 @@ export const TravelPackResponseSchema = z.object({
   constraints: z.object({
     nights: z.number().int().positive(),
     maxItems: z.number().int().positive(),
-    perSlot: z.record(z.number().int().nonnegative()),
+    perSlot: z.record(z.string(), z.number().int().nonnegative()),
   }),
   items: z.array(TravelPackItemSchema),
   checklist: z.string().min(1),
@@ -254,21 +254,21 @@ export const WardrobeTryonResponseSchema = z.object({
   status: z.enum(["READY", "PROCESSING", "FAILED", "NO_AVATAR"]),
   previewUrl: z.string().nullable(),
   imageKey: z.string().nullable().optional(),
-  retryAfter: z.string().datetime().nullable().optional(),
+  retryAfter: z.iso.datetime().nullable().optional(),
 });
 export type WardrobeTryonResponse = z.infer<typeof WardrobeTryonResponseSchema>;
 
 /** Queue `wardrobe-tryon`: render one wardrobe try-on (apps/api/src/jobs/wardrobe-tryon.ts). */
 export const WardrobeTryonJobSchema = z.object({
-  userId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  userId: z.uuid(),
+  wardrobeItemId: z.uuid(),
 });
 export type WardrobeTryonJob = z.infer<typeof WardrobeTryonJobSchema>;
 
 /** Queue `wardrobe-discard-purge`: delete a discarded item once its undo window has passed. */
 export const WardrobeDiscardPurgeJobSchema = z.object({
-  userId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  userId: z.uuid(),
+  wardrobeItemId: z.uuid(),
 });
 export type WardrobeDiscardPurgeJob = z.infer<typeof WardrobeDiscardPurgeJobSchema>;
 
@@ -276,17 +276,17 @@ export const OutfitOccasionSchema = z.enum(["CASUAL", "WORK", "FORMAL", "PARTY",
 export type OutfitOccasion = z.infer<typeof OutfitOccasionSchema>;
 
 export const OutfitSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  itemIds: z.array(z.string().uuid()),
+  id: z.uuid(),
+  userId: z.uuid(),
+  itemIds: z.array(z.uuid()),
   occasion: OutfitOccasionSchema.nullable(),
-  weatherCtx: z.record(z.unknown()).nullable(),
+  weatherCtx: z.record(z.string(), z.unknown()).nullable(),
   /** Explainability strings for why this outfit was chosen. */
   whyThis: z.array(z.string()).optional(),
   /** Calendar day YYYY-MM-DD when this is a week-plan outfit. */
   plannedFor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-  generatedAt: z.string().datetime(),
-  createdAt: z.string().datetime(),
+  generatedAt: z.iso.datetime(),
+  createdAt: z.iso.datetime(),
   items: z.array(WardrobeItemSchema).optional(),
 });
 export type Outfit = z.infer<typeof OutfitSchema>;
@@ -294,7 +294,7 @@ export type Outfit = z.infer<typeof OutfitSchema>;
 export const WorkwearRotationDaySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   weekday: z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
-  itemIds: z.array(z.string().uuid()),
+  itemIds: z.array(z.uuid()),
   occasion: z.literal("WORK"),
   outfit: OutfitSchema.nullable().optional(),
 });
@@ -320,7 +320,7 @@ export const TodayOutfitResponseSchema = z.object({
 export type TodayOutfitResponse = z.infer<typeof TodayOutfitResponseSchema>;
 
 export const SelectTodayOutfitBodySchema = z.object({
-  outfitId: z.string().uuid().optional(),
+  outfitId: z.uuid().optional(),
   alt: z.number().int().min(0).max(20).optional(),
 });
 export type SelectTodayOutfitBody = z.infer<typeof SelectTodayOutfitBodySchema>;
@@ -382,7 +382,7 @@ export type PhotoDumpPhoto = z.infer<typeof PhotoDumpPhotoSchema>;
 
 export const PhotoDumpBodySchema = z.object({
   photos: z.array(PhotoDumpPhotoSchema).min(1).max(50),
-  profileId: z.string().uuid().nullable().optional(),
+  profileId: z.uuid().nullable().optional(),
 });
 export type PhotoDumpBody = z.infer<typeof PhotoDumpBodySchema>;
 
@@ -395,13 +395,13 @@ export const PhotoDumpResponseSchema = z.object({
 export type PhotoDumpResponse = z.infer<typeof PhotoDumpResponseSchema>;
 
 export const FromPurchasesBodySchema = z.object({
-  purchaseItemIds: z.array(z.string().uuid()).min(1).max(50),
+  purchaseItemIds: z.array(z.uuid()).min(1).max(50),
 });
 export type FromPurchasesBody = z.infer<typeof FromPurchasesBodySchema>;
 
 export const ImportablePurchaseItemSchema = z.object({
-  purchaseItemId: z.string().uuid(),
-  purchaseId: z.string().uuid(),
+  purchaseItemId: z.uuid(),
+  purchaseId: z.uuid(),
   merchant: z.string(),
   title: z.string(),
   category: z.string().nullable(),
@@ -445,7 +445,7 @@ export type GenerateWeekDayBody = z.infer<typeof GenerateWeekDayBodySchema>;
 
 export const PatchWeekDayBodySchema = z
   .object({
-    itemIds: z.array(z.string().uuid()).min(1).max(20).optional(),
+    itemIds: z.array(z.uuid()).min(1).max(20).optional(),
     occasion: OutfitOccasionSchema.nullable().optional(),
     /** U033 — pin/unpin outfit for this calendar day. */
     pinned: z.boolean().optional(),
@@ -454,7 +454,7 @@ export const PatchWeekDayBodySchema = z
     (b) =>
       b.itemIds !== undefined || b.occasion !== undefined || b.pinned !== undefined,
     {
-      message: "itemIds, occasion, or pinned required",
+      error: "itemIds, occasion, or pinned required",
     },
   );
 export type PatchWeekDayBody = z.infer<typeof PatchWeekDayBodySchema>;
@@ -463,8 +463,8 @@ export type PatchWeekDayBody = z.infer<typeof PatchWeekDayBodySchema>;
 export const CalendarEventInputSchema = z.object({
   id: z.string().optional(),
   title: z.string().default(""),
-  startAt: z.string().datetime(),
-  endAt: z.string().datetime().optional(),
+  startAt: z.iso.datetime(),
+  endAt: z.iso.datetime().optional(),
 });
 export type CalendarEventInput = z.infer<typeof CalendarEventInputSchema>;
 
@@ -484,7 +484,7 @@ export const FromCalendarEventResultSchema = z.object({
   occasion: OutfitOccasionSchema,
   reason: z.string(),
   plannedFor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  remindAt: z.string().datetime().nullable(),
+  remindAt: z.iso.datetime().nullable(),
   reminderScheduled: z.boolean(),
   outfit: OutfitSchema.nullable(),
 });
@@ -515,12 +515,12 @@ export const WeddingFestivalBodySchema = z
     /** Persist day outfits onto the week calendar (default true). */
     commit: z.boolean().optional().default(true),
   })
-  .refine((b) => b.endDate >= b.startDate, { message: "endDate must be on or after startDate" })
+  .refine((b) => b.endDate >= b.startDate, { error: "endDate must be on or after startDate" })
   .refine(
     (b) =>
       Date.parse(`${b.endDate}T00:00:00Z`) - Date.parse(`${b.startDate}T00:00:00Z`) <
       WEDDING_FESTIVAL_MAX_DAYS * 86_400_000,
-    { message: `A wedding or festival plan covers at most ${WEDDING_FESTIVAL_MAX_DAYS} days` },
+    { error: `A wedding or festival plan covers at most ${WEDDING_FESTIVAL_MAX_DAYS} days` },
   );
 export type WeddingFestivalBody = z.infer<typeof WeddingFestivalBodySchema>;
 
@@ -530,7 +530,7 @@ export const WeddingFestivalDaySchema = z.object({
   dayIndex: z.number().int().nonnegative(),
   dayLabel: z.string(),
   occasion: OutfitOccasionSchema,
-  itemIds: z.array(z.string().uuid()),
+  itemIds: z.array(z.uuid()),
   outfit: OutfitSchema.nullable().optional(),
 });
 export type WeddingFestivalDay = z.infer<typeof WeddingFestivalDaySchema>;
@@ -562,8 +562,8 @@ export type InterviewKitKind = z.infer<typeof InterviewKitKindSchema>;
 export const InterviewKitBodySchema = z.object({
   name: z.string().min(1).max(120),
   kind: InterviewKitKindSchema.optional().default("interview"),
-  itemIds: z.array(z.string().uuid()).min(1).max(20),
-  eventAt: z.string().datetime(),
+  itemIds: z.array(z.uuid()).min(1).max(20),
+  eventAt: z.iso.datetime(),
   occasion: OutfitOccasionSchema.optional(),
   /** Schedule night-before (−1d) reminder (default true). */
   remindNightBefore: z.boolean().optional().default(true),
@@ -573,17 +573,17 @@ export const InterviewKitBodySchema = z.object({
 export type InterviewKitBody = z.infer<typeof InterviewKitBodySchema>;
 
 export const InterviewKitSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   name: z.string(),
   kind: InterviewKitKindSchema,
-  itemIds: z.array(z.string().uuid()),
-  eventAt: z.string().datetime(),
+  itemIds: z.array(z.uuid()),
+  eventAt: z.iso.datetime(),
   occasion: OutfitOccasionSchema,
-  remindAt: z.string().datetime().nullable(),
+  remindAt: z.iso.datetime().nullable(),
   reminderScheduled: z.boolean(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
   outfit: OutfitSchema.nullable().optional(),
 });
 export type InterviewKit = z.infer<typeof InterviewKitSchema>;
@@ -601,14 +601,14 @@ export type InterviewKitListResponse = z.infer<typeof InterviewKitListResponseSc
 /** W056 — edit event time or cancel night-before reminder. */
 export const InterviewKitPatchBodySchema = z
   .object({
-    eventAt: z.string().datetime().optional(),
+    eventAt: z.iso.datetime().optional(),
     /** When true, clear remindAt / reminderScheduled. */
     cancelReminder: z.boolean().optional(),
     /** When true (and not canceling), (re)schedule night-before. */
     remindNightBefore: z.boolean().optional(),
   })
   .refine((b) => b.eventAt !== undefined || b.cancelReminder !== undefined || b.remindNightBefore !== undefined, {
-    message: "eventAt, cancelReminder, or remindNightBefore required",
+    error: "eventAt, cancelReminder, or remindNightBefore required",
   });
 export type InterviewKitPatchBody = z.infer<typeof InterviewKitPatchBodySchema>;
 
@@ -620,33 +620,33 @@ export const GoesWithMatchSchema = WardrobeItemSchema.extend({
 export type GoesWithMatch = z.infer<typeof GoesWithMatchSchema>;
 
 export const GoesWithResponseSchema = z.object({
-  anchorId: z.string().uuid(),
+  anchorId: z.uuid(),
   matches: z.array(GoesWithMatchSchema),
 });
 export type GoesWithResponse = z.infer<typeof GoesWithResponseSchema>;
 
 export const WearLogSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid().nullable(),
-  outfitId: z.string().uuid().nullable(),
-  wornOn: z.string().datetime(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  wardrobeItemId: z.uuid().nullable(),
+  outfitId: z.uuid().nullable(),
+  wornOn: z.iso.datetime(),
   imageKey: z.string().nullable().optional(),
   imageUrl: z.string().nullable().optional(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
   /** U031 — ISO timestamp when undo expires. */
-  undoUntil: z.string().datetime().optional(),
+  undoUntil: z.iso.datetime().optional(),
 });
 export type WearLog = z.infer<typeof WearLogSchema>;
 
 export const CreateWearBodySchema = z.object({
-  wardrobeItemId: z.string().uuid().optional().nullable(),
-  outfitId: z.string().uuid().optional().nullable(),
-  wornOn: z.string().datetime().optional(),
+  wardrobeItemId: z.uuid().optional().nullable(),
+  outfitId: z.uuid().optional().nullable(),
+  wornOn: z.iso.datetime().optional(),
   /** R2 object key from prior upload (e.g. wear/{userId}/{uuid}.jpg). */
   imageKey: z.string().min(1).optional().nullable(),
   /** A retried request with the same key returns the first wear log instead of logging again. */
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
 });
 export type CreateWearBody = z.infer<typeof CreateWearBodySchema>;
 
@@ -673,9 +673,9 @@ export const WearChallengeSchema = z.object({
 export type WearChallenge = z.infer<typeof WearChallengeSchema>;
 
 export const ItemMetricSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   wearCount: z.number().int().nonnegative(),
-  lastWornAt: z.string().datetime().nullable(),
+  lastWornAt: z.iso.datetime().nullable(),
   costPerWearMinor: z.number().int().nullable(),
   status: ItemMetricStatusSchema,
   item: WardrobeItemSchema.optional(),
@@ -770,15 +770,15 @@ export const DisposeBodySchema = z.object({
 export type DisposeBody = z.infer<typeof DisposeBodySchema>;
 
 export const DisposeResponseSchema = z.object({
-  listingId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  listingId: z.uuid(),
+  wardrobeItemId: z.uuid(),
   mode: z.string(),
   status: z.string(),
 });
 export type DisposeResponse = z.infer<typeof DisposeResponseSchema>;
 
 export const WearChallengeStartResponseSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   wearChallenge: WearChallengeSchema,
   pushQueued: z.boolean().optional().default(false),
 });
@@ -786,14 +786,14 @@ export type WearChallengeStartResponse = z.infer<typeof WearChallengeStartRespon
 
 /** N32 — Capsule builder (N-item core set). */
 export const CapsuleBodySchema = z.object({
-  itemIds: z.array(z.string().uuid()).max(50),
+  itemIds: z.array(z.uuid()).max(50),
   /** Soft cap; server clamps to 1–50 (default 12). */
   maxN: z.number().int().min(1).max(50).optional(),
 });
 export type CapsuleBody = z.infer<typeof CapsuleBodySchema>;
 
 export const CapsuleResponseSchema = z.object({
-  itemIds: z.array(z.string().uuid()),
+  itemIds: z.array(z.uuid()),
   maxN: z.number().int().positive(),
   items: z.array(WardrobeItemSchema).optional(),
 });
@@ -801,7 +801,7 @@ export type CapsuleResponse = z.infer<typeof CapsuleResponseSchema>;
 
 /** N51 — Replace worn-out twin via affiliate. */
 export const ReplaceTwinCandidateSchema = z.object({
-  listingId: z.string().uuid(),
+  listingId: z.uuid(),
   title: z.string(),
   category: z.string(),
   score: z.number(),
@@ -818,13 +818,13 @@ export const ReplaceTwinCandidateSchema = z.object({
 export type ReplaceTwinCandidate = z.infer<typeof ReplaceTwinCandidateSchema>;
 
 export const ReplaceTwinsResponseSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   candidates: z.array(ReplaceTwinCandidateSchema),
 });
 export type ReplaceTwinsResponse = z.infer<typeof ReplaceTwinsResponseSchema>;
 
 export const ReplaceTwinClickBodySchema = z.object({
-  listingId: z.string().uuid(),
+  listingId: z.uuid(),
   platform: z.string().min(1).optional(),
   /** Ignored: the server makes every click id. Accepted so older clients still validate. */
   clickId: z.string().min(1).optional(),
@@ -834,8 +834,8 @@ export type ReplaceTwinClickBody = z.infer<typeof ReplaceTwinClickBodySchema>;
 export const ReplaceTwinClickResponseSchema = z.object({
   recorded: z.literal(true),
   clickId: z.string(),
-  listingId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  listingId: z.uuid(),
+  wardrobeItemId: z.uuid(),
 });
 export type ReplaceTwinClickResponse = z.infer<typeof ReplaceTwinClickResponseSchema>;
 
@@ -843,7 +843,7 @@ export type ReplaceTwinClickResponse = z.infer<typeof ReplaceTwinClickResponseSc
 export const CompleteLookOwnedSlotSchema = z.object({
   slot: z.enum(["top", "bottom", "shoes", "outer", "dress", "accessory", "other"]),
   item: z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     category: z.string(),
     colors: z.array(z.string()).optional(),
     brand: z.string().nullable().optional(),
@@ -852,7 +852,7 @@ export const CompleteLookOwnedSlotSchema = z.object({
 
 export const CompleteLookMissingSlotSchema = z.object({
   slot: z.enum(["top", "bottom", "shoes", "outer", "dress", "accessory", "other"]),
-  listingId: z.string().uuid(),
+  listingId: z.uuid(),
   title: z.string(),
   affiliateUrl: z.string().nullable(),
   platform: z.string(),
@@ -886,7 +886,7 @@ export const ShoeBagRotationSuggestionSchema = WardrobeItemSchema.pick({
 }).extend({
   kind: ShoeBagRotationKindSchema,
   wearCount: z.number().int().nonnegative(),
-  lastWornAt: z.string().datetime().nullable(),
+  lastWornAt: z.iso.datetime().nullable(),
   score: z.number(),
   reason: z.string(),
 });
@@ -905,7 +905,7 @@ export const MissingPieceGapSchema = z.object({
   anchorSlot: z.enum(["top", "bottom", "shoes", "outer", "dress", "accessory", "other"]),
   colorHint: z.string().nullable(),
   message: z.string().min(1),
-  affiliateUrl: z.string().url(),
+  affiliateUrl: z.url(),
   priority: z.number().int().min(0).max(100),
 });
 export type MissingPieceGap = z.infer<typeof MissingPieceGapSchema>;

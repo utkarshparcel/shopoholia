@@ -44,7 +44,7 @@ import type {
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const HouseholdVaultMemberSettingsOut = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   vaultAccess: z.enum(["VIEW", "SPEND"]),
   spendCapMinor: z.number().int().nonnegative().nullable(),
   spendCapCurrency: z.string().nullable(),
@@ -224,7 +224,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdDetailResponseSchema,
           401: ErrorSchema,
@@ -260,7 +260,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdInviteResponseSchema,
           401: ErrorSchema,
@@ -292,7 +292,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdWardrobeResponseSchema,
           401: ErrorSchema,
@@ -339,7 +339,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid(), itemId: z.string().uuid() }),
+        params: z.object({ id: z.uuid(), itemId: z.uuid() }),
         body: PatchHouseholdWardrobeBodySchema,
         response: {
           200: WardrobeItemSchema,
@@ -395,7 +395,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdVaultResponseSchema,
           401: ErrorSchema,
@@ -467,7 +467,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PatchHouseholdVaultMemberBodySchema,
         response: {
           200: HouseholdVaultMemberSettingsOut,
@@ -549,7 +549,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: HouseholdVaultSpendBodySchema,
         response: {
           200: HouseholdVaultSpendResponseSchema,

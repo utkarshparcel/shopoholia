@@ -189,7 +189,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: SwapCircleDetailResponseSchema,
           401: ErrorSchema,
@@ -226,7 +226,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: SwapInviteResponseSchema,
           401: ErrorSchema,
@@ -258,7 +258,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: SwapListingsResponseSchema,
           401: ErrorSchema,
@@ -291,7 +291,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CreateSwapListingBodySchema,
         response: {
           200: SwapListingSchema,
@@ -360,7 +360,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid(), listingId: z.string().uuid() }),
+        params: z.object({ id: z.uuid(), listingId: z.uuid() }),
         response: {
           200: SwapListingSchema,
           401: ErrorSchema,
@@ -421,7 +421,7 @@ export const swapCircleRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["swap-circles"],
-        params: z.object({ id: z.string().uuid(), listingId: z.string().uuid() }),
+        params: z.object({ id: z.uuid(), listingId: z.uuid() }),
         response: {
           200: SwapListingSchema,
           401: ErrorSchema,

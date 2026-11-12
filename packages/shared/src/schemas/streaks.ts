@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const StreakResponseSchema = z.object({
   currentStreak: z.number().int().nonnegative(),
-  lastClaimedAt: z.string().datetime().nullable(),
+  lastClaimedAt: z.iso.datetime().nullable(),
   todayClaimed: z.boolean(),
   nextRewardCoins: z.number().int().positive(),
   nextRewardDay: z.number().int().positive(),

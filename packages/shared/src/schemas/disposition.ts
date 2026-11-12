@@ -7,20 +7,20 @@ export const DispositionStatusSchema = z.enum(["ACTIVE", "SOLD", "DONATED", "BAR
 export type DispositionStatus = z.infer<typeof DispositionStatusSchema>;
 
 export const DispositionListingSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  wardrobeItemId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  wardrobeItemId: z.uuid(),
   mode: DispositionModeSchema,
   priceMinor: z.number().int().nullable(),
   status: DispositionStatusSchema,
-  sellerId: z.string().uuid().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  sellerId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type DispositionListing = z.infer<typeof DispositionListingSchema>;
 
 export const CreateDispositionBodySchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   mode: DispositionModeSchema.default("SELL"),
   priceMinor: z.number().int().nonnegative().optional().nullable(),
   /** BARTER only: create an INDIVIDUAL seller and set disposition_listings.sellerId. */
@@ -76,7 +76,7 @@ export type DeclutterChallengeStartResponse = z.infer<typeof DeclutterChallengeS
 
 /** DISP-LOGISTICS — pricing suggestion + pickup partner stub. */
 export const DispositionPriceSuggestSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   suggestedPriceMinor: z.number().int().nonnegative(),
   floorMinor: z.number().int().nonnegative(),
   ceilingMinor: z.number().int().nonnegative(),
@@ -103,16 +103,16 @@ export type LogisticsPartnersResponse = z.infer<typeof LogisticsPartnersResponse
 
 export const BookDispositionPickupBodySchema = z.object({
   partnerId: z.string().min(1),
-  pickupSlotAt: z.string().datetime(),
+  pickupSlotAt: z.iso.datetime(),
 });
 export type BookDispositionPickupBody = z.infer<typeof BookDispositionPickupBodySchema>;
 
 export const DispositionPickupBookingSchema = z.object({
-  dispositionId: z.string().uuid(),
+  dispositionId: z.uuid(),
   partnerId: z.string().min(1),
   partnerName: z.string().min(1),
-  pickupSlotAt: z.string().datetime(),
-  bookedAt: z.string().datetime(),
+  pickupSlotAt: z.iso.datetime(),
+  bookedAt: z.iso.datetime(),
   stub: z.literal(true),
   etaHours: z.number().int().positive(),
 });

@@ -302,17 +302,17 @@ function toEventJson(e: ReturnEventRecord) {
 }
 
 const ReturnJsonSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  purchaseId: z.string().uuid().nullable(),
-  purchaseItemId: z.string().uuid().nullable(),
-  windowDeadline: z.string().datetime(),
-  exchangeDeadline: z.string().datetime().nullable().optional(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  purchaseId: z.uuid().nullable(),
+  purchaseItemId: z.uuid().nullable(),
+  windowDeadline: z.iso.datetime(),
+  exchangeDeadline: z.iso.datetime().nullable().optional(),
   state: z.string(),
   refundMinor: z.number().int().nullable(),
   method: z.string().nullable(),
   tracking: z.string().nullable(),
-  pickupSlotAt: z.string().datetime().nullable().optional(),
+  pickupSlotAt: z.iso.datetime().nullable().optional(),
   reason: z
     .enum([
       "TOO_SMALL",
@@ -327,14 +327,14 @@ const ReturnJsonSchema = z.object({
     .optional(),
   orderedSize: z.string().nullable().optional(),
   preferredSize: z.string().nullable().optional(),
-  chaseSnoozeUntil: z.string().datetime().nullable().optional(),
+  chaseSnoozeUntil: z.iso.datetime().nullable().optional(),
   chaseEscalated: z.boolean().optional(),
-  merchantReturnUrl: z.string().url().nullable().optional(),
+  merchantReturnUrl: z.url().nullable().optional(),
   merchant: z.string().nullable().optional(),
   itemTitle: z.string().nullable().optional(),
   orderRef: z.string().nullable().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 
 export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
@@ -450,7 +450,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: ReturnDetailResponseSchema, 404: ErrorSchema, 401: ErrorSchema },
       },
     },
@@ -556,7 +556,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: InitiateReturnBodySchema.optional(),
         response: {
           200: ReturnJsonSchema,
@@ -675,7 +675,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: BookPickupBodySchema,
         response: {
           200: ReturnJsonSchema,
@@ -735,7 +735,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ReschedulePickupBodySchema,
         response: {
           200: ReturnJsonSchema,
@@ -784,7 +784,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: ReturnJsonSchema,
           404: ErrorSchema,
@@ -826,7 +826,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RefundChaseSnoozeBodySchema.optional(),
         response: {
           200: ReturnJsonSchema,
@@ -861,7 +861,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: ReturnJsonSchema,
           404: ErrorSchema,
@@ -889,7 +889,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CorrectReturnWindowBodySchema,
         response: {
           200: ReturnJsonSchema,
@@ -946,7 +946,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ConfirmReturnBodySchema.optional(),
         response: {
           200: ReturnJsonSchema,
@@ -990,7 +990,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           refundMinor: z.number().int().positive().optional(),
           /** U012 — required tender destination for ledger metadata. */
@@ -998,7 +998,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
         }),
         response: {
           200: z.object({
-            id: z.string().uuid(),
+            id: z.uuid(),
             state: z.string(),
             refundMinor: z.number().int().nullable(),
             destination: z.enum(["ORIGINAL_CARD", "STORE_CREDIT", "UPI"]),
@@ -1080,7 +1080,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RequestGstInvoiceBodySchema,
         response: {
           200: RequestGstInvoiceResponseSchema,
@@ -1176,7 +1176,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: AttachReturnLabelBodySchema,
         response: {
           200: ReturnDetailResponseSchema.shape.request,
@@ -1214,7 +1214,7 @@ export const returnsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["returns"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: ReturnDetailResponseSchema.shape.request,
           400: ErrorSchema,

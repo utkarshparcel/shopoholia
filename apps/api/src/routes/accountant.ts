@@ -569,7 +569,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["budgets"],
         body: CreateBudgetBodySchema,
-        response: { 201: z.object({ id: z.string().uuid(), userId: z.string().uuid(), category: z.enum(["APPAREL","FOOTWEAR","ACCESSORIES","BEAUTY","GENERAL"]), period: z.enum(["MONTHLY","QUARTERLY"]), limitMinor: z.number().int().nonnegative(), createdAt: z.string().datetime(), updatedAt: z.string().datetime() }), 401: ErrorSchema },
+        response: { 201: z.object({ id: z.uuid(), userId: z.uuid(), category: z.enum(["APPAREL","FOOTWEAR","ACCESSORIES","BEAUTY","GENERAL"]), period: z.enum(["MONTHLY","QUARTERLY"]), limitMinor: z.number().int().nonnegative(), createdAt: z.iso.datetime(), updatedAt: z.iso.datetime() }), 401: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -629,7 +629,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
             maxCpwMinor: z.number().int().positive().nullable(),
             alerts: z.array(
               z.object({
-                wardrobeItemId: z.string().uuid(),
+                wardrobeItemId: z.uuid(),
                 category: z.string(),
                 costPerWearMinor: z.number().int(),
                 thresholdMinor: z.number().int(),
@@ -700,7 +700,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         body: SetCpwGoalBodySchema,
         response: {
           200: SetCpwGoalResponseSchema,
@@ -782,7 +782,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
             fixed: z.number().int(),
             mismatches: z.array(
               z.object({
-                accountId: z.string().uuid(),
+                accountId: z.uuid(),
                 merchant: z.string(),
                 cachedMinor: z.number().int(),
                 ledgerSumMinor: z.number().int(),
@@ -790,7 +790,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
                 driftMinor: z.number().int(),
                 fixed: z.boolean(),
                 investigated: z.boolean(),
-                investigatedAt: z.string().datetime().nullable(),
+                investigatedAt: z.iso.datetime().nullable(),
                 actions: z.array(
                   z.object({
                     action: z.enum(["recalc", "open_account", "investigate"]),
@@ -844,10 +844,10 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL"), requireEntitlement("accountant")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ accountId: z.string().uuid() }),
+        params: z.object({ accountId: z.uuid() }),
         response: {
           200: z.object({
-            accountId: z.string().uuid(),
+            accountId: z.uuid(),
             fixed: z.boolean(),
             cachedMinor: z.number().int().nullable(),
           }),
@@ -887,11 +887,11 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL"), requireEntitlement("accountant")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ accountId: z.string().uuid() }),
+        params: z.object({ accountId: z.uuid() }),
         response: {
           200: z.object({
-            accountId: z.string().uuid(),
-            investigatedAt: z.string().datetime(),
+            accountId: z.uuid(),
+            investigatedAt: z.iso.datetime(),
           }),
           401: ErrorSchema,
           403: ErrorSchema,

@@ -4,8 +4,8 @@ export const EmiPlanStatusSchema = z.enum(["ACTIVE", "PAID", "DEFAULTED"]);
 export type EmiPlanStatus = z.infer<typeof EmiPlanStatusSchema>;
 
 export const EmiPlanSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   provider: z.string().min(1),
   merchant: z.string().nullable(),
   principalMinor: z.number().int().nonnegative(),
@@ -16,8 +16,8 @@ export const EmiPlanSchema = z.object({
   dueDay: z.number().int().min(1).max(31).optional(),
   currency: z.string(),
   status: EmiPlanStatusSchema,
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 
 export const CreateEmiPlanBodySchema = z.object({
@@ -33,7 +33,7 @@ export const CreateEmiPlanBodySchema = z.object({
 export const PayEmiBodySchema = z.object({
   amountMinor: z.number().int().positive().optional(),
   /** One key per tap: a retry with the same key records the installment once. */
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export const EmiPlanListResponseSchema = z.object({
@@ -47,7 +47,7 @@ export const EmiScheduleItemSchema = z.object({
 });
 
 export const EmiScheduleResponseSchema = z.object({
-  planId: z.string().uuid(),
+  planId: z.uuid(),
   remainingMinor: z.number().int().nonnegative(),
   schedule: z.array(EmiScheduleItemSchema),
 });

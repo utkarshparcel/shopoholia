@@ -4,21 +4,21 @@ export const CashbackClaimStatusSchema = z.enum(["UNCLAIMED", "CLAIMED", "EXPIRE
 export type CashbackClaimStatus = z.infer<typeof CashbackClaimStatusSchema>;
 
 export const CashbackClaimSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   /** Card / bank / portal that owes the cashback. */
   source: z.string().min(1),
   merchant: z.string().nullable(),
   amountMinor: z.number().int().nonnegative(),
   currency: z.string(),
-  expiresAt: z.string().datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
   status: CashbackClaimStatusSchema,
   notes: z.string().nullable(),
   /** Optional claim-start URL (portal / mailto). Manual tracker — not a bank partner. */
-  claimUrl: z.string().url().nullable().optional(),
-  claimedAt: z.string().datetime().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  claimUrl: z.url().nullable().optional(),
+  claimedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 
 export const CreateCashbackClaimBodySchema = z.object({
@@ -26,9 +26,9 @@ export const CreateCashbackClaimBodySchema = z.object({
   merchant: z.string().max(120).nullable().optional(),
   amountMinor: z.number().int().nonnegative(),
   currency: z.string().optional(),
-  expiresAt: z.string().datetime().nullable().optional(),
+  expiresAt: z.iso.datetime().nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
-  claimUrl: z.string().url().nullable().optional(),
+  claimUrl: z.url().nullable().optional(),
 });
 
 export const CashbackClaimListResponseSchema = z.object({

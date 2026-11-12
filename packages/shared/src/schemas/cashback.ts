@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 export const CashbackEventSchema = z.object({
-  id: z.string().uuid(),
-  listingId: z.string().uuid().nullable(),
+  id: z.uuid(),
+  listingId: z.uuid().nullable(),
   platform: z.string(),
   coinsEarned: z.number().int().nonnegative(),
   status: z.enum(["PENDING", "CONFIRMED", "REJECTED"]),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 });
 
 export const CashbackHistoryResponseSchema = z.object({
@@ -36,18 +36,18 @@ export type ClosetAffiliateSource = z.infer<typeof ClosetAffiliateSourceSchema>;
  */
 export const CashbackClickBodySchema = z
   .object({
-    listingId: z.string().uuid().nullable().optional(),
+    listingId: z.uuid().nullable().optional(),
     platform: z.string().min(1).max(40),
     /** Ignored: the server makes every click id. Accepted so older clients still validate. */
     clickId: z.string().min(1).max(200).optional(),
     source: z.union([z.literal("play_listing"), ClosetAffiliateSourceSchema]).optional(),
-    url: z.string().url().max(2048).optional(),
+    url: z.url().max(2048).optional(),
   })
   .superRefine((body, ctx) => {
     const source = body.source ?? "play_listing";
     if (source === "play_listing" && !body.listingId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "listingId is required for play_listing clicks",
         path: ["listingId"],
       });
@@ -60,7 +60,7 @@ export const CashbackClickResponseSchema = z.object({
   clickId: z.string(),
   source: z.string(),
   platform: z.string(),
-  listingId: z.string().uuid().nullable(),
+  listingId: z.uuid().nullable(),
 });
 export type CashbackClickResponse = z.infer<typeof CashbackClickResponseSchema>;
 

@@ -23,11 +23,11 @@ export const CoinBalanceResponseSchema = z.object({
 });
 
 export const CoinTransactionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   delta: z.number().int(),
   type: CoinLedgerType,
   balanceAfter: z.number().int().nonnegative(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 });
 
 export const CoinTransactionsResponseSchema = z.object({

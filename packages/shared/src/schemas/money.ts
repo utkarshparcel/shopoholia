@@ -33,48 +33,48 @@ export type MoneyAccountStatus = z.infer<typeof MoneyAccountStatusSchema>;
 export const MoneyAccountBalanceCheckSchema = z.object({
   mode: z.enum(["api", "manual"]),
   due: z.boolean(),
-  checkUrl: z.string().url().nullable(),
+  checkUrl: z.url().nullable(),
 });
 
 export const MoneyAccountSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   kind: MoneyAccountKindSchema,
   merchant: z.string(),
   currency: z.string(),
   balanceCacheMinor: z.number().int().nonnegative(),
-  expiresAt: z.string().datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
   status: MoneyAccountStatusSchema,
   /** Affiliate / storefront deep-link for vault "Use it now" (when known). */
-  link: z.string().url().nullable().optional(),
+  link: z.url().nullable().optional(),
   /** Last balance refresh / manual confirm (ISO). Proxied from account.updatedAt. */
-  lastBalanceCheckedAt: z.string().datetime().nullable().optional(),
+  lastBalanceCheckedAt: z.iso.datetime().nullable().optional(),
   /** WV02-BALANCE-CHECK — api refresh vs manual re-check nudge. */
   balanceCheck: MoneyAccountBalanceCheckSchema.optional(),
 });
 
 export const MoneyLedgerEntrySchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   delta: z.number().int(),
   type: MoneyLedgerTypeSchema,
   refType: z.string().nullable(),
-  refId: z.string().uuid().nullable(),
+  refId: z.uuid().nullable(),
   balanceAfter: z.number().int().nonnegative(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 });
 
 export const PostMoneyLedgerBodySchema = z.object({
-  accountId: z.string().uuid(),
-  userId: z.string().uuid(),
+  accountId: z.uuid(),
+  userId: z.uuid(),
   delta: z.number().int(),
   type: MoneyLedgerTypeSchema,
   refType: z.string().optional(),
-  refId: z.string().uuid().optional(),
+  refId: z.uuid().optional(),
 });
 
 export const MoneyBalanceResponseSchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.uuid(),
   balanceMinor: z.number().int().nonnegative(),
 });
 
@@ -138,9 +138,9 @@ export const AddCreditBodySchema = z.object({
   merchant: z.string().min(1),
   currency: z.string().optional(),
   balanceMinor: z.number().int().nonnegative(),
-  expiresAt: z.string().datetime().nullable().optional(),
+  expiresAt: z.iso.datetime().nullable().optional(),
   /** When set, used as DEPOSIT refId so retries do not create duplicate cards. */
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
   /**
    * When true, server seeds the sample ₹500 Myntra gift card (overrides
    * kind/merchant/balance). Needs FINANCIAL consent like any other credit.
@@ -154,7 +154,7 @@ export const AddCreditBodySchema = z.object({
    */
   forceDuplicate: z.boolean().optional(),
   /** Existing near-dup account id when forceDuplicate is set (audit trail). */
-  nearDuplicateOf: z.string().uuid().optional(),
+  nearDuplicateOf: z.uuid().optional(),
 });
 
 export const AddCreditResponseSchema = MoneyAccountSchema;
@@ -162,7 +162,7 @@ export const AddCreditResponseSchema = MoneyAccountSchema;
 /** Idempotent spend against a credit account. */
 export const SpendCreditBodySchema = z.object({
   amountMinor: z.number().int().nonnegative(),
-  idempotencyKey: z.string().uuid(),
+  idempotencyKey: z.uuid(),
 });
 
 export const SpendCreditResponseSchema = z.object({
@@ -172,7 +172,7 @@ export const SpendCreditResponseSchema = z.object({
 /** Undo a SPEND within the 60s grace window (U001). */
 export const UndoSpendCreditBodySchema = z.object({
   /** Original spend idempotencyKey (SPEND ledger refId). */
-  idempotencyKey: z.string().uuid(),
+  idempotencyKey: z.uuid(),
 });
 
 export const UndoSpendCreditResponseSchema = z.object({
@@ -183,28 +183,28 @@ export const UndoSpendCreditResponseSchema = z.object({
 /** Merge duplicate gift cards / store credits for one merchant (U002). */
 export const MergeCreditsBodySchema = z
   .object({
-    targetAccountId: z.string().uuid(),
-    sourceAccountId: z.string().uuid(),
+    targetAccountId: z.uuid(),
+    sourceAccountId: z.uuid(),
   })
   .refine((b) => b.targetAccountId !== b.sourceAccountId, {
-    message: "targetAccountId and sourceAccountId must differ",
+    error: "targetAccountId and sourceAccountId must differ",
   });
 
 export const MergeCreditsResponseSchema = z.object({
   account: MoneyAccountSchema,
-  mergedFromId: z.string().uuid(),
+  mergedFromId: z.uuid(),
   transferredMinor: z.number().int().nonnegative(),
 });
 
 /** Mark expiry checklist handled — snoozes credit expiry push 7d (U003). */
 export const ExpiryHandledBodySchema = z.object({
   /** Optional absolute snooze-until; default now+7d. */
-  until: z.string().datetime().optional(),
+  until: z.iso.datetime().optional(),
 });
 
 export const ExpiryHandledResponseSchema = z.object({
-  accountId: z.string().uuid(),
-  snoozedUntil: z.string().datetime(),
+  accountId: z.uuid(),
+  snoozedUntil: z.iso.datetime(),
   status: z.enum(["published", "skipped"]),
 });
 
@@ -214,14 +214,14 @@ export const BalanceCheckResponseSchema = z.object({
   refreshed: z.boolean(),
   balanceMinor: z.number().int().nonnegative(),
   previousBalanceMinor: z.number().int().nonnegative(),
-  checkUrl: z.string().url().nullable(),
+  checkUrl: z.url().nullable(),
   message: z.string(),
 });
 
 /** POST /credits/:id/confirm-balance — user-confirmed merchant balance. */
 export const ConfirmBalanceBodySchema = z.object({
   balanceMinor: z.number().int().nonnegative(),
-  idempotencyKey: z.string().uuid().optional(),
+  idempotencyKey: z.uuid().optional(),
 });
 
 export const ConfirmBalanceResponseSchema = z.object({

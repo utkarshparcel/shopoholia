@@ -75,7 +75,7 @@ export const paymentsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["payments"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: PaymentIntentSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },

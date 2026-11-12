@@ -66,7 +66,7 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["coins"],
         querystring: z.object({
-          cursor: z.string().uuid().optional(),
+          cursor: z.uuid().optional(),
           limit: z.coerce.number().int().min(1).max(50).default(20),
         }),
         response: {

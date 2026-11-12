@@ -312,7 +312,7 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["vault"],
         querystring: z.object({
-          userId: z.string().uuid().optional(),
+          userId: z.uuid().optional(),
           event: z.string().optional(),
           limit: z.coerce.number().int().min(1).max(200).optional(),
         }),
@@ -484,7 +484,7 @@ export const vaultRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["vault"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: PrivacyRequestSchema,
           401: ErrorSchema,

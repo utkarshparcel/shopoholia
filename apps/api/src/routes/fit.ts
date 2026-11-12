@@ -173,7 +173,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdateMeasurementBodySchema,
         response: { 200: MeasurementProfileSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -269,7 +269,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ sellerId: z.string().uuid() }),
+        params: z.object({ sellerId: z.uuid() }),
         response: { 200: TailorReviewsResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -294,7 +294,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ sellerId: z.string().uuid() }),
+        params: z.object({ sellerId: z.uuid() }),
         body: CreateTailorReviewBodySchema,
         response: {
           201: TailorReviewSchema,
@@ -539,7 +539,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: TailoringOrderResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -576,7 +576,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           fabricRef: z.string().optional().nullable(),
           fabricPhotoKeys: z.array(z.string()).min(1),
@@ -614,7 +614,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 201: TailoringOrderResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -675,7 +675,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: TailoringOrderResponseSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -706,7 +706,7 @@ export const fitRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["fit"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           expectedPickupOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
           asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

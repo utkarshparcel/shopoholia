@@ -122,7 +122,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["disposition"],
-        querystring: z.object({ wardrobeItemId: z.string().uuid() }),
+        querystring: z.object({ wardrobeItemId: z.uuid() }),
         response: {
           200: DispositionPriceSuggestSchema,
           401: ErrorSchema,
@@ -301,7 +301,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["disposition"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: DispositionCreateResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -321,7 +321,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["disposition"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: BookDispositionPickupBodySchema,
         response: {
           200: DispositionPickupBookingSchema,
@@ -380,7 +380,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["disposition"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: DispositionPickupBookingSchema,
           401: ErrorSchema,
@@ -411,7 +411,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["disposition"],
         body: z.object({
-          wardrobeItemId: z.string().uuid(),
+          wardrobeItemId: z.uuid(),
           stillWear: z.boolean().optional(),
           hasValue: z.boolean().optional(),
           willingEffort: z.boolean().optional(),
@@ -424,8 +424,8 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
             nextAction: z.enum(["create_disposition", "keep_snooze"]),
             reason: z.string(),
             surface: z.literal("closet"),
-            listingId: z.string().uuid().nullable(),
-            snoozeUntil: z.string().datetime().nullable(),
+            listingId: z.uuid().nullable(),
+            snoozeUntil: z.iso.datetime().nullable(),
           }),
           401: ErrorSchema,
           404: ErrorSchema,

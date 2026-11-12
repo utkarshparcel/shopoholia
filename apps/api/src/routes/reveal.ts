@@ -21,7 +21,7 @@ import { renderProviderAvailable } from "../lib/render/provider.js";
 import { revealWaitEstimate } from "../lib/render/agent-jobs.js";
 
 const OrderParamsSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
 });
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });

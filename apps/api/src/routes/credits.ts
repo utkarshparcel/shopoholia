@@ -140,7 +140,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: PageQuerySchema,
         response: {
           200: MoneyTransactionsResponseSchema,
@@ -459,7 +459,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: SpendCreditBodySchema,
         response: {
           200: SpendCreditResponseSchema,
@@ -552,7 +552,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UndoSpendCreditBodySchema,
         response: {
           200: UndoSpendCreditResponseSchema,
@@ -728,7 +728,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ExpiryHandledBodySchema,
         response: {
           200: ExpiryHandledResponseSchema,
@@ -789,7 +789,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: BalanceCheckResponseSchema,
           401: ErrorSchema,
@@ -825,7 +825,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ConfirmBalanceBodySchema,
         response: {
           200: ConfirmBalanceResponseSchema,

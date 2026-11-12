@@ -132,7 +132,7 @@ const UploadFieldsSchema = z.object({
   brand: z.string().max(100).nullable(),
   costMinor: z.number().int().nonnegative().max(1_000_000_000),
   /** The closet profile it was added from (a kid's closet); none is the user's own. */
-  profileId: z.string().uuid().nullable(),
+  profileId: z.uuid().nullable(),
 });
 
 const OCR_UNAVAILABLE = { error: "ocr_unavailable", message: "Couldn't read the tag right now. Try again later." };
@@ -220,7 +220,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["wardrobe"],
         querystring: PageQuerySchema.extend({
           /** N27 — scope to closet profile. */
-          profileId: z.string().uuid().optional(),
+          profileId: z.uuid().optional(),
         }),
         response: { 200: WardrobeListResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
       },
@@ -897,7 +897,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdateWardrobeItemBodySchema,
         response: { 200: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -987,7 +987,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CareOcrBodySchema,
         response: {
           200: CareOcrResponseSchema.extend({ item: WardrobeItemSchema }),
@@ -1025,7 +1025,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         consumes: ["multipart/form-data"],
         response: {
           200: CareOcrResponseSchema.extend({ item: WardrobeItemSchema }),
@@ -1085,7 +1085,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: DryCleanDropOffBodySchema,
         response: {
           200: DryCleanActionResponseSchema,
@@ -1154,7 +1154,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: DryCleanActionResponseSchema,
           400: ErrorSchema,
@@ -1201,7 +1201,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: DryCleanActionResponseSchema,
           400: ErrorSchema,
@@ -1289,7 +1289,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: RepairLogsResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -1312,7 +1312,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CreateRepairLogBodySchema,
         response: {
           201: RepairLogSchema,
@@ -1365,7 +1365,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: LendBodySchema,
         response: {
           200: LendActionResponseSchema,
@@ -1435,7 +1435,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: LendActionResponseSchema,
           400: ErrorSchema,
@@ -1481,7 +1481,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 204: z.null(), 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -1505,7 +1505,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: z.object({ limit: z.coerce.number().int().min(1).max(50).optional() }),
         response: { 200: GoesWithResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -1635,7 +1635,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: WardrobeTryonResponseSchema,
           202: WardrobeTryonResponseSchema,
@@ -1893,11 +1893,11 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({
             ok: z.literal(true),
-            id: z.string().uuid(),
+            id: z.uuid(),
           }),
           400: ErrorSchema,
           401: ErrorSchema,
@@ -1983,10 +1983,10 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: z.object({
-          itemIds: z.array(z.string().uuid()).min(1).max(50).optional(),
+          itemIds: z.array(z.uuid()).min(1).max(50).optional(),
         }),
         response: {
-          200: z.object({ cleaned: z.number().int().nonnegative(), itemIds: z.array(z.string().uuid()) }),
+          200: z.object({ cleaned: z.number().int().nonnegative(), itemIds: z.array(z.uuid()) }),
           401: ErrorSchema,
         },
       },
@@ -2095,7 +2095,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: LentOverdueActionBodySchema,
         response: {
           200: LentOverdueActionResponseSchema,
@@ -2169,7 +2169,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           decision: z.enum(["keep", "wardrobe", "discard"]),
         }),
@@ -2178,7 +2178,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
             decision: z.enum(["keep", "wardrobe", "discard"]),
             item: WardrobeItemSchema.nullable(),
             deleted: z.boolean(),
-            undoUntil: z.string().datetime().nullable(),
+            undoUntil: z.iso.datetime().nullable(),
           }),
           400: ErrorSchema,
           401: ErrorSchema,
@@ -2239,7 +2239,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({ ok: z.literal(true), item: WardrobeItemSchema }),
           400: ErrorSchema,

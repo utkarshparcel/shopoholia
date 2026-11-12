@@ -32,8 +32,12 @@ import {
 } from "./schemas/wardrobe.js";
 import { normalizeWishlist } from "./schemas/gift.js";
 import { CashbackClickBodySchema } from "./schemas/cashback.js";
+import { TimestampSchema } from "./schemas/closet-item.js";
+import { OutfitSlotsSchema } from "./schemas/closet-week.js";
+import { StateEtaSchema } from "./schemas/order.js";
+import { ComposerSettingsSchema } from "./closet-composer/input.js";
 
-const UUID = "00000000-0000-0000-0000-000000000001";
+const UUID = "00000000-0000-4000-8000-000000000001";
 const ISO = "2024-01-01T00:00:00.000Z";
 
 describe("consent schemas", () => {
@@ -454,5 +458,27 @@ describe("cashback click body Closet affiliate", () => {
         url: "https://www.amazon.in/",
       }).source,
     ).toBe("use_this_weekend");
+  });
+});
+
+describe("zod 4 upgrade: behaviour kept from zod 3", () => {
+  it("enum-keyed records stay partial (zod 4's z.record with an enum key wants every key)", () => {
+    expect(OutfitSlotsSchema.parse({ TOP: UUID })).toEqual({ TOP: UUID });
+    expect(StateEtaSchema.parse({})).toEqual({});
+    expect(ComposerSettingsSchema.parse({ checksEnabled: { BLOATED: false } }).checksEnabled).toEqual({
+      BLOATED: false,
+    });
+    expect(OutfitSlotsSchema.safeParse({ NOT_A_SLOT: UUID }).success).toBe(false);
+  });
+
+  it("missing composer settings still get the nested defaults (prefault, not default)", () => {
+    expect(ComposerSettingsSchema.parse(undefined)).toEqual({ laundryRules: null, checksEnabled: {}, weights: {} });
+  });
+
+  it("timestamps keep zod 3's datetime rules and message", () => {
+    expect(TimestampSchema.safeParse("2024-01-01T10:00:00.123Z").success).toBe(true);
+    expect(TimestampSchema.safeParse("2024-01-01T10:00Z").success).toBe(false);
+    expect(TimestampSchema.safeParse("2024-01-01T10:00:00+05:30").success).toBe(false);
+    expect(TimestampSchema.safeParse("2024-02-30T10:00:00Z").error?.issues[0]?.message).toBe("Invalid datetime");
   });
 });

@@ -183,7 +183,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RtoStartRefundBodySchema,
         response: {
           200: RtoRecoveryBoardResponseSchema.shape.board.element,
@@ -332,7 +332,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdatePackageBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -434,7 +434,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: MarkDeliveredBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element.extend({
@@ -512,7 +512,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RtoAddressFixBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -572,11 +572,11 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: AttachDeliveryProofBodySchema,
         response: {
           200: z.object({
-            purchaseId: z.string().uuid(),
+            purchaseId: z.uuid(),
             deliveryProofKeys: z.array(z.string()),
             claimPacket: z.object({
               merchant: z.string(),
@@ -636,7 +636,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: BrokenItemRouterResponseSchema,
           401: ErrorSchema,
@@ -698,7 +698,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: AssignPackageBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -805,7 +805,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
           401: ErrorSchema,

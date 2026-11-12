@@ -20,6 +20,7 @@ import { closeQueues } from "./lib/queues/enqueue.js";
 import pino from "pino";
 import { redactQueryError } from "./lib/redact-error.js";
 import { captureException, initSentry } from "./lib/sentry.js";
+import { installZod3Messages } from "./lib/zod-messages.js";
 import {
   bootConfigProblems,
   fastifyTrustProxy,
@@ -32,9 +33,12 @@ import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
 import { apiRoutes } from "./routes/index.js";
 
+// Validation 400s keep the wording clients got before the zod 4 upgrade.
+installZod3Messages();
+
 const HealthResponseSchema = z.object({
   status: z.literal("ok"),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
 });
 
 /** Route groups with tighter rate limits (money, vault data, sign-in). */
@@ -83,9 +87,9 @@ export async function buildServer(options: BuildServerOptions = {}) {
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
     connectionTimeout: 60_000,
-    // Fastify's default, set explicitly because it is a security control: zod 3 can exhaust memory
-    // validating an oversized constrained collection (fixed only in zod 4.6.6), so no JSON body may
-    // exceed 1 MiB. Uploads go through multipart, whose own limits are below.
+    // Fastify's default, set explicitly because it is a security control: no JSON body may exceed
+    // 1 MiB, which bounds what any schema validation has to walk. Uploads go through multipart,
+    // whose own limits are below.
     bodyLimit: 1024 * 1024,
   }).withTypeProvider<ZodTypeProvider>();
 

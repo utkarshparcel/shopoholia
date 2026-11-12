@@ -24,27 +24,27 @@ export const SizeReturnReasonSchema = z.enum([
 export type SizeReturnReason = z.infer<typeof SizeReturnReasonSchema>;
 
 export const ReturnRequestSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
-  purchaseId: z.string().uuid().nullable(),
-  purchaseItemId: z.string().uuid().nullable(),
-  windowDeadline: z.string().datetime(),
+  id: z.uuid(),
+  userId: z.uuid(),
+  purchaseId: z.uuid().nullable(),
+  purchaseItemId: z.uuid().nullable(),
+  windowDeadline: z.iso.datetime(),
   /** Size-exchange deadline — may differ from return/refund window. */
-  exchangeDeadline: z.string().datetime().nullable().optional(),
+  exchangeDeadline: z.iso.datetime().nullable().optional(),
   state: ReturnStateSchema,
   refundMinor: z.number().int().nullable(),
   method: z.string().nullable(),
   tracking: z.string().nullable(),
   /** Scheduled logistics pickup (WV01-PICKUP-BOOK). */
-  pickupSlotAt: z.string().datetime().nullable().optional(),
+  pickupSlotAt: z.iso.datetime().nullable().optional(),
   /** Prefill merchant return portal URL on initiate. */
-  merchantReturnUrl: z.string().url().nullable().optional(),
+  merchantReturnUrl: z.url().nullable().optional(),
   /** N17 — size inconsistency reason when known. */
   reason: SizeReturnReasonSchema.nullable().optional(),
   orderedSize: z.string().nullable().optional(),
   preferredSize: z.string().nullable().optional(),
   /** U020 — chase snooze until (ISO); suppress overdue chase checklist. */
-  chaseSnoozeUntil: z.string().datetime().nullable().optional(),
+  chaseSnoozeUntil: z.iso.datetime().nullable().optional(),
   /** U020 — escalate overdue refund chase for ops. */
   chaseEscalated: z.boolean().optional(),
   /** Enriched for concierge copy — optional so older clients stay compatible. */
@@ -53,9 +53,9 @@ export const ReturnRequestSchema = z.object({
   /** U017 — order ref from purchase graph for portal checklist. */
   orderRef: z.string().nullable().optional(),
   /** U026 — GST invoice requested at (ISO). */
-  invoiceRequestedAt: z.string().datetime().nullable().optional(),
+  invoiceRequestedAt: z.iso.datetime().nullable().optional(),
   /** U026 — vault receipt id when invoice later arrives. */
-  invoiceReceiptId: z.string().uuid().nullable().optional(),
+  invoiceReceiptId: z.uuid().nullable().optional(),
   /** U026 — deep link into vault GST when invoice linked. */
   invoiceVaultHref: z.string().nullable().optional(),
   /** U029 — return label object key. */
@@ -63,9 +63,9 @@ export const ReturnRequestSchema = z.object({
   /** U029 — signed URL for offline-capable display. */
   labelImageUrl: z.string().nullable().optional(),
   /** U029 — when pickup agent used the label. */
-  labelUsedAt: z.string().datetime().nullable().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  labelUsedAt: z.iso.datetime().nullable().optional(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type ReturnRequest = z.infer<typeof ReturnRequestSchema>;
 
@@ -84,7 +84,7 @@ export const RequestGstInvoiceResponseSchema = z.object({
     shareText: z.string(),
     contact: z.string(),
   }),
-  invoiceRequestedAt: z.string().datetime(),
+  invoiceRequestedAt: z.iso.datetime(),
 });
 export type RequestGstInvoiceResponse = z.infer<typeof RequestGstInvoiceResponseSchema>;
 
@@ -95,18 +95,18 @@ export const AttachReturnLabelBodySchema = z.object({
 export type AttachReturnLabelBody = z.infer<typeof AttachReturnLabelBodySchema>;
 
 export const ReturnEventSchema = z.object({
-  id: z.string().uuid(),
-  returnRequestId: z.string().uuid(),
+  id: z.uuid(),
+  returnRequestId: z.uuid(),
   fromState: z.string().nullable(),
   toState: z.string(),
   actor: z.string().nullable(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 });
 export type ReturnEvent = z.infer<typeof ReturnEventSchema>;
 
 export const CreateReturnBodySchema = z.object({
-  purchaseId: z.string().uuid().optional(),
-  purchaseItemId: z.string().uuid().optional(),
+  purchaseId: z.uuid().optional(),
+  purchaseItemId: z.uuid().optional(),
   method: z.string().optional(),
   reason: SizeReturnReasonSchema.optional(),
   orderedSize: z.string().max(32).optional(),
@@ -115,8 +115,8 @@ export const CreateReturnBodySchema = z.object({
 export type CreateReturnBody = z.infer<typeof CreateReturnBodySchema>;
 
 export const InitiateReturnBodySchema = z.object({
-  purchaseId: z.string().uuid().optional(),
-  purchaseItemId: z.string().uuid().optional(),
+  purchaseId: z.uuid().optional(),
+  purchaseItemId: z.uuid().optional(),
   method: z.string().optional(),
   reason: SizeReturnReasonSchema.optional(),
   orderedSize: z.string().max(32).optional(),
@@ -131,13 +131,13 @@ export type ConfirmReturnBody = z.infer<typeof ConfirmReturnBodySchema>;
 
 /** WV01-PICKUP-BOOK — book a logistics pickup slot after initiate. */
 export const BookPickupBodySchema = z.object({
-  pickupSlotAt: z.string().datetime(),
+  pickupSlotAt: z.iso.datetime(),
 });
 export type BookPickupBody = z.infer<typeof BookPickupBodySchema>;
 
 /** U019 — reschedule while PICKUP_SCHEDULED (same state, new slot). */
 export const ReschedulePickupBodySchema = z.object({
-  pickupSlotAt: z.string().datetime(),
+  pickupSlotAt: z.iso.datetime(),
 });
 export type ReschedulePickupBody = z.infer<typeof ReschedulePickupBodySchema>;
 
@@ -149,7 +149,7 @@ export type RefundChaseSnoozeBody = z.infer<typeof RefundChaseSnoozeBodySchema>;
 
 /** U025 — user-correctable return window end date. */
 export const CorrectReturnWindowBodySchema = z.object({
-  windowDeadline: z.string().datetime(),
+  windowDeadline: z.iso.datetime(),
   reason: z.string().min(1).max(500),
 });
 export type CorrectReturnWindowBody = z.infer<typeof CorrectReturnWindowBodySchema>;
@@ -173,18 +173,18 @@ export const RefundEtaPipelineStepSchema = z.object({
 export type RefundEtaPipelineStep = z.infer<typeof RefundEtaPipelineStepSchema>;
 
 export const RefundEtaBoardRowSchema = z.object({
-  returnId: z.string().uuid(),
+  returnId: z.uuid(),
   merchant: z.string().nullable(),
   itemTitle: z.string().nullable(),
   tracking: z.string().nullable(),
   state: ReturnStateSchema,
   pipeline: z.array(RefundEtaPipelineStepSchema),
-  etaAt: z.string().datetime().nullable(),
+  etaAt: z.iso.datetime().nullable(),
   daysLeft: z.number().int().nullable(),
   refundMinor: z.number().int().nullable(),
   ledgerCredited: z.boolean(),
   ledgerAmountMinor: z.number().int().nullable(),
-  ledgerCreditedAt: z.string().datetime().nullable(),
+  ledgerCreditedAt: z.iso.datetime().nullable(),
 });
 export type RefundEtaBoardRow = z.infer<typeof RefundEtaBoardRowSchema>;
 
@@ -195,7 +195,7 @@ export type RefundEtaBoardResponse = z.infer<typeof RefundEtaBoardResponseSchema
 
 /** N17 — per-brand size inconsistency map. */
 export const SizeMapHistoryEntrySchema = z.object({
-  returnId: z.string().uuid(),
+  returnId: z.uuid(),
   brand: z.string(),
   merchant: z.string().nullable(),
   itemTitle: z.string().nullable(),
@@ -203,7 +203,7 @@ export const SizeMapHistoryEntrySchema = z.object({
   orderedSize: z.string().nullable(),
   preferredSize: z.string().nullable(),
   reason: SizeReturnReasonSchema,
-  returnedAt: z.string().datetime(),
+  returnedAt: z.iso.datetime(),
 });
 export type SizeMapHistoryEntry = z.infer<typeof SizeMapHistoryEntrySchema>;
 

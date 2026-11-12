@@ -6,13 +6,13 @@ export const SellerRegisterBodySchema = z.object({
 });
 
 export const SellerRegisterResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   shopName: z.string(),
 });
 
 export const SellerListingCreateResponseSchema = z.object({
-  listingId: z.string().uuid(),
-  variantId: z.string().uuid(),
+  listingId: z.uuid(),
+  variantId: z.uuid(),
 });
 
 export const SellerListingsResponseSchema = z.object({

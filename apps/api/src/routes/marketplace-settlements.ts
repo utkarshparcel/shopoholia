@@ -11,7 +11,7 @@ import {
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const SettlementSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.enum(["tailoring", "resale"]),
   orderRef: z.string(),
   sellerId: z.string(),
