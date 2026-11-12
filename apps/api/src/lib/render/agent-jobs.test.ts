@@ -450,4 +450,34 @@ describe("expectedReadyAt", () => {
     // 06:30 IST (01:00 UTC) + 30 minutes.
     expect(estimate.expectedReadyAt).toBe("2026-11-05T01:30:00.000Z");
   });
+
+  it("counts the night window at the actual instants on a daylight-saving night", () => {
+    const london = agentConfig({ RENDER_AGENT_WINDOW: "23:00-06:30", RENDER_AGENT_TIME_ZONE: "Europe/London" });
+    // Clocks back on 25 October 2026: 23:00 BST (22:00 UTC) + 2 renders + 30 minutes.
+    expect(
+      renderWaitEstimate(london, { now: new Date("2026-10-24T11:00:00.000Z"), lastHeartbeatAt: null, pending: true, queueDepth: 2 }),
+    ).toEqual({ waiting: true, expectedReadyAt: "2026-10-24T22:32:00.000Z" });
+    // Capped at 06:30 GMT (06:30 UTC) + 30 minutes, not an hour early.
+    expect(
+      renderWaitEstimate(london, { now: new Date("2026-10-24T11:00:00.000Z"), lastHeartbeatAt: null, pending: true, queueDepth: 5000 })
+        .expectedReadyAt,
+    ).toBe("2026-10-25T07:00:00.000Z");
+    // Clocks forward on 28 March 2027: capped at 06:30 BST (05:30 UTC) + 30 minutes, not an hour late.
+    expect(
+      renderWaitEstimate(london, { now: new Date("2027-03-27T12:00:00.000Z"), lastHeartbeatAt: null, pending: true, queueDepth: 5000 })
+        .expectedReadyAt,
+    ).toBe("2027-03-28T06:00:00.000Z");
+
+    const newYork = agentConfig({ RENDER_AGENT_WINDOW: "23:00-06:30", RENDER_AGENT_TIME_ZONE: "America/New_York" });
+    // Clocks back on 1 November 2026: 06:30 EST is 11:30 UTC.
+    expect(
+      renderWaitEstimate(newYork, { now: new Date("2026-10-31T16:00:00.000Z"), lastHeartbeatAt: null, pending: true, queueDepth: 5000 })
+        .expectedReadyAt,
+    ).toBe("2026-11-01T12:00:00.000Z");
+    // Clocks forward on 14 March 2027: opens 23:00 EST (04:00 UTC).
+    expect(
+      renderWaitEstimate(newYork, { now: new Date("2027-03-13T17:00:00.000Z"), lastHeartbeatAt: null, pending: true, queueDepth: 1 })
+        .expectedReadyAt,
+    ).toBe("2027-03-14T04:31:00.000Z");
+  });
 });

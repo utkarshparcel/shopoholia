@@ -103,17 +103,25 @@ export function resolveRenderConfig(env: Env = process.env): RenderConfig {
   };
 }
 
-/** Minutes since local midnight in `timeZone`. */
-export function localMinutes(at: Date, timeZone: string): number {
+type LocalParts = { year: number; month: number; day: number; minutes: number };
+
+function localParts(at: Date, timeZone: string): LocalParts {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(at);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return (hour % 24) * 60 + minute;
+  const get = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return { year: get("year"), month: get("month"), day: get("day"), minutes: (get("hour") % 24) * 60 + get("minute") };
+}
+
+/** Minutes since local midnight in `timeZone`. */
+export function localMinutes(at: Date, timeZone: string): number {
+  return localParts(at, timeZone).minutes;
 }
 
 export function inAgentWindow(at: Date, window: AgentWindow, timeZone: string): boolean {
@@ -123,29 +131,57 @@ export function inAgentWindow(at: Date, window: AgentWindow, timeZone: string): 
   return startMin < endMin ? m >= startMin && m < endMin : m >= startMin || m < endMin;
 }
 
-function atMinuteOffset(at: Date, minutes: number): Date {
-  const floored = Math.floor(at.getTime() / MINUTE_MS) * MINUTE_MS;
-  return new Date(floored + minutes * MINUTE_MS);
+/** The zone's offset from UTC at the instant `ms`, in milliseconds (seconds dropped). */
+function offsetMsAt(ms: number, timeZone: string): number {
+  const local = localParts(new Date(ms), timeZone);
+  const asUtc = Date.UTC(local.year, local.month - 1, local.day, 0, local.minutes);
+  return asUtc - Math.floor(ms / MINUTE_MS) * MINUTE_MS;
+}
+
+const HOUR_MS = 60 * MINUTE_MS;
+
+/**
+ * The instants at which the local clock in `timeZone` reads `minutes` on the local day
+ * `year-month-day` (`day` may overflow into the next month). Usually one; two when the clocks go
+ * back over that time; none in the hour skipped when they go forward, and then the instant the
+ * old offset would give (01:30 in a skipped 01:00-02:00 is the instant the clock shows 02:30).
+ * Offsets are read at the actual instants, so daylight saving is right.
+ */
+function instantsAtLocalTime(year: number, month: number, day: number, minutes: number, timeZone: string): number[] {
+  const wall = Date.UTC(year, month - 1, day, 0, minutes);
+  // The real instants are within 14 h of `wall`; one sample either side sees both offsets.
+  const before = offsetMsAt(wall - 15 * HOUR_MS, timeZone);
+  const after = offsetMsAt(wall + 15 * HOUR_MS, timeZone);
+  const found = [...new Set([before, after])]
+    .map((offset) => wall - offset)
+    .filter((ms) => offsetMsAt(ms, timeZone) === wall - ms)
+    .sort((a, b) => a - b);
+  return found.length > 0 ? found : [wall - before];
+}
+
+/** The first instant after `at` at which the local clock reads `minutes`. */
+function nextLocalTime(at: Date, minutes: number, timeZone: string): Date {
+  const today = localParts(at, timeZone);
+  for (let days = 0; days <= 2; days += 1) {
+    for (const ms of instantsAtLocalTime(today.year, today.month, today.day + days, minutes, timeZone)) {
+      if (ms > at.getTime()) return new Date(ms);
+    }
+  }
+  // Unreachable: some day in the next three has that local time after `at`.
+  return new Date(at.getTime() + 24 * HOUR_MS);
 }
 
 /**
- * When the window next opens: `at` itself inside it (or for `always`). Local clock arithmetic,
- * so a daylight-saving change on that night can move it by an hour.
+ * When the window next opens: `at` itself inside it (or for `always`). Computed at the actual
+ * instant in the zone, so a daylight-saving change that night doesn't move it.
  */
 export function nextWindowStart(at: Date, window: AgentWindow, timeZone: string): Date {
   if (window.kind === "always" || inAgentWindow(at, window, timeZone)) return at;
-  const m = localMinutes(at, timeZone);
-  return atMinuteOffset(at, (window.startMin - m + 1440) % 1440);
+  return nextLocalTime(at, window.startMin, timeZone);
 }
 
 /** When the current window closes, or the next one if outside it; null for `always`. */
 export function windowEndAfter(at: Date, window: AgentWindow, timeZone: string): Date | null {
   if (window.kind === "always") return null;
-  const m = localMinutes(at, timeZone);
-  if (inAgentWindow(at, window, timeZone)) {
-    return atMinuteOffset(at, (window.endMin - m + 1440) % 1440);
-  }
-  const toStart = (window.startMin - m + 1440) % 1440;
-  const length = (window.endMin - window.startMin + 1440) % 1440;
-  return atMinuteOffset(at, toStart + length);
+  return nextLocalTime(nextWindowStart(at, window, timeZone), window.endMin, timeZone);
 }
