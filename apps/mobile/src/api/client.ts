@@ -2631,6 +2631,8 @@ export type HouseholdVaultResponse = {
   householdId: string;
   myAccess: 'VIEW' | 'SPEND';
   mySpendCapMinor: number | null;
+  /** The cap's currency (null: no cap, or a cap set before caps had one). */
+  mySpendCapCurrency?: string | null;
   mySpentMinor: number;
   accounts: Array<{
     id: string;
@@ -2645,6 +2647,7 @@ export type HouseholdVaultResponse = {
     userId: string;
     vaultAccess: 'VIEW' | 'SPEND';
     spendCapMinor: number | null;
+    spendCapCurrency?: string | null;
     spentMinor: number;
   }>;
 };
@@ -2663,6 +2666,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess?: 'VIEW' | 'SPEND';
     spendCapMinor?: number | null;
+    spendCapCurrency?: string;
   },
 ) {
   const res = await apiFetch(`${API_URL}/households/${householdId}/vault/members`, {
@@ -2674,6 +2678,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess: 'VIEW' | 'SPEND';
     spendCapMinor: number | null;
+    spendCapCurrency: string | null;
     spentMinor: number;
   }>(res);
 }

@@ -811,7 +811,7 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
       const fix = request.query.fix === true;
       // Only the caller's accounts: never a cross-user scan or fix from here.
       const result = await reconcileMoneyAccounts(app.deps.repos, app.log, { fix, userId });
-      const rows = annotateUserMismatches(userId, result.mismatches);
+      const rows = await annotateUserMismatches(app.deps.repos, userId, result.mismatches);
       audit(app.log, "money.read", {
         userId,
         surface: "accountant.reconcile",
@@ -901,11 +901,10 @@ export const accountantRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request, reply) => {
       const userId = request.user!.sub;
-      const accounts = await app.deps.repos.listMoneyAccounts(userId);
-      if (!accounts.some((a) => a.id === request.params.accountId)) {
+      const marked = await markReconcileInvestigated(app.deps.repos, userId, request.params.accountId);
+      if (!marked) {
         return reply.code(404).send({ error: "Not Found", message: "Account not found" });
       }
-      const marked = markReconcileInvestigated(userId, request.params.accountId);
       audit(app.log, "money.reconcile.investigated", {
         userId,
         accountId: marked.accountId,

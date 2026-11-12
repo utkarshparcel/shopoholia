@@ -99,7 +99,7 @@ Railway, Render or Fly.io can host the API, the worker, Postgres and Redis in on
 
 ### Migrations to run on first deploy
 
-All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0022 on
+All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0026 on
 Postgres 16). On an existing database, the newest ones also repair data:
 
 - `0016_emi_due_day`: EMI plans get a due day, taken from their next due date.
@@ -116,6 +116,15 @@ Postgres 16). On an existing database, the newest ones also repair data:
 - `0025_render_agent_leases`: renders and try-on previews get `lease_owner`, `lease_expires_at`
   and `attempts` (the render agent's leases), and a new `render_agents` table keeps each agent's
   last heartbeat. Additive only.
+- `0026_closet_state`: Closet state the API used to hold in process memory (lost on every
+  restart) gets tables: `merchant_aliases`, `gift_budget_locks`, `parser_training_fixtures`,
+  `lent_waste_notes` (all the user's, in the vault export and erased with the account) and
+  `parser_break_flags` (ops flags, no user column); and columns: wardrobe items' keep-snooze and
+  photo-dump triage times, money accounts' reconcile "investigated" time, measurement profiles'
+  change note and previous version, tailoring orders' expected pickup day and pickup-nudge time,
+  disposition listings' booked pickup, and household vault caps' currency
+  (`spend_cap_currency`). Additive only; a cap set before it takes the currency of the first spend
+  against it.
 
 ### API environment
 

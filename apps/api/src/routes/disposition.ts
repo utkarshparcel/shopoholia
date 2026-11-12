@@ -32,15 +32,17 @@ import {
   suggestDispositionPrice,
 } from "../lib/disposition-logistics.js";
 import { getKeepSnooze, setKeepSnooze } from "../lib/closet-ops-prefs.js";
-import type { DispositionListingRecord } from "../lib/repositories/types.js";
+import type { DispositionListingRecord, Repositories } from "../lib/repositories/types.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
-/** In-process declutter challenge starts (userId → target). */
-const startedDeclutterChallenges = new Map<string, { target: number }>();
-
-/** DISP-LOGISTICS — in-memory pickup bookings (stub; keyed by disposition id). */
-const dispositionPickupBookings = new Map<string, DispositionPickupBooking>();
+/** The declutter challenge the user started (`users.prefs.declutterChallenge`), if any. */
+async function startedDeclutterChallenge(
+  repos: Pick<Repositories, "getUserPrefs">,
+  userId: string,
+): Promise<{ target: number } | null> {
+  return (await repos.getUserPrefs(userId))?.declutterChallenge ?? null;
+}
 
 function toDispositionJson(r: DispositionListingRecord) {
   return {
@@ -56,11 +58,12 @@ function toDispositionJson(r: DispositionListingRecord) {
   };
 }
 
-export function declutterPayloadForUser(
+export async function declutterPayloadForUser(
+  repos: Pick<Repositories, "getUserPrefs">,
   userId: string,
   listings: DispositionListingRecord[],
 ) {
-  const started = startedDeclutterChallenges.get(userId);
+  const started = await startedDeclutterChallenge(repos, userId);
   const progressCount = countDisposedItems(listings);
   const challenge = declutterChallengeProgress(progressCount, {
     started: Boolean(started),
@@ -76,16 +79,6 @@ export function declutterPayloadForUser(
   return { declutterChallenge: challenge, declutterShareCard: shareCard };
 }
 
-/** Test helper — reset in-memory challenge state between suites if needed. */
-export function __resetDeclutterChallengeStateForTests() {
-  startedDeclutterChallenges.clear();
-}
-
-/** Test helper — reset logistics pickup stubs. */
-export function __resetDispositionPickupBookingsForTests() {
-  dispositionPickupBookings.clear();
-}
-
 export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
   // GET /disposition
   app.get(
@@ -97,7 +90,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request) => {
       const userId = request.user!.sub;
       const listings = await app.deps.repos.listDispositionListings(userId);
-      const declutter = declutterPayloadForUser(userId, listings);
+      const declutter = await declutterPayloadForUser(app.deps.repos, userId, listings);
       return { listings: listings.map(toDispositionJson), ...declutter };
     },
   );
@@ -183,7 +176,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const body = (request.body ?? {}) as DeclutterChallengeStartBody;
       const listings = await app.deps.repos.listDispositionListings(userId);
-      const existing = startedDeclutterChallenges.get(userId);
+      const existing = await startedDeclutterChallenge(app.deps.repos, userId);
       const target = body.target ?? existing?.target;
       const challenge = declutterChallengeProgress(countDisposedItems(listings), {
         started: true,
@@ -197,7 +190,13 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      startedDeclutterChallenges.set(userId, { target: challenge.target });
+      if (
+        !(await app.deps.repos.patchUserPrefs(userId, {
+          declutterChallenge: { target: challenge.target, startedAt: new Date().toISOString() },
+        }))
+      ) {
+        throw new Error("user prefs not saved: user not found");
+      }
 
       await app.deps.push.send({
         userId,
@@ -277,7 +276,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       trackServerEvent("disposition_created", { userId, wardrobeItemId: body.wardrobeItemId, mode });
 
       const all = await app.deps.repos.listDispositionListings(userId);
-      const started = startedDeclutterChallenges.get(userId);
+      const started = await startedDeclutterChallenge(app.deps.repos, userId);
       if (started) {
         const challenge = declutterChallengeProgress(countDisposedItems(all), {
           started: true,
@@ -362,7 +361,9 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
         stub: true,
         etaHours: booked.booking.etaHours,
       };
-      dispositionPickupBookings.set(id, payload);
+      if (!(await app.deps.repos.setDispositionPickupBooking(id, userId, payload))) {
+        return reply.code(404).send({ error: "Not Found", message: "Disposition listing not found" });
+      }
       trackServerEvent("disposition_pickup_booked", {
         userId,
         dispositionId: id,
@@ -394,7 +395,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!listing) {
         return reply.code(404).send({ error: "Not Found", message: "Disposition listing not found" });
       }
-      const booking = dispositionPickupBookings.get(id);
+      const booking = await app.deps.repos.getDispositionPickupBooking(id, userId);
       if (!booking) {
         return reply.code(404).send({ error: "Not Found", message: "No pickup booked" });
       }
@@ -457,7 +458,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
 
       if (result.nextAction === "keep_snooze") {
         const until = keepSnoozeUntil();
-        setKeepSnooze(userId, body.wardrobeItemId, until);
+        await setKeepSnooze(app.deps.repos, userId, body.wardrobeItemId, until);
         audit(app.log, "waste.keep_snoozed", {
           userId,
           wardrobeItemId: body.wardrobeItemId,
@@ -499,7 +500,7 @@ export const dispositionRoutes: FastifyPluginAsyncZod = async (app) => {
       return {
         ...result,
         listingId: listing.id,
-        snoozeUntil: getKeepSnooze(userId, body.wardrobeItemId),
+        snoozeUntil: await getKeepSnooze(app.deps.repos, userId, body.wardrobeItemId),
       };
     },
   );

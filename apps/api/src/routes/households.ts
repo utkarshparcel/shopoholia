@@ -47,6 +47,7 @@ const HouseholdVaultMemberSettingsOut = z.object({
   userId: z.string().uuid(),
   vaultAccess: z.enum(["VIEW", "SPEND"]),
   spendCapMinor: z.number().int().nonnegative().nullable(),
+  spendCapCurrency: z.string().nullable(),
   spentMinor: z.number().int().nonnegative(),
 });
 
@@ -443,6 +444,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
           userId: m.userId,
           vaultAccess: (s?.vaultAccess ?? "VIEW") as "VIEW" | "SPEND",
           spendCapMinor: s?.spendCapMinor ?? null,
+          spendCapCurrency: s?.spendCapCurrency ?? null,
           spentMinor: s?.spentMinor ?? 0,
         };
       });
@@ -450,6 +452,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         householdId: id,
         myAccess: mySettings.vaultAccess,
         mySpendCapMinor: mySettings.spendCapMinor,
+        mySpendCapCurrency: mySettings.spendCapCurrency,
         mySpentMinor: mySettings.spentMinor,
         accounts,
         members: memberSettings,
@@ -468,6 +471,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         body: PatchHouseholdVaultMemberBodySchema,
         response: {
           200: HouseholdVaultMemberSettingsOut,
+          400: ErrorSchema,
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
@@ -496,11 +500,31 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!members.some((m) => m.userId === body.userId)) {
         return reply.code(404).send({ error: "Not Found", message: "Member not found" });
       }
+      // A cap counts one currency: the one given, else the one the owner's shared credits are in.
+      // Spends against credits in another currency are refused, never added as raw minor units.
+      let spendCapCurrency: string | null | undefined = body.spendCapCurrency;
+      if (body.spendCapMinor === null) spendCapCurrency = null;
+      else if (body.spendCapMinor !== undefined && spendCapCurrency === undefined) {
+        const ownerIds = members.filter((m) => m.role === "OWNER").map((m) => m.userId);
+        const currencies = new Set(
+          (await app.deps.repos.listMoneyAccountsByUsers(ownerIds))
+            .filter((a) => !a.status || a.status === "ACTIVE")
+            .map((a) => a.currency),
+        );
+        if (currencies.size !== 1) {
+          return reply.code(400).send({
+            error: "Bad Request",
+            message: "Say which currency the spend cap is in (spendCapCurrency)",
+          });
+        }
+        spendCapCurrency = [...currencies][0]!;
+      }
       const updated = await app.deps.repos.upsertHouseholdVaultSettings({
         householdId: id,
         userId: body.userId,
         vaultAccess: body.vaultAccess,
         spendCapMinor: body.spendCapMinor,
+        spendCapCurrency,
       });
       trackServerEvent("household_vault_member_patched", {
         userId,
@@ -512,6 +536,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         userId: updated.userId,
         vaultAccess: updated.vaultAccess,
         spendCapMinor: updated.spendCapMinor,
+        spendCapCurrency: updated.spendCapCurrency,
         spentMinor: updated.spentMinor,
       };
     },
@@ -596,9 +621,25 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // One conditional update checks access and cap and adds the amount, so two concurrent
       // spends cannot both fit under the cap.
-      const reserved = await app.deps.repos.tryReserveHouseholdVaultSpend(id, userId, body.amountMinor);
+      const reserved = await app.deps.repos.tryReserveHouseholdVaultSpend(
+        id,
+        userId,
+        body.amountMinor,
+        account.currency,
+      );
       if (!reserved) {
         const settings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
+        if (
+          settings.vaultAccess === "SPEND" &&
+          settings.spendCapMinor !== null &&
+          settings.spendCapCurrency !== null &&
+          settings.spendCapCurrency !== account.currency
+        ) {
+          return reply.code(409).send({
+            error: "Conflict",
+            message: `Your household spend cap is in ${settings.spendCapCurrency} and this credit is in ${account.currency}; caps don't convert between currencies`,
+          });
+        }
         const capCheck = checkHouseholdVaultSpendCap({
           isMember: true,
           vaultAccess: settings.vaultAccess,

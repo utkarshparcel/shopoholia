@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, type SettlementRow } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, type DispositionPickupBooking, type SettlementRow } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { withNewReferralCode } from "../referral-code.js";
 import {
@@ -82,6 +82,11 @@ import {
   wearLog,
   repairLogs,
   marketplaceSettlements,
+  merchantAliases,
+  parserBreakFlags,
+  giftBudgetLocks,
+  parserTrainingFixtures,
+  lentWasteNotes,
   type Db,
 } from "@worn/db";
 import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
@@ -173,6 +178,9 @@ import type {
   RepairLogRecord,
   ReturnRecord,
   TailoringOrderRecord,
+  GiftBudgetLockRecord,
+  ParserTrainingFixtureRecord,
+  LentWasteNoteRecord,
 } from "./types.js";
 
 type UserRow = typeof users.$inferSelect;
@@ -568,6 +576,20 @@ function mapSeller(row: SellerRow): SellerRecord {
   };
 }
 
+function mapMeasurementProfile(row: typeof measurementProfiles.$inferSelect): MeasurementProfileRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    region: row.region,
+    unit: row.unit as MeasurementProfileRecord["unit"],
+    points: (row.points ?? {}) as Record<string, number>,
+    changeNote: row.changeNote ?? null,
+    previousId: row.previousId ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function mapTailoringOrder(row: typeof tailoringOrders.$inferSelect): TailoringOrderRecord {
   return {
     id: row.id,
@@ -580,6 +602,8 @@ function mapTailoringOrder(row: typeof tailoringOrders.$inferSelect): TailoringO
     tailorSellerId: row.tailorSellerId ?? null,
     measurementSnapshot: (row.measurementSnapshot as Record<string, unknown> | null) ?? null,
     state: row.state,
+    expectedPickupOn: row.expectedPickupOn ?? null,
+    pickupNudgeSentAt: row.pickupNudgeSentAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -879,8 +903,49 @@ function mapHouseholdVaultSettings(row: HouseholdVaultSettingsRow): HouseholdVau
     userId: row.userId,
     vaultAccess: row.vaultAccess,
     spendCapMinor: row.spendCapMinor ?? null,
+    spendCapCurrency: row.spendCapCurrency ?? null,
     spentMinor: row.spentMinor,
     updatedAt: row.updatedAt,
+  };
+}
+
+function mapGiftBudgetLock(row: typeof giftBudgetLocks.$inferSelect): GiftBudgetLockRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    recipientId: row.recipientId,
+    occasion: row.occasion,
+    occasionDay: row.occasionDay,
+    occasionDate: row.occasionDate,
+    budgetLockMinor: row.budgetLockMinor,
+    currency: row.currency,
+    shortlistIds: [...(row.shortlistIds ?? [])],
+    lockedAt: row.lockedAt,
+  };
+}
+
+function mapParserTrainingFixture(row: typeof parserTrainingFixtures.$inferSelect): ParserTrainingFixtureRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    documentId: row.documentId,
+    kind: row.kind,
+    merchantHint: row.merchantHint ?? null,
+    fields: [...(row.fields ?? [])],
+    before: row.before,
+    after: row.after,
+    exportStatus: row.exportStatus,
+    createdAt: row.createdAt,
+  };
+}
+
+function mapLentWasteNote(row: typeof lentWasteNotes.$inferSelect): LentWasteNoteRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    wardrobeItemId: row.wardrobeItemId ?? null,
+    note: row.note,
+    createdAt: row.createdAt,
   };
 }
 
@@ -5719,41 +5784,28 @@ export function createPostgresRepositories(db: Db): Repositories {
     // --- P4 fit ---
     async listMeasurementProfiles(userId) {
         const rows = await db.select().from(measurementProfiles).where(eq(measurementProfiles.userId, userId)).orderBy(desc(measurementProfiles.createdAt));
-        return rows.map((r) => ({
-          id: r.id,
-          userId: r.userId,
-          region: r.region,
-          unit: r.unit as MeasurementProfileRecord["unit"],
-          points: (r.points ?? {}) as Record<string, number>,
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt,
-        }));
+        return rows.map(mapMeasurementProfile);
     },
     async findMeasurementProfile(id, userId) {
         const [row] = await db.select().from(measurementProfiles).where(and(eq(measurementProfiles.id, id), eq(measurementProfiles.userId, userId))).limit(1);
         if (!row)
             return null;
-        return {
-          id: row.id,
-          userId: row.userId,
-          region: row.region,
-          unit: row.unit as MeasurementProfileRecord["unit"],
-          points: (row.points ?? {}) as Record<string, number>,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        };
+        return mapMeasurementProfile(row);
     },
     async createMeasurementProfile(input) {
-        const [row] = await db.insert(measurementProfiles).values({ id: randomUUID(), userId: input.userId, region: input.region ?? "IN", unit: (input.unit ?? "CM"), points: input.points }).returning();
-        return {
-          id: row.id,
-          userId: row.userId,
-          region: row.region,
-          unit: row.unit as MeasurementProfileRecord["unit"],
-          points: (row.points ?? {}) as Record<string, number>,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        };
+        const [row] = await db
+          .insert(measurementProfiles)
+          .values({
+            id: randomUUID(),
+            userId: input.userId,
+            region: input.region ?? "IN",
+            unit: input.unit ?? "CM",
+            points: input.points,
+            changeNote: input.changeNote ?? null,
+            previousId: input.previousId ?? null,
+          })
+          .returning();
+        return mapMeasurementProfile(row!);
     },
     async listCustomizationTemplates(region) {
         const rows = region ? await db.select().from(customizationTemplates).where(eq(customizationTemplates.region, region)).orderBy(desc(customizationTemplates.createdAt)) : await db.select().from(customizationTemplates).orderBy(desc(customizationTemplates.createdAt));
@@ -5797,6 +5849,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           tailorSellerId: input.tailorSellerId ?? null,
           measurementSnapshot: snapshot,
           state: "PENDING",
+          expectedPickupOn: input.expectedPickupOn ?? null,
         }).returning();
         return mapTailoringOrder(row);
     },
@@ -6267,6 +6320,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         userId,
         vaultAccess: "VIEW",
         spendCapMinor: null,
+        spendCapCurrency: null,
         spentMinor: 0,
         updatedAt: now(),
       } satisfies HouseholdVaultSettingsRecord;
@@ -6276,7 +6330,12 @@ export function createPostgresRepositories(db: Db): Repositories {
       const set: Record<string, unknown> = { updatedAt: now() };
       if (input.vaultAccess !== undefined) set.vaultAccess = input.vaultAccess;
       if (input.spendCapMinor !== undefined) set.spendCapMinor = input.spendCapMinor;
+      if (input.spendCapCurrency !== undefined) set.spendCapCurrency = input.spendCapCurrency;
       if (input.spentMinor !== undefined) set.spentMinor = input.spentMinor;
+      else if (input.spendCapCurrency != null) {
+        // The spent total counts the old currency's minor units: it can't carry over to another.
+        set.spentMinor = sql`CASE WHEN ${householdVaultSettings.spendCapCurrency} IS NOT NULL AND ${householdVaultSettings.spendCapCurrency} <> ${input.spendCapCurrency} THEN 0 ELSE ${householdVaultSettings.spentMinor} END`;
+      }
       const [row] = await db
         .insert(householdVaultSettings)
         .values({
@@ -6284,6 +6343,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           userId: input.userId,
           vaultAccess: input.vaultAccess ?? "VIEW",
           spendCapMinor: input.spendCapMinor ?? null,
+          spendCapCurrency: input.spendCapCurrency ?? null,
           spentMinor: input.spentMinor ?? 0,
         })
         .onConflictDoUpdate({
@@ -6300,19 +6360,27 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(eq(householdVaultSettings.householdId, householdId));
       return rows.map(mapHouseholdVaultSettings);
     },
-    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor, currency) {
+      const s = householdVaultSettings;
       const [row] = await db
-        .update(householdVaultSettings)
+        .update(s)
         .set({
-          spentMinor: sql`${householdVaultSettings.spentMinor} + ${amountMinor}`,
+          spentMinor: sql`${s.spentMinor} + ${amountMinor}`,
+          // A cap set before caps had a currency takes the first spend's.
+          ...(currency
+            ? { spendCapCurrency: sql`CASE WHEN ${s.spendCapMinor} IS NOT NULL THEN coalesce(${s.spendCapCurrency}, ${currency}) ELSE ${s.spendCapCurrency} END` }
+            : {}),
           updatedAt: now(),
         })
         .where(
           and(
-            eq(householdVaultSettings.householdId, householdId),
-            eq(householdVaultSettings.userId, userId),
-            eq(householdVaultSettings.vaultAccess, "SPEND"),
-            sql`(${householdVaultSettings.spendCapMinor} IS NULL OR ${householdVaultSettings.spentMinor} + ${amountMinor} <= ${householdVaultSettings.spendCapMinor})`,
+            eq(s.householdId, householdId),
+            eq(s.userId, userId),
+            eq(s.vaultAccess, "SPEND"),
+            sql`(${s.spendCapMinor} IS NULL OR ${s.spentMinor} + ${amountMinor} <= ${s.spendCapMinor})`,
+            currency
+              ? sql`(${s.spendCapMinor} IS NULL OR ${s.spendCapCurrency} IS NULL OR ${s.spendCapCurrency} = ${currency})`
+              : undefined,
           ),
         )
         .returning();
@@ -7122,6 +7190,170 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(and(eq(repairLogs.wardrobeItemId, wardrobeItemId), eq(repairLogs.userId, userId)))
         .orderBy(desc(repairLogs.createdAt));
       return rows.map(mapRepairLog);
+    },
+
+    // --- Closet state (S6-13) ---
+    async upsertMerchantAlias(userId, alias, canonical) {
+      const at = now();
+      const [row] = await db
+        .insert(merchantAliases)
+        .values({ userId, alias, canonical, createdAt: at, updatedAt: at })
+        .onConflictDoUpdate({ target: [merchantAliases.userId, merchantAliases.alias], set: { canonical, updatedAt: at } })
+        .returning();
+      return { alias: row!.alias, canonical: row!.canonical, createdAt: row!.createdAt, updatedAt: row!.updatedAt };
+    },
+    async listMerchantAliases(userId) {
+      const rows = await db
+        .select()
+        .from(merchantAliases)
+        .where(eq(merchantAliases.userId, userId))
+        .orderBy(sql`${merchantAliases.alias} COLLATE "C"`);
+      return rows.map((r) => ({ alias: r.alias, canonical: r.canonical, createdAt: r.createdAt, updatedAt: r.updatedAt }));
+    },
+    async setParserBreakFlag(flag) {
+      await db
+        .insert(parserBreakFlags)
+        .values(flag)
+        .onConflictDoUpdate({
+          target: parserBreakFlags.merchantKey,
+          set: { merchant: flag.merchant, reason: flag.reason, region: flag.region, setAt: flag.setAt },
+        });
+    },
+    async clearParserBreakFlag(merchantKey) {
+      await db.delete(parserBreakFlags).where(eq(parserBreakFlags.merchantKey, merchantKey));
+    },
+    async listParserBreakFlags() {
+      const rows = await db.select().from(parserBreakFlags).orderBy(asc(parserBreakFlags.setAt), asc(parserBreakFlags.merchantKey));
+      return rows.map((r) => ({
+        merchantKey: r.merchantKey,
+        merchant: r.merchant,
+        reason: r.reason,
+        region: r.region ?? null,
+        setAt: r.setAt,
+      }));
+    },
+    async upsertGiftBudgetLock(input) {
+      // Only the user's own recipient may carry a lock.
+      const owned = await db
+        .select({ id: recipients.id })
+        .from(recipients)
+        .where(and(eq(recipients.id, input.recipientId), eq(recipients.userId, input.userId)))
+        .limit(1);
+      if (owned.length === 0) return null;
+      const [row] = await db
+        .insert(giftBudgetLocks)
+        .values({ ...input, shortlistIds: [...input.shortlistIds] })
+        .onConflictDoUpdate({
+          target: [giftBudgetLocks.recipientId, giftBudgetLocks.occasion, giftBudgetLocks.occasionDay],
+          set: {
+            occasionDate: input.occasionDate,
+            budgetLockMinor: input.budgetLockMinor,
+            currency: input.currency,
+            shortlistIds: [...input.shortlistIds],
+            lockedAt: input.lockedAt,
+          },
+        })
+        .returning();
+      return mapGiftBudgetLock(row!);
+    },
+    async listGiftBudgetLocks(userId) {
+      const rows = await db.select().from(giftBudgetLocks).where(eq(giftBudgetLocks.userId, userId));
+      return rows.map(mapGiftBudgetLock);
+    },
+    async insertParserTrainingFixture(fixture) {
+      const [row] = await db.insert(parserTrainingFixtures).values(fixture).returning();
+      return mapParserTrainingFixture(row!);
+    },
+    async listParserTrainingFixtures(opts) {
+      const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 1000);
+      const rows = await db
+        .select()
+        .from(parserTrainingFixtures)
+        .where(opts?.exportStatus ? eq(parserTrainingFixtures.exportStatus, opts.exportStatus) : undefined)
+        .orderBy(desc(parserTrainingFixtures.createdAt), desc(parserTrainingFixtures.id))
+        .limit(limit);
+      return rows.map(mapParserTrainingFixture);
+    },
+    async appendLentWasteNote(input) {
+      const [row] = await db.insert(lentWasteNotes).values(input).returning();
+      return mapLentWasteNote(row!);
+    },
+    async listLentWasteNotes(userId) {
+      const rows = await db
+        .select()
+        .from(lentWasteNotes)
+        .where(eq(lentWasteNotes.userId, userId))
+        .orderBy(asc(lentWasteNotes.createdAt), asc(lentWasteNotes.id));
+      return rows.map(mapLentWasteNote);
+    },
+    async markMoneyAccountReconcileInvestigated(accountId, userId, at) {
+      const [row] = await db
+        .update(moneyAccounts)
+        .set({ reconcileInvestigatedAt: at })
+        .where(and(eq(moneyAccounts.id, accountId), eq(moneyAccounts.userId, userId)))
+        .returning({ at: moneyAccounts.reconcileInvestigatedAt });
+      return row?.at ?? null;
+    },
+    async listReconcileInvestigatedAccounts(userId) {
+      const rows = await db
+        .select({ accountId: moneyAccounts.id, investigatedAt: moneyAccounts.reconcileInvestigatedAt })
+        .from(moneyAccounts)
+        .where(and(eq(moneyAccounts.userId, userId), isNotNull(moneyAccounts.reconcileInvestigatedAt)));
+      return rows.map((r) => ({ accountId: r.accountId, investigatedAt: r.investigatedAt! }));
+    },
+    async setWardrobeItemMarks(id, userId, patch) {
+      const set: { keepSnoozedUntil?: Date | null; photoDumpTriagedAt?: Date | null } = {};
+      if (patch.keepSnoozedUntil !== undefined) set.keepSnoozedUntil = patch.keepSnoozedUntil;
+      if (patch.photoDumpTriagedAt !== undefined) set.photoDumpTriagedAt = patch.photoDumpTriagedAt;
+      const where = and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId));
+      if (Object.keys(set).length === 0) {
+        return (await db.select({ id: wardrobeItems.id }).from(wardrobeItems).where(where).limit(1)).length > 0;
+      }
+      // Not updatedAt: a mark is not an edit of the item.
+      const rows = await db.update(wardrobeItems).set(set).where(where).returning({ id: wardrobeItems.id });
+      return rows.length > 0;
+    },
+    async getWardrobeItemMarks(id, userId) {
+      const [row] = await db
+        .select({ keepSnoozedUntil: wardrobeItems.keepSnoozedUntil, photoDumpTriagedAt: wardrobeItems.photoDumpTriagedAt })
+        .from(wardrobeItems)
+        .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId)))
+        .limit(1);
+      return row ? { keepSnoozedUntil: row.keepSnoozedUntil ?? null, photoDumpTriagedAt: row.photoDumpTriagedAt ?? null } : null;
+    },
+    async updateTailoringOrderPickup(id, userId, patch) {
+      const t = tailoringOrders;
+      const set: Record<string, unknown> = { updatedAt: now() };
+      if (patch.expectedPickupOn !== undefined) {
+        set.expectedPickupOn = patch.expectedPickupOn;
+        // A new pickup day needs its own nudge.
+        if (patch.pickupNudgeSentAt === undefined) {
+          set.pickupNudgeSentAt = sql`CASE WHEN ${t.expectedPickupOn} IS DISTINCT FROM ${patch.expectedPickupOn}::date THEN NULL ELSE ${t.pickupNudgeSentAt} END`;
+        }
+      }
+      if (patch.pickupNudgeSentAt !== undefined) set.pickupNudgeSentAt = patch.pickupNudgeSentAt;
+      const [row] = await db
+        .update(t)
+        .set(set)
+        .where(and(eq(t.id, id), eq(t.userId, userId)))
+        .returning();
+      return row ? mapTailoringOrder(row) : null;
+    },
+    async setDispositionPickupBooking(id, userId, booking) {
+      const rows = await db
+        .update(dispositionListings)
+        .set({ pickupBooking: { ...booking }, updatedAt: now() })
+        .where(and(eq(dispositionListings.id, id), eq(dispositionListings.userId, userId)))
+        .returning({ id: dispositionListings.id });
+      return rows.length > 0;
+    },
+    async getDispositionPickupBooking(id, userId) {
+      const [row] = await db
+        .select({ booking: dispositionListings.pickupBooking })
+        .from(dispositionListings)
+        .where(and(eq(dispositionListings.id, id), eq(dispositionListings.userId, userId)))
+        .limit(1);
+      return (row?.booking as DispositionPickupBooking | null | undefined) ?? null;
     },
 
   };

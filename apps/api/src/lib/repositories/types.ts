@@ -1,5 +1,6 @@
 import type {
   DeliveryTier,
+  DispositionPickupBooking,
   OrderState,
   PageResponse,
   RenderScenario,
@@ -2022,11 +2023,16 @@ export interface Repositories {
     householdId: string,
     userId: string,
   ): Promise<HouseholdVaultSettingsRecord>;
+  /**
+   * A key left out is unchanged. Changing the cap to a currency other than the stored one starts
+   * the spent total again at 0 (it counted another currency's minor units).
+   */
   upsertHouseholdVaultSettings(input: {
     householdId: string;
     userId: string;
     vaultAccess?: "VIEW" | "SPEND";
     spendCapMinor?: number | null;
+    spendCapCurrency?: string | null;
     spentMinor?: number;
   }): Promise<HouseholdVaultSettingsRecord>;
   listHouseholdVaultSettings(
@@ -2035,11 +2041,14 @@ export interface Repositories {
   /**
    * Atomically adds `amountMinor` to the member's spent total if it stays within the cap
    * and the member has SPEND access. Returns the new settings, or null when refused.
+   * With `currency` (the spent credit's), a cap in another currency refuses the spend, and a
+   * cap stored without a currency takes this one.
    */
   tryReserveHouseholdVaultSpend(
     householdId: string,
     userId: string,
     amountMinor: number,
+    currency?: string,
   ): Promise<HouseholdVaultSettingsRecord | null>;
   /** Gives back a reservation whose ledger write failed. */
   releaseHouseholdVaultSpend(
@@ -2208,7 +2217,121 @@ export interface Repositories {
   }): Promise<RepairLogRecord>;
   listRepairLogs(userId: string): Promise<RepairLogRecord[]>;
   listRepairLogsByItem(wardrobeItemId: string, userId: string): Promise<RepairLogRecord[]>;
+
+  // --- Closet state that lived in process memory (S6-13) ---
+  /** U042 — sets the canonical merchant for a normalised alias (one row per user and alias). */
+  upsertMerchantAlias(userId: string, alias: string, canonical: string): Promise<MerchantAliasRecord>;
+  /** The user's aliases, by alias. */
+  listMerchantAliases(userId: string): Promise<MerchantAliasRecord[]>;
+  /** U050 — raises (or replaces) the ops flag for a merchant whose parser is broken. */
+  setParserBreakFlag(flag: ParserBreakFlagRecord): Promise<void>;
+  /** Clears a merchant's flag; a missing flag is not an error. */
+  clearParserBreakFlag(merchantKey: string): Promise<void>;
+  /** Every raised flag, oldest first. */
+  listParserBreakFlags(): Promise<ParserBreakFlagRecord[]>;
+  /**
+   * U049 — sets the budget lock for (recipient, occasion, occasion day). The recipient must be the
+   * user's: a lock is refused (null) for anyone else's recipient.
+   */
+  upsertGiftBudgetLock(input: Omit<GiftBudgetLockRecord, "id">): Promise<GiftBudgetLockRecord | null>;
+  listGiftBudgetLocks(userId: string): Promise<GiftBudgetLockRecord[]>;
+  /** U041 — stores a parse-correction fixture (structured fields only, never a raw body). */
+  insertParserTrainingFixture(fixture: ParserTrainingFixtureRecord): Promise<ParserTrainingFixtureRecord>;
+  /** Fixtures newest first, optionally only those waiting for export; for ops. */
+  listParserTrainingFixtures(opts?: {
+    limit?: number;
+    exportStatus?: ParserTrainingFixtureRecord["exportStatus"];
+  }): Promise<ParserTrainingFixtureRecord[]>;
+  /** U039 — a "lost while lent" write-off note. */
+  appendLentWasteNote(input: { userId: string; wardrobeItemId: string | null; note: string }): Promise<LentWasteNoteRecord>;
+  /** The user's write-off notes, oldest first. */
+  listLentWasteNotes(userId: string): Promise<LentWasteNoteRecord[]>;
+  /** U046 — marks a reconcile mismatch on the user's account as investigated; null if not theirs. */
+  markMoneyAccountReconcileInvestigated(accountId: string, userId: string, at: Date): Promise<Date | null>;
+  /** Accounts of the user's that are marked investigated. */
+  listReconcileInvestigatedAccounts(userId: string): Promise<Array<{ accountId: string; investigatedAt: Date }>>;
+  /**
+   * Keep-snooze (U035) and photo-dump triage time (U040) on the user's wardrobe item, discarded
+   * or not. A key left out is unchanged, null clears it. false: no such item for the user.
+   */
+  setWardrobeItemMarks(
+    id: string,
+    userId: string,
+    patch: { keepSnoozedUntil?: Date | null; photoDumpTriagedAt?: Date | null },
+  ): Promise<boolean>;
+  getWardrobeItemMarks(id: string, userId: string): Promise<WardrobeItemMarks | null>;
+  /**
+   * Sets the tailoring order's expected pickup day and/or nudge time. A new pickup day clears
+   * the nudge time, so the nudge goes out again for the new day.
+   */
+  updateTailoringOrderPickup(
+    id: string,
+    userId: string,
+    patch: { expectedPickupOn?: string; pickupNudgeSentAt?: Date | null },
+  ): Promise<TailoringOrderRecord | null>;
+  /** DISP-LOGISTICS — stores the booked pickup on the user's listing; false if not theirs. */
+  setDispositionPickupBooking(id: string, userId: string, booking: DispositionPickupBooking): Promise<boolean>;
+  getDispositionPickupBooking(id: string, userId: string): Promise<DispositionPickupBooking | null>;
 }
+
+export type MerchantAliasRecord = {
+  /** Normalised (trimmed, upper-cased, single-spaced). */
+  alias: string;
+  canonical: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type ParserBreakFlagRecord = {
+  /** Upper-cased merchant. */
+  merchantKey: string;
+  merchant: string;
+  reason: string;
+  region: string | null;
+  setAt: Date;
+};
+
+export type GiftBudgetLockRecord = {
+  id: string;
+  userId: string;
+  recipientId: string;
+  occasion: string;
+  /** YYYY-MM-DD of the occasion. */
+  occasionDay: string;
+  occasionDate: Date;
+  budgetLockMinor: number;
+  currency: string;
+  shortlistIds: string[];
+  lockedAt: Date;
+};
+
+export type ParserFixtureFields = { merchant: string | null; totalMinor: number | null; currency: string | null };
+
+export type ParserTrainingFixtureRecord = {
+  id: string;
+  userId: string;
+  documentId: string;
+  kind: string;
+  merchantHint: string | null;
+  fields: string[];
+  before: ParserFixtureFields;
+  after: ParserFixtureFields;
+  exportStatus: "QUEUED" | "EXPORTED" | "SKIPPED";
+  createdAt: Date;
+};
+
+export type LentWasteNoteRecord = {
+  id: string;
+  userId: string;
+  wardrobeItemId: string | null;
+  note: string;
+  createdAt: Date;
+};
+
+export type WardrobeItemMarks = {
+  keepSnoozedUntil: Date | null;
+  photoDumpTriagedAt: Date | null;
+};
 
 export type WardrobeItemRecord = {
   id: string;
@@ -2411,6 +2534,8 @@ export type HouseholdVaultSettingsRecord = {
   userId: string;
   vaultAccess: "VIEW" | "SPEND";
   spendCapMinor: number | null;
+  /** ISO currency of the cap and of `spentMinor`; null for no cap or a cap set before 0026. */
+  spendCapCurrency: string | null;
   spentMinor: number;
   updatedAt: Date;
 };
@@ -2596,6 +2721,8 @@ export type TailoringOrderRecord = {
   measurementSnapshot: Record<string, unknown> | null;
   state: "PENDING" | "CONFIRMED" | "IN_STITCHING" | "SHIPPED" | "DELIVERED" | "CANCELLED";
   expectedPickupOn?: string | null;
+  /** When the day-before pickup nudge went out for `expectedPickupOn`. */
+  pickupNudgeSentAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };

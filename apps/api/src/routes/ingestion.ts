@@ -728,7 +728,8 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const correctedFields = Object.keys(request.body);
-      const fixture = buildParserTrainingFixture({
+      const fixture = await buildParserTrainingFixture(app.deps.repos, {
+        userId,
         documentId: docId,
         kind: updated.kind,
         beforeParsed: prev,
@@ -849,7 +850,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       const docs = await app.deps.repos.listIngestionDocumentsByUser(userId);
       return {
         items: buildUnknownMerchantQueue(docs),
-        picker: merchantPickerOptions(userId),
+        picker: await merchantPickerOptions(app.deps.repos, userId),
       };
     },
   );
@@ -879,14 +880,14 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const { alias, canonical, documentId } = request.body;
-      const row = upsertMerchantAlias(userId, alias, canonical);
+      const doc = documentId ? await findOwnedDocument(app.deps.repos, userId, documentId) : null;
+      if (documentId && !doc) {
+        return reply.code(404).send({ error: "Not Found", message: "Document not found" });
+      }
+      const row = await upsertMerchantAlias(app.deps.repos, userId, alias, canonical);
       let reprocessedPurchaseId: string | null = null;
 
-      if (documentId) {
-        const doc = await findOwnedDocument(app.deps.repos, userId, documentId);
-        if (!doc) {
-          return reply.code(404).send({ error: "Not Found", message: "Document not found" });
-        }
+      if (documentId && doc) {
         const nextParsed = {
           ...(doc.parsedJson ?? {}),
           merchant: row.canonical,
@@ -1259,10 +1260,11 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      return {
-        banner: buildParserBreakBanner(userId),
-        flags: listParserBreakFlags(),
-      };
+      const [banner, flags] = await Promise.all([
+        buildParserBreakBanner(app.deps.repos, userId),
+        listParserBreakFlags(app.deps.repos),
+      ]);
+      return { banner, flags };
     },
   );
 
@@ -1292,8 +1294,8 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      dismissParserBreakBanner(userId, request.body.merchant);
-      return { banner: buildParserBreakBanner(userId) };
+      await dismissParserBreakBanner(app.deps.repos, userId, request.body.merchant);
+      return { banner: await buildParserBreakBanner(app.deps.repos, userId) };
     },
   );
 
@@ -1335,7 +1337,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request) => {
-      const flag = setParserBreakFlag(request.body);
+      const flag = await setParserBreakFlag(app.deps.repos, request.body);
       audit(app.log, "parser.break.flagged", {
         userId: request.user!.sub,
         merchant: flag.merchant,

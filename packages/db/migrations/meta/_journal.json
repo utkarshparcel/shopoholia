@@ -183,6 +183,13 @@
       "when": 1793771486685,
       "tag": "0025_render_agent_leases",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794484334484,
+      "tag": "0026_closet_state",
+      "breakpoints": true
     }
   ]
 }

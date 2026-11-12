@@ -110,7 +110,16 @@ export {
   type HouseholdMemberRow,
   type ClosetProfileRow,
 } from "./schema/household.js";
-export { wearChallenges, interviewKits, householdVaultSettings } from "./schema/closet-state.js";
+export {
+  wearChallenges,
+  interviewKits,
+  householdVaultSettings,
+  merchantAliases,
+  parserBreakFlags,
+  giftBudgetLocks,
+  parserTrainingFixtures,
+  lentWasteNotes,
+} from "./schema/closet-state.js";
 export { socialPolls, socialPollVotes } from "./schema/social-polls.js";
 export {
   getCoinBalance,

@@ -141,7 +141,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
         currency: "INR",
       });
       const listings = await app.deps.repos.listDispositionListings(userId);
-      const declutter = declutterPayloadForUser(userId, listings);
+      const declutter = await declutterPayloadForUser(app.deps.repos, userId, listings);
       const rewearStreak = await loadRewearStreak(app, userId, { breakOnPurchase });
       const co2WaterSavings = computeCo2WaterSavings({
         metrics: metrics.map((m) => ({ wearCount: m.wearCount })),
@@ -430,7 +430,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       });
       trackServerEvent("waste_disposed", { userId, wardrobeItemId: itemId, mode });
       const all = await app.deps.repos.listDispositionListings(userId);
-      const declutter = declutterPayloadForUser(userId, all);
+      const declutter = await declutterPayloadForUser(app.deps.repos, userId, all);
       if (declutter.declutterChallenge.started && declutter.declutterChallenge.completed) {
         trackServerEvent("declutter_challenge_completed", {
           userId,

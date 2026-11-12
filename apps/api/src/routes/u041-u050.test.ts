@@ -1,13 +1,8 @@
 /**
  * U041–U050 ingest/trust ops route smoke tests.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildTestServer, login } from "../test-utils.js";
-import { clearParserTrainingState } from "../lib/parser-training.js";
-import { clearMerchantAliases } from "../lib/merchant-alias.js";
-import { clearParserBreakFlags } from "../lib/parser-break-banner.js";
-import { clearGiftBudgetLocks } from "../lib/gift-deadline.js";
-import { clearReconcileInvestigated } from "../lib/user-reconcile.js";
 
 async function grantEmail(
   app: Awaited<ReturnType<typeof buildTestServer>>["app"],
@@ -24,14 +19,6 @@ async function grantEmail(
 }
 
 describe("U041–U050 ingest/trust ops routes", () => {
-  beforeEach(() => {
-    clearParserTrainingState();
-    clearMerchantAliases();
-    clearParserBreakFlags();
-    clearGiftBudgetLocks();
-    clearReconcileInvestigated();
-  });
-
   it("U041 correct returns fixtureId without raw body leak", async () => {
     const { app, repos } = await buildTestServer();
     const { accessToken, userId } = await login(app);

@@ -89,8 +89,9 @@ export default function HouseholdScreen() {
   const items = wardrobe.data?.items ?? [];
   const vaultAccounts = vault.data?.accounts ?? [];
   const vaultMembers = vault.data?.members ?? [];
-  // The server counts a cap in raw minor units, whatever the credit's currency. Caps are typed and
-  // shown in the shared credits' currency when they all share one, not the viewer's preference.
+  // A cap counts one currency (the server stores it with the cap and refuses spends from credits
+  // in another). New caps are typed in the shared credits' currency when they all share one, else
+  // the viewer's preference; a stored cap is shown in its own currency.
   const vaultCurrencies = [...new Set(vaultAccounts.map((a) => a.currency))];
   const capCurrency = vaultCurrencies.length === 1 ? vaultCurrencies[0]! : currency;
   const mixedVaultCurrencies = vaultCurrencies.length > 1;
@@ -124,7 +125,12 @@ export default function HouseholdScreen() {
     });
     if (!values) return;
     patchVault.mutate(
-      { userId, vaultAccess: 'SPEND', spendCapMinor: parseAmountInput(values.cap!, capCurrency)! },
+      {
+        userId,
+        vaultAccess: 'SPEND',
+        spendCapMinor: parseAmountInput(values.cap!, capCurrency)!,
+        spendCapCurrency: capCurrency,
+      },
       {
         onError: (e) => Alert.alert('Could not update', friendlyHouseholdVaultAclCopy(closetAlertText(e))),
       },
@@ -306,13 +312,13 @@ export default function HouseholdScreen() {
             <Text style={styles.muted}>
               Balances only — no card numbers. You {vault.data?.myAccess === 'SPEND' ? 'can spend' : 'can view'}
               {vault.data?.mySpendCapMinor != null
-                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor, capCurrency)}`
+                ? ` · cap ${formatMinor(vault.data.mySpendCapMinor, vault.data.mySpendCapCurrency ?? capCurrency)}`
                 : ''}
             </Text>
             {mixedVaultCurrencies ? (
               <Text style={styles.muted} testID="household-vault-mixed-currency">
-                Shared credits are in {vaultCurrencies.join(', ')}. A spend cap counts each amount as
-                spent, without converting it.
+                Shared credits are in {vaultCurrencies.join(', ')}. A spend cap is in one currency:
+                credits in another can't be spent against it.
               </Text>
             ) : null}
             {vaultAclError ? (
@@ -329,7 +335,7 @@ export default function HouseholdScreen() {
                   <Text style={styles.item}>
                     {name} · {accessLabel(m.vaultAccess)}
                     {m.vaultAccess === 'SPEND' && m.spendCapMinor != null
-                      ? ` · cap ${formatMinor(m.spendCapMinor, capCurrency)}`
+                      ? ` · cap ${formatMinor(m.spendCapMinor, m.spendCapCurrency ?? capCurrency)}`
                       : ''}
                   </Text>
                   {canManageAccess && !isMe ? (

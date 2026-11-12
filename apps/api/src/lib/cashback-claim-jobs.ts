@@ -5,6 +5,7 @@
 import {
   CASHBACK_CLAIM_LEAD_MS,
   cashbackClaimReminderJobId,
+  formatMinor,
   type sendExpoPush,
 } from "@worn/shared";
 import { computeExpiryDelayMs } from "./expiry.js";
@@ -64,7 +65,8 @@ export async function processCashbackClaimDeadline(
   const { runClosetPushDelivery } = await import("@worn/shared");
   const user = await repos.findUserById(payload.userId);
   if (!user) return { status: "skipped" as const };
-  const amount = (payload.amountMinor / 100).toFixed(0);
+  // The claim's own currency, with its minor units (a $12.50 claim is not "₹13").
+  const amount = formatMinor(payload.amountMinor, payload.currency);
   const label = payload.merchant
     ? `${payload.source} · ${payload.merchant}`
     : payload.source;
@@ -74,7 +76,7 @@ export async function processCashbackClaimDeadline(
     timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: "Cashback claim due soon",
-    body: `${label}: ₹${amount} — claim before it lapses`,
+    body: `${label}: ${amount} — claim before it lapses`,
     deepLinkExtra: { claimId: payload.claimId },
     payloadExtra: { ...payload },
     now: opts.now,

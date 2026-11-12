@@ -31,6 +31,7 @@ import { computeNextOccasion, indianFestivalDates } from "../lib/festivals.js";
 import { regionFestivalDates } from "../lib/region-pack-defaults.js";
 import {
   buildGiftDeadlineBoard,
+  listGiftBudgetLocks,
   GIFT_DEADLINE_LEAD_DAYS,
   lockShortlistOfThree,
   setGiftBudgetLock,
@@ -483,7 +484,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         }
       }
       return {
-        board: buildGiftDeadlineBoard(rows),
+        board: buildGiftDeadlineBoard(rows, await listGiftBudgetLocks(app.deps.repos, userId)),
         reminderLeads: [...GIFT_DEADLINE_LEAD_DAYS],
       };
     },
@@ -538,7 +539,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         body.shortlistIds ?? [],
         body.budgetLockMinor,
       );
-      const lock = setGiftBudgetLock({
+      const lock = await setGiftBudgetLock(app.deps.repos, userId, {
         recipientId: body.recipientId,
         occasion: body.occasion,
         date: body.date,
@@ -546,6 +547,10 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         currency: body.currency,
         shortlistIds: short.shortlistIds,
       });
+      if (!lock) {
+        // The recipient was deleted between the check above and the write.
+        return reply.code(404).send({ error: "Not Found", message: "Recipient not found" });
+      }
       const reminders = GIFT_DEADLINE_LEAD_DAYS.map((leadDays) => ({
         leadDays,
         jobId: giftDeadlineReminderJobId(

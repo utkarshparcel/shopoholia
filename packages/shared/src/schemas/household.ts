@@ -71,10 +71,15 @@ export type PatchHouseholdWardrobeBody = z.infer<typeof PatchHouseholdWardrobeBo
 export const HouseholdVaultAccessSchema = z.enum(["VIEW", "SPEND"]);
 export type HouseholdVaultAccessDto = z.infer<typeof HouseholdVaultAccessSchema>;
 
+/** ISO 4217 code, e.g. "INR". */
+const CurrencyCodeSchema = z.string().regex(/^[A-Z]{3}$/, "a 3-letter ISO currency code");
+
 export const HouseholdVaultMemberSettingsSchema = z.object({
   userId: z.string().uuid(),
   vaultAccess: HouseholdVaultAccessSchema,
   spendCapMinor: z.number().int().nonnegative().nullable(),
+  /** The cap's currency; spends against credits in another currency are refused. */
+  spendCapCurrency: CurrencyCodeSchema.nullable().optional(),
   spentMinor: z.number().int().nonnegative().optional().default(0),
 });
 export type HouseholdVaultMemberSettings = z.infer<
@@ -96,6 +101,7 @@ export const HouseholdVaultResponseSchema = z.object({
   householdId: z.string().uuid(),
   myAccess: HouseholdVaultAccessSchema,
   mySpendCapMinor: z.number().int().nonnegative().nullable(),
+  mySpendCapCurrency: CurrencyCodeSchema.nullable().optional(),
   mySpentMinor: z.number().int().nonnegative(),
   accounts: z.array(HouseholdVaultAccountSchema),
   members: z.array(HouseholdVaultMemberSettingsSchema).optional(),
@@ -106,6 +112,11 @@ export const PatchHouseholdVaultMemberBodySchema = z.object({
   userId: z.string().uuid(),
   vaultAccess: HouseholdVaultAccessSchema.optional(),
   spendCapMinor: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * The cap's currency. Without it a new cap takes the currency of the owner's shared credits
+   * when they all share one; otherwise the request is refused.
+   */
+  spendCapCurrency: CurrencyCodeSchema.optional(),
 });
 export type PatchHouseholdVaultMemberBody = z.infer<
   typeof PatchHouseholdVaultMemberBodySchema
