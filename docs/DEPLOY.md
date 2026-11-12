@@ -5,39 +5,62 @@ which needs the Apple and Google developer accounts.
 
 | Phase | What goes live | Needs |
 |---|---|---|
-| 1. Now | `worncloset.app`: Worn Play at `/`, Worn Closet at `/closet`, the waitlist form | A Next.js host, DNS, the waitlist Sheet, email forwarding |
+| 1. Now | `worncloset.app`: Worn Play at `/`, Worn Closet at `/closet`, the early-access form | Cloudflare: Workers, DNS, Email Routing |
 | 2. With the app | `api.worncloset.app`, `media.worncloset.app`, the iPhone and Android apps | Postgres, Redis, R2, an OCR provider, Google sign-in, Apple and Google developer accounts |
 
 ## Phase 1: the website
 
-`apps/web` is a static Next.js site (every page is prerendered; no server code, no middleware). The
-share links (`/r/<code>` and the rest, below) are rewrites in `next.config.js` to static pages.
+`apps/web` is a static Next.js site (every page is prerendered, no middleware) plus one small Worker,
+`apps/web/worker/index.ts`, which answers the early-access form at `/api/join`. The links the app
+shares (`/r/<code>`, `/c/<code>`, `/h/<code>`, `/p/outfit/<id>`, `/p/return/<id>`) are mapped onto
+their static pages by `apps/web/public/_redirects` (status 200, so the address keeps the code).
+`/privacy` is rendered from `docs/legal/PRIVACY_POLICY_DRAFT.md` at build time.
 
-1. **Host.** Vercel is the simplest fit for Next.js: import the repo, set the root directory to
-   `apps/web`, framework Next.js, install command `pnpm install --frozen-lockfile`, build command
-   `pnpm build`. Leave **Include files outside the root directory in the Build Step** on (the
-   default): `/privacy` is rendered from `docs/legal/PRIVACY_POLICY_DRAFT.md` at build time.
-   Cloudflare Pages works too but needs the Next.js adapter, and must keep the rewrites.
-2. **Environment variables** (Production, and Preview if you want):
-   - `NEXT_PUBLIC_WAITLIST_URL`: the Google Apps Script web app URL (set-up steps in
-     [`apps/web/waitlist/README.md`](../apps/web/waitlist/README.md)). Without it the sign-up
-     forms fall back to an email button.
-   - `NEXT_PUBLIC_SITE_URL` only if the site is not served from `https://worncloset.app`.
+1. **Host.** Cloudflare Workers with static assets. `apps/web/next.config.js` sets
+   `output: 'export'`, so `next build` writes the whole site to `apps/web/out`, and
+   `apps/web/wrangler.jsonc` uploads that folder plus the Worker as `worn-web`. The Worker only
+   runs for `/api/*` (`run_worker_first`); everything else is served straight from the assets.
+   Response headers live in `apps/web/public/_headers`. To ship by hand: `pnpm --filter @worn/web
+   exec wrangler login` once per machine, then `pnpm --filter @worn/web run deploy` (runs
+   `next build && wrangler deploy`). Pushes to `main` that touch `apps/web` deploy on their own
+   through `.github/workflows/deploy-web.yml` once the repository has the `CLOUDFLARE_API_TOKEN`
+   secret: in the Cloudflare dashboard, My Profile, API Tokens, create a token from the "Edit
+   Cloudflare Workers" template scoped to this account, then add it on GitHub under Settings,
+   Secrets and variables, Actions. Until then the workflow skips with a notice.
+2. **Configuration.** Read at build time (change one, then redeploy):
+   - `NEXT_PUBLIC_SITE_URL`, only if the site is not served from `https://worncloset.app`.
    - `NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL`: the Worn Play store listings.
      **Leave them unset until the app is live in that store.** Unset, the site says "coming to
-     iPhone and Android" and shows the waitlist. Set one or both and redeploy: the site shows App
-     Store / Google Play buttons, its copy switches to "out now" / "Get the app", the FAQ and its
-     search data follow, and the waitlist stays only for a platform that isn't out yet.
-
-   All `NEXT_PUBLIC_*` values are read at build time: change one, then redeploy.
-3. **Domains.** Add `worncloset.app` and `www.worncloset.app` to the host and redirect `www` to the
-   apex. Create the DNS records the host gives you.
-4. **Email.** Forward `hello@` and `privacy@worncloset.app` to a real inbox (Cloudflare Email
-   Routing if the DNS is on Cloudflare, otherwise ImprovMX). The site and the privacy policy use
-   both addresses.
+     iPhone and Android" and shows the early-access form. Set one or both and redeploy: the site
+     shows App Store / Google Play buttons, its copy switches to "out now" / "Get the app", the FAQ
+     and its search data follow, and the form stays only for a platform that isn't out yet. For
+     automatic deploys, add them as repository variables and pass them to the build step in
+     `.github/workflows/deploy-web.yml`.
+ The inbox the form writes to is the Worker secret
+   `JOIN_TO`, a verified Email Routing destination address of the account:
+   `printf '%s' you@example.com | pnpm --filter @worn/web exec wrangler secret put JOIN_TO`.
+   Secrets live on the Worker, not in the repository; `wrangler dev` reads the same name from
+   `apps/web/.dev.vars` (git-ignored).
+3. **Domains.** The Worker is always reachable at `https://worn-web.worn-web.workers.dev`.
+   `worncloset.app` is a zone in the same Cloudflare account (Free plan, active since 2026-11-05).
+   The domain stays registered at GoDaddy, which points at Cloudflare's nameservers
+   `cody.ns.cloudflare.com` and `imani.ns.cloudflare.com` (GoDaddy: Domain, Nameservers, Change,
+   "I'll use my own nameservers"). `wrangler.jsonc` binds the apex to the Worker as a custom domain
+   (`routes`), a zone Redirect Rule (template "Redirect from WWW to root") sends `www` to the apex,
+   and the zone setting "Always Use HTTPS" is on.
+4. **Email.** Cloudflare Email Routing (free) is enabled on the zone and forwards `hello@` and
+   `privacy@worncloset.app` to the account inbox; the MX, SPF and DKIM records it needs are in the
+   zone. The site and the privacy policy use both addresses. The form's sign-ups go out the same
+   way: the Worker's `send_email` binding sends from `hello@worncloset.app` to the `JOIN_TO`
+   address, with the visitor as reply-to, which is free. To reply *as* `hello@worncloset.app`
+   for free, add it in Gmail under Settings, Accounts and Import, "Send mail as" (SMTP server
+   `smtp.gmail.com`, port 587, the Gmail address plus a Google App Password; the confirmation code
+   arrives through the forwarding). So that this mail is not quarantined, the zone's `_dmarc` TXT
+   has to be relaxed to `v=DMARC1; p=none;` and the root SPF TXT extended to
+   `v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all` (still to do).
 5. **Check after deploy:** `/`, `/closet`, `/privacy`, `/support`, `/r/TEST1234`, `/c/TEST1234`,
-   `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, `/closet/opengraph-image` all load, and
-   `/nope` shows the 404 page; submit one email through each form and see the row in the Sheet;
+   `/h/TEST1234`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, `/closet/opengraph-image` all
+   load, and `/nope` shows the 404 page; submit the form on each page and see the email arrive;
    paste the URL into a chat app to see the share card.
 
 ### Known gaps on the website

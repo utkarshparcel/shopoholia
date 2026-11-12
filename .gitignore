@@ -8,6 +8,9 @@ build/
 .next/
 .expo/
 .turbo/
+.wrangler/
+.dev.vars
+apps/web/out/
 *.tsbuildinfo
 
 # Environment

@@ -24,13 +24,7 @@ export function closetHref(hash = ''): string {
 }
 
 /**
- * The Google Apps Script web app that adds waitlist sign-ups to a Sheet (see waitlist/README.md).
- * Unset, the sign-up buttons fall back to an email to CONTACT_EMAIL.
- */
-export const WAITLIST_URL = process.env.NEXT_PUBLIC_WAITLIST_URL?.trim() || '';
-
-/**
- * Store links for Worn Play, read at build time like the waitlist URL. Unset (today), the site says
+ * Store links for Worn Play, read at build time. Unset (today), the site says
  * "coming to iPhone and Android" and asks for an email. Set one or both and the site says "download"
  * and shows that store's button; the list stays only while one platform isn't out yet.
  */

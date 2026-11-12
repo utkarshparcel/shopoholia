@@ -55,6 +55,14 @@ personal data.
 
 We do **not** use Gmail content for ads or to train general AI/ML models (Limited Use; see `docs/CASA.md`).
 
+### 2.4 The website (worncloset.app)
+
+If you ask for early access on the website, the form sends us your **name, email address and
+phone number**, which list you joined (Worn Play or Worn Closet), the page you were on and the
+page that sent you there, the country your connection comes from, and the time. It arrives as an
+email in our inbox; we use it only to tell you about early access and the launch, and to answer
+you. The website itself sets no cookies and runs no analytics.
+
 ## 3. Legal bases (GDPR) / consent (DPDP)
 
 - **Contract / service** — your account, try-on avatar and renders, hauls, coins and purchases.
@@ -88,7 +96,7 @@ renders.
 | Provider | What they get | Why |
 |----------|---------------|-----|
 | FASHN.ai ([FASHN LEGAL NAME, COUNTRY]) — **only while overflow rendering is enabled** ([OWNER: say whether it is]) | Your avatar reference image and the garment image | Generate some AI try-on images when our own rendering can't keep up |
-| Cloudflare (R2 storage) | Photos, avatar and render images | Store and serve images |
+| Cloudflare (R2 storage; website hosting and Email Routing) | Photos, avatar and render images; early-access sign-ups from the website | Store and serve images; host worncloset.app and deliver sign-up and contact emails |
 | [API AND DATABASE HOST, e.g. Railway / Render / Fly.io] | Account and app data | Run the API and database |
 | Google | Sign-in with Google; Google Play billing for Android purchases | Sign-in, payments |
 | Apple | Sign in with Apple; App Store payments for iPhone purchases | Sign-in, payments |
@@ -107,6 +115,8 @@ honestly.]
 ## 6. Retention
 
 - Account and app data: until you delete your account.
+- Website early-access sign-ups: until you ask us to remove them (email us), or [OWNER: e.g. "12
+  months after launch"], whichever comes first.
 - Photos: until you delete them (Profile → Delete my photos) or your account. When you upload a new
   avatar photo, the previous photos are deleted.
 - After account deletion we keep only: a pseudonymous record that consents were given and

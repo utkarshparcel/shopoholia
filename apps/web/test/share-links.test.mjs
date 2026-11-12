@@ -50,3 +50,22 @@ test('the referral page is Worn Play copy, and Closet invites never say Closet i
     assert.match(SHARE_KINDS[kind].steps.join(' '), /hasn’t opened yet/);
   }
 });
+
+test('Cloudflare maps every share link onto its page, and leaves its share card alone', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const rules = (await readFile(new URL('../public/_redirects', import.meta.url), 'utf8'))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split(/\s+/));
+  const index = (from) => rules.findIndex(([source]) => source === from);
+  for (const prefix of Object.values(SHARE_PREFIX)) {
+    const codeRule = index(`${prefix}/:code`) >= 0 ? index(`${prefix}/:code`) : index(`${prefix}/:id`);
+    assert.ok(codeRule >= 0, `${prefix}/:code is rewritten`);
+    assert.deepEqual(rules[codeRule].slice(1), [prefix, '200'], `${prefix} keeps the address (200)`);
+    // Rules match top-down: the card's own rule must come first or the code rule swallows it.
+    const card = index(`${prefix}/opengraph-image`);
+    assert.ok(card >= 0 && card < codeRule, `${prefix}/opengraph-image is served before the code rule`);
+    assert.deepEqual(rules[card].slice(1), [`${prefix}/opengraph-image`, '200']);
+  }
+});

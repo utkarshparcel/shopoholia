@@ -1,0 +1,47 @@
+/*
+  X-DNS-Prefetch-Control: on
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: origin-when-cross-origin
+
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/renders/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/closet/mirror-party.webp
+  Cache-Control: public, max-age=31536000, immutable
+
+/closet/mirror-wax.webp
+  Cache-Control: public, max-age=31536000, immutable
+
+# Next's static export writes the generated images without an extension.
+/opengraph-image
+  Content-Type: image/png
+
+/closet/opengraph-image
+  Content-Type: image/png
+
+/apple-icon
+  Content-Type: image/png
+
+/privacy/opengraph-image
+  Content-Type: image/png
+
+/support/opengraph-image
+  Content-Type: image/png
+
+/r/opengraph-image
+  Content-Type: image/png
+
+/c/opengraph-image
+  Content-Type: image/png
+
+/h/opengraph-image
+  Content-Type: image/png
+
+/p/outfit/opengraph-image
+  Content-Type: image/png
+
+/p/return/opengraph-image
+  Content-Type: image/png
