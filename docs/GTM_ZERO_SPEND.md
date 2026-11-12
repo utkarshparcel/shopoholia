@@ -38,7 +38,7 @@ Then see AI renders of YOU wearing them. WORN Play, free to start.
 
 ## Store / ASO
 
-Store listing work lives in `docs/STORE_LISTINGS.md` (Data Safety, App Privacy, screenshot storyboard). Its Closet-first copy predates this scope and needs a Worn Play pass before submission. The "WORN Closet: ..." titles in Part B are Closet-phase drafts, not the launch titles.
+Store listing work lives in `docs/STORE_LISTINGS.md` (Worn Play copy, Data Safety, App Privacy, screenshot plan), which is the source for launch titles and screenshots. The "WORN Closet: ..." titles in Part B are Closet-phase drafts, not the launch titles.
 
 ## Analytics and consent
 

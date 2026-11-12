@@ -1,6 +1,6 @@
 # WORN CLOSET — Implementation Plan
 
-> **Historical planning document, 2026-11-12: describes the plan at the time (2026-10-25/26), not the current product.** Worn Play is what launches; Worn Closet is behind `FEATURE_CLOSET` (off in release builds) and not launching yet. **§0 "Reality check" is a snapshot and is largely superseded**: the migrations now have 21 SQL files and 21 journal entries, `apps/api` depends on `bullmq`, the release API URL is set by `apps/mobile/app.config.js` (no localhost in `app.json`), the unauthenticated payments smoke route is gone, and there is no RevenueCat integration (`revenueCatEnabled: false`). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md`, `docs/PENTEST_READINESS.md` and the code. Where this plan and the code disagree, the code wins.
+> **Historical planning document, 2026-11-12: describes the plan at the time (2026-10-25/26), not the current product.** Worn Play is what launches; Worn Closet is behind `FEATURE_CLOSET` (off in release builds) and not launching yet. **§0 "Reality check" is a snapshot and is largely superseded**: the migrations now have 26 SQL files and 26 journal entries, `apps/api` depends on `bullmq`, the release API URL is set by `apps/mobile/app.config.js` and checked per EAS profile (no localhost in `app.json`), the unauthenticated payments smoke route is gone, and there is no RevenueCat integration (`revenueCatEnabled: false`). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md`, `docs/PENTEST_READINESS.md` and the code. Where this plan and the code disagree, the code wins.
 
 > The engineering plan for **Worn Closet**, the next chapter of Worn, as the `/closet` page describes it (`apps/web/src/app/closet/page.tsx` and `apps/web/src/components/closet/*` in this worktree).
 > The product is a stylist and back office for clothes you already own. It plans Monday to Sunday from your closet, packs four backups, shows the pick on you, counts wears and cost per wear, keeps the money paperwork, and helps the pile leave.
@@ -85,7 +85,7 @@ Line numbers are as read on 2026-10-25 and 2026-10-26, and will drift.
 - Merging the universe tree will conflict in the app shell, the API client, the session store and push.
 
 **The migrations have drifted.**
-- *(Historical; now fixed: 21 SQL files, 21 journal entries.)* At the time there were 34 SQL files but only 29 journal entries (up to `0028_concierge_consent`).
+- *(Historical; now fixed: 26 SQL files, 26 journal entries.)* At the time there were 34 SQL files but only 29 journal entries (up to `0028_concierge_consent`).
 - Snapshots exist only for `0000` and `0005`–`0012`.
 - Five files are never applied: `0024_household_borrow_profiles`, `0024_tailor_marketplace`, `0025_rto_size_repair`, `0029_useful_returns_packages` and `0029_useful_u026_u030`.
 - Numbers repeat, and they collide with `main`'s `0005`–`0007`.
@@ -201,7 +201,7 @@ Status:
 
 **7. Self-granted entitlements.** *(Historical; the unauthenticated smoke route no longer exists and entitlements are not validated against RevenueCat, which is not integrated.)* [redacted: route-level detail of the former entitlement weaknesses; see git history and `docs/PENTEST_READINESS.md`.]
 
-**8. OAuth.** [redacted: OAuth state and token-encryption weaknesses recorded at the time; see `docs/PENTEST_READINESS.md` and the owner. Verify current status in code before relying on this section.]
+**8. OAuth.** [redacted: OAuth state and token-encryption weaknesses recorded at the time; see `docs/PENTEST_READINESS.md` and the owner. State now carries a stored nonce with a 10-minute expiry (`apps/api/src/routes/ingestion.ts`); verify the remaining items in code before relying on this section.]
 
 **9. Schema hygiene.**
 - 51 tables have 10 indexes between them, and none is on `user_id`.

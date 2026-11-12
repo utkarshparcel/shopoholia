@@ -30,8 +30,9 @@ dependencies. The API selects the provider in `createOcrClientFromEnv`.
 
 `OCR_PROVIDER=hosted` → `HostedOcrClient` (apps/api/src/lib/ocr/hosted.ts) is
 implemented: it calls the configured provider URL (`generic` or `google-vision`
-response mapping) with a 10 s timeout. The spike's open question is which
-provider and whether hosted beats on-device, not whether a client exists.
+response mapping) with a 10 s timeout. The hosted-vs-on-device decision is
+recorded as resolved in that file's header comment; the questions below are the
+original inputs to it.
 
 ## Open questions to close the spike
 1. Median receipt image size + expected monthly upload volume → hosted $/mo.
