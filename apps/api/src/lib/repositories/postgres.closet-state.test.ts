@@ -190,6 +190,31 @@ function closetStateCases(get: () => { writer: Repositories; reader: Repositorie
     expect(await reader.getDispositionPickupBooking(listing.id, other.id)).toBeNull();
   });
 
+  it("household vault caps count one currency (S1-28)", async () => {
+    const { writer, reader } = get();
+    const owner = await newUser();
+    const member = await newUser();
+    const household = await writer.createHousehold({ name: "Home", ownerId: owner.id, inviteCode: randomUUID().slice(0, 8) });
+    const ids = [household.id, member.id] as const;
+    // A cap from before caps had a currency takes the first spend's.
+    await writer.upsertHouseholdVaultSettings({ householdId: household.id, userId: member.id, vaultAccess: "SPEND", spendCapMinor: 5_000 });
+    expect((await reader.getHouseholdVaultSettings(...ids)).spendCapCurrency).toBeNull();
+    expect(await writer.tryReserveHouseholdVaultSpend(...ids, 1_000, "INR")).toMatchObject({ spentMinor: 1_000, spendCapCurrency: "INR" });
+    expect(await writer.tryReserveHouseholdVaultSpend(...ids, 1_000, "USD")).toBeNull();
+    expect(await reader.getHouseholdVaultSettings(...ids)).toMatchObject({ spentMinor: 1_000, spendCapCurrency: "INR" });
+
+    // Same currency again keeps the total; another currency starts it again.
+    await writer.upsertHouseholdVaultSettings({ householdId: household.id, userId: member.id, spendCapMinor: 6_000, spendCapCurrency: "INR" });
+    expect((await reader.getHouseholdVaultSettings(...ids)).spentMinor).toBe(1_000);
+    await writer.upsertHouseholdVaultSettings({ householdId: household.id, userId: member.id, spendCapMinor: 6_000, spendCapCurrency: "USD" });
+    expect(await reader.getHouseholdVaultSettings(...ids)).toMatchObject({ spendCapCurrency: "USD", spentMinor: 0 });
+    expect(await writer.tryReserveHouseholdVaultSpend(...ids, 6_000, "USD")).toMatchObject({ spentMinor: 6_000 });
+
+    // Without a cap any currency spends, and no currency is stored.
+    await writer.upsertHouseholdVaultSettings({ householdId: household.id, userId: member.id, spendCapMinor: null, spendCapCurrency: null });
+    expect(await writer.tryReserveHouseholdVaultSpend(...ids, 1, "GBP")).toMatchObject({ spendCapCurrency: null });
+  });
+
   it("export carries the new Closet state, and erasure removes it", async () => {
     const { writer, reader } = get();
     const user = await newUser();

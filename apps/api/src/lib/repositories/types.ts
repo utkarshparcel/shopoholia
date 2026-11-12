@@ -2023,11 +2023,16 @@ export interface Repositories {
     householdId: string,
     userId: string,
   ): Promise<HouseholdVaultSettingsRecord>;
+  /**
+   * A key left out is unchanged. Changing the cap to a currency other than the stored one starts
+   * the spent total again at 0 (it counted another currency's minor units).
+   */
   upsertHouseholdVaultSettings(input: {
     householdId: string;
     userId: string;
     vaultAccess?: "VIEW" | "SPEND";
     spendCapMinor?: number | null;
+    spendCapCurrency?: string | null;
     spentMinor?: number;
   }): Promise<HouseholdVaultSettingsRecord>;
   listHouseholdVaultSettings(
@@ -2036,11 +2041,14 @@ export interface Repositories {
   /**
    * Atomically adds `amountMinor` to the member's spent total if it stays within the cap
    * and the member has SPEND access. Returns the new settings, or null when refused.
+   * With `currency` (the spent credit's), a cap in another currency refuses the spend, and a
+   * cap stored without a currency takes this one.
    */
   tryReserveHouseholdVaultSpend(
     householdId: string,
     userId: string,
     amountMinor: number,
+    currency?: string,
   ): Promise<HouseholdVaultSettingsRecord | null>;
   /** Gives back a reservation whose ledger write failed. */
   releaseHouseholdVaultSpend(
@@ -2209,14 +2217,6 @@ export interface Repositories {
   }): Promise<RepairLogRecord>;
   listRepairLogs(userId: string): Promise<RepairLogRecord[]>;
   listRepairLogsByItem(wardrobeItemId: string, userId: string): Promise<RepairLogRecord[]>;
-}
-
-export type WardrobeItemRecord = {
-  id: string;
-  userId: string;
-  source: "MANUAL" | "RECEIPT" | "EMAIL" | "SMS";
-  category: string;
-  colors: string[];
 
   // --- Closet state that lived in process memory (S6-13) ---
   /** U042 — sets the canonical merchant for a normalised alias (one row per user and alias). */
@@ -2272,8 +2272,8 @@ export type WardrobeItemRecord = {
   /** DISP-LOGISTICS — stores the booked pickup on the user's listing; false if not theirs. */
   setDispositionPickupBooking(id: string, userId: string, booking: DispositionPickupBooking): Promise<boolean>;
   getDispositionPickupBooking(id: string, userId: string): Promise<DispositionPickupBooking | null>;
-  brand: string | null;
-  costMinor: number;
+}
+
 export type MerchantAliasRecord = {
   /** Normalised (trimmed, upper-cased, single-spaced). */
   alias: string;
@@ -2333,6 +2333,14 @@ export type WardrobeItemMarks = {
   photoDumpTriagedAt: Date | null;
 };
 
+export type WardrobeItemRecord = {
+  id: string;
+  userId: string;
+  source: "MANUAL" | "RECEIPT" | "EMAIL" | "SMS";
+  category: string;
+  colors: string[];
+  brand: string | null;
+  costMinor: number;
   imageKeys: string[];
   garmentImageKey: string | null;
   purchaseItemId: string | null;
@@ -2526,6 +2534,8 @@ export type HouseholdVaultSettingsRecord = {
   userId: string;
   vaultAccess: "VIEW" | "SPEND";
   spendCapMinor: number | null;
+  /** ISO currency of the cap and of `spentMinor`; null for no cap or a cap set before 0026. */
+  spendCapCurrency: string | null;
   spentMinor: number;
   updatedAt: Date;
 };
@@ -2711,6 +2721,8 @@ export type TailoringOrderRecord = {
   measurementSnapshot: Record<string, unknown> | null;
   state: "PENDING" | "CONFIRMED" | "IN_STITCHING" | "SHIPPED" | "DELIVERED" | "CANCELLED";
   expectedPickupOn?: string | null;
+  /** When the day-before pickup nudge went out for `expectedPickupOn`. */
+  pickupNudgeSentAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -2721,8 +2733,6 @@ export type CreateTailoringOrderInput = {
   measurementProfileId?: string | null;
   selections: Record<string, string>;
   fabricRef?: string | null;
-  /** When the day-before pickup nudge went out for `expectedPickupOn`. */
-  pickupNudgeSentAt?: Date | null;
   fabricPhotoKeys?: string[];
   tailorSellerId?: string | null;
   measurementSnapshot?: Record<string, unknown> | null;

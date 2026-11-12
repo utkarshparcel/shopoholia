@@ -2659,6 +2659,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess?: 'VIEW' | 'SPEND';
     spendCapMinor?: number | null;
+    spendCapCurrency?: string;
   },
 ) {
   const res = await apiFetch(`${API_URL}/households/${householdId}/vault/members`, {
@@ -2670,6 +2671,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess: 'VIEW' | 'SPEND';
     spendCapMinor: number | null;
+    spendCapCurrency: string | null;
     spentMinor: number;
   }>(res);
 }

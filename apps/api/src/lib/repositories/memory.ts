@@ -4499,6 +4499,7 @@ export function createMemoryRepositories(): Repositories {
         userId,
         vaultAccess: "VIEW",
         spendCapMinor: null,
+        spendCapCurrency: null,
         spentMinor: 0,
         updatedAt: now(),
       };
@@ -4507,6 +4508,10 @@ export function createMemoryRepositories(): Repositories {
     async upsertHouseholdVaultSettings(input) {
       const key = `${input.householdId}:${input.userId}`;
       const prev = householdVaultSettingsStore.get(key);
+      const prevCurrency = prev?.spendCapCurrency ?? null;
+      const spendCapCurrency = input.spendCapCurrency !== undefined ? input.spendCapCurrency : prevCurrency;
+      // The spent total counts the old currency's minor units: it can't carry over to another.
+      const currencyChanged = prevCurrency !== null && spendCapCurrency !== null && spendCapCurrency !== prevCurrency;
       const next: HouseholdVaultSettingsRecord = {
         householdId: input.householdId,
         userId: input.userId,
@@ -4515,10 +4520,13 @@ export function createMemoryRepositories(): Repositories {
           input.spendCapMinor !== undefined
             ? input.spendCapMinor
             : (prev?.spendCapMinor ?? null),
+        spendCapCurrency,
         spentMinor:
           input.spentMinor !== undefined
             ? input.spentMinor
-            : (prev?.spentMinor ?? 0),
+            : currencyChanged
+              ? 0
+              : (prev?.spentMinor ?? 0),
         updatedAt: now(),
       };
       householdVaultSettingsStore.set(key, next);
@@ -4529,12 +4537,19 @@ export function createMemoryRepositories(): Repositories {
         (s) => s.householdId === householdId,
       );
     },
-    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor, currency) {
       const key = `${householdId}:${userId}`;
       const prev = householdVaultSettingsStore.get(key);
       if (!prev || prev.vaultAccess !== "SPEND") return null;
       if (prev.spendCapMinor !== null && prev.spentMinor + amountMinor > prev.spendCapMinor) return null;
-      const next = { ...prev, spentMinor: prev.spentMinor + amountMinor, updatedAt: now() };
+      const capped = prev.spendCapMinor !== null;
+      if (capped && currency && prev.spendCapCurrency && prev.spendCapCurrency !== currency) return null;
+      const next = {
+        ...prev,
+        spendCapCurrency: capped && currency ? (prev.spendCapCurrency ?? currency) : prev.spendCapCurrency,
+        spentMinor: prev.spentMinor + amountMinor,
+        updatedAt: now(),
+      };
       householdVaultSettingsStore.set(key, next);
       return next;
     },
@@ -5241,6 +5256,7 @@ export function createMemoryRepositories(): Repositories {
         measurementSnapshot: snapshot,
         state: "PENDING",
         expectedPickupOn: input.expectedPickupOn ?? null,
+        pickupNudgeSentAt: null,
         createdAt: now(),
         updatedAt: now(),
       };
@@ -5256,7 +5272,6 @@ export function createMemoryRepositories(): Repositories {
       return [...tailoringOrdersStore.values()].filter(r=>r.userId===userId).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime());
     },
     async updateTailoringOrderState(id, state) {
-        pickupNudgeSentAt: null,
       const r = tailoringOrdersStore.get(id);
       if (!r) return null;
       if (r.state !== state && (r.state === "DELIVERED" || r.state === "CANCELLED")) return null;
@@ -5480,9 +5495,6 @@ export function createMemoryRepositories(): Repositories {
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
 
-  };
-  return repos;
-}
     // --- Closet state (S6-13) ---
     async upsertMerchantAlias(userId, alias, canonical) {
       const key = `${userId}:${alias}`;
@@ -5600,3 +5612,6 @@ export function createMemoryRepositories(): Repositories {
       return { ...row.booking };
     },
 
+  };
+  return repos;
+}

@@ -2048,6 +2048,7 @@ export function usePatchHouseholdVaultMember(householdId: string | null) {
       userId: string;
       vaultAccess?: 'VIEW' | 'SPEND';
       spendCapMinor?: number | null;
+      spendCapCurrency?: string;
     }) => patchHouseholdVaultMember(sessionToken(), householdId!, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['household-vault'] });

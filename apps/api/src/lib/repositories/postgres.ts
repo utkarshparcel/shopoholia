@@ -903,12 +903,12 @@ function mapHouseholdVaultSettings(row: HouseholdVaultSettingsRow): HouseholdVau
     userId: row.userId,
     vaultAccess: row.vaultAccess,
     spendCapMinor: row.spendCapMinor ?? null,
+    spendCapCurrency: row.spendCapCurrency ?? null,
     spentMinor: row.spentMinor,
     updatedAt: row.updatedAt,
   };
 }
 
-/** Storage keys we own (not external URLs), deduplicated. */
 function mapGiftBudgetLock(row: typeof giftBudgetLocks.$inferSelect): GiftBudgetLockRecord {
   return {
     id: row.id,
@@ -949,6 +949,7 @@ function mapLentWasteNote(row: typeof lentWasteNotes.$inferSelect): LentWasteNot
   };
 }
 
+/** Storage keys we own (not external URLs), deduplicated. */
 function ownStorageKeys(values: Array<string | null | undefined>): string[] {
   const keys = new Set<string>();
   for (const v of values) {
@@ -5848,8 +5849,8 @@ export function createPostgresRepositories(db: Db): Repositories {
           tailorSellerId: input.tailorSellerId ?? null,
           measurementSnapshot: snapshot,
           state: "PENDING",
-        }).returning();
           expectedPickupOn: input.expectedPickupOn ?? null,
+        }).returning();
         return mapTailoringOrder(row);
     },
     async findTailoringOrder(id, userId) {
@@ -6319,6 +6320,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         userId,
         vaultAccess: "VIEW",
         spendCapMinor: null,
+        spendCapCurrency: null,
         spentMinor: 0,
         updatedAt: now(),
       } satisfies HouseholdVaultSettingsRecord;
@@ -6328,7 +6330,12 @@ export function createPostgresRepositories(db: Db): Repositories {
       const set: Record<string, unknown> = { updatedAt: now() };
       if (input.vaultAccess !== undefined) set.vaultAccess = input.vaultAccess;
       if (input.spendCapMinor !== undefined) set.spendCapMinor = input.spendCapMinor;
+      if (input.spendCapCurrency !== undefined) set.spendCapCurrency = input.spendCapCurrency;
       if (input.spentMinor !== undefined) set.spentMinor = input.spentMinor;
+      else if (input.spendCapCurrency != null) {
+        // The spent total counts the old currency's minor units: it can't carry over to another.
+        set.spentMinor = sql`CASE WHEN ${householdVaultSettings.spendCapCurrency} IS NOT NULL AND ${householdVaultSettings.spendCapCurrency} <> ${input.spendCapCurrency} THEN 0 ELSE ${householdVaultSettings.spentMinor} END`;
+      }
       const [row] = await db
         .insert(householdVaultSettings)
         .values({
@@ -6336,6 +6343,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           userId: input.userId,
           vaultAccess: input.vaultAccess ?? "VIEW",
           spendCapMinor: input.spendCapMinor ?? null,
+          spendCapCurrency: input.spendCapCurrency ?? null,
           spentMinor: input.spentMinor ?? 0,
         })
         .onConflictDoUpdate({
@@ -6352,19 +6360,27 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(eq(householdVaultSettings.householdId, householdId));
       return rows.map(mapHouseholdVaultSettings);
     },
-    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor, currency) {
+      const s = householdVaultSettings;
       const [row] = await db
-        .update(householdVaultSettings)
+        .update(s)
         .set({
-          spentMinor: sql`${householdVaultSettings.spentMinor} + ${amountMinor}`,
+          spentMinor: sql`${s.spentMinor} + ${amountMinor}`,
+          // A cap set before caps had a currency takes the first spend's.
+          ...(currency
+            ? { spendCapCurrency: sql`CASE WHEN ${s.spendCapMinor} IS NOT NULL THEN coalesce(${s.spendCapCurrency}, ${currency}) ELSE ${s.spendCapCurrency} END` }
+            : {}),
           updatedAt: now(),
         })
         .where(
           and(
-            eq(householdVaultSettings.householdId, householdId),
-            eq(householdVaultSettings.userId, userId),
-            eq(householdVaultSettings.vaultAccess, "SPEND"),
-            sql`(${householdVaultSettings.spendCapMinor} IS NULL OR ${householdVaultSettings.spentMinor} + ${amountMinor} <= ${householdVaultSettings.spendCapMinor})`,
+            eq(s.householdId, householdId),
+            eq(s.userId, userId),
+            eq(s.vaultAccess, "SPEND"),
+            sql`(${s.spendCapMinor} IS NULL OR ${s.spentMinor} + ${amountMinor} <= ${s.spendCapMinor})`,
+            currency
+              ? sql`(${s.spendCapMinor} IS NULL OR ${s.spendCapCurrency} IS NULL OR ${s.spendCapCurrency} = ${currency})`
+              : undefined,
           ),
         )
         .returning();
@@ -7176,14 +7192,6 @@ export function createPostgresRepositories(db: Db): Repositories {
       return rows.map(mapRepairLog);
     },
 
-  };
-
-  return repos;
-}
-
-export function createPostgresRepositoriesFromUrl(connectionString: string): Repositories {
-  return createPostgresRepositories(createDb(connectionString));
-}
     // --- Closet state (S6-13) ---
     async upsertMerchantAlias(userId, alias, canonical) {
       const at = now();
@@ -7348,3 +7356,11 @@ export function createPostgresRepositoriesFromUrl(connectionString: string): Rep
       return (row?.booking as DispositionPickupBooking | null | undefined) ?? null;
     },
 
+  };
+
+  return repos;
+}
+
+export function createPostgresRepositoriesFromUrl(connectionString: string): Repositories {
+  return createPostgresRepositories(createDb(connectionString));
+}

@@ -150,6 +150,7 @@ describe('household vault', () => {
       userId: MEMBER,
       vaultAccess: 'SPEND',
       spendCapMinor: 200000,
+      spendCapCurrency: 'INR',
     });
   });
 
@@ -177,6 +178,37 @@ describe('household vault', () => {
     ];
     await openHousehold();
     expect(screen.getByTestId('household-vault-mixed-currency').textContent).toMatch(/INR, USD/);
+    expect(screen.getByTestId('household-vault-mixed-currency').textContent).toMatch(/one currency/);
+  });
+
+  it('S1-28: a stored cap is shown in its own currency and a new cap is sent with one', async () => {
+    useClosetPrefsStore.setState({ preferredCurrency: 'GBP' });
+    state.extraAccounts = [
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        ownerUserId: MEMBER,
+        merchant: 'Target',
+        kind: 'GIFT_CARD',
+        currency: 'USD',
+        balanceCacheMinor: 5000,
+        expiresAt: null,
+      },
+    ];
+    state.extraMembers = [
+      {
+        userId: '66666666-6666-4666-8666-666666666666',
+        vaultAccess: 'SPEND',
+        spendCapMinor: 4000,
+        spendCapCurrency: 'USD',
+        spentMinor: 0,
+      },
+    ];
+    await openHousehold();
+    // Mixed credits: the stored USD cap reads in dollars, not the viewer's pounds.
+    expect(screen.getByText(/Member 2 · can spend · cap \$40\.00/)).toBeTruthy();
+    fireEvent.click(screen.getAllByText('Allow spend')[0]!);
+    await confirmPrompt('cap', '30', 'Allow spend');
+    expect(patchMutate.mock.calls[0]![0]).toMatchObject({ spendCapMinor: 3000, spendCapCurrency: 'GBP' });
   });
 
   it('S1-28: marks you and the owner, and offers no access change on your own row', async () => {
