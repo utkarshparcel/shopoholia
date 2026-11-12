@@ -37,7 +37,8 @@ async function twoInstances(phone: string) {
   };
 }
 
-describe("Closet state survives an API restart (S6-13)", () => {
+// Each case loads the whole API's modules two or three times over.
+describe("Closet state survives an API restart (S6-13)", { timeout: 90_000 }, () => {
   it("merchant aliases", async () => {
     const { first, second, authA, authB } = await twoInstances("919800000401");
     const created = await first.inject({
