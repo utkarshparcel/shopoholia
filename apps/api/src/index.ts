@@ -20,6 +20,7 @@ import { closeQueues } from "./lib/queues/enqueue.js";
 import pino from "pino";
 import { redactQueryError } from "./lib/redact-error.js";
 import { captureException, initSentry } from "./lib/sentry.js";
+import { installZod3Messages } from "./lib/zod-messages.js";
 import {
   bootConfigProblems,
   fastifyTrustProxy,
@@ -31,6 +32,9 @@ import {
 import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
 import { apiRoutes } from "./routes/index.js";
+
+// Validation 400s keep the wording clients got before the zod 4 upgrade.
+installZod3Messages();
 
 const HealthResponseSchema = z.object({
   status: z.literal("ok"),
