@@ -1,5 +1,7 @@
 # WORN — USEFUL-50 (job-completing backlog)
 
+> **Historical planning document, 2026-11-12: describes the plan at the time, not the current product.** Items ticked or marked SHIPPED here were not re-verified against the code; some cite migrations that do not exist (the repo has `0000`-`0020` only, see `packages/db/migrations/`), RevenueCat (removed; no `/webhooks/revenuecat`) or Android SMS ingestion (`READ_SMS` is blocked in `app.json`). Worn Closet is behind `FEATURE_CLOSET` (off in release builds). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md` and the code.
+
 > Next **50** Closet-first tickets that deepen *utility* (finish a chore, save money, prevent loss) — complementary to wow/polish in [`UNIVERSE_WOW100.md`](./UNIVERSE_WOW100.md).
 >
 > Synced 2026-08-27 from ethos in `UNIVERSE_ARCHITECTURE.md`, `GTM_ZERO_SPEND.md`, `.cursor/skills/worn-gtm/SKILL.md`.
@@ -79,7 +81,7 @@
   - Acceptance: Sorted by claim deadline; CTA opens claim flow; push at T-3d
   - Est: M
 
-- [x] **U007-EMI-SCHEDULE-FROM-SMS** · P1 · [EMI] Parse EMI due SMS → schedule rows + mark paid
+- [ ] **U007-EMI-SCHEDULE-FROM-SMS** *(correction 2026-11-12: SMS ingestion is not shipped, so this is not working end to end)* · P1 · [EMI] Parse EMI due SMS → schedule rows + mark paid
   - Why: India EMI miss = fees; useful chase
   - Depends: SMS ingest, EMI module
   - Files: worker-ingest EMI parser, EMI board

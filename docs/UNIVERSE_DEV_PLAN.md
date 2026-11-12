@@ -1,5 +1,7 @@
 # WORN Universe — Dev Plan (P0 + P1)
 
+> **Historical planning document, 2026-11-12: describes the plan at the time, not the current product.** Items ticked or marked SHIPPED here were not re-verified against the code; some cite migrations that do not exist (the repo has `0000`-`0020` only, see `packages/db/migrations/`), RevenueCat (removed; no `/webhooks/revenuecat`) or Android SMS ingestion (`READ_SMS` is blocked in `app.json`). Worn Closet is behind `FEATURE_CLOSET` (off in release builds). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md` and the code.
+
 > Executable plan derived from `UNIVERSE_ARCHITECTURE.md`. Task-level for **P0 (platform spine)** and **P1 (found-money wedges)** — what the team builds next. P2–P4 stay at the milestone level in the architecture doc; they're planned in detail once P0/P1 data exists (planning them now would be speculative).
 > Voice matches `IMPLEMENTATION_PLAN.md`: decisive defaults, task tables, acceptance criteria, spikes pulled forward.
 
@@ -10,7 +12,7 @@
 - **Stack is already in place** — pnpm+Turbo monorepo, Fastify+Drizzle API (route-module-per-domain in `apps/api/src/routes/`), BullMQ workers (`services/worker-*`), Expo Router app (`apps/mobile/app/` with route groups), Postgres+Redis via `infra/docker-compose.yml`, vitest. New work **extends** these patterns; no new frameworks.
 - **Team baseline:** ~2–3 engineers. Estimates are rough engineer-days (**pre-spike**); the four P0 workstreams parallelize, so with 4–5 eng the calendar compresses (§6).
 - **The bet P1 validates:** does the *utility* loop's core promise — **"found money"** — land, and does ingestion parse real inboxes well enough to feel magic? Everything heavier waits on that.
-- **Do-first cleanups (½ day, unblock prod):** reconcile the env drift already flagged — code reads `JWT_SECRET` / `PORT` / `HOST` ([apps/api/src/index.ts:43](apps/api/src/index.ts:43), [:72](apps/api/src/index.ts:72)) but `.env` defines `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` / `API_PORT` / `API_HOST`; and fix the `launch.json` `design-system` path (`design-system` → `docs/design-system`).
+- **Do-first cleanups (½ day, unblock prod):** reconcile the env drift already flagged — code reads `JWT_SECRET` / `PORT` / `HOST` *(2026-11-12: it accepts both these and the `JWT_ACCESS_SECRET` / `API_PORT` / `API_HOST` names; this drift is no longer a blocker)* ([apps/api/src/index.ts:43](apps/api/src/index.ts:43), [:72](apps/api/src/index.ts:72)) but `.env` defines `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` / `API_PORT` / `API_HOST`; and fix the `launch.json` `design-system` path (`design-system` → `docs/design-system`).
 
 ## 1. Workstream map & dependencies
 

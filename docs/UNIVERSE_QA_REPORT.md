@@ -1,5 +1,7 @@
 # WORN Universe — QA Report
 
+> **Historical planning document, 2026-11-12: describes the plan at the time, not the current product.** Items ticked or marked SHIPPED here were not re-verified against the code; some cite migrations that do not exist (the repo has `0000`-`0020` only, see `packages/db/migrations/`), RevenueCat (removed; no `/webhooks/revenuecat`) or Android SMS ingestion (`READ_SMS` is blocked in `app.json`). Worn Closet is behind `FEATURE_CLOSET` (off in release builds). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md` and the code.
+
 > QA of the universe implementation against the ethos in `UNIVERSE_ARCHITECTURE.md` / `UNIVERSE_DEV_PLAN.md`. Reviewed from code **and** product eyes, across four clusters (money+trust, ingestion+post-purchase, closet modules, mobile two-surface). Date: 2026-08-25.
 
 ## Verdict
