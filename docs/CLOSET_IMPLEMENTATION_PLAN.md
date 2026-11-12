@@ -1,5 +1,7 @@
 # WORN CLOSET — Implementation Plan
 
+> **Historical planning document, 2026-11-12: describes the plan at the time (2026-10-25/26), not the current product.** Worn Play is what launches; Worn Closet is behind `FEATURE_CLOSET` (off in release builds) and not launching yet. **§0 "Reality check" is a snapshot and is largely superseded**: the migrations now have 21 SQL files and 21 journal entries, `apps/api` depends on `bullmq`, the release API URL is set by `apps/mobile/app.config.js` (no localhost in `app.json`), the unauthenticated payments smoke route is gone, and there is no RevenueCat integration (`revenueCatEnabled: false`). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md`, `docs/PENTEST_READINESS.md` and the code. Where this plan and the code disagree, the code wins.
+
 > The engineering plan for **Worn Closet**, the next chapter of Worn, as the `/closet` page describes it (`apps/web/src/app/closet/page.tsx` and `apps/web/src/components/closet/*` in this worktree).
 > The product is a stylist and back office for clothes you already own. It plans Monday to Sunday from your closet, packs four backups, shows the pick on you, counts wears and cost per wear, keeps the money paperwork, and helps the pile leave.
 > This doc covers what exists today, the target architecture, the data model, the API, the mobile app, jobs, integrations, the AI pipeline, render capacity, DPDP, phases with estimates, the definition of done every build task meets, tests, risks, the page-vs-plan table, why the phases come in this order, open questions and assumptions, and next steps.
@@ -13,7 +15,7 @@
 
 | Tag | Meaning |
 |---|---|
-| `[U]` | **The universe tree.** This is the uncommitted working tree in the main checkout `/Users/kandarp/startups/shopoholia`, on branch `feat/universe-p0-spine` at `ab43455` (2026-07-24) plus uncommitted changes. Almost all Closet code lives only here. **A path with no tag refers to `[U]`.** |
+| `[U]` | **The universe tree.** This is the uncommitted working tree in the main checkout [redacted: owner local path], on branch `feat/universe-p0-spine` at `ab43455` (2026-07-24) plus uncommitted changes. Almost all Closet code lives only here. **A path with no tag refers to `[U]`.** |
 | `[main]` | The `main` branch at `1c75306`. |
 | `[site]` | This worktree's uncommitted website work (`apps/web/src/components/closet/*`), which is the copy this plan has to make true. |
 
@@ -83,7 +85,7 @@ Line numbers are as read on 2026-10-25 and 2026-10-26, and will drift.
 - Merging the universe tree will conflict in the app shell, the API client, the session store and push.
 
 **The migrations have drifted.**
-- There are 34 SQL files but only 29 journal entries (up to `0028_concierge_consent`).
+- *(Historical; now fixed: 21 SQL files, 21 journal entries.)* At the time there were 34 SQL files but only 29 journal entries (up to `0028_concierge_consent`).
 - Snapshots exist only for `0000` and `0005`–`0012`.
 - Five files are never applied: `0024_household_borrow_profiles`, `0024_tailor_marketplace`, `0025_rto_size_repair`, `0029_useful_returns_packages` and `0029_useful_u026_u030`.
 - Numbers repeat, and they collide with `main`'s `0005`–`0007`.
@@ -94,12 +96,12 @@ Line numbers are as read on 2026-10-25 and 2026-10-26, and will drift.
   - There is no Dockerfile, Procfile or hosting config.
   - There is no scheduler: no cron, no repeat jobs, no `upsertJobScheduler`, no `setInterval`.
 - Queued jobs are skipped:
-  - `apps/api` has no `bullmq` dependency, only `src/types/bullmq.d.ts`.
+  - *(Historical; now fixed: `apps/api` depends on `bullmq`.)* At the time `apps/api` had no `bullmq` dependency, only `src/types/bullmq.d.ts`.
   - Its 16 queue-producing libs call `await import("bullmq")` and return `"skipped"` when `REDIS_URL` is unset or the import fails.
 - Seven queues have no consumer at all: `cal-event-outfit`, `cooling-off-release`, `emi-due`, `interview-kit`, `lent-overdue`, `price-drop` and `ingest-dead-letter`.
 - `infra/docker-compose.yml` [main] runs Postgres 16 and Redis 7 for local use only.
 
-**Release builds call localhost, on `main` too.**
+**Release builds called localhost, on `main` too.** *(Historical; fixed: the release API URL now comes from `EXPO_PUBLIC_API_URL` via `apps/mobile/app.config.js`, which rejects an unsuitable release URL.)*
 - `mob/app.json` sets `extra.apiUrl: "http://localhost:3000"`, which takes precedence over `EXPO_PUBLIC_API_URL`.
 - `eas.json` sets no environment variables for any profile.
 - Unless something outside the repo overrides this, TestFlight and Play internal builds can't reach an API. The site's CTA says Play is in early access "through TestFlight and Play internal testing", so the owner should confirm those builds actually work.
@@ -185,7 +187,7 @@ Status:
 - Add a worker runner and a Job Scheduler.
 - In production, a failed enqueue must be an error, not `"skipped"`.
 
-**4. Release API URL.** Release builds point to localhost.
+**4. Release API URL.** *(Resolved: see §0.1.)*
 
 **5. Time zones.** Dates and quiet hours are UTC. `users` has no time zone column, and `getTodayOutfit` (`postgres.ts:2628`) uses UTC.
 
@@ -197,16 +199,9 @@ Status:
 - interview kits (`interview-kit.ts:213`);
 - entitlements.
 
-**7. Self-granted entitlements.**
-- `POST /entitlements/sync` lets a user grant themselves `CLOSET_ENTITLEMENTS = ["accountant","outfits"]`, each with a 7-day trial.
-- `POST /payments/upi/smoke` (`payments.ts:94–127`) has no auth and grants a trial to whatever `userId` the body names (`api/lib/payments/adapter.ts:122`). Its comment says it is open only outside production when `FEATURE_UPI_SMOKE=1`. In fact it refuses only in production without that flag, so it is open in every other environment.
-- Entitlements have to be validated against RevenueCat instead, and the smoke route removed or limited to staging behind auth.
+**7. Self-granted entitlements.** *(Historical; the unauthenticated smoke route no longer exists and entitlements are not validated against RevenueCat, which is not integrated.)* [redacted: route-level detail of the former entitlement weaknesses; see git history and `docs/PENTEST_READINESS.md`.]
 
-**8. OAuth.**
-- State is an HMAC over `{userId, sourceId, kind}`. The secret falls back from `OAUTH_STATE_SECRET` to `JWT_ACCESS_SECRET` to `"dev-only-change-me"`.
-- There is no nonce and no expiry.
-- An unsigned legacy state is accepted whenever a JWT is present.
-- Tokens use AES-256-GCM with an scrypt key, a static salt `"worn-oauth-token-v1"` and no key version.
+**8. OAuth.** [redacted: OAuth state and token-encryption weaknesses recorded at the time; see `docs/PENTEST_READINESS.md` and the owner. Verify current status in code before relying on this section.]
 
 **9. Schema hygiene.**
 - 51 tables have 10 indexes between them, and none is on `user_id`.
