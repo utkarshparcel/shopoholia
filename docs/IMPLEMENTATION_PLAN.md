@@ -15,7 +15,7 @@ The spec is directionally strong but makes a few technical assumptions that will
 | "Every item you browse renders on you, **real-time**, in the feed" | Per-user, per-card live try-on is too slow (seconds/render) and too expensive at scroll speed. | Feed shows product on a **house model / flat-lay**. The "you in it" render fires on **item-detail open**, is **cached** per (user, item, variant), and the **top N feed items are pre-warmed** in the background. Promise preserved, cost controlled. |
 | "Stored **avatar embeddings**" fed to FASHN.ai | FASHN.ai (and most try-on APIs) take a **model image + garment image**, not a persistent embedding. | Avatar = a canonical, pose-normalized **reference model image** (1–3) stored in R2. Identity consistency across scenarios comes from reusing that reference + optional per-user IP-Adapter/LoRA later (Phase IV). |
 | "On-device embedding extraction, no raw photo storage" | Try-on runs server-side; the reference image must persist to render future orders. | Be honest: encrypted at-rest storage, short retention of *uploads* (delete originals after deriving the reference), strict access control, hard-delete flow. On-device is a Phase IV aspiration, not an MVP claim. |
-| Reveal = 6–8 cinematic renders per order, pre-generated | This is the **cost center**. 8 renders × every order can exceed coin revenue/order. | Pre-generate the **2 free** renders always; generate paywalled renders **lazily on unlock** OR pre-generate all and price the unlock to cover cost. Default MVP: pre-gen 2 free + generate rest on unlock. Revisit with data. |
+| Reveal = 6–8 cinematic renders per order, pre-generated | This is the **cost center**. 8 renders × every order can exceed coin revenue/order. | Pre-generate the **1 free** render per piece (the Studio scene) always; generate paywalled renders **lazily on unlock** OR pre-generate all and price the unlock to cover cost. Current rule: 1 free Studio scene per piece + generate the other five on unlock (50 coins each). Revisit with data. |
 | "Express is 2 hours" wait | Good for dopamine, bad for first-run validation — beta users won't wait 2h to see the core moment. | Make tier durations **config-driven** (already needed for the A/B open question). Beta builds use compressed timers (e.g. Express = 5 min) to validate the reveal; production uses real timers. |
 
 **The moat is the render pipeline.** Everything else is standard ecomm plumbing. Budget the most engineering risk and spike time there first (Week 2).
@@ -152,7 +152,7 @@ stateDiagram-v2
 2. The **full transition ladder is scheduled at checkout** as BullMQ delayed jobs (one per state), with delays from a per-tier config in `packages/shared`. Job ids stored on the order so they can be cancelled/refunded.
 3. Each job is **idempotent** — guards on current state (no double-advance, safe on retry/restart).
 4. Every transition: update DB → fire push → bump `state_eta`. Client uses TanStack Query polling (5–10s) on the tracking screen; WebSocket is a Phase III upgrade.
-5. `DELIVERED` enqueues render jobs for the 2 free renders per item. When they complete → `REVEAL_READY` + "Your haul is here" push.
+5. `DELIVERED` enqueues the render job for the 1 free render (Studio) per item. When every free render is done → `REVEAL_READY` + "Your haul is here" push.
 
 Tier timings (config-driven, beta vs prod):
 
@@ -169,6 +169,10 @@ Tier timings (config-driven, beta vs prod):
 
 ## 6. The render pipeline (the moat)
 
+> **Free scenes (current rule):** each piece in a haul gets **one** free scene, Studio; the other
+> five scenes (Golden hour, Street, Editorial dark, Night, Candid) unlock for 50 coins each. This
+> replaces the earlier "2 free" hypothesis; see `docs/RENDER_AGENT.md`.
+
 Three quality tiers, three cost profiles:
 
 1. **Avatar reference (once, on onboarding)** — validate uploads (single face, full/upper body, quality gate) → derive a clean pose-normalized **reference model image** → store encrypted in R2 → **delete raw uploads**. Spike: FASHN.ai vs a ComfyUI normalization pass.
@@ -176,7 +180,7 @@ Three quality tiers, three cost profiles:
 3. **Reveal (slow, expensive, the reward)** — on `DELIVERED`, per order_item:
    - Pass A: FASHN.ai try-on → garment on the user.
    - Pass B: scenario styling — ComfyUI img2img with scene/lighting (studio, golden hour, street, editorial-dark, night, candid) → upscale.
-   - Generate **2 free** now; mark 4–8 paywalled rows `QUEUED` but **generate on unlock**.
+   - Generate **1 free** now (Studio); the other five scenes are paywalled rows, **generated on unlock**.
    - Store in R2, write `renders` rows with `cost_micros`. All free done → `REVEAL_READY`.
 
 ```mermaid
@@ -224,7 +228,7 @@ app/
 
 - **State:** Zustand stores — `session`, `avatar`, `cart`, `coins`.
 - **Data:** TanStack Query — feed (infinite), order tracking (polling while not `REVEAL_READY`), balance.
-- **Reveal UX:** Reanimated 3 swipe deck; 2 free, locked cards show blurred placeholder + coin-unlock CTA; download/share/add-to-lookbook actions.
+- **Reveal UX:** Reanimated 3 swipe deck; 1 free (Studio) per piece, locked cards show blurred placeholder + coin-unlock CTA; download/share/add-to-lookbook actions.
 - **Push:** Expo Notifications → token to API; deep-link `worn://order/:id` and `worn://reveal/:orderId`.
 
 ---
@@ -253,7 +257,7 @@ Goal: full loop for **50 beta users**, compressed timers, validate the reveal la
 - **Week 2 — Avatar + render spike (highest risk first).** Upload endpoint + processing job. FASHN.ai integration spike: reference image → garment try-on quality bar. ComfyUI box up; scenario styling pass proven on 2–3 looks. Onboarding screen + coin grant on signup. **Gate: do renders look genuinely flattering? If not, escalate before continuing.**
 - **Week 3 — Feed + try-on + cart.** Seed script (50 listings w/ house-model imagery + variants). Feed endpoint + infinite scroll UI. Listing detail + cached `/tryon` preview + background pre-warm. Cart store + screen + haul view.
 - **Week 4 — Checkout + state machine.** `POST /orders` w/ serializable coin debit + ledger. BullMQ ladder scheduling + `worker-orders` (idempotent transitions). Tracking screen w/ countdown + polling. Push wired end-to-end (beta timers).
-- **Week 5 — Render pipeline + reveal.** `worker-render`: DELIVERED → 2 free renders → REVEAL_READY. Reveal screen (Reanimated swipe), paywall placeholders, `/reveal/unlock` (generate-on-unlock). Cost metering on every render.
+- **Week 5 — Render pipeline + reveal.** `worker-render`: DELIVERED → 1 free render per piece (Studio) → REVEAL_READY. Reveal screen (Reanimated swipe), paywall placeholders, `/reveal/unlock` (generate-on-unlock). Cost metering on every render.
 - **Week 6 — Beta hardening.** Analytics funnel (§11). Crash/error reporting (Sentry). EAS build → TestFlight + Play internal. Onboarding transparency copy ("the experience, not the outcome" — risk mitigation). Ship to 50; instrument a 1-tap "how did the reveal feel?" survey.
 
 **Phase I exit criteria:** a beta user completes avatar → buy → wait → reveal; ≥ target % rate the reveal "loved it"; render cost/order is measured and within a known bound.
@@ -286,7 +290,7 @@ Funnel: install → avatar complete → first add-to-cart → first checkout →
 
 ## 14. Open questions to resolve (spec §09 + engineering)
 
-From spec: optimal wait duration; free/paywall render split (2/6 hypothesis); primary acquisition channel; avatar likeness licensing.
+From spec: optimal wait duration; free/paywall render split (decided: 1 free Studio scene per piece, the other five paid); primary acquisition channel; avatar likeness licensing.
 Engineering adds: FASHN.ai identity consistency across scenarios (good enough, or need per-user LoRA sooner?); generate-on-unlock vs pre-generate-all economics; house-model vs pre-warmed-you in the feed (UX test); ComfyUI hosting cost at beta scale.
 
 ---
