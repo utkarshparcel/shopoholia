@@ -21,7 +21,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/pngjs": "^6.0.5",
     "typescript": "^5.7.2",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0"
   }
 }

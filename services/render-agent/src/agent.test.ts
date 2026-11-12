@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -14,10 +15,12 @@ import {
   SCENARIO_PROMPTS,
   type RenderEngine,
 } from "./mediagen.js";
+import { decodeImage, QualityCheckError, sniffFormat } from "./quality.js";
+import { flat, photo, toJpeg } from "./test-images.js";
 import { parseWindow } from "./window.js";
 
 const API = "https://api.worn.test";
-const MODEL_BYTES = new Uint8Array([0xff, 0xd8, 1, 2, 3]);
+const MODEL_BYTES = toJpeg(photo(640, 960));
 
 function job(id = "11111111-1111-4111-8111-111111111111"): LeasedJob {
   return {
@@ -122,8 +125,10 @@ describe("the agent loop", () => {
       "PUT https://r2.test/out",
       `POST ${API}/agent/renders/11111111-1111-4111-8111-111111111111/complete`,
     ]);
-    // The dry-run engine copies the model photo: that is what went up.
-    expect(fake.uploads[0]).toEqual(MODEL_BYTES);
+    // The dry-run engine mirrors the model photo: a JPEG of the same size went up, not a copy.
+    expect(sniffFormat(fake.uploads[0]!)).toBe("jpeg");
+    expect(fake.uploads[0]).not.toEqual(MODEL_BYTES);
+    expect(decodeImage(fake.uploads[0]!, "jpeg")).toMatchObject({ width: 640, height: 960 });
     // The agent's token on its own calls only, never on the signed R2 URLs.
     for (const call of fake.calls) {
       expect(call.auth).toBe(call.url.startsWith(API) ? "Bearer secret-token" : null);
@@ -173,6 +178,35 @@ describe("the agent loop", () => {
       expect(fake.calls.some((c) => c.url.endsWith("/complete"))).toBe(false);
       expect(readdirSync(workDir)).toEqual([]);
     }
+  });
+
+  it("a render that fails a quality check is reported retryable as quality:<check> and never uploaded", async () => {
+    const outputs: [string, Uint8Array | "copy"][] = [
+      ["format", new TextEncoder().encode("not an image")],
+      ["dimensions", toJpeg(photo(400, 300, [180, 30, 40]))],
+      ["blank", toJpeg(flat(640, 960, [0, 0, 0]))],
+      ["unchanged", "copy"],
+    ];
+    for (const [check, bytes] of outputs) {
+      const fake = fakeFetch({ leases: [] });
+      const workDir = mkdtempSync(join(tmpdir(), "agent-test-"));
+      const engine: RenderEngine = {
+        configured: true,
+        async editTryOn({ modelImagePath, outputPath }) {
+          await writeFile(outputPath, bytes === "copy" ? await readFile(modelImagePath) : bytes);
+        },
+      };
+      const outcome = await runJob(job(), { api: api(fake.impl), engine, workDir, log: () => undefined });
+      expect(outcome).toBe("failed");
+      const fail = fake.calls.find((c) => c.url.endsWith("/fail"))!;
+      expect(fail.body).toMatchObject({ retryable: true, agentId: "mac-1" });
+      expect((fail.body as { reason: string }).reason).toMatch(new RegExp(`^quality:${check}`));
+      expect(fake.calls.some((c) => c.method === "PUT")).toBe(false);
+      expect(fake.uploads).toEqual([]);
+      expect(fake.calls.some((c) => c.url.endsWith("/complete"))).toBe(false);
+      expect(readdirSync(workDir)).toEqual([]);
+    }
+    expect(isRetryable(new QualityCheckError("blank", "flat"))).toBe(true);
   });
 
   it("a failed upload is retryable and the job is not completed", async () => {

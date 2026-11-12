@@ -3,12 +3,15 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { HttpError, type ApiClient, type LeasedJob } from "./api.js";
 import { MediagenNotConfiguredError, RenderRejectedError, type RenderEngine } from "./mediagen.js";
+import { checkRenderFiles, QualityCheckError } from "./quality.js";
 import { inWindow, msUntilWindow, type AgentWindow } from "./window.js";
 
 export type Log = (message: string, fields?: Record<string, unknown>) => void;
 
 /** Whether another attempt might succeed. Expired signed URLs (403) are re-signed on the next lease. */
 export function isRetryable(error: unknown): boolean {
+  // Another render of the same job may well pass.
+  if (error instanceof QualityCheckError) return true;
   if (error instanceof RenderRejectedError || error instanceof MediagenNotConfiguredError) return false;
   if (error instanceof HttpError && error.status !== undefined) {
     return error.status === 403 || error.status === 404 || error.status === 408 || error.status === 429 || error.status >= 500;
@@ -21,8 +24,8 @@ function randomName(ext = ".jpg") {
 }
 
 /**
- * One job: inputs to a private temp dir under random names, the engine, the upload through the
- * signed PUT, then complete (or fail, retryable when another attempt might pass). The temp dir
+ * One job: inputs to a private temp dir under random names, the engine, the quality checks
+ * (src/quality.ts), the upload through the signed PUT, then complete (or fail, retryable when another attempt might pass). The temp dir
  * is always deleted: the Mac keeps no copies.
  */
 export async function runJob(
@@ -42,6 +45,8 @@ export async function runJob(
     }
     const outputPath = join(dir, randomName());
     await deps.engine.editTryOn({ modelImagePath, garmentImagePaths, scenario: job.scenario, outputPath });
+    // A render that is not a usable image never goes up.
+    await checkRenderFiles({ outputPath, modelImagePath, contentType: job.output.contentType });
     await deps.api.upload(job.output.url, outputPath, job.output.contentType);
     await deps.api.complete(job.id);
     deps.log("job done", { jobId: job.id, kind: job.kind, attempt: job.attempt });

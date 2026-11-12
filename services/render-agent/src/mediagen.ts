@@ -1,4 +1,6 @@
-import { copyFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import jpeg from "jpeg-js";
+import { decodeImage, sniffFormat } from "./quality.js";
 
 /**
  * The render engine: the local mediagen HTTP server (127.0.0.1:8199, backed by mlx-serve with
@@ -104,12 +106,28 @@ export function createMediagenEngine(mediagenUrl: string): RenderEngine {
   };
 }
 
-/** --dry-run: "renders" by copying the model photo, to test the whole loop end to end. */
+/**
+ * --dry-run: "renders" the model photo mirrored left to right, as a JPEG, to test the whole loop
+ * end to end. Mirrored, not copied, so it passes the quality checks like a real render.
+ */
 export function createDryRunEngine(): RenderEngine {
   return {
     configured: true,
     async editTryOn({ modelImagePath, outputPath }) {
-      await copyFile(modelImagePath, outputPath);
+      const bytes = new Uint8Array(await readFile(modelImagePath));
+      const format = sniffFormat(bytes);
+      if (!format) throw new RenderRejectedError("The model photo is not a JPEG or PNG");
+      const image = decodeImage(bytes, format);
+      const mirrored = new Uint8Array(image.data.length);
+      for (let y = 0; y < image.height; y += 1) {
+        for (let x = 0; x < image.width; x += 1) {
+          const from = (y * image.width + x) * 4;
+          const to = (y * image.width + (image.width - 1 - x)) * 4;
+          mirrored.set(image.data.subarray(from, from + 4), to);
+        }
+      }
+      const output = jpeg.encode({ width: image.width, height: image.height, data: mirrored }, 90);
+      await writeFile(outputPath, output.data, { mode: 0o600 });
     },
   };
 }

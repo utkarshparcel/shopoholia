@@ -31,7 +31,9 @@ the other five unlock for 50 coins.
    for each: the job id, its kind (`render` or `tryon`), the scene, signed GET URLs for the model
    photo and the garment photo(s) in order, and a signed PUT URL with its content type.
 3. The agent downloads the inputs to a private temp folder under random names, calls mediagen,
-   PUTs the JPEG to R2, and calls `POST /agent/renders/:id/complete`. The API checks the object is
+   checks the output (a real JPEG, at least 512 px on its short side, not blank, not the model
+   photo again; a failure is reported retryable as `quality:<check>` and never uploaded), PUTs the
+   JPEG to R2, and calls `POST /agent/renders/:id/complete`. The API checks the object is
    in R2, marks the render `DONE`, and (for a free render) opens the reveal and sends the push,
    the same path as before.
 4. On an error the agent calls `POST /agent/renders/:id/fail` with `retryable`. A retryable
@@ -89,6 +91,7 @@ Every setting is in `docs/DEPLOY.md` ("Renders"). Mac setup: `services/render-ag
   API isn't documented here, so the agent refuses to lease jobs until someone fills in its
   endpoint, request format (model photo, garment photos, prompt, seed, steps), how the output
   comes back, its clean-up call, and tunes the six scene prompts. `--dry-run` tests the whole loop
-  with a fake engine that copies the model photo.
-- Quality checks before upload (face similarity, colour, safety) are in the plan (§4.7) and not
-  built.
+  with a fake engine that mirrors the model photo.
+- The quality checks before upload cover format, size, blank and unchanged output
+  (`services/render-agent/README.md`). Face similarity, garment colour and safety (plan §4.7) need
+  an ML model and are not built.
