@@ -15,7 +15,7 @@ describe("request body limit", () => {
   });
 
   it("refuses a JSON body over 1 MiB before any schema validation runs", async () => {
-    // An oversized collection: the case zod 3 could exhaust memory on.
+    // An oversized collection: refused on size alone, before zod sees it.
     const items = Array.from({ length: 300_000 }, () => "x");
     const payload = JSON.stringify({ phone: "919876543210", items });
     expect(Buffer.byteLength(payload)).toBeGreaterThan(1024 * 1024);
