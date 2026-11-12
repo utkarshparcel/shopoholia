@@ -18,7 +18,7 @@ export const DeliveryTier = z.enum(["EXPRESS", "STANDARD", "SLOW_BURN"]);
 
 export type DeliveryTier = z.infer<typeof DeliveryTier>;
 
-export const StateEtaSchema = z.record(OrderState, z.string().datetime().optional());
+export const StateEtaSchema = z.partialRecord(OrderState, z.string().datetime().optional());
 
 export type StateEta = z.infer<typeof StateEtaSchema>;
 

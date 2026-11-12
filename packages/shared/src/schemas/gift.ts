@@ -45,7 +45,7 @@ export function normalizeWishlist(items: unknown): WishlistRef[] {
 export const RecipientProfileSchema = z.object({
   id: z.string().uuid(),
   recipientId: z.string().uuid(),
-  sizes: z.record(z.string()),
+  sizes: z.record(z.string(), z.string()),
   tasteTags: z.array(z.string()),
   wishlist: z.array(WishlistRefSchema),
   importantDates: z.array(ImportantDateSchema),
@@ -91,7 +91,7 @@ export const CreateRecipientBodySchema = z.object({
   region: z.string().optional().default("IN"),
   profile: z
     .object({
-      sizes: z.record(z.string()).optional().default({}),
+      sizes: z.record(z.string(), z.string()).optional().default({}),
       tasteTags: z.array(z.string()).optional().default([]),
       wishlist: z.array(WishlistItemInputSchema).optional().default([]),
       importantDates: z.array(ImportantDateSchema).optional().default([]),

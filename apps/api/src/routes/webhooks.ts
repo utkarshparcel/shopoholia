@@ -102,7 +102,7 @@ export const webhooksRoutes: FastifyPluginAsyncZod = async (app) => {
     {
       schema: {
         tags: ["webhooks"],
-        body: z.record(z.unknown()),
+        body: z.record(z.string(), z.unknown()),
         response: {
           200: WebhookAckSchema,
           501: z.object({ error: z.string(), message: z.string() }),
@@ -117,7 +117,7 @@ export const webhooksRoutes: FastifyPluginAsyncZod = async (app) => {
     {
       schema: {
         tags: ["webhooks"],
-        body: z.record(z.unknown()),
+        body: z.record(z.string(), z.unknown()),
         response: {
           200: WebhookAckSchema,
           401: ErrorSchema,

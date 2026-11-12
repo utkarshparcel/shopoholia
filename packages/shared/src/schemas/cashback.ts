@@ -47,7 +47,7 @@ export const CashbackClickBodySchema = z
     const source = body.source ?? "play_listing";
     if (source === "play_listing" && !body.listingId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "listingId is required for play_listing clicks",
         path: ["listingId"],
       });

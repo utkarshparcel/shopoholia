@@ -14,12 +14,12 @@ export const LocalDateSchema = z
 export type LocalDate = z.infer<typeof LocalDateSchema>;
 
 /**
- * A UTC timestamp, checked as `z.string().datetime()` checks it, but with zod's regex built
- * once: `.datetime()` builds it again for every value, which a 1,000-item closet feels.
+ * A UTC timestamp, checked with the regex `z.iso.datetime()` uses (seconds required, any
+ * precision, `Z` only), built once here, keeping the "Invalid datetime" message clients see.
  */
 export const TimestampSchema = z
   .string()
-  .regex(z.datetimeRegex({ precision: null, offset: false, local: false }), "Invalid datetime");
+  .regex(z.regexes.datetime({ offset: false, local: false }), "Invalid datetime");
 
 export const ItemSlotSchema = z.enum([
   "TOP", "BOTTOM", "DRESS", "COORD_TOP", "COORD_BOTTOM", "JUMPSUIT",

@@ -216,7 +216,7 @@ export const TravelPackResponseSchema = z.object({
   constraints: z.object({
     nights: z.number().int().positive(),
     maxItems: z.number().int().positive(),
-    perSlot: z.record(z.number().int().nonnegative()),
+    perSlot: z.record(z.string(), z.number().int().nonnegative()),
   }),
   items: z.array(TravelPackItemSchema),
   checklist: z.string().min(1),
@@ -280,7 +280,7 @@ export const OutfitSchema = z.object({
   userId: z.string().uuid(),
   itemIds: z.array(z.string().uuid()),
   occasion: OutfitOccasionSchema.nullable(),
-  weatherCtx: z.record(z.unknown()).nullable(),
+  weatherCtx: z.record(z.string(), z.unknown()).nullable(),
   /** Explainability strings for why this outfit was chosen. */
   whyThis: z.array(z.string()).optional(),
   /** Calendar day YYYY-MM-DD when this is a week-plan outfit. */

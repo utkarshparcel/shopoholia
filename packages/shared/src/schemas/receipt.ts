@@ -18,7 +18,7 @@ export const ReceiptParsedSchema = z.object({
   totalMinor: z.number().int().nonnegative(),
   currency: z.string().default("INR"),
   items: z.array(ReceiptItemSchema),
-  ocrJson: z.record(z.unknown()),
+  ocrJson: z.record(z.string(), z.unknown()),
   purchaseId: z.string().uuid().nullable(),
   /** OCR confidence in [0, 1] — always present. */
   confidence: z.number().min(0).max(1),

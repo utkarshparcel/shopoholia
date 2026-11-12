@@ -119,7 +119,7 @@ describe("server analytics — events on key routes", () => {
       method: "POST",
       url: `/credits/${accountId}/spend`,
       headers: { authorization: `Bearer ${token}` },
-      payload: { amountMinor: 10000, idempotencyKey: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
+      payload: { amountMinor: 10000, idempotencyKey: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa" },
     });
     expect(events).toContain("credit_added");
     expect(events).toContain("credit_spent");

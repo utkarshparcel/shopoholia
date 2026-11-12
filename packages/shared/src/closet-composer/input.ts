@@ -85,7 +85,7 @@ export const ComposerSettingsSchema = z
       .optional()
       .default(null),
     /** `checks_enabled`: a check that is missing is on. */
-    checksEnabled: z.record(BackupCheckSchema, z.boolean()).optional().default({}),
+    checksEnabled: z.partialRecord(BackupCheckSchema, z.boolean()).optional().default({}),
     /** The user's learned soft-score multipliers (§8.8), bounded so one odd week can't swing the plan. */
     weights: z
       .object({
@@ -105,8 +105,8 @@ export const ComposerSettingsSchema = z
       .optional()
       .default({}),
   })
-  .optional()
-  .default({});
+  // A missing settings object parses as `{}`, so the field defaults above still apply.
+  .prefault({});
 export type ComposerSettings = z.infer<typeof ComposerSettingsSchema>;
 
 /** `week_plans.seed`: a bigint column, so a safe integer, a digit string or a bigint. */
@@ -195,7 +195,7 @@ export function failure(code: ComposerErrorCode, path: string, message: string):
   return { ok: false, error: { code, message, issues: [{ path, message }] } };
 }
 
-export function parseInput<S extends z.ZodTypeAny>(schema: S, input: unknown): ComposerResult<z.output<S>> {
+export function parseInput<S extends z.ZodType>(schema: S, input: unknown): ComposerResult<z.output<S>> {
   const parsed = schema.safeParse(input);
   if (parsed.success) return { ok: true, value: parsed.data };
   const issues = parsed.error.issues.slice(0, MAX_ISSUES).map((issue) => ({

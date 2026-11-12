@@ -33,7 +33,7 @@ export const NoteReasonSchema = z.object({
 export type NoteReason = z.infer<typeof NoteReasonSchema>;
 
 /** Slot → wardrobe item id. `itemIds` is derived from it. */
-export const OutfitSlotsSchema = z.record(ItemSlotSchema, z.string().uuid());
+export const OutfitSlotsSchema = z.partialRecord(ItemSlotSchema, z.string().uuid());
 export type OutfitSlots = z.infer<typeof OutfitSlotsSchema>;
 
 /** An `outfits` row with the §3.1 columns. Named apart from the universe's `OutfitSchema`. */

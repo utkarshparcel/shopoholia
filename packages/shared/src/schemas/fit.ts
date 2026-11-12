@@ -11,7 +11,7 @@ export const MeasurementProfileSchema = z.object({
   userId: z.string().uuid(),
   region: z.string(),
   unit: z.enum(["CM", "IN"]),
-  points: z.record(z.number()),
+  points: z.record(z.string(), z.number()),
   /** U037 — what changed note for this version. */
   changeNote: z.string().nullable().optional(),
   /** U037 — prior profile id this version supersedes. */
@@ -24,13 +24,13 @@ export type MeasurementProfile = z.infer<typeof MeasurementProfileSchema>;
 export const CreateMeasurementBodySchema = z.object({
   region: z.string().optional().default("IN"),
   unit: z.enum(["CM", "IN"]).optional().default("CM"),
-  points: z.record(z.number()),
+  points: z.record(z.string(), z.number()),
   changeNote: z.string().max(240).optional().nullable(),
 });
 export type CreateMeasurementBody = z.infer<typeof CreateMeasurementBodySchema>;
 
 export const UpdateMeasurementBodySchema = z.object({
-  points: z.record(z.number()),
+  points: z.record(z.string(), z.number()),
   changeNote: z.string().max(240).optional().nullable(),
   region: z.string().optional(),
   unit: z.enum(["CM", "IN"]).optional(),
@@ -53,7 +53,7 @@ export const CustomizationTemplateSchema = z.object({
   region: z.string(),
   garmentType: GarmentTypeSchema,
   name: z.string(),
-  optionsSchema: z.record(z.unknown()),
+  optionsSchema: z.record(z.string(), z.unknown()),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -67,7 +67,7 @@ export type TemplatesResponse = z.infer<typeof TemplatesResponseSchema>;
 export const CreateTailoringOrderBodySchema = z.object({
   templateId: z.string().uuid(),
   measurementProfileId: z.string().uuid().optional().nullable(),
-  selections: z.record(z.string()).default({}),
+  selections: z.record(z.string(), z.string()).default({}),
   fabricRef: z.string().optional().nullable(),
   fabricPhotoKeys: z.array(z.string()).optional().default([]),
   tailorSellerId: z.string().uuid().optional().nullable(),
@@ -80,11 +80,11 @@ export const TailoringOrderSchema = z.object({
   userId: z.string().uuid(),
   templateId: z.string().uuid().nullable(),
   measurementProfileId: z.string().uuid().nullable(),
-  selections: z.record(z.string()),
+  selections: z.record(z.string(), z.string()),
   fabricRef: z.string().nullable(),
   fabricPhotoKeys: z.array(z.string()).default([]),
   tailorSellerId: z.string().uuid().nullable(),
-  measurementSnapshot: z.record(z.unknown()).nullable(),
+  measurementSnapshot: z.record(z.string(), z.unknown()).nullable(),
   state: TailorOrderStateSchema,
   /** U038 — expected pickup YYYY-MM-DD for T-1d nudge. */
   expectedPickupOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -148,7 +148,7 @@ export type TailorReviewsResponse = z.infer<typeof TailorReviewsResponseSchema>;
 
 export const FitPreviewBodySchema = z.object({
   templateId: z.string().uuid(),
-  selections: z.record(z.string()).default({}),
+  selections: z.record(z.string(), z.string()).default({}),
 });
 export type FitPreviewBody = z.infer<typeof FitPreviewBodySchema>;
 
@@ -157,7 +157,7 @@ export const FitPreviewResponseSchema = z.object({
   status: z.enum(["READY", "PROCESSING", "NO_AVATAR", "FAILED"]),
   previewUrl: z.string().nullable(),
   imageKey: z.string().nullable(),
-  selections: z.record(z.string()),
+  selections: z.record(z.string(), z.string()),
   summary: z.string(),
   retryAfter: z.string().datetime().nullable().optional(),
 });
