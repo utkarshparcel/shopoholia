@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGiftDeadlineBoard,
+  daysUntil,
   computeGiftDeadlineReminderDelayMs,
   GIFT_DEADLINE_LEAD_DAYS,
   giftDeadlineReminderJobId,
@@ -84,5 +85,17 @@ describe("U049 gift-deadline", () => {
     expect(lock).toBeNull();
     expect(await repos.listGiftBudgetLocks(user.id)).toEqual([]);
     expect(await repos.listGiftBudgetLocks(other.id)).toEqual([]);
+  });
+
+  it("counts days from the user's own date, not the UTC date", () => {
+    const row = [{ recipientId: "r1", recipientName: "Mom", occasion: "BIRTHDAY", date: "2026-09-10T00:00:00.000Z" }];
+    // 00:30 IST on Sep 9 is still Sep 8 in UTC: one day to go in India, two by the UTC date.
+    const lateNight = new Date("2026-09-08T19:00:00.000Z");
+    expect(buildGiftDeadlineBoard(row, [], lateNight, "Asia/Kolkata")[0]?.daysUntil).toBe(1);
+    expect(buildGiftDeadlineBoard(row, [], lateNight, "UTC")[0]?.daysUntil).toBe(2);
+    // New York is behind UTC: 21:00 on Sep 8 there is already Sep 9 in UTC.
+    const evening = new Date("2026-09-09T01:00:00.000Z");
+    expect(daysUntil(row[0]!.date, "America/New_York", evening)).toBe(2);
+    expect(daysUntil(row[0]!.date, "Not/AZone", evening)).toBe(1);
   });
 });

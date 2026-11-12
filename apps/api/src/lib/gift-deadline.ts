@@ -84,12 +84,29 @@ export async function listGiftBudgetLocks(
   return (await repos.listGiftBudgetLocks(userId)).map(toGiftBudgetLock);
 }
 
-export function utcDaysUntil(dateIso: string, now: Date = new Date()): number {
+/** Today's calendar date where the user is, as UTC midnight of that date (ms). */
+function startOfTodayIn(timeZone: string, now: Date): number {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  } catch {
+    // An unknown zone name: count from the UTC date rather than fail the board.
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  }
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return Date.UTC(part("year"), part("month") - 1, part("day"));
+}
+
+/**
+ * Whole days from the user's today to an occasion. The occasion is a calendar day (stored as UTC
+ * midnight of that date); "today" is the date on the user's own clock, so late at night in India
+ * the count doesn't run a day ahead of what the calendar on the wall says.
+ */
+export function daysUntil(dateIso: string, timeZone = "UTC", now: Date = new Date()): number {
   const raw = new Date(dateIso);
   if (Number.isNaN(raw.getTime())) return 0;
-  const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const target = Date.UTC(raw.getUTCFullYear(), raw.getUTCMonth(), raw.getUTCDate());
-  return Math.max(0, Math.round((target - startOfToday) / 86_400_000));
+  return Math.max(0, Math.round((target - startOfTodayIn(timeZone, now)) / 86_400_000));
 }
 
 /**
@@ -128,11 +145,13 @@ export function buildGiftDeadlineBoard(
   }>,
   locks: GiftBudgetLock[],
   now: Date = new Date(),
+  /** The user's IANA time zone (users.time_zone): days are counted from their today. */
+  timeZone = "UTC",
 ): GiftDeadlineBoardRow[] {
   const byKey = new Map(locks.map((l) => [lockKey(l.recipientId, l.occasion, l.date.slice(0, 10)), l]));
   const out: GiftDeadlineBoardRow[] = [];
   for (const r of rows) {
-    const days = utcDaysUntil(r.date, now);
+    const days = daysUntil(r.date, timeZone, now);
     const lock = byKey.get(lockKey(r.recipientId, r.occasion, r.date.slice(0, 10)));
     out.push({
       recipientId: r.recipientId,

@@ -483,8 +483,14 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
           });
         }
       }
+      const user = await app.deps.repos.findUserById(userId);
       return {
-        board: buildGiftDeadlineBoard(rows, await listGiftBudgetLocks(app.deps.repos, userId)),
+        board: buildGiftDeadlineBoard(
+          rows,
+          await listGiftBudgetLocks(app.deps.repos, userId),
+          new Date(),
+          user?.timeZone ?? "Asia/Kolkata",
+        ),
         reminderLeads: [...GIFT_DEADLINE_LEAD_DAYS],
       };
     },
