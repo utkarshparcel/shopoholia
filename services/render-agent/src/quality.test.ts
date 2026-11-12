@@ -9,9 +9,9 @@ import {
 } from "./quality.js";
 import { flat, photo, toJpeg, toPng } from "./test-images.js";
 
-const MODEL = toJpeg(photo(768, 1024));
+const MODEL = toJpeg(photo(540, 720));
 /** The same person in a red garment instead of a blue one. */
-const RENDER = toJpeg(photo(768, 1024, [180, 30, 40]));
+const RENDER = toJpeg(photo(540, 720, [180, 30, 40]));
 
 function failure(output: Uint8Array, options: { modelImage?: Uint8Array; contentType?: string } = {}): QualityCheck | null {
   try {
@@ -27,13 +27,13 @@ function failure(output: Uint8Array, options: { modelImage?: Uint8Array; content
 describe("render quality checks", () => {
   it("passes a real render", () => {
     expect(failure(RENDER)).toBeNull();
-    expect(failure(toPng(photo(768, 1024, [180, 30, 40])), { contentType: "image/png" })).toBeNull();
+    expect(failure(toPng(photo(540, 720, [180, 30, 40])), { contentType: "image/png" })).toBeNull();
   });
 
   describe("format", () => {
     it("reads JPEG and PNG magic bytes and dimensions", () => {
       expect(sniffFormat(RENDER)).toBe("jpeg");
-      expect(readDimensions(RENDER, "jpeg")).toEqual({ width: 768, height: 1024 });
+      expect(readDimensions(RENDER, "jpeg")).toEqual({ width: 540, height: 720 });
       const png = toPng(photo(600, 520));
       expect(sniffFormat(png)).toBe("png");
       expect(readDimensions(png, "png")).toEqual({ width: 600, height: 520 });
@@ -51,14 +51,14 @@ describe("render quality checks", () => {
       expect(failure(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]))).toBe("format");
       // The header (with its dimensions) is intact but the scan data is cut off.
       const cut = RENDER.subarray(0, Math.floor(RENDER.length / 3));
-      expect(readDimensions(cut, "jpeg")).toEqual({ width: 768, height: 1024 });
+      expect(readDimensions(cut, "jpeg")).toEqual({ width: 540, height: 720 });
       expect(failure(cut)).toBe("format");
-      const png = toPng(photo(768, 1024, [180, 30, 40]));
+      const png = toPng(photo(540, 720, [180, 30, 40]));
       expect(failure(png.subarray(0, 200), { contentType: "image/png" })).toBe("format");
     });
 
     it("fails a PNG for a JPEG upload (the signed PUT is for image/jpeg)", () => {
-      expect(failure(toPng(photo(768, 1024, [180, 30, 40])))).toBe("format");
+      expect(failure(toPng(photo(540, 720, [180, 30, 40])))).toBe("format");
     });
   });
 
@@ -72,13 +72,13 @@ describe("render quality checks", () => {
 
   describe("blank", () => {
     it("fails a flat image, black, white or grey", () => {
-      expect(failure(toJpeg(flat(768, 1024, [0, 0, 0])))).toBe("blank");
-      expect(failure(toJpeg(flat(768, 1024, [255, 255, 255])))).toBe("blank");
-      expect(failure(toPng(flat(768, 1024, [128, 128, 128])), { contentType: "image/png" })).toBe("blank");
+      expect(failure(toJpeg(flat(540, 720, [0, 0, 0])))).toBe("blank");
+      expect(failure(toJpeg(flat(540, 720, [255, 255, 255])))).toBe("blank");
+      expect(failure(toPng(flat(540, 720, [128, 128, 128])), { contentType: "image/png" })).toBe("blank");
     });
 
     it("fails a near-uniform image with compression noise", () => {
-      const noisy = flat(768, 1024, [120, 120, 120]);
+      const noisy = flat(540, 720, [120, 120, 120]);
       for (let p = 0; p < noisy.data.length; p += 4) {
         const n = (p * 2654435761) % 7;
         noisy.data[p] = 117 + n;
@@ -95,17 +95,17 @@ describe("render quality checks", () => {
     });
 
     it("fails the model photo re-encoded, or resized", () => {
-      expect(failure(toJpeg(photo(768, 1024), 70))).toBe("unchanged");
-      expect(failure(toPng(photo(768, 1024)), { contentType: "image/png" })).toBe("unchanged");
-      expect(failure(toJpeg(photo(1152, 1536)))).toBe("unchanged");
+      expect(failure(toJpeg(photo(540, 720), 70))).toBe("unchanged");
+      expect(failure(toPng(photo(540, 720)), { contentType: "image/png" })).toBe("unchanged");
+      expect(failure(toJpeg(photo(810, 1080)))).toBe("unchanged");
     });
 
     it("passes a render the same shape as the model photo with a different garment, and any other shape", () => {
-      expect(failure(toJpeg(photo(768, 1024, [60, 60, 70])))).toBeNull();
+      expect(failure(toJpeg(photo(540, 720, [60, 60, 70])))).toBeNull();
       // A close shade of the same colour is still a change.
-      expect(failure(toJpeg(photo(768, 1024, [50, 80, 150])))).toBeNull();
+      expect(failure(toJpeg(photo(540, 720, [50, 80, 150])))).toBeNull();
       // A different crop of the scene is a different picture.
-      expect(failure(toJpeg(photo(1024, 1024)))).toBeNull();
+      expect(failure(toJpeg(photo(720, 720)))).toBeNull();
     });
 
     it("skips the comparison when the model photo can't be decoded", () => {
