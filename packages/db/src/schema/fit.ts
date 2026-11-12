@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { date, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { id, timestamps } from "./columns.js";
 import { garmentTypeEnum, tailorOrderStateEnum } from "./enums.js";
 import { sellers } from "./sellers.js";
@@ -15,6 +15,10 @@ export const measurementProfiles = pgTable(
     region: text("region").notNull().default("IN"),
     unit: text("unit").notNull().default("CM"),
     points: jsonb("points").$type<Record<string, number>>().notNull().default({}),
+    /** U037 — what changed from the previous version ("waist +2 cm"). */
+    changeNote: text("change_note"),
+    /** U037 — the version this one replaced. */
+    previousId: uuid("previous_id").references((): AnyPgColumn => measurementProfiles.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [index("measurement_profiles_user_created_idx").on(t.userId, t.createdAt.desc().nullsFirst())],
@@ -75,6 +79,10 @@ export const tailoringOrders = pgTable(
     tailorSellerId: uuid("tailor_seller_id").references(() => sellers.id, { onDelete: "set null" }),
     measurementSnapshot: jsonb("measurement_snapshot").$type<Record<string, unknown> | null>().default(null),
     state: tailorOrderStateEnum("state").notNull().default("PENDING"),
+    /** Expected pickup day (YYYY-MM-DD) for the day-before nudge. */
+    expectedPickupOn: date("expected_pickup_on"),
+    /** When the pickup nudge went out; cleared when the pickup day changes. */
+    pickupNudgeSentAt: timestamp("pickup_nudge_sent_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [

@@ -29,6 +29,8 @@ export const moneyAccounts = pgTable(
     balanceCacheMinor: integer("balance_cache_minor").notNull().default(0),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     status: moneyAccountStatusEnum("status").notNull().default("ACTIVE"),
+    /** U046 — when the user marked a reconcile mismatch on this account as investigated. */
+    reconcileInvestigatedAt: timestamp("reconcile_investigated_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [index("money_accounts_user_created_idx").on(t.userId, t.createdAt.desc().nullsFirst())],
