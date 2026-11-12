@@ -71,6 +71,14 @@ export const TryonResponseSchema = z.object({
   status: z.enum(["READY", "PROCESSING", "FAILED"]),
   previewUrl: z.string().url().nullable(),
   retryAfter: z.string().datetime().nullable().optional(),
+  /**
+   * PROCESSING and waiting for the render agent (it is down, its night window is closed, or the
+   * queue is backed up): the app says when it should be ready instead of polling. Named as on
+   * the reveal.
+   */
+  rendersWaiting: z.boolean().optional(),
+  /** When the waiting preview should be ready; null when there is no estimate ("shortly"). */
+  expectedReadyAt: z.string().datetime().nullable().optional(),
 });
 
 export type ListingCard = z.infer<typeof ListingCardSchema>;

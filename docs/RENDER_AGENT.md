@@ -75,6 +75,12 @@ are waiting for the agent:
 The app shows "Delivered — your reveal is being styled and will be ready by about 7 AM. We'll send
 you a push." on the order and reveal screens, in the user's locale and time zone.
 
+A listing try-on preview (`POST /listings/:id/tryon`) answers 202 `PROCESSING` with the same
+`rendersWaiting` and `expectedReadyAt`, from the same estimate (`agentWaitEstimate`). While it is
+waiting the app stops polling and shows "Your try-on is being styled and will be ready by about
+7 AM. Tap Try on me again to see it." ("shortly" with no time) under the button. A preview sends
+no push.
+
 `RENDER_OVERFLOW=fashn` (with `FASHN_API_KEY`) hands a job to FASHN, through the old in-process
 pipeline at 1k balanced, when it is queued outside the window, when the agent has been silent for
 3 minutes, or when it is still unleased after `RENDER_OVERFLOW_AFTER_MINUTES` (15). With `none`
