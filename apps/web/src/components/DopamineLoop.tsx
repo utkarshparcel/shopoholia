@@ -52,11 +52,12 @@ export function DopamineLoop() {
             How it works
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            Everything you love about a haul. <em className="grad-text">Nothing ships.</em>
+            Same rush. <em className="grad-text">Nothing ships.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[52ch] text-body-l text-worn-ink-soft">
             Same scroll, same try-on, same wait for the doorbell. What arrives is
-            photos of you in it, so nothing costs real money and nothing piles up.
+            photos of you wearing it, ready to post, so it costs no real money and
+            nothing ends up at the back of the cupboard.
           </p>
         </motion.div>
 

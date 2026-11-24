@@ -16,10 +16,10 @@ const rise: Variants = {
 };
 
 const RECEIPTS = [
-  { label: 'Receipt 01', line: 'The wedding one. Worn once.' },
-  { label: 'Receipt 02', line: 'Tags still on. Two seasons.' },
+  { label: 'Receipt 01', line: 'The café dress. ₹2,000. One photo.' },
+  { label: 'Receipt 02', line: 'The wedding one. Worn once.' },
   { label: 'Receipt 03', line: 'The 1 AM cart. Regretted at 9.' },
-  { label: 'Receipt 04', line: 'Twelve black tops. Nothing to wear.' },
+  { label: 'Receipt 04', line: 'Tags still on. Back of the cupboard.' },
 ];
 
 const GHOSTS = [
@@ -65,12 +65,12 @@ export function GhostWardrobe() {
             Sound familiar?
           </p>
           <h2 className="mt-5 font-display text-[clamp(36px,5.5vw,72px)] leading-[1.02] tracking-tight text-worn-ink">
-            You love buying clothes. <em className="grad-text">Not what it costs you.</em>
+            ₹2,000 on a dress. <em className="grad-text">One photo at that café.</em>
           </h2>
           <p className="mx-auto mt-5 max-w-[54ch] text-body-l text-worn-ink-soft">
-            The late-night cart, the outfit worn once, the tags still on. The fun
-            was the buying; the bill and the pile came after. Worn Play keeps the
-            fun part and drops the rest.
+            Then it moves to the back of the cupboard, next to the last one, and
+            the next dress is already in your cart. What you wanted was the rush of
+            buying it and the picture in it. Worn Play gives you both, virtually.
           </p>
         </motion.div>
 
@@ -122,8 +122,9 @@ export function GhostWardrobe() {
           custom={0.2}
           className="mx-auto mt-14 max-w-[46ch] text-center font-display text-[clamp(22px,3vw,32px)] italic leading-snug text-worn-ink-soft"
         >
-          None of this means you shopped badly. It means the part you loved was
-          the buying. We built an app for exactly that part.
+          None of this means you shopped badly. The part you loved was the buying
+          and the photo. Worn Play is the nicotine patch: the same hit, without the
+          bill or the pile.
         </motion.p>
       </div>
     </section>

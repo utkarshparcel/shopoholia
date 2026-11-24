@@ -10,7 +10,7 @@ import { gsap } from '@/lib/gsap';
 import { APP_LIVE, GET_APP_LABEL, LIVE_PLATFORMS } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
-const WORDS = ['Shop', 'the', 'haul.', 'Skip', 'the', 'bill.'];
+const WORDS = ['A', 'nicotine', 'patch', 'for', 'shopaholics.'];
 // Words from here on are the gold italic half of the headline.
 const GOLD_FROM = 3;
 
@@ -228,7 +228,7 @@ export function Hero() {
     <section
       ref={sectionRef}
       id="hero"
-      aria-label="Shop the haul. Skip the bill."
+      aria-label="A nicotine patch for shopaholics."
       onMouseMove={onMove}
       onMouseLeave={onLeave}
       className="relative flex min-h-[100svh] flex-col justify-center overflow-hidden pb-20 pt-32 sm:pt-36"
@@ -259,7 +259,7 @@ export function Hero() {
 
             {/* split-text headline */}
             <h1 className="mt-6 font-display leading-[0.98] tracking-tight text-worn-ink">
-              <span className="sr-only">Shop the haul. Skip the bill.</span>
+              <span className="sr-only">A nicotine patch for shopaholics.</span>
               <span aria-hidden="true" className="block">
                 {WORDS.map((w, i) => (
                   <span
@@ -284,10 +284,10 @@ export function Hero() {
             </h1>
 
             <p className="hero-rise mt-7 max-w-[52ch] text-body-l text-worn-ink-soft" style={delay(0.55)}>
-              Worn is a fashion shopping app where you pay with free coins, not
-              money. Browse real pieces, try them on your own AI avatar, check out
-              and track the delivery, then unbox photos of you wearing it all. The
-              rush of a new haul, without spending a rupee or adding to the pile.
+              You know the one: ₹2,000 on a dress, one photo at that café, then the
+              back of the cupboard. Worn Play gives you the rush of the haul and the
+              photo, without the dress. Try real pieces on your AI avatar, pay with
+              free coins, and unbox photos of you wearing them.
             </p>
 
             {/* CTAs */}

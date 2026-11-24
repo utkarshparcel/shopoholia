@@ -4,6 +4,10 @@ import { APP_EVERYWHERE, APP_LIVE, APP_STORE_URL, LIVE_PLATFORMS } from '@/lib/s
 /** The questions people ask before they join the list. Also emitted as FAQPage structured data on `/`. */
 export const FAQS = [
   {
+    q: 'Why a nicotine patch?',
+    a: 'Because the buzz of a new haul is real, and so are the bill and the pile. Worn Play keeps the buzz (the scroll, the try-on, the checkout, the wait, the unboxing) and swaps the parcel for photos of you wearing it. It’s a swap for the habit, not a treatment: if shopping is causing you real money trouble, talk to someone you trust.',
+  },
+  {
     q: 'Is Worn free?',
     a: `Yes. ${APP_LIVE ? 'It’s free to download' : 'It will be free to download when it launches'}: you start with 500 coins and earn more from daily streaks and from friends you refer. Coin packs are there if you want more, but you never have to buy one.`,
   },
@@ -13,7 +17,7 @@ export const FAQS = [
   },
   {
     q: 'Do I actually get the clothes?',
-    a: 'No parcel arrives. Your haul is delivered as photos of you wearing it. If you fall for a piece, every listing links to the store that sells it.',
+    a: 'No parcel arrives. Your haul is delivered as photos of you wearing it, ready to post. If you fall for a piece, every listing links to the store that sells it.',
   },
   {
     q: 'What happens to my photo?',

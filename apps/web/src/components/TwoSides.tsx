@@ -46,12 +46,13 @@ export function TwoSides() {
               <Sparkles size={12} /> Worn Play · {APP_LIVE ? 'out now' : 'coming soon'}
             </span>
             <h3 className="mt-6 font-display text-[clamp(28px,3.4vw,44px)] leading-tight text-worn-ink">
-              The haul, without the parcel.
+              The photo, without the dress.
             </h3>
             <p className="mt-4 max-w-[46ch] text-body-l text-worn-ink-soft">
               Browse tonight’s edit, try it on your avatar, add it to your haul and
               pay with coins. Pick a delivery speed, wait for the push, then unbox
-              the AI renders of you in it. No clothes bill, no parcel, no pile.
+              the photos of you in it. No ₹2,000 bill, no parcel, nothing at the
+              back of the cupboard.
             </p>
             <a
               href="#download"

@@ -30,12 +30,12 @@ const dmMono = DM_Mono({
 });
 
 const DESCRIPTION =
-  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
+  'A nicotine patch for shopaholics. Skip the ₹2,000 dress you wear once for a café photo: try real pieces on your AI avatar, pay with free coins, and unbox photos of you wearing them.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: 'Worn Play — the fashion haul without the bill',
+    default: 'Worn Play — a nicotine patch for shopaholics',
     template: '%s | Worn',
   },
   description: DESCRIPTION,
@@ -46,6 +46,8 @@ export const metadata: Metadata = {
     'virtual try-on app',
     'virtual shopping',
     'dopamine shopping',
+    'shopaholic',
+    'impulse shopping',
   ],
   authors: [{ name: 'Worn Team' }],
   creator: 'Worn',
@@ -66,12 +68,12 @@ export const metadata: Metadata = {
     locale: 'en_US',
     url: SITE_URL,
     siteName: 'Worn',
-    title: 'Worn Play — the fashion haul without the bill',
+    title: 'Worn Play — a nicotine patch for shopaholics',
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Worn Play — the fashion haul without the bill',
+    title: 'Worn Play — a nicotine patch for shopaholics',
     description: DESCRIPTION,
   },
   // icon.svg, apple-icon.tsx and opengraph-image.tsx in this folder supply the icons and the share image
