@@ -73,12 +73,14 @@ function extractExpiresAt(text: string): string | null {
 /**
  * Detect gift-card / store-credit / loyalty-points signals in an email/SMS body.
  * Returns null when the message is a normal purchase.
- * Balances are best-effort parses — not live wallet sync.
+ * Balances are best-effort parses — not live wallet sync. The amount must sit next to the credit
+ * phrase: a mention of gift cards in an order email ("Shop gift cards for every occasion") is not
+ * a credit, and the order total is never taken as one.
  */
 export function detectCreditSignal(
   subject: string,
   text: string,
-  fallbackTotalMinor = 0,
+  _orderTotalMinor = 0,
   fallbackCurrency?: string,
 ): ParsedCreditSignal | null {
   const hay = `${subject}\n${text}`;
@@ -87,9 +89,7 @@ export function detectCreditSignal(
   const isLoyalty = LOYALTY_POINTS_RE.test(hay);
   if (!isGift && !isStore && !isLoyalty) return null;
 
-  const amount =
-    extractCreditAmountMinor(hay) ??
-    (fallbackTotalMinor > 0 ? fallbackTotalMinor : null);
+  const amount = extractCreditAmountMinor(hay);
   if (amount === null || amount <= 0) return null;
 
   let kind: ParsedCreditSignal["kind"];

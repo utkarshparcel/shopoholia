@@ -64,4 +64,16 @@ describe("wear_log includes accessories via outfit itemIds", () => {
     expect(ids).toEqual(["shirt", "jeans", "necklace"]);
     expect(ids).toContain("necklace");
   });
+
+  it("matches accessory words whole and never turns a garment into an accessory (S6-18)", () => {
+    for (const garment of ["Baggy jeans", "Capri pants", "Spring dress", "Belted dress", "Tie-dye top"]) {
+      expect(normalizeAccessoryCategory(garment)).toBeNull();
+      expect(isAccessoryCategory(garment)).toBe(false);
+      expect(createAccessoryCategory(garment)).toBe(garment);
+    }
+    expect(normalizeAccessoryCategory("Leather bags")).toBe("bag");
+    expect(normalizeAccessoryCategory("Brown belt")).toBe("belt");
+    expect(normalizeAccessoryCategory("Silk tie")).toBe("tie");
+    expect(normalizeAccessoryCategory("Gold ring")).toBe("ring");
+  });
 });

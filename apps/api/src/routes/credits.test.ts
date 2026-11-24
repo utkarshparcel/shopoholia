@@ -151,7 +151,8 @@ describe("credits", () => {
     expect(account.balanceCacheMinor).toBe(5000);
     expect(account.kind).toBe("GIFT_CARD");
     expect(account.link).toContain("amazon.in");
-    expect(account.link).toContain("tag=shopoholia-21");
+    // No AFFILIATE_AMAZON_TAG in tests: the storefront link is untagged, never a placeholder id.
+    expect(account.link).toBe("https://www.amazon.in/");
 
     const list = await app.inject({
       method: "GET",
@@ -1489,7 +1490,7 @@ describe("credits", () => {
           kind: "GIFT_CARD",
           merchant: "Nykaa",
           balanceMinor: 900,
-          expiresAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+          expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
         },
       });
       const accountId = add.json().id as string;
@@ -1505,6 +1506,30 @@ describe("credits", () => {
       expect(res.json().status).toBe("skipped");
       const until = Date.parse(res.json().snoozedUntil);
       expect(until).toBeGreaterThan(Date.now() + 6 * 86_400_000);
+    });
+
+    it("caps the snooze a day before a credit that expires sooner", async () => {
+      await grantFinancialConsent();
+      const expiresAt = new Date(Date.now() + 5 * 86_400_000);
+      const add = await app.inject({
+        method: "POST",
+        url: "/credits",
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          kind: "GIFT_CARD",
+          merchant: "Nykaa",
+          balanceMinor: 900,
+          expiresAt: expiresAt.toISOString(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/credits/${add.json().id as string}/expiry-handled`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(Date.parse(res.json().snoozedUntil)).toBe(expiresAt.getTime() - 86_400_000);
     });
   });
 });

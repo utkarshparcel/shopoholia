@@ -45,6 +45,7 @@ vi.mock('@/src/hooks/reveal', () => ({
   }),
   useUnlockRenders: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useGenerateRenders: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useRetryRenders: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/src/hooks/orders', () => ({

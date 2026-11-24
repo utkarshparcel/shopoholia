@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildSeedListings } from "@worn/shared";
+import { affiliateIdsFromEnv, buildSeedListings } from "@worn/shared";
 import type { Repositories, ListingRecord, ListingVariantRecord } from "../repositories/types.js";
 import type { StorageClient } from "../storage/r2.js";
 import { seedScrapedCatalog } from "./scraped.js";
@@ -33,7 +33,7 @@ export async function seedCatalog(
     if (scraped) return { listings: scraped.listings, variants: scraped.variants };
   }
 
-  const seedData = buildSeedListings(count);
+  const seedData = buildSeedListings(count, { affiliateIds: affiliateIdsFromEnv(process.env) });
   const listings: ListingRecord[] = [];
   const variants: ListingVariantRecord[] = [];
   const now = new Date();

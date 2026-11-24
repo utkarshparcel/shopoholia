@@ -1,0 +1,14 @@
+# The links the app shares (apps/web/src/lib/share-links.ts) each land on one static page, which
+# reads the code from the address in the browser. Status 200 serves that page and keeps the address,
+# so /r/AB3K9Q shows /r with the code still in the URL. Nothing is looked up on the server.
+# Each page's share-card image sits under the same prefix: serve it as itself, before the code rule.
+/r/opengraph-image         /r/opengraph-image         200
+/c/opengraph-image         /c/opengraph-image         200
+/h/opengraph-image         /h/opengraph-image         200
+/p/outfit/opengraph-image  /p/outfit/opengraph-image  200
+/p/return/opengraph-image  /p/return/opengraph-image  200
+/r/:code         /r           200
+/c/:code         /c           200
+/h/:code         /h           200
+/p/outfit/:id    /p/outfit    200
+/p/return/:id    /p/return    200

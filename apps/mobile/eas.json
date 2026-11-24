@@ -47,11 +47,12 @@
       "ios": {
         "simulator": false
       },
-      "channel": "beta"
+      "channel": "beta",
+      "autoIncrement": true
     },
     "play-internal": {
       "extends": "preview",
-      "distribution": "internal",
+      "distribution": "store",
       "env": {
         "WORN_RELEASE_BUILD": "1",
         "EXPO_PUBLIC_API_URL": "https://api.worncloset.app"
@@ -59,7 +60,8 @@
       "android": {
         "buildType": "app-bundle"
       },
-      "channel": "beta"
+      "channel": "beta",
+      "autoIncrement": true
     }
   },
   "submit": {

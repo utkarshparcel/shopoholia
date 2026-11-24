@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const DuplicateMatchSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   wardrobeLabel: z.string(),
   wardrobeBrand: z.string().nullable(),
   score: z.number().min(0).max(1),
@@ -12,8 +12,8 @@ export type DuplicateMatch = z.infer<typeof DuplicateMatchSchema>;
 export const DuplicateWarningSchema = z.object({
   candidateTitle: z.string(),
   candidateBrand: z.string().nullable().optional(),
-  listingId: z.string().uuid().optional(),
-  purchaseItemId: z.string().uuid().optional(),
+  listingId: z.uuid().optional(),
+  purchaseItemId: z.uuid().optional(),
   matches: z.array(DuplicateMatchSchema).min(1),
 });
 export type DuplicateWarning = z.infer<typeof DuplicateWarningSchema>;

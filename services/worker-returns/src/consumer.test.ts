@@ -144,6 +144,34 @@ describe("worker-returns queue", () => {
     });
   });
 
+  it("signs the item image when the push is sent, not when it was scheduled", async () => {
+    const db = mockDb();
+    const signImageKey = vi.fn((key: string) => `https://r2.example/${key}?X-Amz-Signature=fresh`);
+    const result = await processReturnDeadline(
+      {
+        ...payload,
+        imageKey: "u/user-1/items/jacket.jpg",
+        imageUrl: "https://media.example/brand/worn-return-deadline.png",
+      },
+      db,
+      { now: NOON, signImageKey },
+    );
+    expect(result.status).toBe("queued");
+    expect(signImageKey).toHaveBeenCalledWith("u/user-1/items/jacket.jpg");
+    expect(db.inserted[0]!.payload).toMatchObject({
+      imageUrl: "https://r2.example/u/user-1/items/jacket.jpg?X-Amz-Signature=fresh",
+    });
+
+    // Without a signer the long-lived placeholder is used.
+    const db2 = mockDb();
+    await processReturnDeadline(
+      { ...payload, imageKey: "u/user-1/items/jacket.jpg", imageUrl: "https://media.example/brand/p.png" },
+      db2,
+      { now: NOON },
+    );
+    expect(db2.inserted[0]!.payload).toMatchObject({ imageUrl: "https://media.example/brand/p.png" });
+  });
+
   it("skips when returns category is opted out", async () => {
     const db = mockDb({
       user: {
@@ -228,6 +256,22 @@ describe("worker-returns queue", () => {
     );
     expect(result.status).toBe("queued");
     expect(db.inserted[0]!.title).toBe("Return window closes tomorrow");
+  });
+
+  it("says today on the last day, and skips once the window has closed", async () => {
+    // 17:30 IST; the deadline is 3 hours away, still today in IST.
+    const soon = new Date(NOON.getTime() + 3 * 3_600_000);
+    const db = mockDb({ returnRequest: { state: "REQUESTED", windowDeadline: soon } });
+    await processReturnDeadline({ ...payload, windowDeadline: soon.toISOString() }, db, { now: NOON });
+    expect(db.inserted[0]!.title).toBe("Return window closes today");
+
+    // Delayed past the deadline (quiet hours): no push claiming it closes tomorrow.
+    const past = new Date(NOON.getTime() - 60_000);
+    const late = mockDb({ returnRequest: { state: "REQUESTED", windowDeadline: past } });
+    expect(
+      await processReturnDeadline({ ...payload, windowDeadline: past.toISOString() }, late, { now: NOON }),
+    ).toEqual({ status: "skipped" });
+    expect(late.inserted).toHaveLength(0);
   });
 
   it("skips a user who no longer exists", async () => {

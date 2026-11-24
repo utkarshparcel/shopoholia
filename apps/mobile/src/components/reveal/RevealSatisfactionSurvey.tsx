@@ -35,14 +35,19 @@ export function RevealSatisfactionSurvey({
 }: RevealSatisfactionSurveyProps) {
   const [selected, setSelected] = useState<RevealRating | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [failed, setFailed] = useState(false);
 
+  // The thanks shows once the rating is sent; a failed send unlocks the options to try again.
   const handleRate = async (rating: RevealRating) => {
     if (selected || submitting) return;
     setSubmitting(true);
-    setSelected(rating);
-    trackEvent('reveal_rated', { orderId, rating });
+    setFailed(false);
     try {
       await onRate?.(rating);
+      setSelected(rating);
+      trackEvent('reveal_rated', { orderId, rating });
+    } catch {
+      setFailed(true);
     } finally {
       setSubmitting(false);
     }
@@ -56,7 +61,7 @@ export function RevealSatisfactionSurvey({
         {RATINGS.map((option) => (
           <Button
             key={option.id}
-            disabled={Boolean(selected) && selected !== option.id}
+            disabled={submitting || (Boolean(selected) && selected !== option.id)}
             label={option.label}
             onPress={() => void handleRate(option.id)}
             style={styles.chip}
@@ -64,6 +69,11 @@ export function RevealSatisfactionSurvey({
           />
         ))}
       </View>
+      {failed ? (
+        <Text accessibilityRole="alert" style={styles.failed}>
+          Couldn’t send your rating. Tap again to retry.
+        </Text>
+      ) : null}
       {selected ? (
         <View style={styles.after}>
           <Text style={styles.thanks}>Thanks — noted.</Text>
@@ -77,6 +87,13 @@ export function RevealSatisfactionSurvey({
 }
 
 const styles = StyleSheet.create({
+  failed: {
+    color: '#9a4d3a',
+    fontFamily: fontSansMedium,
+    fontSize: fsCaption,
+    marginTop: space3,
+    textAlign: 'center',
+  },
   after: {
     gap: space4,
     marginTop: space4,

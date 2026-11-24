@@ -1,5 +1,7 @@
 # WORN Universe — Master TODO (to a complete, lovable app)
 
+> **Historical planning document, 2026-11-12: describes the plan at the time, not the current product.** Items ticked or marked SHIPPED here were not re-verified against the code; some cite migrations that do not exist (the repo has `0000`-`0025`, none of those names; see `packages/db/migrations/`), RevenueCat (removed; no `/webhooks/revenuecat`) or Android SMS ingestion (`READ_SMS` is blocked in `app.json`). Worn Closet is behind `FEATURE_CLOSET` (off in release builds). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md` and the code.
+
 > Executable engineer backlog (waves, acceptance, N01–N55): [`UNIVERSE_DETAILED_TODO.md`](./UNIVERSE_DETAILED_TODO.md).
 > Usable + wow next-100 (Closet polish): [`UNIVERSE_WOW100.md`](./UNIVERSE_WOW100.md).
 > Job-completing next-50 (utility chores): [`UNIVERSE_USEFUL50.md`](./UNIVERSE_USEFUL50.md).

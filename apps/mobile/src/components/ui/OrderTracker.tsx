@@ -87,6 +87,12 @@ function TimelineStep({ step, isLast }: TimelineStepProps) {
   );
 }
 
+// The dot sits after the step's left padding; the connector runs down through its centre.
+const STEP_PADDING_LEFT = 6;
+const DOT_SIZE = 20;
+const CONNECTOR_WIDTH = 2;
+export const CONNECTOR_LEFT = STEP_PADDING_LEFT + DOT_SIZE / 2 - CONNECTOR_WIDTH / 2;
+
 const styles = StyleSheet.create({
   check: {
     color: '#fff',
@@ -96,10 +102,10 @@ const styles = StyleSheet.create({
   connector: {
     backgroundColor: border,
     bottom: -2,
-    left: 9,
+    left: CONNECTOR_LEFT,
     position: 'absolute',
     top: 22,
-    width: 2,
+    width: CONNECTOR_WIDTH,
   },
   connectorActive: {
     backgroundColor: accentSoft,
@@ -110,9 +116,9 @@ const styles = StyleSheet.create({
     borderColor: border,
     borderRadius: 10,
     borderWidth: 2,
-    height: 20,
+    height: DOT_SIZE,
     justifyContent: 'center',
-    width: 20,
+    width: DOT_SIZE,
     zIndex: 1,
   },
   dotCurrent: {
@@ -161,7 +167,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 16,
     paddingBottom: 22,
-    paddingLeft: 6,
+    paddingLeft: STEP_PADDING_LEFT,
     position: 'relative',
   },
   stepBody: {

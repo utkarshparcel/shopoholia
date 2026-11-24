@@ -17,7 +17,7 @@ export async function ensureIndividualSeller(
     return await repos.registerSeller(userId, shopName, "INDIVIDUAL");
   } catch (err) {
     // A concurrent first listing registered the seller (unique sellers.user_id): use that one.
-    if ((err as { code?: string })?.code !== "23505") throw err;
+    if (!isUniqueViolation(err)) throw err;
     const raced = await repos.findSellerByUserId(userId);
     if (!raced) throw err;
     return raced;
@@ -123,4 +123,14 @@ export async function openDispositionWithRails(
     throw err;
   }
   return opened;
+}
+
+/** Postgres unique_violation (23505). */
+function isUniqueViolation(err: unknown): boolean {
+  // drizzle-orm >= 0.44 wraps driver errors in DrizzleQueryError; postgres-js's error is its `cause`.
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }

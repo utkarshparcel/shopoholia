@@ -39,7 +39,7 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       preHandler: requireAuth,
     },
-    async (request) => {
+    async (request, reply) => {
       const body = request.body as {
         listingId?: string | null;
         platform: string;
@@ -48,6 +48,9 @@ export const cashbackRoutes: FastifyPluginAsyncZod = async (app) => {
       };
       const source = body.source ?? "play_listing";
       const listingId = body.listingId ?? null;
+      if (listingId && !(await app.deps.repos.findListingById(listingId))) {
+        return reply.code(400).send({ error: "Bad Request", message: "Unknown listing" });
+      }
       let platform = body.platform?.trim() || "other";
       if (body.url && (platform === "other" || !platform)) {
         platform = platformFromAffiliateUrl(body.url);

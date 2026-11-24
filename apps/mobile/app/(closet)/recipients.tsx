@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button } from '@/src/components/ui';
 import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { useRecipients, useCreateRecipient, useRecipientIdeas, useCreateGiftOrder } from '@/src/hooks/closet/useCloset';
@@ -27,11 +27,36 @@ export default function RecipientsScreen() {
   const [relationship, setRelationship] = useState('FRIEND');
   const [taste, setTaste] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  /** Ideas already gifted this visit (`recipientId:listingId`): a second tap would order again. */
+  const [gifted, setGifted] = useState<ReadonlySet<string>>(new Set());
   const ideas = useRecipientIdeas(selected ?? '');
 
   if (!FEATURE_CLOSET) return <ClosetScreen title="Gifts" subtitle={CLOSET_OFF_SUBTITLE} />;
 
   const recipients = data?.recipients ?? [];
+
+  function giftIdea(recipientId: string, listingId: string) {
+    // The order is not idempotent on the server: one request at a time, once per idea.
+    const key = `${recipientId}:${listingId}`;
+    if (gift.isPending || gifted.has(key)) return;
+    gift.mutate(
+      { recipientId, listingId },
+      {
+        onSuccess: (order) => {
+          setGifted((prev) => new Set(prev).add(key));
+          const link = order.affiliateLink;
+          if (link && /^https?:\/\//i.test(link)) {
+            Linking.openURL(link).catch(() =>
+              Alert.alert('Gift saved', 'Could not open the store. Find it in your gift orders.'),
+            );
+          } else {
+            Alert.alert('Gift saved', 'We added it to your gift orders.');
+          }
+        },
+        onError: (e) => Alert.alert('Gift failed', closetAlertText(e)),
+      },
+    );
+  }
 
   function handleCreate() {
     if (!name.trim()) return Alert.alert('Name required');
@@ -78,7 +103,13 @@ export default function RecipientsScreen() {
                   <View key={it.id} style={styles.idea}>
                     <Text style={styles.title}>{it.title}</Text>
                     <Text style={styles.muted}>{it.category} · {it.reason}{it.affiliateUrl ? ' · we may earn a commission' : ''}</Text>
-                    <Button label="Gift this" size="sm" variant="ghost" onPress={()=>gift.mutate({ recipientId: r.id, listingId: it.id }, { onError: (e)=>Alert.alert('Gift failed', closetAlertText(e)) })} />
+                    <Button
+                      label={gifted.has(`${r.id}:${it.id}`) ? 'Gifted' : 'Gift this'}
+                      size="sm"
+                      variant="ghost"
+                      disabled={gift.isPending || gifted.has(`${r.id}:${it.id}`)}
+                      onPress={() => giftIdea(r.id, it.id)}
+                    />
                   </View>
                 ))}
                 {ideas.data.ideas.length===0 ? <Text style={styles.muted}>No ideas yet</Text> : null}

@@ -24,6 +24,7 @@ import { z } from "zod";
 import { requireAuth } from "../lib/auth/guard.js";
 import { trackServerEvent } from "../lib/analytics.js";
 import { audit } from "../lib/audit.js";
+import { ownsStorageKey } from "../lib/storage/r2.js";
 import {
   IN_TRANSIT_STATUSES,
   isValidPackageTransition,
@@ -182,7 +183,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RtoStartRefundBodySchema,
         response: {
           200: RtoRecoveryBoardResponseSchema.shape.board.element,
@@ -331,7 +332,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdatePackageBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -348,6 +349,10 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       const existing = await app.deps.repos.findMerchantPurchaseById(id);
       if (!existing || existing.userId !== userId) {
         return reply.code(404).send({ error: "Not Found", message: "Package not found" });
+      }
+      // Proof photos must be this user's own uploads: they are signed for display and deleted on erasure.
+      if (request.body.deliveryProofKeys?.some((key) => !ownsStorageKey(key, userId))) {
+        return reply.code(404).send({ error: "Not Found", message: "Image not found" });
       }
 
       const nextStatus = (request.body.deliveryStatus ??
@@ -429,7 +434,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: MarkDeliveredBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element.extend({
@@ -507,7 +512,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: RtoAddressFixBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -567,11 +572,11 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: AttachDeliveryProofBodySchema,
         response: {
           200: z.object({
-            purchaseId: z.string().uuid(),
+            purchaseId: z.uuid(),
             deliveryProofKeys: z.array(z.string()),
             claimPacket: z.object({
               merchant: z.string(),
@@ -592,6 +597,9 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       const existing = await app.deps.repos.findMerchantPurchaseById(id);
       if (!existing || existing.userId !== userId) {
         return reply.code(404).send({ error: "Not Found", message: "Package not found" });
+      }
+      if (!ownsStorageKey(request.body.imageKey, userId)) {
+        return reply.code(404).send({ error: "Not Found", message: "Image not found" });
       }
       const keys = [...(existing.deliveryProofKeys ?? [])];
       if (!keys.includes(request.body.imageKey)) keys.push(request.body.imageKey);
@@ -628,7 +636,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: BrokenItemRouterResponseSchema,
           401: ErrorSchema,
@@ -690,7 +698,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: AssignPackageBodySchema,
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
@@ -797,7 +805,7 @@ export const packagesRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["packages"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: PackagesListResponseSchema.shape.packages.element,
           401: ErrorSchema,

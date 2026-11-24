@@ -46,5 +46,10 @@ describe('iosForwardWizard (W011)', () => {
     expect(buildIosForwardAddress({ baseAddress: 'forward@inbox.shopoholia.app' })).toBe(
       'forward@inbox.shopoholia.app',
     );
+    // S2-09 — no configured inbox and no base: no address at all, never a placeholder.
+    const prev = process.env.EXPO_PUBLIC_FORWARDING_ADDRESS;
+    delete process.env.EXPO_PUBLIC_FORWARDING_ADDRESS;
+    expect(buildIosForwardAddress({ userKey: 'user-1' })).toBeNull();
+    if (prev !== undefined) process.env.EXPO_PUBLIC_FORWARDING_ADDRESS = prev;
   });
 });

@@ -174,7 +174,7 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["closet-profiles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdateClosetProfileBodySchema,
         response: {
           200: ClosetProfileSchema,
@@ -214,7 +214,7 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["closet-profiles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           204: z.null(),
           400: ErrorSchema,
@@ -247,7 +247,7 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["closet-profiles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: PageQuerySchema,
         response: {
           200: ClosetProfileWardrobeResponseSchema,
@@ -290,7 +290,7 @@ export const closetProfileRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["closet-profiles"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: PageQuerySchema,
         response: {
           200: ClosetProfileOutfitsResponseSchema,

@@ -280,6 +280,52 @@ describe("U015 household vault spend cap", () => {
     });
     expect(reused.statusCode).toBe(409);
 
+    // SPEND from the owner doesn't reach a third member's own credit.
+    const third = await login(app, "919810000118");
+    await app.inject({
+      method: "POST",
+      url: "/vault/consent",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { userId: third.userId, scope: "FINANCIAL", source: "onboarding" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/households/join",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { inviteCode: household.inviteCode },
+    });
+    const thirdCredit = await app.inject({
+      method: "POST",
+      url: "/credits",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+      payload: { kind: "GIFT_CARD", merchant: "Ajio", currency: "INR", balanceMinor: 30000 },
+    });
+    expect(thirdCredit.statusCode).toBe(201);
+    const thirdAccountId = (thirdCredit.json() as { id: string }).id;
+    await app.inject({
+      method: "PATCH",
+      url: `/households/${household.id}/vault/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { userId: partner.userId, vaultAccess: "SPEND", spendCapMinor: 100000 },
+    });
+    const othersCredit = await app.inject({
+      method: "POST",
+      url: `/households/${household.id}/vault/spend`,
+      headers: { authorization: `Bearer ${partner.accessToken}` },
+      payload: {
+        accountId: thirdAccountId,
+        amountMinor: 100,
+        idempotencyKey: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      },
+    });
+    expect(othersCredit.statusCode).toBe(403);
+    const thirdAccounts = await app.inject({
+      method: "GET",
+      url: "/credits",
+      headers: { authorization: `Bearer ${third.accessToken}` },
+    });
+    expect(JSON.stringify(thirdAccounts.json())).toContain("30000");
+
     // Outsiders see no household at all.
     const outsider = await login(app, "919810000117");
     for (const req of [
@@ -480,6 +526,86 @@ describe("U015 household vault spend cap", () => {
     const after = await spend(100, "55555555-5555-4555-8555-555555555555");
     expect(after.statusCode).toBe(200);
     expect((after.json() as SpendBody).spentMinor).toBe(1900);
+  });
+
+  it("a cap counts one currency: another currency's credit is refused, not added in raw units (S1-28)", async () => {
+    const { app } = await buildTestServer();
+    const owner = await login(app, "919810000131");
+    const partner = await login(app, "919810000132");
+    const auth = (u: { accessToken: string }) => ({ authorization: `Bearer ${u.accessToken}` });
+    for (const u of [owner, partner]) {
+      await app.inject({
+        method: "POST",
+        url: "/vault/consent",
+        headers: auth(u),
+        payload: { userId: u.userId, scope: "FINANCIAL", source: "onboarding" },
+      });
+    }
+    const household = (
+      await app.inject({ method: "POST", url: "/households", headers: auth(owner), payload: { name: "Mixed" } })
+    ).json() as Household;
+    await app.inject({
+      method: "POST",
+      url: "/households/join",
+      headers: auth(partner),
+      payload: { inviteCode: household.inviteCode },
+    });
+    const credit = async (currency: string) =>
+      (
+        (
+          await app.inject({
+            method: "POST",
+            url: "/credits",
+            headers: auth(owner),
+            payload: { kind: "GIFT_CARD", merchant: `Shop ${currency}`, currency, balanceMinor: 100_000 },
+          })
+        ).json() as { id: string }
+      ).id;
+    const patch = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "PATCH",
+        url: `/households/${household.id}/vault/members`,
+        headers: auth(owner),
+        payload: { userId: partner.userId, vaultAccess: "SPEND", ...payload },
+      });
+    const spend = (accountId: string, amountMinor: number) =>
+      app.inject({
+        method: "POST",
+        url: `/households/${household.id}/vault/spend`,
+        headers: auth(partner),
+        payload: { accountId, amountMinor, idempotencyKey: crypto.randomUUID() },
+      });
+
+    // One currency among the owner's credits: a cap without a currency takes it.
+    const inr = await credit("INR");
+    const inferred = await patch({ spendCapMinor: 5_000 });
+    expect(inferred.statusCode).toBe(200);
+    expect(inferred.json()).toMatchObject({ spendCapMinor: 5_000, spendCapCurrency: "INR" });
+
+    // Credits in two currencies: the owner has to say which.
+    const usd = await credit("USD");
+    const ambiguous = await patch({ spendCapMinor: 5_000 });
+    expect(ambiguous.statusCode).toBe(400);
+    expect((ambiguous.json() as { message: string }).message).toMatch(/currency/i);
+
+    expect((await patch({ spendCapMinor: 5_000, spendCapCurrency: "INR" })).statusCode).toBe(200);
+    expect((await spend(inr, 1_000)).statusCode).toBe(200);
+    // $40 against a ₹50 cap used to count as 4,000 "minor units" of it.
+    const crossed = await spend(usd, 4_000);
+    expect(crossed.statusCode).toBe(409);
+    expect((crossed.json() as { message: string }).message).toMatch(/INR.*USD/);
+
+    const vault = await app.inject({ method: "GET", url: `/households/${household.id}/vault`, headers: auth(partner) });
+    expect(vault.json()).toMatchObject({ mySpendCapMinor: 5_000, mySpendCapCurrency: "INR", mySpentMinor: 1_000 });
+
+    // A cap moved to another currency starts its spent total again.
+    const moved = await patch({ spendCapMinor: 10_000, spendCapCurrency: "USD" });
+    expect(moved.json()).toMatchObject({ spendCapCurrency: "USD", spentMinor: 0 });
+    expect((await spend(usd, 4_000)).statusCode).toBe(200);
+    expect((await spend(inr, 1_000)).statusCode).toBe(409);
+
+    // No cap: no currency.
+    expect((await patch({ spendCapMinor: null })).json()).toMatchObject({ spendCapMinor: null, spendCapCurrency: null });
   });
 });
 

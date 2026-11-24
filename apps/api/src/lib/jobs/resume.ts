@@ -1,5 +1,6 @@
 import type { PushService } from "../push/stub.js";
 import { checkAndMarkRevealReady } from "../render/pipeline.js";
+import { OVERFLOW_OWNER } from "../render/agent-jobs.js";
 import type { Repositories } from "../repositories/types.js";
 import { IN_TRANSIT_ORDER_STATES } from "./order-scheduler.js";
 import type { JobQueue } from "./queue.js";
@@ -23,6 +24,10 @@ export async function resumeInFlightWork(deps: {
   // Renders first, so the ones seeded for delivered orders below aren't queued twice.
   const pending = await deps.repos.listPendingRenders();
   for (const { render, orderId } of pending) {
+    if (render.status === "RUNNING" && render.leaseOwner && render.leaseOwner !== OVERFLOW_OWNER && render.leaseExpiresAt && render.leaseExpiresAt > new Date()) {
+      // Leased by the render agent, which is still working on it: the restart didn't cut it off.
+      continue;
+    }
     if (render.status === "RUNNING") {
       // Cut off mid-generation by the restart; generate it again.
       await deps.repos.updateRender(render.id, { status: "QUEUED" });

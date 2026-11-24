@@ -231,6 +231,8 @@ export default function ClosetWardrobeScreen() {
         : category.trim() || 'other',
       brand: brand || null,
       costMinor: typedCost,
+      // Added from a kid's (or other) profile: it belongs in that closet, not the parent's.
+      profileId: activeProfileId,
     };
     if (uris.length === 1) {
       upload.mutate(
@@ -258,20 +260,21 @@ export default function ClosetWardrobeScreen() {
   function runBulkImport(drafts: AutotagConfirmDraft[]) {
     cancelBulkRef.current = false;
     setBulkProgress(reduceBulkImportProgress(INITIAL_BULK_IMPORT_PROGRESS, { type: 'start', total: drafts.length }));
-    const costMinor = (cost.trim() ? parseAmountInput(cost, currency) : 0) ?? 0;
+    // One typed cost is one piece's price (or the haul's total), never every photo's: copying it
+    // onto each item inflated closet value and cost-per-wear. Bulk pieces start without a cost.
     bulkUpload.mutate(
       {
         imageUris: drafts.map((d) => d.imageUri),
         meta: {
           category: drafts[0]?.category ?? 'other',
           brand: drafts[0]?.brand ?? null,
-          costMinor,
+          profileId: activeProfileId,
         },
         perItemMeta: drafts.map((d) => ({
           category: d.category,
           colors: d.colors,
           brand: d.brand,
-          costMinor,
+          profileId: activeProfileId,
         })),
         shouldCancel: () => cancelBulkRef.current,
         onProgress: (p) => {
@@ -289,9 +292,11 @@ export default function ClosetWardrobeScreen() {
         onSuccess: (res) => {
           setBulkProgress((prev) => reduceBulkImportProgress(prev, { type: 'finish' }));
           const errN = res.errors?.length ?? 0;
+          const costNote =
+            cost.trim() && res.created > 0 ? ' Add each piece’s cost from its card.' : '';
           Alert.alert(
             res.cancelled ? 'Import cancelled' : 'Imported',
-            `Added ${res.created}${errN ? ` · ${errN} failed` : ''}.`,
+            `Added ${res.created}${errN ? ` · ${errN} failed` : ''}.${costNote}`,
           );
         },
         onError: (e) => {
@@ -600,7 +605,7 @@ export default function ClosetWardrobeScreen() {
       />
       <TextInput
         style={styles.input}
-        placeholder={`Cost in ${currency} (optional)`}
+        placeholder={`Cost in ${currency} (optional, one photo)`}
         placeholderTextColor={closet.muted}
         keyboardType="decimal-pad"
         value={cost}

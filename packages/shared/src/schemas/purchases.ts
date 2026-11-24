@@ -20,44 +20,44 @@ export const PurchaseStatusSchema = z.enum([
 export type PurchaseStatus = z.infer<typeof PurchaseStatusSchema>;
 
 export const MerchantPurchaseItemSchema = z.object({
-  id: z.string().uuid(),
-  purchaseId: z.string().uuid(),
+  id: z.uuid(),
+  purchaseId: z.uuid(),
   title: z.string(),
   category: z.string().nullable(),
   brand: z.string().nullable().optional(),
   priceMinor: z.number().int().nonnegative(),
   imageKey: z.string().nullable(),
   qty: z.number().int().positive(),
-  duplicateWardrobeItemId: z.string().uuid().nullable().optional(),
+  duplicateWardrobeItemId: z.uuid().nullable().optional(),
 });
 
 export const MerchantPurchaseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   source: PurchaseSourceSchema,
   merchant: z.string(),
   orderRef: z.string().nullable(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   currency: z.string(),
   totalMinor: z.number().int().nonnegative(),
   status: PurchaseStatusSchema,
-  rawDocId: z.string().uuid().nullable(),
+  rawDocId: z.uuid().nullable(),
   deliveryStatus: PackageDeliveryStatusSchema.optional(),
-  etaAt: z.string().datetime().nullable().optional(),
+  etaAt: z.iso.datetime().nullable().optional(),
   trackingCode: z.string().nullable().optional(),
-  deliveredAt: z.string().datetime().nullable().optional(),
-  returnWindowDeadline: z.string().datetime().nullable().optional(),
-  exchangeWindowDeadline: z.string().datetime().nullable().optional(),
+  deliveredAt: z.iso.datetime().nullable().optional(),
+  returnWindowDeadline: z.iso.datetime().nullable().optional(),
+  exchangeWindowDeadline: z.iso.datetime().nullable().optional(),
 });
 
 export const IngestPurchaseBodySchema = z.object({
   source: PurchaseSourceSchema,
   merchant: z.string().min(1),
   orderRef: z.string().nullable().optional(),
-  purchasedAt: z.string().datetime().optional(),
+  purchasedAt: z.iso.datetime().optional(),
   currency: z.string().min(1),
   totalMinor: z.number().int().nonnegative(),
   deliveryStatus: PackageDeliveryStatusSchema.optional(),
-  etaAt: z.string().datetime().nullable().optional(),
+  etaAt: z.iso.datetime().nullable().optional(),
   trackingCode: z.string().nullable().optional(),
   items: z
     .array(
@@ -80,11 +80,11 @@ export const PurchasesListResponseSchema = z.object({
 /** N48 — merge two double-parsed purchases into one. */
 export const MergePurchasesBodySchema = z
   .object({
-    targetPurchaseId: z.string().uuid(),
-    sourcePurchaseId: z.string().uuid(),
+    targetPurchaseId: z.uuid(),
+    sourcePurchaseId: z.uuid(),
   })
   .refine((b) => b.targetPurchaseId !== b.sourcePurchaseId, {
-    message: "targetPurchaseId and sourcePurchaseId must differ",
+    error: "targetPurchaseId and sourcePurchaseId must differ",
   });
 
 export const PurchaseWithItemsSchema = z.object({
@@ -95,13 +95,13 @@ export const PurchaseWithItemsSchema = z.object({
 export const MergePurchasesResponseSchema = z.object({
   purchase: MerchantPurchaseSchema,
   items: z.array(MerchantPurchaseItemSchema),
-  mergedFromId: z.string().uuid(),
+  mergedFromId: z.uuid(),
 });
 
 /** N48 — split selected line items onto a new purchase. */
 export const SplitPurchaseBodySchema = z.object({
-  purchaseId: z.string().uuid(),
-  itemIds: z.array(z.string().uuid()).min(1),
+  purchaseId: z.uuid(),
+  itemIds: z.array(z.uuid()).min(1),
   merchant: z.string().min(1).optional(),
 });
 

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  WORN render agent, as a launchd agent of the (dedicated) render user.
+  Copy to ~/Library/LaunchAgents/app.worncloset.render-agent.plist, replace every
+  /Users/RENDER_USER path, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.worncloset.render-agent.plist
+  The token is NOT here: the agent reads it from the Keychain (service worn-render-agent).
+  `caffeinate -i` keeps the Mac from idle-sleeping for as long as the agent runs.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.worncloset.render-agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/RENDER_USER/worn-render-agent/dist/index.js</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>WORN_API_URL</key>
+    <string>https://api.worncloset.app</string>
+    <key>AGENT_ID</key>
+    <string>mac-1</string>
+    <key>MEDIAGEN_URL</key>
+    <string>http://127.0.0.1:8199</string>
+    <key>RENDER_AGENT_WINDOW</key>
+    <string>always</string>
+    <key>RENDER_AGENT_TIME_ZONE</key>
+    <string>Asia/Kolkata</string>
+    <key>RENDER_AGENT_WORK_DIR</key>
+    <string>/Users/RENDER_USER/worn-render-work</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/RENDER_USER/worn-render-agent</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart after a crash or a reboot; a config error (exit 78) is retried once a minute. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/RENDER_USER/Library/Logs/worn-render-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/RENDER_USER/Library/Logs/worn-render-agent.log</string>
+</dict>
+</plist>

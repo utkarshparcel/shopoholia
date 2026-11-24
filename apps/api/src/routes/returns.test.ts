@@ -469,7 +469,7 @@ describe("returns", () => {
     await app.close();
   });
 
-  it("WV01-DEADLINE-IMAGE-PUSH: enrichDeadlineFromPurchaseItem includes signed imageUrl", async () => {
+  it("WV01-DEADLINE-IMAGE-PUSH: enrichDeadlineFromPurchaseItem carries the item imageKey", async () => {
     const { app } = await buildTestServer();
     const { accessToken, userId } = await login(app);
     const { enrichDeadlineFromPurchaseItem } = await import("../lib/return-jobs.js");
@@ -491,7 +491,7 @@ describe("returns", () => {
       ],
     });
     const item = purchase.items[0]!;
-    const payload = await enrichDeadlineFromPurchaseItem(
+    const payload = enrichDeadlineFromPurchaseItem(
       {
         returnId: "00000000-0000-4000-8000-0000000000r9",
         userId,
@@ -499,10 +499,10 @@ describe("returns", () => {
         merchant: "Amazon",
       },
       item,
-      (key) => app.deps.storage.getSignedUrl(key),
       "INR",
     );
-    expect(payload.imageUrl).toContain("sneakers");
+    // The key is signed by the worker when the push is sent; a URL signed now would expire first.
+    expect(payload.imageKey).toBe("items/sneakers.jpg");
     expect(payload.amountMinor).toBe(45000);
     expect(payload.currency).toBe("INR");
 
@@ -602,12 +602,21 @@ describe("U026 GST invoice request + U029 return label", () => {
       method: "POST",
       url: `/returns/${ret.id}/label`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { imageKey: `returns/${userId}/${ret.id}/label.jpg` },
+      payload: { imageKey: `u/${userId}/returns/${ret.id}-label.jpg` },
     });
     expect(upload.statusCode).toBe(200);
     const labeled = upload.json() as { labelImageKey: string | null; labelUsedAt: string | null };
     expect(labeled.labelImageKey).toContain("label.jpg");
     expect(labeled.labelUsedAt).toBeNull();
+
+    // Another object's key would be signed for this user and deleted on their erasure.
+    const foreign = await app.inject({
+      method: "POST",
+      url: `/returns/${ret.id}/label`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { imageKey: "references/house-model.jpg" },
+    });
+    expect(foreign.statusCode).toBe(404);
 
     const used = await app.inject({
       method: "POST",

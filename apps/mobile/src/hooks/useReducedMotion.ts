@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 
 /**
  * Hook to detect and respond to prefers-reduced-motion
@@ -16,9 +16,20 @@ export function useReducedMotion(): boolean {
       mediaQuery.addEventListener('change', handler);
       return () => mediaQuery.removeEventListener('change', handler);
     }
-    // On native, we could use AccessibilityInfo.isReduceMotionEnabled()
-    // For now, default to false on native
-    setReduced(false);
+    // iOS "Reduce Motion" / Android "Remove animations": read it now and follow changes.
+    let active = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (active) setReduced(enabled);
+      })
+      .catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', (enabled) => {
+      setReduced(enabled);
+    });
+    return () => {
+      active = false;
+      subscription.remove();
+    };
   }, []);
 
   return reduced;

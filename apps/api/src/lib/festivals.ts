@@ -22,6 +22,12 @@ const IN_FESTIVAL_SEEDS: Array<{ year: number; occasion: string; label: string; 
   { year: 2027, occasion: "FESTIVAL", label: "Holi", month: 3, day: 22 },
 ];
 
+/** The known date of a lunar IN festival in `year` (month 1–12), or null outside the table. */
+export function indianFestivalDate(label: string, year: number): { month: number; day: number } | null {
+  const seed = IN_FESTIVAL_SEEDS.find((f) => f.year === year && f.label === label);
+  return seed ? { month: seed.month, day: seed.day } : null;
+}
+
 export function indianFestivalDates(opts?: { year?: number; from?: Date }): FestivalSeed[] {
   const from = opts?.from ?? new Date();
   const yearFilter = opts?.year;

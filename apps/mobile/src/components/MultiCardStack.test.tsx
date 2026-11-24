@@ -44,4 +44,13 @@ describe('MultiCardStack (W019)', () => {
     );
     expect(container.querySelector('[data-testid="multi-card-stack"]')).toBeNull();
   });
+
+  it('S3-28: totals each currency on its own instead of adding them', () => {
+    const mixed = [...three.slice(0, 2), { ...three[2]!, currency: 'USD', balanceCacheMinor: 5_000 }];
+    render(<MultiCardStack accounts={mixed} now={now} />);
+    const label = screen.getByTestId('multi-card-stack').getAttribute('aria-label') ?? '';
+    expect(label).toMatch(/₹700/);
+    expect(label).toMatch(/\$50/);
+    expect(label).not.toMatch(/₹750/);
+  });
 });

@@ -3,7 +3,7 @@
  * Parallel to merchantReturnUrl; used when cancel window is still open.
  */
 
-import { normalizeMerchantKey } from "./merchantDeepLink.js";
+import { merchantKeyMatches, normalizeMerchantKey } from "./merchantDeepLink.js";
 
 const MERCHANT_CANCEL_URL: Record<string, string> = {
   amazon: "https://www.amazon.in/gp/css/order-history",
@@ -25,7 +25,7 @@ export function merchantCancelUrl(merchant: string): string | null {
   if (MERCHANT_CANCEL_URL[key]) return MERCHANT_CANCEL_URL[key]!;
 
   for (const [known, url] of Object.entries(MERCHANT_CANCEL_URL)) {
-    if (key.startsWith(known) || known.startsWith(key)) return url;
+    if (merchantKeyMatches(key, known)) return url;
   }
 
   return null;

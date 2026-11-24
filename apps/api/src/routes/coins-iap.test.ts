@@ -14,6 +14,7 @@ import {
   testAppleTrust,
   type FakePlay,
 } from "../lib/iap/test-support.js";
+import { resetServerAnalyticsSink, setServerAnalyticsSink } from "../lib/analytics.js";
 import { createMemoryRepositories } from "../lib/repositories/memory.js";
 import { login } from "../test-utils.js";
 
@@ -114,7 +115,18 @@ describe("coin purchases (store verified)", () => {
   it("App Store: credits the pack's coins once; a repeat returns the original grant", async () => {
     const { userId, headers } = await user();
     const tx = appleTransaction({ productId: "worn.coins.350", appAccountToken: userId });
+    const events: Array<{ name: string; props?: Record<string, unknown> }> = [];
+    setServerAnalyticsSink((name, props) => events.push({ name, props }));
     const first = await validateApple(headers, tx);
+    resetServerAnalyticsSink();
+    // A Sandbox purchase (App Review, TestFlight) is credited and flagged as such.
+    expect(events.filter((e) => e.name === "iap_purchase")).toEqual([
+      {
+        name: "iap_purchase",
+        props: expect.objectContaining({ store: "app_store", coins: 350, environment: "sandbox" }),
+      },
+    ]);
+    expect((await repos.findCoinPurchase("app_store", String(tx.transactionId)))?.environment).toBe("sandbox");
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({
       success: true,

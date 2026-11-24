@@ -8,7 +8,7 @@ export const PageQuerySchema = z.object({
 export type PageQuery = z.infer<typeof PageQuerySchema>;
 
 /** `{ items, nextCursor }`; `nextCursor` is null on the last page. */
-export function pageResponse<T extends z.ZodTypeAny>(itemSchema: T) {
+export function pageResponse<T extends z.ZodType>(itemSchema: T) {
   return z.object({
     items: z.array(itemSchema),
     nextCursor: z.string().nullable(),

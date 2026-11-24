@@ -195,3 +195,50 @@ describe('useGenerateRenders', () => {
     ]);
   });
 });
+
+describe('a charged spend whose balance refresh fails', () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  function mount<T>(hook: () => T) {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    client.setQueryData(['reveal', ORDER_ID, null], { orderId: ORDER_ID, renders: [locked] });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return { client, result: renderHook(hook, { wrapper }).result };
+  }
+
+  it('still reports the generate as done and shows the new look (a retry would pay twice)', async () => {
+    const fresh = card('new-1', { unlocked: true, status: 'QUEUED', scenario: 'NIGHT' });
+    vi.mocked(generateRenders).mockResolvedValue({ renders: [fresh], coinsSpent: 50 });
+    vi.mocked(fetchCoinBalance).mockRejectedValue(new Error('Network request failed'));
+    const { client, result } = mount(() => useGenerateRenders(ORDER_ID));
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({ orderItemIds: ['item-1'], scenario: 'NIGHT' });
+    });
+
+    expect(outcome).toMatchObject({ coinsSpent: 50 });
+    const cached = client.getQueryData<{ renders: RenderCard[] }>(['reveal', ORDER_ID, null]);
+    expect(cached?.renders.map((r) => r.id)).toEqual(['locked-1', 'new-1']);
+  });
+
+  it('still reports the unlock as done and shows the look unlocked', async () => {
+    vi.mocked(unlockRenders).mockResolvedValue({
+      renders: [{ ...locked, unlocked: true }],
+      coinsSpent: 50,
+    });
+    vi.mocked(fetchCoinBalance).mockRejectedValue(new Error('timeout'));
+    const { client, result } = mount(() => useUnlockRenders(ORDER_ID));
+
+    await act(async () => {
+      await result.current.mutateAsync(['locked-1']);
+    });
+
+    const cached = client.getQueryData<{ renders: RenderCard[] }>(['reveal', ORDER_ID, null]);
+    expect(cached?.renders[0]?.unlocked).toBe(true);
+  });
+});

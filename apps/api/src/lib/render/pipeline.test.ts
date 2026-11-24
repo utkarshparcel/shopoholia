@@ -275,7 +275,8 @@ function combinedRenderCases(getRepos: () => Repositories) {
           coinPrice: 50,
           realPrice: null,
           productImageKeys: [],
-          houseModelRenderKey: "",
+          // No avatar: renders go on the listing's house-model photo.
+          houseModelRenderKey: "house-models/combined.jpg",
           affiliateUrl: null,
           affiliateLinks: null,
           // Kept out of the feed so these rows can't be mistaken for the real catalog.

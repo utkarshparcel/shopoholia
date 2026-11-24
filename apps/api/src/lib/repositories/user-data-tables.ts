@@ -16,6 +16,7 @@ import {
   entitlementEvents,
   entitlementGrants,
   fitPreviews,
+  giftBudgetLocks,
   giftOrders,
   groupGiftContributions,
   householdMembers,
@@ -28,8 +29,10 @@ import {
   itemMetrics,
   listings,
   listingVariants,
+  lentWasteNotes,
   lookbookItems,
   measurementProfiles,
+  merchantAliases,
   merchantPurchaseItems,
   merchantPurchases,
   moneyAccounts,
@@ -37,6 +40,7 @@ import {
   orderItems,
   orders,
   outfits,
+  parserTrainingFixtures,
   paymentIntents,
   privacyRequests,
   pushEvents,
@@ -76,7 +80,7 @@ export type UserTableSpec =
   | { table: PgTable; parent: PgTable; fk: AnyPgColumn; omit?: string[] };
 
 export const USER_DATA_TABLES: UserTableSpec[] = [
-  { table: users, owner: users.id },
+  { table: users, owner: users.id, omit: ["appleRefreshTokenEnc"] },
   { table: avatars, owner: avatars.userId },
   { table: lookbookItems, owner: lookbookItems.userId },
   { table: cashbackEvents, owner: cashbackEvents.userId },
@@ -142,6 +146,10 @@ export const USER_DATA_TABLES: UserTableSpec[] = [
   { table: brandPriceWatches, owner: brandPriceWatches.userId },
   { table: emiPlans, owner: emiPlans.userId },
   { table: cashbackClaims, owner: cashbackClaims.userId },
+  { table: merchantAliases, owner: merchantAliases.userId },
+  { table: giftBudgetLocks, owner: giftBudgetLocks.userId },
+  { table: parserTrainingFixtures, owner: parserTrainingFixtures.userId },
+  { table: lentWasteNotes, owner: lentWasteNotes.userId },
 ];
 
 /** Tables left out of the export, with the reason. */
@@ -149,8 +157,11 @@ export const EXEMPT_TABLES: Record<string, string> = {
   refresh_tokens: "session secrets; revoked with the account, not user content",
   customization_templates: "shared catalog of tailoring templates; no user column",
   oauth_states: "one-time OAuth nonces, deleted by the callback; go with the user",
-  otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column",
+  otp_codes: "sign-in codes (HMAC only) keyed by phone, expire in minutes; no user column (erasure deletes the user's phone's codes)",
   job_dead_letters: "worker failure log, ids only; no user column",
+  marketplace_settlements: "ops payout ledger per marketplace order, keyed by seller id; no user column",
+  render_agents: "the operator's render agents and their last heartbeat; no user column",
+  parser_break_flags: "ops flags for merchants whose email/SMS parser is broken, shown to everyone; no user column",
 };
 
 /**
@@ -160,7 +171,7 @@ export const EXEMPT_TABLES: Record<string, string> = {
 export const SECONDARY_USER_COLUMNS: Record<string, string> = {
   "merchant_purchases.assignee_user_id": "household member a parcel is assigned to",
   "swap_listings.borrower_user_id": "borrower of another member's item",
-  "users.referred_by": "referrer of another user",
+  "users.referred_by": "referrer of another user (text, no FK: deleteAllUserData clears it)",
   "disposition_listings.seller_id": "marketplace seller row, owned through sellers",
   "tailoring_orders.tailor_seller_id": "tailor's seller row",
   "tailoring_reviews.seller_id": "reviewed tailor's seller row",

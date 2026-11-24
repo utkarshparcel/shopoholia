@@ -10,16 +10,16 @@ export type ReceiptItem = z.infer<typeof ReceiptItemSchema>;
 
 /** Parsed OCR result returned for review before confirmation. */
 export const ReceiptParsedSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   imageUrl: z.string(),
   merchant: z.string(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   totalMinor: z.number().int().nonnegative(),
   currency: z.string().default("INR"),
   items: z.array(ReceiptItemSchema),
-  ocrJson: z.record(z.unknown()),
-  purchaseId: z.string().uuid().nullable(),
+  ocrJson: z.record(z.string(), z.unknown()),
+  purchaseId: z.uuid().nullable(),
   /** OCR confidence in [0, 1] — always present. */
   confidence: z.number().min(0).max(1),
   warrantyHint: z
@@ -37,7 +37,7 @@ export type ReceiptParsed = z.infer<typeof ReceiptParsedSchema>;
 /** Editable review payload sent to POST /receipts/:id/confirm. */
 export const ConfirmReceiptBodySchema = z.object({
   merchant: z.string().min(1),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   totalMinor: z.number().int().nonnegative(),
   currency: z.string().default("INR"),
   items: z.array(ReceiptItemSchema).min(1),
@@ -46,7 +46,7 @@ export const ConfirmReceiptBodySchema = z.object({
     .array(
       z.object({
         itemIndex: z.number().int().nonnegative(),
-        coverageUntil: z.string().datetime(),
+        coverageUntil: z.iso.datetime(),
         claimContact: z.string().optional(),
         category: z.enum(["electronics", "appliances", "apparel"]).optional(),
       }),
@@ -68,7 +68,7 @@ export type ConfirmReceiptBody = z.infer<typeof ConfirmReceiptBodySchema>;
 export const PatchReceiptBodySchema = z
   .object({
     merchant: z.string().min(1).optional(),
-    purchasedAt: z.string().datetime().optional(),
+    purchasedAt: z.iso.datetime().optional(),
     totalMinor: z.number().int().nonnegative().optional(),
     items: z.array(ReceiptItemSchema).min(1).optional(),
     gstin: z.string().min(1).nullable().optional(),
@@ -80,20 +80,20 @@ export const PatchReceiptBodySchema = z
       v.totalMinor !== undefined ||
       v.items !== undefined ||
       v.gstin !== undefined,
-    { message: "At least one of merchant, purchasedAt, totalMinor, items, gstin is required" },
+    { error: "At least one of merchant, purchasedAt, totalMinor, items, gstin is required" },
   );
 
 export type PatchReceiptBody = z.infer<typeof PatchReceiptBodySchema>;
 
 export const ReceiptResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   merchant: z.string(),
-  purchasedAt: z.string().datetime(),
+  purchasedAt: z.iso.datetime(),
   totalMinor: z.number().int().nonnegative(),
   currency: z.string(),
   imageUrl: z.string(),
-  purchaseId: z.string().uuid().nullable(),
-  createdAt: z.string().datetime(),
+  purchaseId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
   /** OCR confidence in [0, 1] — always present. */
   confidence: z.number().min(0).max(1),
   /** GSTIN when OCR / correction captured one. */
@@ -121,7 +121,7 @@ export const ReceiptExportFormatSchema = z.enum(["image", "pdf"]);
 export type ReceiptExportFormat = z.infer<typeof ReceiptExportFormatSchema>;
 
 export const ReceiptExportResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   format: ReceiptExportFormatSchema,
   filename: z.string().min(1),
   contentType: z.string().min(1),

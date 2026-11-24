@@ -1,7 +1,8 @@
 /**
  * Quiet-hours visual editor helpers (W082-QUIET-HOURS-EDITOR + W025 preview).
- * Prefs are stored as UTC HH:mm — same as push-delivery quiet hours.
- * Preview uses @worn/shared next-send helpers (user TZ).
+ * Prefs are HH:mm on the user's own clock: push delivery evaluates them in the user's time zone
+ * (@worn/shared isInQuietHours, C1), and the app keeps that zone in sync (useTimeZoneSync).
+ * They used to be labelled "UTC" here, so a user in India set 22:00 expecting 03:30 (S3-25).
  */
 
 import {
@@ -68,6 +69,11 @@ export function formatNextSendPreview(
     timeZone,
     locale: 'en-IN',
   });
+}
+
+/** The editor's hint: the times are the user's local clock, in their zone. */
+export function quietHoursZoneHint(timeZone: string): string {
+  return `No pushes during this window. Times are your local time (${timeZone.replace(/_/g, ' ')}).`;
 }
 
 export const QUIET_HOURS_EDITOR_TITLE = 'Quiet hours';

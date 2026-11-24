@@ -17,7 +17,7 @@ import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { ensureDevAuth } from '@/src/lib/devAuth';
 import { ThemeProvider } from '@/src/theme/ThemeProvider';
 import { initAnalyticsFromEnv, trackInstallOnce } from '@/src/lib/analytics';
-import { initSentry } from '@/src/lib/sentry';
+import { initSentry, setSentrySurface } from '@/src/lib/sentry';
 import { isServerRendering } from '@/src/lib/ssr';
 import { FEATURE_CLOSET } from '@/src/lib/features';
 import { closetEntryHref } from '@/src/lib/firstDelight';
@@ -185,6 +185,15 @@ export default function RootLayout() {
 
   // After the restore above: the stored side follows the screen from here on.
   useActiveSurfaceSync(FEATURE_CLOSET && ready);
+
+  // Crash reports say which surface they came from (always Play without the Closet).
+  useEffect(() => {
+    if (!FEATURE_CLOSET) return;
+    setSentrySurface(useSessionStore.getState().activeSurface);
+    return useSessionStore.subscribe((state, prev) => {
+      if (state.activeSurface !== prev.activeSurface) setSentrySurface(state.activeSurface);
+    });
+  }, []);
 
   // Same providers either way, so the theme (and its font loading) stays mounted.
   if (!ready) {

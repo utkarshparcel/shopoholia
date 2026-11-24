@@ -94,8 +94,9 @@ describe('W016 expiry countdown hero', () => {
 describe('W017 use this weekend', () => {
   it('computes next Saturday morning', () => {
     const sat = nextSaturdayMorning(now, 10);
-    expect(sat.getUTCDay()).toBe(6);
-    expect(sat.getUTCHours()).toBe(10);
+    // Saturday 10:00 on the user's clock (S2-10), not in UTC.
+    expect(sat.getDay()).toBe(6);
+    expect(sat.getHours()).toBe(10);
   });
 
   it('builds calendar URL without card digits', () => {

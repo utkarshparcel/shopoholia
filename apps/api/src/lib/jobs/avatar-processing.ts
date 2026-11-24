@@ -22,11 +22,15 @@ export function createAvatarProcessingHandler(deps: {
         uploadKeys: job.uploadKeys,
       });
 
-      await deps.storage.put({
-        key: result.referenceImageKey,
-        body: Buffer.from("mock-avatar-reference"),
-        contentType: "image/jpeg",
-      });
+      // Only a provider that made a new image hands back bytes; otherwise the reference is one of
+      // the uploads, stored as it is.
+      if (result.imageBytes) {
+        await deps.storage.put({
+          key: result.referenceImageKey,
+          body: Buffer.from(result.imageBytes),
+          contentType: "image/jpeg",
+        });
+      }
 
       await deps.repos.upsertAvatar({
         id: job.avatarId,
@@ -38,7 +42,9 @@ export function createAvatarProcessingHandler(deps: {
       });
 
       await deps.repos.updateUser(job.userId, { avatarStatus: "READY" });
-      await deps.storage.deleteMany(job.uploadKeys);
+      // The photo the reference points at stays; DELETE /avatar removes it with the reference.
+      const unused = job.uploadKeys.filter((key) => key !== result.referenceImageKey);
+      if (unused.length > 0) await deps.storage.deleteMany(unused);
     } catch {
       await deps.repos.upsertAvatar({
         id: job.avatarId,

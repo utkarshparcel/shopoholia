@@ -2,7 +2,8 @@
  * Android notification channels for Closet pushes (NOTIF-RICH).
  *
  * Channel IDs must match `@worn/shared` ANDROID_NOTIFICATION_CHANNELS.
- * Production injects an Expo Notifications adapter; tests use the memory stub.
+ * By default channels are created through expo-notifications; tests switch to the memory stub
+ * with `resetAndroidChannelStub`.
  */
 
 import {
@@ -10,6 +11,8 @@ import {
   type AndroidNotificationChannel,
   type NotificationCategory,
 } from '@worn/shared';
+
+import { expoAndroidChannelAdapter } from './expoNotificationAdapters';
 
 export type AndroidChannelImportance = AndroidNotificationChannel['importance'];
 
@@ -53,13 +56,13 @@ export function setAndroidChannelAdapter(next: AndroidChannelAdapter | null): vo
 }
 
 export function getAndroidChannelAdapter(): AndroidChannelAdapter {
-  return adapter ?? memoryStub;
+  return adapter ?? expoAndroidChannelAdapter;
 }
 
-/** Test helper — reset memory stub. */
+/** Test helper — reset the memory stub and use it instead of expo-notifications. */
 export function resetAndroidChannelStub(): void {
   memoryStub._reset();
-  adapter = null;
+  adapter = memoryStub;
 }
 
 /** Test helper — channels created via stub. */

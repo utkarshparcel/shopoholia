@@ -233,15 +233,40 @@ describe("U016–U025 useful returns/packages chores", () => {
       method: "POST",
       url: `/packages/${purchase.purchase.id}/delivery-proof`,
       headers: { authorization: `Bearer ${accessToken}` },
-      payload: { imageKey: "proofs/damage-1.jpg" },
+      payload: { imageKey: `u/${userId}/proofs/damage-1.jpg` },
     });
     expect(proof.statusCode).toBe(200);
     const body = proof.json() as {
       deliveryProofKeys: string[];
       claimPacket: { proofKeys: string[]; merchant: string };
     };
-    expect(body.deliveryProofKeys).toContain("proofs/damage-1.jpg");
-    expect(body.claimPacket.proofKeys).toContain("proofs/damage-1.jpg");
+    expect(body.deliveryProofKeys).toContain(`u/${userId}/proofs/damage-1.jpg`);
+    expect(body.claimPacket.proofKeys).toContain(`u/${userId}/proofs/damage-1.jpg`);
     expect(body.claimPacket.merchant).toBe("Amazon");
+
+    // Someone else's object, or a shared one, can't be attached (it would be signed for this
+    // user, and deleted when this user erases their account).
+    for (const imageKey of [
+      "references/house-model.jpg",
+      "garments/v1.jpg",
+      "u/00000000-0000-4000-8000-0000000000aa/proofs/x.jpg",
+    ]) {
+      const foreign = await app.inject({
+        method: "POST",
+        url: `/packages/${purchase.purchase.id}/delivery-proof`,
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { imageKey },
+      });
+      expect(foreign.statusCode, imageKey).toBe(404);
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/packages/${purchase.purchase.id}`,
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { deliveryProofKeys: [imageKey] },
+      });
+      expect(patched.statusCode, imageKey).toBe(404);
+    }
+    const after = await app.deps.repos.findMerchantPurchaseById(purchase.purchase.id);
+    expect(after?.deliveryProofKeys).toEqual([`u/${userId}/proofs/damage-1.jpg`]);
   });
 });

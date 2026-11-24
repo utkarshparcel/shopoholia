@@ -13,24 +13,20 @@ export const CalendarTagKindSchema = z.enum([
 export type CalendarTagKind = z.infer<typeof CalendarTagKindSchema>;
 
 /** One calendar event, reduced on the phone. Strict: titles, attendees and places can't be sent. */
-export const CalendarTagSchema = z
-  .object({
-    startLocal: LocalTimeSchema.nullable(),
-    endLocal: LocalTimeSchema.nullable(),
-    kind: CalendarTagKindSchema,
-    formality: z.number().int().min(1).max(5).nullable(),
-    outdoor: z.boolean(),
-    allDay: z.boolean(),
-  })
-  .strict();
+export const CalendarTagSchema = z.strictObject({
+  startLocal: LocalTimeSchema.nullable(),
+  endLocal: LocalTimeSchema.nullable(),
+  kind: CalendarTagKindSchema,
+  formality: z.number().int().min(1).max(5).nullable(),
+  outdoor: z.boolean(),
+  allDay: z.boolean(),
+});
 export type CalendarTag = z.infer<typeof CalendarTagSchema>;
 
 /** `PUT /context/calendar`. */
-export const CalendarTagsPutSchema = z
-  .object({
-    days: z.array(z.object({ date: LocalDateSchema, tags: z.array(CalendarTagSchema).max(12) }).strict()).max(14),
-  })
-  .strict();
+export const CalendarTagsPutSchema = z.strictObject({
+  days: z.array(z.strictObject({ date: LocalDateSchema, tags: z.array(CalendarTagSchema).max(12) })).max(14),
+});
 export type CalendarTagsPut = z.infer<typeof CalendarTagsPutSchema>;
 
 /** Same values as the universe's `WeatherCtx.condition`. */

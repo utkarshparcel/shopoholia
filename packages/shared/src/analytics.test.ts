@@ -129,6 +129,43 @@ describe("sanitizeAnalyticsProperties / funnel", () => {
     expect(String(safe.note)).toContain("[redacted_email]");
     expect(String(safe.cardHint)).toBe("[redacted_digits]");
   });
+
+  it("redacts every email and phone in a value, bare Indian mobiles too, and PII-named keys", () => {
+    const safe = sanitizeAnalyticsProperties({
+      note: "a@b.com and c@d.com",
+      q: "call 9876543210",
+      q2: "+91 98765 43210 or +91 91234 56789",
+      phoneNumber: "9876543210",
+      mobile_no: "9876543210",
+      user_email: "a@b.com",
+      userId: "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      amountMinor: 9876543210,
+      merchant: "Amazon",
+    });
+    expect(safe.note).toBe("[redacted_email] and [redacted_email]");
+    expect(safe.q).toBe("call [redacted_phone]");
+    expect(safe.q2).toBe("[redacted_phone] or [redacted_phone]");
+    expect(safe.phoneNumber).toBeUndefined();
+    expect(safe.mobile_no).toBeUndefined();
+    expect(safe.user_email).toBeUndefined();
+    expect(safe.userId).toBe("6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    expect(safe.merchant).toBe("Amazon");
+  });
+});
+
+describe("createHttpAnalyticsSink person", () => {
+  it("sends each event as its own user, not one shared 'anonymous' person", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true });
+    const sink = createHttpAnalyticsSink({ posthogKey: "phc_test", fetchImpl: fetchImpl as unknown as typeof fetch })!;
+    sink("iap_purchase", { userId: "user-a" });
+    sink("iap_purchase", { userId: "user-b" });
+    sink("referral_attribution", { referralCode: "ABC123" });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+    const ids = fetchImpl.mock.calls.map(
+      (call) => (JSON.parse((call[1] as { body: string }).body) as { distinct_id: string }).distinct_id,
+    );
+    expect(ids).toEqual(["user-a", "user-b", "anonymous"]);
+  });
 });
 
 describe("createHttpAnalyticsSink", () => {

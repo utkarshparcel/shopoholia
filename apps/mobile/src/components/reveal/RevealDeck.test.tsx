@@ -37,6 +37,27 @@ describe('RevealDeck', () => {
     expect(screen.queryByText('Locked look')).toBeNull();
   });
 
+  it('shows a failed included look with a retry, and a failed paid look as refunded', () => {
+    const onRetry = vi.fn();
+    const { unmount } = render(
+      <RevealDeck onRetry={onRetry} onUnlock={vi.fn()} renders={[card({ id: 'free', status: 'FAILED' })]} />,
+    );
+    expect(screen.getByText('Couldn’t render this look')).toBeTruthy();
+    screen.getByText('Try again').click();
+    expect(onRetry).toHaveBeenCalledWith('free');
+    unmount();
+
+    render(
+      <RevealDeck
+        onRetry={onRetry}
+        onUnlock={vi.fn()}
+        renders={[card({ id: 'paid', isFree: false, unlocked: true, status: 'FAILED' })]}
+      />,
+    );
+    expect(screen.getByText(/coins were refunded/)).toBeTruthy();
+    expect(screen.queryByText('Try again')).toBeNull();
+  });
+
   it('opens on a newly generated look appended at the end of the deck', () => {
     const renders = Array.from({ length: 20 }, (_, i) => card({ id: `r${i}`, scenario: `S${i}` }));
     const { rerender } = render(<RevealDeck onUnlock={vi.fn()} renders={renders} />);

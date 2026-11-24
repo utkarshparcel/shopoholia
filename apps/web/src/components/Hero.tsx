@@ -7,9 +7,10 @@ import { ArrowRight, Heart } from 'lucide-react';
 import { Magnetic } from './Magnetic';
 import { GoldParticles } from './GoldParticles';
 import { gsap } from '@/lib/gsap';
+import { APP_LIVE, GET_APP_LABEL, LIVE_PLATFORMS } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
-const WORDS = ['Shop', 'the', 'haul.', 'Skip', 'the', 'bill.'];
+const WORDS = ['A', 'nicotine', 'patch', 'for', 'shopaholics.'];
 // Words from here on are the gold italic half of the headline.
 const GOLD_FROM = 3;
 
@@ -22,22 +23,22 @@ const FEED = [
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/06/12073053427750de/NM-PRC-455-DRS-26-JUN-34374-SAGE(1).webp',
     title: 'Sage ruched bodycon mini dress',
-    coins: '1,049',
+    coins: '105',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/05/09102331e3473fe4/NM-IN-56-DRS-24-APR-5058-RED(0).webp',
     title: 'Red one shoulder ruched dress',
-    coins: '450',
+    coins: '45',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/04/021348591258e001/NM-PRC-414-DRS-26-APR-32495-YELLOW(1).webp',
     title: 'Yellow floral a-line maxi dress',
-    coins: '1,049',
+    coins: '105',
   },
   {
     img: 'https://assets.newme.asia/wp-content/uploads/2026/03/1715592685b4dd97/NM-PRC-178-DRS-26-MAR-31596-OFFWHITE(1).webp',
     title: 'Off white striped maxi dress',
-    coins: '949',
+    coins: '95',
   },
 ];
 
@@ -227,7 +228,7 @@ export function Hero() {
     <section
       ref={sectionRef}
       id="hero"
-      aria-label="Shop the haul. Skip the bill."
+      aria-label="A nicotine patch for shopaholics."
       onMouseMove={onMove}
       onMouseLeave={onLeave}
       className="relative flex min-h-[100svh] flex-col justify-center overflow-hidden pb-20 pt-32 sm:pt-36"
@@ -253,12 +254,12 @@ export function Hero() {
               className="hero-rise ornament font-mono text-micro uppercase tracking-[0.25em] text-worn-gold-deep"
               style={delay(0)}
             >
-              Worn Play · Free · Coming to iPhone and Android
+              {APP_LIVE ? `Worn Play · Free on ${LIVE_PLATFORMS}` : 'Worn Play · Free · Coming to iPhone and Android'}
             </p>
 
             {/* split-text headline */}
             <h1 className="mt-6 font-display leading-[0.98] tracking-tight text-worn-ink">
-              <span className="sr-only">Shop the haul. Skip the bill.</span>
+              <span className="sr-only">A nicotine patch for shopaholics.</span>
               <span aria-hidden="true" className="block">
                 {WORDS.map((w, i) => (
                   <span
@@ -283,17 +284,17 @@ export function Hero() {
             </h1>
 
             <p className="hero-rise mt-7 max-w-[52ch] text-body-l text-worn-ink-soft" style={delay(0.55)}>
-              Worn is a fashion shopping app where you pay with free coins, not
-              money. Browse real pieces, try them on your own AI avatar, check out
-              and track the delivery, then unbox photos of you wearing it all. The
-              rush of a new haul, without spending a rupee or adding to the pile.
+              You know the one: ₹2,000 on a dress, one photo at that café, then the
+              back of the cupboard. Worn Play gives you the rush of the haul and the
+              photo, without the dress. Try real pieces on your AI avatar, pay with
+              free coins, and unbox photos of you wearing them.
             </p>
 
             {/* CTAs */}
             <div className="hero-rise mt-9 flex flex-wrap items-center gap-4" style={delay(0.7)}>
               <Magnetic strength={0.3}>
                 <a href="#download" className="btn btn-primary px-8 py-4 text-[15px] shadow-pop">
-                  Get early access
+                  {GET_APP_LABEL}
                   <ArrowRight size={17} strokeWidth={2.2} />
                 </a>
               </Magnetic>

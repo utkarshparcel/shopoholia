@@ -31,6 +31,7 @@ import {
   scheduleWarrantyReminder,
   snoozeWarrantyReminder,
   snoozeCreditReminder,
+  capCreditSnooze,
   CREDIT_SNOOZE_DEFAULT_MS,
   warrantyExpiryJobId,
 } from "./expiry.js";
@@ -332,7 +333,7 @@ describe("snoozeCreditReminder (producer)", () => {
 
   it("publishes a snooze job keyed on the snooze time", async () => {
     process.env.REDIS_URL = REDIS;
-    const snoozeUntil = new Date(Date.now() + CREDIT_SNOOZE_DEFAULT_MS);
+    const snoozeUntil = new Date(Date.now() + 2 * 86_400_000);
     const result = await snoozeCreditReminder(account, snoozeUntil);
     expect(result).toBe("published");
     expect(queueMocks.add).toHaveBeenCalledWith(
@@ -346,6 +347,30 @@ describe("snoozeCreditReminder (producer)", () => {
         jobId: jobIdFrom(`credit-expiry:${account.id}`, "snooze", snoozeUntil.toISOString()),
         delay: expect.any(Number),
       }),
+    );
+  });
+
+  it("caps a snooze that would land on or after the expiry to a day before it", async () => {
+    process.env.REDIS_URL = REDIS;
+    // The default 7-day snooze on a credit that expires in 5 days.
+    const result = await snoozeCreditReminder(account, new Date(Date.now() + CREDIT_SNOOZE_DEFAULT_MS));
+    expect(result).toBe("published");
+    const dayBefore = new Date(account.expiresAt.getTime() - 86_400_000).toISOString();
+    expect(queueMocks.add).toHaveBeenLastCalledWith(
+      "credit-expiry-reminder",
+      expect.objectContaining({ snoozedUntil: dayBefore }),
+      expect.objectContaining({ jobId: jobIdFrom(`credit-expiry:${account.id}`, "snooze", dayBefore) }),
+    );
+    const opts = queueMocks.add.mock.calls.at(-1)![2] as { delay: number };
+    expect(opts.delay).toBeLessThanOrEqual(4 * 86_400_000 + 1000);
+  });
+
+  it("skips a snooze when the credit expires within a day", async () => {
+    process.env.REDIS_URL = REDIS;
+    const soon = { ...account, expiresAt: new Date(Date.now() + 12 * 3_600_000) };
+    expect(await snoozeCreditReminder(soon, new Date(Date.now() + CREDIT_SNOOZE_DEFAULT_MS))).toBe("skipped");
+    expect(capCreditSnooze(new Date("2026-01-10T00:00:00Z"), "2026-01-05T00:00:00Z").toISOString()).toBe(
+      "2026-01-04T00:00:00.000Z",
     );
   });
 });

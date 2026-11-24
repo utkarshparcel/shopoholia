@@ -5,23 +5,23 @@ export const HouseholdRoleSchema = z.enum(["OWNER", "MEMBER"]);
 export type HouseholdRole = z.infer<typeof HouseholdRoleSchema>;
 
 export const HouseholdMemberSchema = z.object({
-  id: z.string().uuid(),
-  householdId: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  householdId: z.uuid(),
+  userId: z.uuid(),
   role: HouseholdRoleSchema,
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type HouseholdMember = z.infer<typeof HouseholdMemberSchema>;
 
 export const HouseholdSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   name: z.string().min(1).max(80),
-  ownerId: z.string().uuid(),
+  ownerId: z.uuid(),
   inviteCode: z.string().min(4).max(16),
   memberCount: z.number().int().nonnegative().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
 });
 export type Household = z.infer<typeof HouseholdSchema>;
 
@@ -49,13 +49,13 @@ export type HouseholdDetailResponse = z.infer<typeof HouseholdDetailResponseSche
 
 export const HouseholdInviteResponseSchema = z.object({
   inviteCode: z.string().min(4).max(16),
-  inviteUrl: z.string().url(),
+  inviteUrl: z.url(),
   deepLink: z.string().min(1),
 });
 export type HouseholdInviteResponse = z.infer<typeof HouseholdInviteResponseSchema>;
 
 export const HouseholdWardrobeResponseSchema = z.object({
-  householdId: z.string().uuid(),
+  householdId: z.uuid(),
   items: z.array(WardrobeItemSchema),
 });
 export type HouseholdWardrobeResponse = z.infer<typeof HouseholdWardrobeResponseSchema>;
@@ -64,17 +64,22 @@ export const PatchHouseholdWardrobeBodySchema = z
   .object({
     laundryStatus: z.enum(["CLEAN", "DIRTY", "IN_LAUNDRY"]).optional(),
   })
-  .refine((b) => Object.keys(b).length > 0, { message: "At least one field required" });
+  .refine((b) => Object.keys(b).length > 0, { error: "At least one field required" });
 export type PatchHouseholdWardrobeBody = z.infer<typeof PatchHouseholdWardrobeBodySchema>;
 
 /** U015 — shared vault ACL (view-only default). */
 export const HouseholdVaultAccessSchema = z.enum(["VIEW", "SPEND"]);
 export type HouseholdVaultAccessDto = z.infer<typeof HouseholdVaultAccessSchema>;
 
+/** ISO 4217 code, e.g. "INR". */
+const CurrencyCodeSchema = z.string().regex(/^[A-Z]{3}$/, "a 3-letter ISO currency code");
+
 export const HouseholdVaultMemberSettingsSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   vaultAccess: HouseholdVaultAccessSchema,
   spendCapMinor: z.number().int().nonnegative().nullable(),
+  /** The cap's currency; spends against credits in another currency are refused. */
+  spendCapCurrency: CurrencyCodeSchema.nullable().optional(),
   spentMinor: z.number().int().nonnegative().optional().default(0),
 });
 export type HouseholdVaultMemberSettings = z.infer<
@@ -82,20 +87,21 @@ export type HouseholdVaultMemberSettings = z.infer<
 >;
 
 export const HouseholdVaultAccountSchema = z.object({
-  id: z.string().uuid(),
-  ownerUserId: z.string().uuid(),
+  id: z.uuid(),
+  ownerUserId: z.uuid(),
   merchant: z.string(),
   kind: z.string(),
   currency: z.string(),
   balanceCacheMinor: z.number().int().nonnegative(),
-  expiresAt: z.string().datetime().nullable(),
+  expiresAt: z.iso.datetime().nullable(),
 });
 export type HouseholdVaultAccountDto = z.infer<typeof HouseholdVaultAccountSchema>;
 
 export const HouseholdVaultResponseSchema = z.object({
-  householdId: z.string().uuid(),
+  householdId: z.uuid(),
   myAccess: HouseholdVaultAccessSchema,
   mySpendCapMinor: z.number().int().nonnegative().nullable(),
+  mySpendCapCurrency: CurrencyCodeSchema.nullable().optional(),
   mySpentMinor: z.number().int().nonnegative(),
   accounts: z.array(HouseholdVaultAccountSchema),
   members: z.array(HouseholdVaultMemberSettingsSchema).optional(),
@@ -103,18 +109,23 @@ export const HouseholdVaultResponseSchema = z.object({
 export type HouseholdVaultResponse = z.infer<typeof HouseholdVaultResponseSchema>;
 
 export const PatchHouseholdVaultMemberBodySchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   vaultAccess: HouseholdVaultAccessSchema.optional(),
   spendCapMinor: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * The cap's currency. Without it a new cap takes the currency of the owner's shared credits
+   * when they all share one; otherwise the request is refused.
+   */
+  spendCapCurrency: CurrencyCodeSchema.optional(),
 });
 export type PatchHouseholdVaultMemberBody = z.infer<
   typeof PatchHouseholdVaultMemberBodySchema
 >;
 
 export const HouseholdVaultSpendBodySchema = z.object({
-  accountId: z.string().uuid(),
+  accountId: z.uuid(),
   amountMinor: z.number().int().positive(),
-  idempotencyKey: z.string().uuid(),
+  idempotencyKey: z.uuid(),
 });
 export type HouseholdVaultSpendBody = z.infer<typeof HouseholdVaultSpendBodySchema>;
 

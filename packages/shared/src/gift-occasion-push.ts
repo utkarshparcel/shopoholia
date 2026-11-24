@@ -4,6 +4,7 @@
  */
 
 import { runClosetPushDelivery } from "./closet-push-flow.js";
+import { localDateKey, resolveTimeZone } from "./local-time.js";
 import type { ProcessPushResult, sendExpoPush } from "./push-delivery.js";
 
 export const GIFT_OCCASION_EVENT = "gift_occasion";
@@ -80,10 +81,12 @@ function prettyOccasion(occasion: string, label?: string | null): string {
   return map[occasion.toUpperCase()] ?? occasion;
 }
 
-function utcDaysUntil(dateIso: string, now: Date): number {
+/** Whole days from the user's local today to the occasion's calendar date (`YYYY-MM-DD…`). */
+function daysUntilOccasion(dateIso: string, now: Date, tz: string): number {
   const raw = new Date(dateIso);
   if (Number.isNaN(raw.getTime())) return 0;
-  const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const [ty, tm, td] = localDateKey(now, tz).split("-").map(Number) as [number, number, number];
+  const startOfToday = Date.UTC(ty, tm - 1, td);
   const target = Date.UTC(raw.getUTCFullYear(), raw.getUTCMonth(), raw.getUTCDate());
   return Math.max(0, Math.round((target - startOfToday) / DAY_MS));
 }
@@ -98,9 +101,15 @@ export function giftOccasionPushCopy(input: {
   recipientName?: string | null;
   ideaCount?: number;
   now?: Date;
+  /** The user's zone for "today" (UTC when absent). */
+  timeZone?: string | null;
 }): { title: string; body: string } {
   const now = input.now ?? new Date();
-  const days = utcDaysUntil(input.date, now);
+  const days = daysUntilOccasion(
+    input.date,
+    now,
+    input.timeZone === undefined ? "UTC" : resolveTimeZone(input.timeZone),
+  );
   const label = prettyOccasion(input.occasion, input.label);
   const name = input.recipientName?.trim() || "them";
   const title =
@@ -156,6 +165,7 @@ export async function deliverGiftOccasionPush(
     recipientName: input.recipientName,
     ideaCount: input.ideaCount,
     now: input.now,
+    timeZone: input.timeZone,
   });
   return runClosetPushDelivery({
     eventType: GIFT_OCCASION_EVENT,

@@ -38,6 +38,8 @@ export type InterviewKitStore = {
     eventAt: string;
     occasion?: OutfitOccasion;
     now?: Date;
+    /** The user's zone: the reminder fires at 20:00 local the day before. */
+    timeZone?: string | null;
   }): Promise<InterviewKitRecord>;
   get(id: string, userId: string): Promise<InterviewKitRecord | null>;
   listByUser(userId: string): Promise<InterviewKitRecord[]>;
@@ -49,7 +51,7 @@ export type InterviewKitStore = {
     id: string,
     userId: string,
     eventAt: string,
-    opts?: { now?: Date },
+    opts?: { now?: Date; timeZone?: string | null },
   ): Promise<InterviewKitRecord | null>;
   remove(id: string, userId: string): Promise<boolean>;
 };
@@ -67,11 +69,12 @@ export function defaultOccasionForKitKind(kind: InterviewKitKind): OutfitOccasio
  */
 export function planInterviewKitReminder(
   eventAt: string | Date,
-  opts?: { now?: Date; hour?: number },
+  opts?: { now?: Date; hour?: number; timeZone?: string | null },
 ): { remindAt: Date; delayMs: number } | null {
   return computeNightBeforeReminder(eventAt, {
     now: opts?.now,
     hour: opts?.hour ?? CAL_EVENT_REMINDER_LOCAL_HOUR,
+    timeZone: opts?.timeZone,
   });
 }
 
@@ -160,7 +163,7 @@ export function createInterviewKitStore(repos: Repositories): InterviewKitStore 
       if (!input.itemIds.length) {
         throw new Error("itemIds required");
       }
-      const rem = planInterviewKitReminder(event, { now });
+      const rem = planInterviewKitReminder(event, { now, timeZone: input.timeZone });
       const row = await repos.createInterviewKit({
         id: randomUUID(),
         userId: input.userId,
@@ -192,7 +195,10 @@ export function createInterviewKitStore(repos: Repositories): InterviewKitStore 
       if (Number.isNaN(event.getTime())) {
         throw new Error("Invalid eventAt");
       }
-      const rem = planInterviewKitReminder(event, { now: opts?.now ?? new Date() });
+      const rem = planInterviewKitReminder(event, {
+        now: opts?.now ?? new Date(),
+        timeZone: opts?.timeZone,
+      });
       return patch(id, userId, {
         eventAt: event,
         remindAt: rem?.remindAt ?? null,

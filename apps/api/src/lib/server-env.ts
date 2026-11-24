@@ -1,6 +1,10 @@
+import proxyAddr from "@fastify/proxy-addr";
 import { WEB_ORIGIN } from "@worn/shared";
 import { parseServiceAccount } from "./iap/google-play.js";
+import { resolveEconomyMode } from "./orders/state-machine.js";
 import { hasR2Config } from "./storage/r2.js";
+import { parseAgentWindow } from "./render/backend.js";
+import { appleRevocationConfigProblem } from "./auth/apple-revoke.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -11,7 +15,8 @@ const DEV_JWT_SECRET = "dev-only-change-me";
  * (.env.example, @worn/config); JWT_SECRET is still read so existing setups keep working.
  */
 export function resolveJwtSecret(env: Env = process.env): { secret: string; warning?: string } {
-  const secret = env.JWT_ACCESS_SECRET || env.JWT_SECRET;
+  // A blank or whitespace-only value counts as unset: tokens are never signed with an empty key.
+  const secret = [env.JWT_ACCESS_SECRET, env.JWT_SECRET].find((value) => value?.trim());
   if (secret) return { secret };
 
   if (env.NODE_ENV === "production") {
@@ -29,6 +34,41 @@ export function resolveListenAddress(env: Env = process.env): { port: number; ho
     port: Number(env.PORT || env.API_PORT || 3000),
     host: env.HOST || env.API_HOST || "0.0.0.0",
   };
+}
+
+/**
+ * Fastify's `trustProxy`: whose X-Forwarded-For to believe for `request.ip` (rate limits key
+ * signed-out callers and sign-in by it). TRUST_PROXY is a hop count, `true`, `false`, or a
+ * comma-separated list of proxy addresses/CIDRs. Unset, production trusts one hop (the host's load
+ * balancer: Railway, Render and Fly all put one in front) and elsewhere nothing is trusted.
+ * Undefined means the value is not understood.
+ */
+export function resolveTrustProxy(env: Env = process.env): boolean | number | string | undefined {
+  const raw = env.TRUST_PROXY?.trim();
+  if (raw === undefined || raw === "") return env.NODE_ENV === "production" ? 1 : false;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  if (/^[0-9a-fA-F.:/]+(\s*,\s*[0-9a-fA-F.:/]+)*$/.test(raw)) return raw;
+  return undefined;
+}
+
+/** Addresses a host's own load balancer connects from: private, loopback or carrier-grade NAT. */
+const isInternalProxyAddress = proxyAddr.compile(["loopback", "linklocal", "uniquelocal", "100.64.0.0/10"]);
+
+/**
+ * resolveTrustProxy's value as Fastify's `trustProxy` option. Fastify 5.12 stopped honouring a bare
+ * hop count (it fails closed, so request.ip became the proxy's and every signed-out caller shared one
+ * rate-limit bucket): a hop count is now a function that trusts at most that many hops, and only
+ * hops whose address is internal, so a client reaching the API directly from the internet can't
+ * spoof X-Forwarded-For. A host whose balancer connects from public addresses sets TRUST_PROXY to
+ * its CIDRs instead.
+ */
+export function fastifyTrustProxy(
+  value: boolean | number | string | undefined,
+): boolean | string | ((address: string, hop: number) => boolean) {
+  if (typeof value !== "number") return value ?? false;
+  return (address, hop) => hop < value && isInternalProxyAddress(address, hop);
 }
 
 /**
@@ -60,11 +100,62 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     if (!env.DATABASE_URL?.trim()) {
       errors.push("DATABASE_URL is not set: every account, order and coin would live in memory and vanish on restart");
     }
+    if (!(env.JWT_ACCESS_SECRET?.trim() || env.JWT_SECRET?.trim())) {
+      errors.push("JWT_ACCESS_SECRET is not set: access tokens can't be signed");
+    }
+    if ((env.PRIVACY_HMAC_SECRET ?? "").length < 16) {
+      errors.push(
+        "PRIVACY_HMAC_SECRET is not set (at least 16 characters): consent records and poll share links can't be keyed",
+      );
+    }
+    if (env.TRUST_PROXY !== undefined && resolveTrustProxy(env) === undefined) {
+      errors.push(`TRUST_PROXY=${env.TRUST_PROXY} is not understood: use a hop count, true, false or a list of addresses`);
+    }
+    if (!(env.GOOGLE_CLIENT_IDS ?? env.GOOGLE_CLIENT_ID)?.trim()) {
+      warnings.push(
+        "GOOGLE_CLIENT_IDS is not set: Google sign-in fails, and phone sign-in is off in production, so nobody can sign in",
+      );
+    }
+    if (!env.REDIS_URL?.trim()) {
+      warnings.push("REDIS_URL is not set: account deletion and data export answer 503, and the API worker can't start");
+    }
+    const renderBackend = env.RENDER_BACKEND?.trim().toLowerCase();
+    // The recommended production renderer is the render agent (RENDER_BACKEND=agent,
+    // RENDER_AGENT_WINDOW=always, RENDER_OVERFLOW=none); FASHN runs only when opted into.
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push(
+        "FASHN_API_KEY is not set: try-on and reveal renders are unavailable. The recommended renderer is the render agent: RENDER_BACKEND=agent with RENDER_AGENT_TOKEN (docs/RENDER_AGENT.md)",
+      );
+    }
+    if (renderBackend === "agent" && !env.RENDER_AGENT_TOKEN?.trim()) {
+      warnings.push(
+        "RENDER_BACKEND=agent but RENDER_AGENT_TOKEN is not set: the render agent can't sign in, so every reveal and try-on waits forever",
+      );
+    } else if (renderBackend === "agent" && (env.RENDER_AGENT_TOKEN?.trim().length ?? 0) < 32) {
+      warnings.push("RENDER_AGENT_TOKEN is short: use a long random secret (openssl rand -hex 32)");
+    }
+    if (renderBackend === "agent" && env.RENDER_AGENT_WINDOW?.trim() && !parseAgentWindow(env.RENDER_AGENT_WINDOW)) {
+      warnings.push(`RENDER_AGENT_WINDOW=${env.RENDER_AGENT_WINDOW} is not understood: use always or HH:MM-HH:MM; using always`);
+    }
+    if (env.RENDER_OVERFLOW?.trim().toLowerCase() === "fashn" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push("RENDER_OVERFLOW=fashn but FASHN_API_KEY is not set: there is no overflow, jobs wait for the render agent");
+    }
+    if (renderBackend === "mock") {
+      warnings.push("RENDER_BACKEND=mock: reveals and try-ons show placeholder images");
+    }
+    if (resolveEconomyMode(env) === "beta") {
+      warnings.push("WORN_ECONOMY_MODE=beta: orders use the short beta delivery timers (minutes, not hours)");
+    }
     if (!hasR2Config(env)) {
       errors.push("R2 storage is not configured (R2_*): uploads would go to an in-memory mock");
     }
     if (!(env.OCR_PROVIDER_URL ?? env.OCR_PROVIDER_ENDPOINT) || env.OCR_PROVIDER === "mock") {
       errors.push("OCR is not configured (OCR_PROVIDER_URL): receipts would be read by the mock");
+    }
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push(
+        "FASHN_API_KEY is not set: try-on previews, reveal unlocks and generates are unavailable (503), and every free reveal render fails",
+      );
     }
     if (!env.WEATHER_API?.trim()) {
       warnings.push("WEATHER_API is not set: weather falls back to the mock (source: mock)");
@@ -77,6 +168,29 @@ export function bootConfigProblems(env: Env = process.env): { errors: string[]; 
     }
     if (!env.GOOGLE_CLIENT_ID || !env.OAUTH_STATE_SECRET) {
       warnings.push("GOOGLE_CLIENT_ID or OAUTH_STATE_SECRET is not set: Gmail connect is unavailable (503)");
+    }
+    if (!env.REDIS_URL?.trim()) {
+      warnings.push(
+        "REDIS_URL is not set: the API worker can't run, so account-deletion retries (stored objects left after a storage error), data exports, store-purchase reconciliation and the Closet jobs never run, and every route that enqueues one answers 503",
+      );
+    }
+    if (!(env.GOOGLE_CLIENT_IDS ?? env.GOOGLE_CLIENT_ID)?.trim()) {
+      warnings.push(
+        "GOOGLE_CLIENT_IDS is not set: Google sign-in answers 503 (phone sign-in is off in production, so only Sign in with Apple on iOS works)",
+      );
+    }
+    if (!(env.APPLE_SIGN_IN_AUDIENCES ?? env.APPLE_BUNDLE_ID)?.trim()) {
+      warnings.push("APPLE_BUNDLE_ID is not set: Sign in with Apple answers 503");
+    }
+    const appleRevocation = appleRevocationConfigProblem(env);
+    if (appleRevocation) warnings.push(appleRevocation);
+    if (renderBackend !== "agent" && renderBackend !== "mock" && !env.FASHN_API_KEY?.trim()) {
+      warnings.push("FASHN_API_KEY is not set: try-on and reveal renders fail, so orders never reach their reveal");
+    }
+    if (env.IAP_ACCEPT_TEST_PURCHASES === "0") {
+      warnings.push(
+        "IAP_ACCEPT_TEST_PURCHASES=0: Sandbox and license-tester purchases are refused, so App Review and TestFlight testers can't buy coins",
+      );
     }
     if (env.IAP_ALLOW_SIMULATED === "1") warnings.push("IAP_ALLOW_SIMULATED=1 is ignored in production");
     if (env.IAP_ALLOW_XCODE === "1") warnings.push("IAP_ALLOW_XCODE=1 is ignored in production");

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 
 import {
@@ -21,6 +21,40 @@ export const orderKeys = {
   list: (userId: string | null) => ['orders', userId] as const,
   detail: (orderId: string, userId: string | null) => ['order', orderId, userId] as const,
 };
+
+/**
+ * Reloads the coin balance after a spend into both places screens read it from (the query cache
+ * and the session store). Fire-and-forget: it never throws, so a spend the server already made
+ * can't be reported as failed because this follow-up request failed.
+ */
+export function refreshCoinBalance(
+  queryClient: QueryClient,
+  accessToken: string,
+  userId: string | null,
+  setCoinBalance: (balance: number) => void,
+) {
+  void fetchCoinBalance(accessToken).then(
+    (balance) => {
+      setCoinBalance(balance.balance);
+      queryClient.setQueryData(orderKeys.balance(userId), balance);
+    },
+    () => {
+      // Shown values may lag; mark them stale so the next screen that reads them reloads.
+      void queryClient.invalidateQueries({ queryKey: orderKeys.balance(userId) });
+    },
+  );
+}
+
+/** Sets a balance the server just reported (a claim or a spend response) everywhere it's shown. */
+export function applyCoinBalance(
+  queryClient: QueryClient,
+  userId: string | null,
+  setCoinBalance: (balance: number) => void,
+  balance: number,
+) {
+  setCoinBalance(balance);
+  queryClient.setQueryData(orderKeys.balance(userId), { balance });
+}
 
 export function useCoinBalance() {
   const userId = useSessionStore((s) => userIdFromAccessToken(s.accessToken));
@@ -67,17 +101,15 @@ export function useCheckout(haulKey = '') {
       }
       return createOrder(accessToken, tier, attempt.current.idempotencyKey, coolingOffOverride);
     },
-    onSuccess: async (order) => {
+    // The order is placed once this resolves: a failed balance refresh must not report it as
+    // failed (the screen would stay on a haul the server already emptied).
+    onSuccess: (order) => {
       attempt.current = null;
       trackEvent('checkout', { orderId: order.id, tier: order.tier, coinTotal: order.coinTotal });
-      if (accessToken) {
-        const balance = await fetchCoinBalance(accessToken);
-        setCoinBalance(balance.balance);
-        queryClient.setQueryData(orderKeys.balance(userId), balance);
-        queryClient.invalidateQueries({ queryKey: cartKey(userId) });
-        queryClient.setQueryData(orderKeys.detail(order.id, userId), order);
-        queryClient.invalidateQueries({ queryKey: orderKeys.list(userId) });
-      }
+      queryClient.setQueryData(orderKeys.detail(order.id, userId), order);
+      void queryClient.invalidateQueries({ queryKey: cartKey(userId) });
+      void queryClient.invalidateQueries({ queryKey: orderKeys.list(userId) });
+      if (accessToken) refreshCoinBalance(queryClient, accessToken, userId, setCoinBalance);
     },
   });
 }
@@ -94,12 +126,20 @@ export function useOrder(orderId: string) {
       return fetchOrder(accessToken, orderId);
     },
     enabled: signedIn && Boolean(orderId),
+    // Polls while the order is moving; a ready, cancelled or failed order won't change again.
     refetchInterval: (query) => {
       const state = query.state.data?.state;
-      return state && state !== 'REVEAL_READY' ? 5_000 : false;
+      return state && !SETTLED_ORDER_STATES.has(state) ? 5_000 : false;
     },
   });
 }
+
+/** Order states that no longer change. */
+export const SETTLED_ORDER_STATES: ReadonlySet<OrderSummary['state']> = new Set([
+  'REVEAL_READY',
+  'CANCELLED',
+  'FAILED',
+]);
 
 /** True when the API turned a coin spend down for lack of coins (402). */
 export function isInsufficientCoinsError(error: unknown) {

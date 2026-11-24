@@ -44,6 +44,7 @@ describe('RewearStreakCelebrate (W072)', () => {
       expect(screen.getByTestId('rewear-streak-milestone')).toBeTruthy();
     });
     expect(screen.getByText(/Habit > haul/i)).toBeTruthy();
-    expect(screen.getByText(/Reduce Motion/i)).toBeTruthy();
+    // The celebration stays static; users are not shown a note about the setting (S3-27).
+    expect(screen.queryByText(/Reduce Motion/i)).toBeNull();
   });
 });

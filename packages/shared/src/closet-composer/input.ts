@@ -46,7 +46,7 @@ export const ComposerItemSchema = ClosetItemFieldsSchema.pick({
   priceSource: true,
   deletedAt: true,
 }).extend({
-  id: z.string().uuid(),
+  id: z.uuid(),
   category: z.string().min(1),
   colors: z.array(z.string()),
   costMinor: z.number().int().nonnegative(),
@@ -57,7 +57,7 @@ export const ComposerItemSchema = ClosetItemFieldsSchema.pick({
   lentTo: z.string().nullable().optional().default(null),
   lentDueOn: LocalDateSchema.nullable().optional().default(null),
   /** An open alteration order (`tailoring_orders`), and the day it is due back. */
-  tailorOrderId: z.string().uuid().nullable().optional().default(null),
+  tailorOrderId: z.uuid().nullable().optional().default(null),
   tailorPickupOn: LocalDateSchema.nullable().optional().default(null),
 });
 export type ComposerItem = z.infer<typeof ComposerItemSchema>;
@@ -65,7 +65,7 @@ export type ComposerItemInput = z.input<typeof ComposerItemSchema>;
 
 /** The part of the universe's `ItemMetricSchema` the composer reads. */
 export const ComposerMetricSchema = z.object({
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   wearCount: z.number().int().nonnegative(),
   lastWornAt: TimestampSchema.nullable(),
   /** Wears in the 180 days before the week, for the palette (style spec §6). Missing counts as none. */
@@ -85,7 +85,7 @@ export const ComposerSettingsSchema = z
       .optional()
       .default(null),
     /** `checks_enabled`: a check that is missing is on. */
-    checksEnabled: z.record(BackupCheckSchema, z.boolean()).optional().default({}),
+    checksEnabled: z.partialRecord(BackupCheckSchema, z.boolean()).optional().default({}),
     /** The user's learned soft-score multipliers (§8.8), bounded so one odd week can't swing the plan. */
     weights: z
       .object({
@@ -105,13 +105,13 @@ export const ComposerSettingsSchema = z
       .optional()
       .default({}),
   })
-  .optional()
-  .default({});
+  // A missing settings object parses as `{}`, so the field defaults above still apply.
+  .prefault({});
 export type ComposerSettings = z.infer<typeof ComposerSettingsSchema>;
 
 /** `week_plans.seed`: a bigint column, so a safe integer, a digit string or a bigint. */
 export const ComposerSeedSchema = z
-  .union([z.number().int().safe(), z.string().regex(/^-?\d{1,20}$/), z.bigint()])
+  .union([z.number().int(), z.string().regex(/^-?\d{1,20}$/), z.bigint()])
   .transform((seed) => String(seed));
 
 const closetFields = {
@@ -169,7 +169,7 @@ export type RestyleInput = z.input<typeof RestyleInputSchema>;
 export const SwapInputSchema = z.object({
   context: ClosetDayContextSchema,
   outfit: ClosetOutfitSchema,
-  swap: z.object({ slot: ItemSlotSchema, itemId: z.string().uuid() }),
+  swap: z.object({ slot: ItemSlotSchema, itemId: z.uuid() }),
   ...closetFields,
 });
 export type SwapInput = z.input<typeof SwapInputSchema>;
@@ -195,7 +195,7 @@ export function failure(code: ComposerErrorCode, path: string, message: string):
   return { ok: false, error: { code, message, issues: [{ path, message }] } };
 }
 
-export function parseInput<S extends z.ZodTypeAny>(schema: S, input: unknown): ComposerResult<z.output<S>> {
+export function parseInput<S extends z.ZodType>(schema: S, input: unknown): ComposerResult<z.output<S>> {
   const parsed = schema.safeParse(input);
   if (parsed.success) return { ok: true, value: parsed.data };
   const issues = parsed.error.issues.slice(0, MAX_ISSUES).map((issue) => ({

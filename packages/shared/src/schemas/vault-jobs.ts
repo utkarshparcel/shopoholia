@@ -10,17 +10,17 @@ export const GMAIL_TOKEN_REVOKE_QUEUE = "gmail-token-revoke";
 export const INGESTION_RETENTION_QUEUE = "ingestion-retention";
 
 /** DELETE /vault: erase every row and stored object of the request's user. */
-export const PrivacyEraseJobSchema = z.object({ requestId: z.string().uuid() });
+export const PrivacyEraseJobSchema = z.object({ requestId: z.uuid() });
 
 /** POST /vault/export: build the export file and store it for download. */
-export const PrivacyExportJobSchema = z.object({ requestId: z.string().uuid() });
+export const PrivacyExportJobSchema = z.object({ requestId: z.uuid() });
 
 /**
  * Consent withdrawal / erasure: revoke a Gmail grant at Google. Carries the encrypted token
  * blob (AES-256-GCM); the plaintext only exists inside the handler.
  */
 export const GmailTokenRevokeJobSchema = z.object({
-  sourceId: z.string().uuid(),
+  sourceId: z.uuid(),
   encryptedToken: z.string().min(1).max(8192),
 });
 

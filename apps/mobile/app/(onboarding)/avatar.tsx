@@ -141,10 +141,10 @@ export default function AvatarOnboardingScreen() {
             {status === 'READY'
               ? 'Avatar ready'
               : status === 'PROCESSING'
-                ? 'Processing your photos…'
+                ? 'Processing your photo…'
                 : status === 'FAILED'
                   ? 'Processing failed — try again'
-                  : 'Upload 1–3 photos (full or upper body)'}
+                  : 'Upload a photo of yourself (full or upper body)'}
           </Text>
         </View>
 

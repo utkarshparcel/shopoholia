@@ -255,13 +255,26 @@ export type BackupWhyInput =
       tempC: number | null;
     };
 
+/**
+ * Where a planned piece is open, with the garment as the subject (spec §10.3: a body part only
+ * as where a garment sits): "is open at the shoulders and at the underarms, and ends above the knee".
+ */
+function openingsPhrase(zones: readonly string[], plural: boolean): string {
+  const open = zones.filter((z) => z === "shoulders" || z === "underarms").map((z) => `at the ${z}`);
+  const parts: string[] = [];
+  if (open.length) parts.push(`${plural ? "are" : "is"} open ${open.join(" and ")}`);
+  if (zones.includes("legs")) parts.push(`${plural ? "end" : "ends"} above the knee`);
+  if (parts.length === 0) return `${plural ? "are" : "is"} open`;
+  return parts.length === 2 ? `${parts[0]}, and ${parts[1]}` : parts[0]!;
+}
+
 /** Why a backup exists, read off the planned look that triggered its check. */
 export function backupWhy(input: BackupWhyInput): string {
   switch (input.check) {
     case "NOT_WAXED":
-      return `${input.day}${APOS}s ${input.piece} ${input.plural ? "show" : "shows"} ${joinList(input.zones)}.`;
+      return `${input.day}${APOS}s ${input.piece} ${openingsPhrase(input.zones, input.plural)}.`;
     case "BLOATED":
-      return `The ${input.piece} ${input.plural ? "are" : "is"} ${joinList(input.fits)} through the ${joinList(input.areas)}.`;
+      return `The ${input.piece} ${input.plural ? "are" : "is"} ${joinList(input.fits)} ${joinList(input.areas.map((a) => `through the ${a}`))}.`;
     case "BAD_HAIR":
       return "The look was built around hair down and blow-dried.";
     case "PARTY_DATE": {
@@ -276,7 +289,7 @@ export function backupWhy(input: BackupWhyInput): string {
 
 /** Why a backup exists when nothing in the plan trips its check. */
 export const BACKUP_WHY_NONE: Record<BackupCheck, string> = {
-  NOT_WAXED: "Nothing in the plan shows underarms or legs.",
+  NOT_WAXED: "Nothing in the plan is open at the underarms or ends above the knee.",
   BLOATED: "Nothing in the plan sits tight at the waist.",
   BAD_HAIR: "Nothing in the plan needs hair down.",
   PARTY_DATE: "Every look in the plan already works for the evening.",
@@ -285,10 +298,17 @@ export const BACKUP_WHY_NONE: Record<BackupCheck, string> = {
 /** What the closet lacks when a check has no answer. */
 export function backupMissing(check: BackupCheck, zones: readonly string[], when: "this week" | "today"): string {
   switch (check) {
-    case "NOT_WAXED":
-      return `Nothing that covers the ${joinList(zones.length ? zones : ["underarms", "legs"])} fits ${when}.`;
+    case "NOT_WAXED": {
+      // Garment-led (spec §10.3): what the missing piece has, not which body it covers.
+      const wanted = zones.length ? zones : ["underarms", "legs"];
+      const needs = [
+        ...(wanted.some((z) => z === "shoulders" || z === "underarms") ? ["with sleeves"] : []),
+        ...(wanted.includes("legs") ? ["that reaches below the knee"] : []),
+      ];
+      return `Nothing ${needs.join(" ")} fits ${when}.`;
+    }
     case "BLOATED":
-      return `Nothing loose through the waist and hips fits ${when}.`;
+      return `Nothing loose through the waist and through the hips fits ${when}.`;
     case "BAD_HAIR":
       return `Nothing built for hair up fits ${when}.`;
     case "PARTY_DATE":

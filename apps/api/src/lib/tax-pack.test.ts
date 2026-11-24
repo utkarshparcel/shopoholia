@@ -30,6 +30,53 @@ describe("tax-pack (N44-TAX-PACK)", () => {
     });
   });
 
+  it("uses the user's local year and offers the Indian financial year", () => {
+    const ist = resolveTaxPackRange({ year: 2026, timeZone: "Asia/Kolkata" });
+    if ("error" in ist) throw new Error(ist.error);
+    expect(ist.from.toISOString()).toBe("2025-12-31T18:30:00.000Z");
+    expect(ist.to.toISOString()).toBe("2026-12-31T18:29:59.999Z");
+    // 00:30 IST on 1 Jan 2026 is 2026 spend, not 2025.
+    expect(isDateInRange(new Date("2025-12-31T19:00:00.000Z"), ist.from, ist.to)).toBe(true);
+
+    const fy = resolveTaxPackRange({ fy: 2025, timeZone: "Asia/Kolkata" });
+    if ("error" in fy) throw new Error(fy.error);
+    expect(fy.label).toBe("FY2025-26");
+    expect(fy.year).toBeNull();
+    expect(fy.from.toISOString()).toBe("2025-03-31T18:30:00.000Z");
+    expect(fy.to.toISOString()).toBe("2026-03-31T18:29:59.999Z");
+
+    const custom = resolveTaxPackRange({ from: "2026-01-01", to: "2026-01-31", timeZone: "Asia/Kolkata" });
+    if ("error" in custom) throw new Error(custom.error);
+    expect(custom.from.toISOString()).toBe("2025-12-31T18:30:00.000Z");
+    expect(resolveTaxPackRange({ year: 2026, fy: 2025 })).toEqual({ error: "use either year or fy, not both" });
+  });
+
+  it("dates spend by the linked purchase, not by when the item was added to the closet", () => {
+    const range = resolveTaxPackRange({ year: 2025 });
+    if ("error" in range) throw new Error(range.error);
+    const purchaseItemId = "11111111-1111-4111-8111-111111111111";
+    const purchaseId = "22222222-2222-4222-8222-222222222222";
+    const pack = buildWorkwearTaxPack({
+      range,
+      wardrobeItems: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          category: "blazer",
+          tags: ["workwear"],
+          costMinor: 500000,
+          // Backfilled into the closet in 2026, bought in 2025.
+          createdAt: new Date("2026-02-01T10:00:00.000Z"),
+          purchaseItemId,
+        },
+      ],
+      receipts: [],
+      purchaseIdByItemId: new Map([[purchaseItemId, purchaseId]]),
+      purchasedAtByPurchaseId: new Map([[purchaseId, new Date("2025-07-10T10:00:00.000Z")]]),
+    });
+    expect(pack.spendRowCount).toBe(1);
+    expect(pack.spend[0]!.purchasedAt).toBe("2025-07-10T10:00:00.000Z");
+  });
+
   it("isDateInRange is inclusive on boundaries", () => {
     const from = new Date("2025-01-01T00:00:00.000Z");
     const to = new Date("2025-12-31T23:59:59.999Z");

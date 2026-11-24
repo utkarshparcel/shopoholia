@@ -163,6 +163,16 @@ describe("processEmiDueNudge", () => {
     expect(sendExpo).toHaveBeenCalledTimes(1);
   });
 
+  it("shows amounts in the plan's currency with their minor units, not rupees", async () => {
+    const { repos } = makeRepos({ status: "ACTIVE", remainingMinor: 50_050, nextDueOn: "2099-01-15" });
+    const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "t1" }));
+    const usd = { ...payload, currency: "USD", installmentMinor: 10_050, remainingMinor: 50_050 };
+    expect((await processEmiDueNudge(usd, repos as never, { now, sendExpo })).status).toBe("sent");
+    const body = (repos.recordPushEvent.mock.calls[0] as unknown as [{ body: string }])[0].body;
+    expect(body).toBe("LazyPay · Ajio: $100.50 installment ($500.50 left)");
+    expect(body).not.toContain("₹");
+  });
+
   it("skips when the plan moved to another due date or was paid", async () => {
     const sendExpo = vi.fn(async () => ({ ok: true as const, ticketId: "t1" }));
     const moved = makeRepos({ status: "ACTIVE", remainingMinor: 40_000, nextDueOn: "2099-02-15" });

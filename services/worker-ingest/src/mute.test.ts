@@ -71,7 +71,7 @@ describe("processIngestJob muted filter (N47)", () => {
     expect(result.purchase?.merchant).toBe("AMAZON");
     expect(calls.insert).not.toHaveBeenCalled();
     expect(calls.mark).toHaveBeenCalledWith("doc-mute", "UNMATCHED");
-    expect(calls.cursor).toHaveBeenCalledWith("src-1", amazonMsg.messageId);
+    expect(calls.cursor).not.toHaveBeenCalled();
   });
 
   it("persists when merchant is not muted", async () => {

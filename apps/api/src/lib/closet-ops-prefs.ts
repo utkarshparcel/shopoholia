@@ -1,7 +1,8 @@
 /**
  * Closet ops prefs. Laundry rules (U032), missing-layer dismissals (U034) and the CPW threshold
- * (U036) live in `users.prefs` (C2: written only through repos.patchUserPrefs). The rest is still
- * in process memory (keep snooze, measure meta, tailor pickup, photo-dump triage, lent notes).
+ * (U036) live in `users.prefs` (C2: written only through repos.patchUserPrefs). Keep snooze and
+ * photo-dump triage are columns on the wardrobe item, lent write-off notes a table
+ * (`lent_waste_notes`); measurement change notes and tailor pickups are on their own rows.
  */
 
 import {
@@ -26,18 +27,6 @@ async function savePrefs(
 ): Promise<void> {
   if (!(await repos.patchUserPrefs(userId, patch))) throw new Error("user prefs not saved: user not found");
 }
-
-const keepSnoozeByItem = new Map<string, { userId: string; until: string }>();
-const measureMeta = new Map<
-  string,
-  { changeNote: string | null; previousId: string | null; familyId: string }
->();
-const tailorPickupByOrder = new Map<
-  string,
-  { expectedPickupOn: string; nudgeSent: boolean }
->();
-const photoDumpTriageAt = new Map<string, string>();
-const lentWasteNotes = new Map<string, string[]>();
 
 export async function getLaundryRules(repos: Repositories, userId: string): Promise<LaundryRulesPrefs> {
   const prefs = await repos.getUserPrefs(userId);
@@ -90,73 +79,55 @@ export async function listDismissedMissingLayers(repos: Repositories, userId: st
   return [...(prefs?.dismissedMissingLayerIds ?? [])];
 }
 
-export function setKeepSnooze(userId: string, wardrobeItemId: string, until: string): void {
-  keepSnoozeByItem.set(wardrobeItemId, { userId, until });
-}
-
-export function getKeepSnooze(
+/** U035 — snoozes the waste nudge for the user's item until `until`; false if not theirs. */
+export async function setKeepSnooze(
+  repos: Pick<Repositories, "setWardrobeItemMarks">,
   userId: string,
   wardrobeItemId: string,
-): string | null {
-  const row = keepSnoozeByItem.get(wardrobeItemId);
-  if (!row || row.userId !== userId) return null;
-  return row.until;
+  until: string,
+): Promise<boolean> {
+  return repos.setWardrobeItemMarks(wardrobeItemId, userId, { keepSnoozedUntil: new Date(until) });
 }
 
-export function setMeasureMeta(
-  profileId: string,
-  meta: { changeNote: string | null; previousId: string | null; familyId: string },
-): void {
-  measureMeta.set(profileId, meta);
+export async function getKeepSnooze(
+  repos: Pick<Repositories, "getWardrobeItemMarks">,
+  userId: string,
+  wardrobeItemId: string,
+): Promise<string | null> {
+  return (await repos.getWardrobeItemMarks(wardrobeItemId, userId))?.keepSnoozedUntil?.toISOString() ?? null;
 }
 
-export function getMeasureMeta(profileId: string) {
-  return measureMeta.get(profileId) ?? null;
+/** U040 — when the item's photo-dump triage was decided (the undo window runs from it). */
+export async function setPhotoDumpTriageAt(
+  repos: Pick<Repositories, "setWardrobeItemMarks">,
+  userId: string,
+  itemId: string,
+  at: Date | null,
+): Promise<boolean> {
+  return repos.setWardrobeItemMarks(itemId, userId, { photoDumpTriagedAt: at });
 }
 
-export function setTailorPickup(
-  orderId: string,
-  expectedPickupOn: string,
-): void {
-  tailorPickupByOrder.set(orderId, { expectedPickupOn, nudgeSent: false });
+export async function getPhotoDumpTriageAt(
+  repos: Pick<Repositories, "getWardrobeItemMarks">,
+  userId: string,
+  itemId: string,
+): Promise<string | null> {
+  return (await repos.getWardrobeItemMarks(itemId, userId))?.photoDumpTriagedAt?.toISOString() ?? null;
 }
 
-export function getTailorPickup(orderId: string) {
-  return tailorPickupByOrder.get(orderId) ?? null;
+/** U039 — a "lost while lent" write-off note. */
+export async function appendLentWasteNote(
+  repos: Pick<Repositories, "appendLentWasteNote">,
+  userId: string,
+  wardrobeItemId: string | null,
+  note: string,
+): Promise<void> {
+  await repos.appendLentWasteNote({ userId, wardrobeItemId, note });
 }
 
-export function markTailorPickupNudgeSent(orderId: string): void {
-  const row = tailorPickupByOrder.get(orderId);
-  if (row) tailorPickupByOrder.set(orderId, { ...row, nudgeSent: true });
-}
-
-export function setPhotoDumpTriageAt(itemId: string, iso: string): void {
-  photoDumpTriageAt.set(itemId, iso);
-}
-
-export function getPhotoDumpTriageAt(itemId: string): string | null {
-  return photoDumpTriageAt.get(itemId) ?? null;
-}
-
-export function clearPhotoDumpTriageAt(itemId: string): void {
-  photoDumpTriageAt.delete(itemId);
-}
-
-export function appendLentWasteNote(userId: string, note: string): void {
-  const list = lentWasteNotes.get(userId) ?? [];
-  list.push(note);
-  lentWasteNotes.set(userId, list);
-}
-
-export function listLentWasteNotes(userId: string): string[] {
-  return [...(lentWasteNotes.get(userId) ?? [])];
-}
-
-/** Test helper */
-export function __resetClosetOpsPrefsForTests(): void {
-  keepSnoozeByItem.clear();
-  measureMeta.clear();
-  tailorPickupByOrder.clear();
-  photoDumpTriageAt.clear();
-  lentWasteNotes.clear();
+export async function listLentWasteNotes(
+  repos: Pick<Repositories, "listLentWasteNotes">,
+  userId: string,
+): Promise<string[]> {
+  return (await repos.listLentWasteNotes(userId)).map((n) => n.note);
 }

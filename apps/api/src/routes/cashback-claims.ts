@@ -101,7 +101,7 @@ export const cashbackClaimsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["vault"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: CashbackClaimSchema, 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
       },
     },
@@ -132,11 +132,11 @@ export const cashbackClaimsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["vault"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({
-            claimId: z.string().uuid(),
-            startUrl: z.string().url().nullable(),
+            claimId: z.uuid(),
+            startUrl: z.url().nullable(),
           }),
           401: ErrorSchema,
           404: ErrorSchema,

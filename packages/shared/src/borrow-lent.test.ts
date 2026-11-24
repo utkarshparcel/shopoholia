@@ -76,4 +76,12 @@ describe("borrow-lent", () => {
     ]);
     expect(sorted.map((i) => i.id)).toEqual(["a", "same1", "same2", "b", "n", "e"]);
   });
+
+  it("an item due back today is due, not overdue, everywhere", () => {
+    const item = { lentTo: "Priya", lentDueOn: "2026-08-26" };
+    expect(isLentOverdue(item, "2026-08-26")).toBe(false);
+    expect(filterLentDue([item], { asOf: "2026-08-26", filter: "overdue" })).toHaveLength(0);
+    expect(filterLentDue([item], { asOf: "2026-08-26", filter: "due" })).toHaveLength(1);
+    expect(isLentOverdue(item, "2026-08-27")).toBe(true);
+  });
 });

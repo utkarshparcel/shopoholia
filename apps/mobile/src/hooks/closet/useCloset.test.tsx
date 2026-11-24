@@ -4,12 +4,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { enqueueVaultAdd, VAULT_ADD_QUEUE_KEY } from '@/src/lib/vaultAddQueue';
+import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
 
 import {
   useAddGiftCard,
   useAccountantSeasonRoi,
   useBalanceCheck,
   useBorrowSwapListing,
+  useReturnSwapListing,
   useBudgets,
   useBulkUploadWardrobe,
   useCapsule,
@@ -453,6 +455,7 @@ vi.mock('@/src/api/client', () => ({
   joinSwapCircle: vi.fn(async () => ({ id: 'sc1' })),
   fetchSwapListings: vi.fn(async () => ({ listings: [] })),
   borrowSwapListing: vi.fn(async () => ({ id: 'sl1', status: 'BORROWED' })),
+  returnSwapListing: vi.fn(async () => ({ id: 'sl1', status: 'RETURNED' })),
   lendWardrobeItem: vi.fn(async () => ({ id: 'w1', lentTo: 'Ada' })),
   returnLentWardrobeItem: vi.fn(async () => ({ id: 'w1' })),
   createHousehold: vi.fn(async () => ({ id: 'hh1', name: 'Home' })),
@@ -1013,6 +1016,67 @@ describe('useSpendGiftCard', () => {
     expect(body.idempotencyKey).toBeTruthy();
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] })?.queryKey?.[0]);
     expect(keys).toContain('gift-cards');
+  });
+
+  it('reuses the idempotency key when a failed spend is retried, and mints a new one after success', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    let mutateAsync!: ReturnType<typeof useSpendGiftCard>['mutateAsync'];
+    function SpendProbe({ onReady }: { onReady: (m: ReturnType<typeof useSpendGiftCard>['mutateAsync']) => void }) {
+      const spend = useSpendGiftCard();
+      onReady(spend.mutateAsync);
+      return <span>spend</span>;
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <SpendProbe onReady={(m) => (mutateAsync = m)} />
+      </QueryClientProvider>,
+    );
+    const id = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(spendCredit).mockRejectedValueOnce(new Error('timeout'));
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 }).catch(() => undefined);
+    });
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 });
+    });
+    await act(async () => {
+      await mutateAsync({ id, amountMinor: 1000 });
+    });
+    const sent = vi.mocked(spendCredit).mock.calls.map((c) => c[2].idempotencyKey);
+    expect(sent).toHaveLength(3);
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[1]);
+  });
+});
+
+describe('useAddGiftCard retries', () => {
+  it('reuses the idempotency key when the same add is retried after a failure', async () => {
+    vi.mocked(addCredit).mockClear();
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    let mutateAsync!: ReturnType<typeof useAddGiftCard>['mutateAsync'];
+    render(
+      <QueryClientProvider client={client}>
+        <AddProbe onReady={(m) => (mutateAsync = m)} />
+      </QueryClientProvider>,
+    );
+    const input = { kind: 'GIFT_CARD' as const, merchant: 'Amazon', currency: 'INR', balanceMinor: 1000 };
+    vi.mocked(addCredit).mockRejectedValueOnce(new Error('timeout'));
+    await act(async () => {
+      await mutateAsync(input).catch(() => undefined);
+    });
+    await act(async () => {
+      await mutateAsync(input);
+    });
+    await act(async () => {
+      await mutateAsync({ ...input, merchant: 'Myntra' });
+    });
+    const sent = vi.mocked(addCredit).mock.calls.map((c) => c[1].idempotencyKey);
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[1]);
   });
 });
 
@@ -1581,7 +1645,13 @@ describe('receipts / warranties / cashback / balance surface', () => {
 
     expect(checkCreditBalance).toHaveBeenCalled();
     expect(confirmCreditBalance).toHaveBeenCalled();
-    expect(uploadReceipt).toHaveBeenCalled();
+    // S1-27 — the receipt is sent with the user's Closet currency, not left to default to INR.
+    expect(uploadReceipt).toHaveBeenCalledWith(
+      'test-token',
+      'file:///r.jpg',
+      undefined,
+      useClosetPrefsStore.getState().preferredCurrency,
+    );
     expect(confirmReceipt).toHaveBeenCalled();
     expect(claimWarranty).toHaveBeenCalled();
     expect(unclaimWarranty).toHaveBeenCalled();
@@ -1850,6 +1920,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
     let createSwap!: ReturnType<typeof useCreateSwapCircle>['mutateAsync'];
     let joinSwap!: ReturnType<typeof useJoinSwapCircle>['mutateAsync'];
     let borrow!: ReturnType<typeof useBorrowSwapListing>['mutateAsync'];
+    let giveBack!: ReturnType<typeof useReturnSwapListing>['mutateAsync'];
     let lend!: ReturnType<typeof useLendWardrobeItem>['mutateAsync'];
     let returnLent!: ReturnType<typeof useReturnLentWardrobeItem>['mutateAsync'];
     let createHh!: ReturnType<typeof useCreateHousehold>['mutateAsync'];
@@ -1864,6 +1935,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
       createSwap = useCreateSwapCircle().mutateAsync;
       joinSwap = useJoinSwapCircle().mutateAsync;
       borrow = useBorrowSwapListing().mutateAsync;
+      giveBack = useReturnSwapListing().mutateAsync;
       lend = useLendWardrobeItem().mutateAsync;
       returnLent = useReturnLentWardrobeItem().mutateAsync;
       createHh = useCreateHousehold().mutateAsync;
@@ -1890,6 +1962,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
       await createSwap('Friends');
       await joinSwap('INVITE');
       await borrow({ circleId: 'sc1', listingId: 'sl1' });
+      await giveBack({ circleId: 'sc1', listingId: 'sl1' });
       await lend({ id: 'w1', lentTo: 'Ada', dueOn: '2026-09-30' });
       await returnLent('w1');
       await createHh('Home');
@@ -1904,6 +1977,7 @@ describe('gift / fit / disposition / swap / household surface', () => {
     expect(api.createSwapCircle).toHaveBeenCalled();
     expect(api.joinSwapCircle).toHaveBeenCalled();
     expect(api.borrowSwapListing).toHaveBeenCalled();
+    expect(api.returnSwapListing).toHaveBeenCalledWith('test-token', 'sc1', 'sl1');
     expect(api.lendWardrobeItem).toHaveBeenCalled();
     expect(api.returnLentWardrobeItem).toHaveBeenCalled();
     expect(api.createHousehold).toHaveBeenCalled();

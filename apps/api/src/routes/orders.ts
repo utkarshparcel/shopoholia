@@ -115,6 +115,7 @@ export const ordersRoutes: FastifyPluginAsyncZod = async (app) => {
           400: ErrorSchema,
           401: ErrorSchema,
           402: ErrorSchema,
+          409: ErrorSchema,
           423: CoolingOffErrorSchema,
         },
       },
@@ -140,7 +141,12 @@ export const ordersRoutes: FastifyPluginAsyncZod = async (app) => {
               coolingOff: error.coolingOff,
             });
           }
-          const status = error.code === "INSUFFICIENT_COINS" ? 402 : 400;
+          const status =
+            error.code === "INSUFFICIENT_COINS"
+              ? 402
+              : error.code === "CART_CHANGED" || error.code === "IDEMPOTENCY_CONFLICT"
+                ? 409
+                : 400;
           return reply.code(status).send({ error: error.code, message: error.message });
         }
         throw error;

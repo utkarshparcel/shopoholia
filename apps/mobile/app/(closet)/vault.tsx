@@ -43,8 +43,9 @@ import {
   delightHapticForCelebrationSource,
 } from '@/src/lib/delightHaptics';
 import { formatClosetDate } from '@/src/lib/format';
-import { useClosetPrefsStore } from '@/src/lib/closetPrefs';
+import { CLOSET_CURRENCIES, useClosetPrefsStore } from '@/src/lib/closetPrefs';
 import { parseAmountInput } from '@/src/lib/amountInput';
+import { scheduleBalanceRecheckReminder } from '@/src/lib/balanceReminder';
 import { newIdempotencyKey } from '@/src/lib/idempotency';
 import { addMonthsToDayKey, endOfDayKeyIso, localDayKey, parseDayKey } from '@/src/lib/localDay';
 import { celebrationVariantForSource } from '@/src/lib/celebrationVariants';
@@ -53,14 +54,9 @@ import {
   isGstFocus,
   type GstInvoiceSearchPrefill,
 } from '@/src/lib/gstFromReturn';
-import {
-  enqueueVaultAdd,
-  flushVaultAddQueue,
-  queuedAddAsPendingAccount,
-  readVaultAddQueue,
-  type QueuedVaultAdd,
-} from '@/src/lib/vaultAddQueue';
+import { enqueueVaultAdd, queuedAddAsPendingAccount } from '@/src/lib/vaultAddQueue';
 import { useNetworkStatus } from '@/src/hooks/closet/useNetworkStatus';
+import { useVaultAddQueue } from '@/src/hooks/closet/useVaultAddQueue';
 import { useSessionUserId } from '@/src/hooks/closet/keys';
 
 import { Button } from '@/src/components/ui';
@@ -126,7 +122,7 @@ import {
   whatsAppStatusAssetFromAccounts,
 } from '@/src/lib/foundMoney';
 import { delightBarcodeCaptureSuccess } from '@/src/lib/barcodeCaptureDelight';
-import { ApiRequestError, getMyReferral, recordClosetAffiliateClick, addCredit } from '@/src/api/client';
+import { ApiRequestError, getMyReferral, recordClosetAffiliateClick } from '@/src/api/client';
 import {
   SAMPLE_MYNTRA_CREDIT,
   VAULT_FOUND_MONEY_HREF,
@@ -300,18 +296,7 @@ export default function ClosetVaultScreen() {
   const router = useRouter();
   const accessToken = useSessionStore((s) => s.accessToken);
   const userId = useSessionUserId();
-  const { isOffline } = useNetworkStatus();
-  const [offlineQueuedCount, setOfflineQueuedCount] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    void readVaultAddQueue(userId).then((snap) => {
-      if (!cancelled) setOfflineQueuedCount(snap.items.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOffline, userId]);
+  const addQueue = useVaultAddQueue(userId);
 
   const onSnapReceiptFromHero = useCallback(() => {
     trackEvent('receipt_snap_hero');
@@ -427,12 +412,9 @@ export default function ClosetVaultScreen() {
         warranties.isRefetching ||
         ingestion.isRefetching
       }
-      offlineQueuedCount={offlineQueuedCount}
+      offlineQueuedCount={addQueue.items.length}
       onOfflineRetry={async () => {
-        if (accessToken && userId) {
-          const snap = await flushVaultAddQueue(userId, (body) => addCredit(accessToken, body));
-          setOfflineQueuedCount(snap.items.length);
-        }
+        if (accessToken) await addQueue.flush(accessToken);
         onRefresh();
       }}
       skeletonRows={5}
@@ -552,8 +534,12 @@ function CreditsKindTab({
   const copyPackId = useClosetPrefsStore((s) => s.copyPackId);
   const copyPack = getCopyPack(copyPackId);
   const { isOffline } = useNetworkStatus();
-  const [pendingQueue, setPendingQueue] = useState<QueuedVaultAdd[]>([]);
-  const [flushError, setFlushError] = useState<string | null>(null);
+  const addQueue = useVaultAddQueue(userId);
+  const pendingQueue = addQueue.items;
+  const flushAddQueue = addQueue.flush;
+  /** Why an online add was queued instead (not stored: the next flush replaces it). */
+  const [onlineAddError, setOnlineAddError] = useState<string | null>(null);
+  const flushError = addQueue.lastFlushError ?? onlineAddError;
   const [shareViaLabel, setShareViaLabel] = useState<string | null>(null);
   /** The user's own referral code once fetched, so sharing does not ask the API again. */
   const [myReferralCode, setMyReferralCode] = useState<string | null>(null);
@@ -600,29 +586,15 @@ function CreditsKindTab({
   }, [justConnected, tab, celebrationSource]);
 
   useEffect(() => {
-    let cancelled = false;
-    void readVaultAddQueue(userId).then((snap) => {
-      if (cancelled) return;
-      setPendingQueue(snap.items);
-      setFlushError(snap.lastFlushError);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  useEffect(() => {
     if (isOffline || !accessToken || !userId || tab !== 'gift') return;
     let cancelled = false;
-    void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
-      if (cancelled) return;
-      setPendingQueue(snap.items);
-      setFlushError(snap.lastFlushError);
+    void flushAddQueue(accessToken).then(() => {
+      if (!cancelled) setOnlineAddError(null);
     });
     return () => {
       cancelled = true;
     };
-  }, [isOffline, accessToken, userId, tab]);
+  }, [isOffline, accessToken, userId, tab, flushAddQueue]);
 
   useEffect(() => {
     if (!loyaltyJustAdded) return;
@@ -904,11 +876,8 @@ function CreditsKindTab({
         notify(`Could not add ${meta.noun}`, 'Sign in to add it.');
         return;
       }
-      void enqueueVaultAdd(userId, payload).then((item) => {
-        setPendingQueue((prev) =>
-          prev.some((p) => p.id === item.id) ? prev : [...prev, item],
-        );
-        setFlushError(null);
+      void enqueueVaultAdd(userId, payload).then(() => {
+        setOnlineAddError(null);
         finishLocalSuccess();
       });
       return;
@@ -926,11 +895,8 @@ function CreditsKindTab({
           e.status !== 408 &&
           e.status !== 429;
         if (tab === 'gift' && !answered && userId) {
-          void enqueueVaultAdd(userId, payload).then((item) => {
-            setPendingQueue((prev) =>
-              prev.some((p) => p.id === item.id) ? prev : [...prev, item],
-            );
-            setFlushError(closetAlertText(e));
+          void enqueueVaultAdd(userId, payload).then(() => {
+            setOnlineAddError(closetAlertText(e));
             finishLocalSuccess();
           });
           return;
@@ -1040,6 +1006,8 @@ function CreditsKindTab({
   }
 
   function submitSpend(id: string) {
+    // A second tap while the first spend is in flight would record it twice.
+    if (spendGiftCard.isPending) return;
     if (demoAccount && id === demoAccount.id) {
       Alert.alert('Sample card', 'Add a real card to track spends.');
       return;
@@ -1288,23 +1256,34 @@ function CreditsKindTab({
     });
     const checkUrl =
       account.balanceCheck?.checkUrl ?? merchantDeepLink(account.merchant);
-    Alert.alert(
-      'Reminder set',
-      'We’ll nudge you to re-check this balance. You can also confirm it on the merchant site now.',
-      checkUrl
-        ? [
-            {
-              text: 'Open merchant',
-              onPress: () => {
-                Linking.openURL(checkUrl).catch(() =>
-                  Alert.alert('Could not open link'),
-                );
-              },
+    const buttons = checkUrl
+      ? [
+          {
+            text: 'Open merchant',
+            onPress: () => {
+              Linking.openURL(checkUrl).catch(() => Alert.alert('Could not open link'));
             },
-            { text: 'OK' },
-          ]
-        : [{ text: 'OK' }],
-    );
+          },
+          { text: 'OK' },
+        ]
+      : [{ text: 'OK' }];
+    void scheduleBalanceRecheckReminder(account).then((result) => {
+      if (result.scheduled) {
+        Alert.alert(
+          'Reminder set',
+          `We’ll nudge you to re-check this balance on ${formatClosetDate(result.at)}. You can also confirm it on the merchant site now.`,
+          buttons,
+        );
+        return;
+      }
+      Alert.alert(
+        'Reminder not set',
+        result.reason === 'permission'
+          ? 'Turn on notifications for WORN to get a reminder. You can also confirm the balance on the merchant site now.'
+          : 'Could not schedule the reminder. You can confirm the balance on the merchant site now.',
+        buttons,
+      );
+    });
   }
 
   function submitRecheck(id: string) {
@@ -1493,10 +1472,7 @@ function CreditsKindTab({
             variant="secondary"
             onPress={() => {
               if (!accessToken || !userId) return;
-              void flushVaultAddQueue(userId, (body) => addCredit(accessToken, body)).then((snap) => {
-                setPendingQueue(snap.items);
-                setFlushError(snap.lastFlushError);
-              });
+              void flushAddQueue(accessToken).then(() => setOnlineAddError(null));
             }}
           />
         </View>
@@ -1968,6 +1944,8 @@ function CreditsKindTab({
                   <Button
                     label="Confirm"
                     size="sm"
+                    disabled={spendGiftCard.isPending}
+                    loading={spendGiftCard.isPending}
                     onPress={() => submitSpend(account.id)}
                   />
                   <Button
@@ -2079,23 +2057,28 @@ function CreditsKindTab({
                       }
                     />
                   ) : null}
-                  <Button
-                    label={
-                      'balanceCheck' in account && account.balanceCheck?.due
-                        ? 'Re-check due'
-                        : 'Re-check'
-                    }
-                    size="sm"
-                    variant="ghost"
-                    disabled={balanceCheck.isPending}
-                    onPress={() => runBalanceCheck(account.id, account.merchant)}
-                  />
-                  <Button
-                    label="Mark spent"
-                    size="sm"
-                    variant="ghost"
-                    onPress={() => setSpendingId(account.id)}
-                  />
+                  {'pendingSync' in account && account.pendingSync ? null : (
+                    // A queued card has no server id yet: a spend or re-check would 404.
+                    <>
+                      <Button
+                        label={
+                          'balanceCheck' in account && account.balanceCheck?.due
+                            ? 'Re-check due'
+                            : 'Re-check'
+                        }
+                        size="sm"
+                        variant="ghost"
+                        disabled={balanceCheck.isPending}
+                        onPress={() => runBalanceCheck(account.id, account.merchant)}
+                      />
+                      <Button
+                        label="Mark spent"
+                        size="sm"
+                        variant="ghost"
+                        onPress={() => setSpendingId(account.id)}
+                      />
+                    </>
+                  )}
                 </View>
               </View>
             )}
@@ -2157,11 +2140,14 @@ function ReceiptsTab({
   const [merchant, setMerchant] = useState('');
   const [purchasedAt, setPurchasedAt] = useState('');
   const [totalRupees, setTotalRupees] = useState('');
+  /** The receipt's currency: the parsed one, or what the user picks in review. */
+  const [receiptCurrency, setReceiptCurrency] = useState('INR');
   const [editItems, setEditItems] = useState<EditItem[]>([]);
   const [overrideLowConfidence, setOverrideLowConfidence] = useState(false);
 
   function applyParsed(parsed: ReceiptParsed) {
     setPending(parsed);
+    setReceiptCurrency(parsed.currency);
     setMerchant(parsed.merchant);
     // The purchase day on this phone; slicing the ISO string gave the UTC day.
     const purchaseDay = localDayKey(new Date(parsed.purchasedAt));
@@ -2222,7 +2208,7 @@ function ReceiptsTab({
   /** The body to save, or what the user has to fix first. Bad dates used to throw out of the handler. */
   function buildConfirmBody(override: boolean): ConfirmReceiptBody | string | null {
     if (!pending) return null;
-    const currency = pending.currency;
+    const currency = receiptCurrency;
     const items: ConfirmReceiptBody['items'] = [];
     for (const i of editItems) {
       const t = i.priceText.trim();
@@ -2260,7 +2246,7 @@ function ReceiptsTab({
       merchant: merchant.trim() || pending.merchant,
       purchasedAt: dateIso,
       totalMinor,
-      currency: pending.currency,
+      currency,
       items,
       // Always send array so empty = user opted out of category-rule auto (U010).
       warranties,
@@ -2337,9 +2323,27 @@ function ReceiptsTab({
           value={purchasedAt}
           onChangeText={setPurchasedAt}
         />
+        <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="Receipt currency">
+          {(CLOSET_CURRENCIES as readonly string[])
+            .concat(
+              (CLOSET_CURRENCIES as readonly string[]).includes(pending.currency)
+                ? []
+                : [pending.currency],
+            )
+            .map((code) => (
+              <Button
+                key={code}
+                label={code}
+                size="sm"
+                variant={receiptCurrency === code ? 'primary' : 'secondary'}
+                accessibilityState={{ selected: receiptCurrency === code }}
+                onPress={() => setReceiptCurrency(code)}
+              />
+            ))}
+        </View>
         <TextInput
           style={styles.input}
-          placeholder={`Total in ${pending.currency}`}
+          placeholder={`Total in ${receiptCurrency}`}
           placeholderTextColor={textMuted}
           keyboardType="decimal-pad"
           value={totalRupees}
@@ -2356,7 +2360,7 @@ function ReceiptsTab({
             />
             <TextInput
               style={styles.input}
-              placeholder={`Price in ${pending.currency}`}
+              placeholder={`Price in ${receiptCurrency}`}
               placeholderTextColor={textMuted}
               keyboardType="decimal-pad"
               value={item.priceText}

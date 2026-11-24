@@ -16,6 +16,17 @@ export const WARRANTY_LEAD_MS = 14 * 86_400_000;
 export const WARRANTY_SNOOZE_DEFAULT_MS = 3 * 86_400_000;
 /** U003 — mark expiry checklist handled → snooze credit push 7d. */
 export const CREDIT_SNOOZE_DEFAULT_MS = 7 * 86_400_000;
+/** A snoozed credit reminder lands at least this long before the credit expires. */
+export const CREDIT_SNOOZE_BEFORE_EXPIRY_MS = 86_400_000;
+
+/**
+ * The time a credit reminder snoozed until `snoozeUntil` actually fires: never later than a day
+ * before `expiresAt`, so the user still has time to spend the credit.
+ */
+export function capCreditSnooze(snoozeUntil: Date, expiresAt: Date | string): Date {
+  const latest = new Date(expiresAt).getTime() - CREDIT_SNOOZE_BEFORE_EXPIRY_MS;
+  return new Date(Math.min(snoozeUntil.getTime(), latest));
+}
 
 export type CreditExpiryPayload = {
   accountId: string;
@@ -206,7 +217,9 @@ export async function snoozeCreditReminder(
 ): Promise<"published" | "skipped"> {
   if (!account.expiresAt) return "skipped";
 
-  const effectiveDelay = computeSnoozeDelayMs(snoozeUntil);
+  // A snooze past the expiry would remind the user once the credit is gone.
+  const firesAt = capCreditSnooze(snoozeUntil, account.expiresAt);
+  const effectiveDelay = computeSnoozeDelayMs(firesAt);
   if (effectiveDelay === null) return "skipped";
 
   const payload: CreditExpiryPayload = {
@@ -214,7 +227,7 @@ export async function snoozeCreditReminder(
     userId: account.userId,
     merchant: account.merchant,
     expiresAt: new Date(account.expiresAt).toISOString(),
-    snoozedUntil: snoozeUntil.toISOString(),
+    snoozedUntil: firesAt.toISOString(),
   };
   const result = await enqueueJob(CREDIT_EXPIRY_QUEUE, CREDIT_EXPIRY_JOB, payload, {
     delay: effectiveDelay,

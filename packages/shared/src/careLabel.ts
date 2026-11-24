@@ -61,7 +61,7 @@ export const CareOcrBodySchema = z
     ocrText: z.string().min(1).optional(),
   })
   .refine((b) => Boolean(b.imageKey || b.ocrText), {
-    message: "imageKey or ocrText required",
+    error: "imageKey or ocrText required",
   });
 export type CareOcrBody = z.infer<typeof CareOcrBodySchema>;
 
@@ -69,7 +69,7 @@ export const CareOcrResponseSchema = z.object({
   careRules: CareRulesSchema,
   confidence: z.number().min(0).max(1),
   rawText: z.string(),
-  itemId: z.string().uuid(),
+  itemId: z.uuid(),
 });
 export type CareOcrResponse = z.infer<typeof CareOcrResponseSchema>;
 

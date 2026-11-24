@@ -51,6 +51,14 @@ beforeEach(() => {
 });
 
 describe('Buy coins screen', () => {
+  it('says coins are store-bought, in-app only and have no cash value', () => {
+    show({ status: 'ready', packs: [pack()] });
+    const terms = screen.getByText(/can only be used in WORN/).textContent ?? '';
+    expect(terms).toMatch(/App Store or Google Play/);
+    expect(terms).toMatch(/no cash value/);
+    expect(terms).toMatch(/can’t be exchanged for money/);
+  });
+
   it('shows the store\'s price and buys the pack', () => {
     show({ status: 'ready', packs: [pack()] });
 
@@ -117,5 +125,22 @@ describe('Buy coins screen', () => {
   it('shows nothing extra after a cancel', () => {
     show({ status: 'ready', packs: [pack()] });
     expect(screen.queryByTestId('purchase-notice')).toBeNull();
+  });
+});
+
+describe('what coins buy', () => {
+  it('quotes the prices the server charges, and promises no cashback', async () => {
+    const economy = await import('@worn/shared');
+    show({ status: 'ready', packs: [pack()] });
+    expect(
+      screen.getByText(`Unlock the other five scenes (${economy.REVEAL_UNLOCK_COST_COINS} coins each)`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Combine items into full looks (${economy.REVEAL_COMBINE_COST_COINS} coins)`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Rush delivery to Express tier (${economy.RUSH_TO_EXPRESS_COST_COINS} coins)`),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/cashback|coins back/i)).toBeNull();
   });
 });

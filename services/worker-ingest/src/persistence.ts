@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@worn/db";
 import {
   ingestionDocuments,
@@ -44,6 +44,14 @@ function now(): Date {
   return new Date();
 }
 
+const DELIVERY_ORDER = ["ORDERED", "SHIPPED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED"];
+
+/** How far along a delivery status is; FAILED and CANCELLED end the order, so they rank last. */
+function deliveryRank(status: string): number {
+  const i = DELIVERY_ORDER.indexOf(status);
+  return i === -1 ? DELIVERY_ORDER.length : i;
+}
+
 /** DB-backed implementation of {@link IngestPersister}. */
 export function createDbPersister(db: Db): IngestPersister {
   return {
@@ -83,24 +91,68 @@ export function createDbPersister(db: Db): IngestPersister {
           if (doc?.matchedPurchaseId) return doc.matchedPurchaseId;
         }
 
-        await tx.insert(merchantPurchases).values({
-          id: purchaseId,
-          userId,
-          source: opts.sourceKind,
-          merchant: purchase.merchant,
-          orderRef: purchase.orderRef ?? null,
-          purchasedAt,
-          currency: purchase.currency,
-          totalMinor: purchase.totalMinor,
-          status: "CONFIRMED",
-          rawDocId: opts.rawDocId ?? null,
-          deliveryStatus,
-          etaAt,
-          trackingCode: purchase.trackingCode ?? null,
-          deliveredAt: deliveryStatus === "DELIVERED" ? purchasedAt : null,
-          returnWindowDeadline,
-          exchangeWindowDeadline,
-        });
+        const inserted = await tx
+          .insert(merchantPurchases)
+          .values({
+            id: purchaseId,
+            userId,
+            source: opts.sourceKind,
+            merchant: purchase.merchant,
+            orderRef: purchase.orderRef ?? null,
+            purchasedAt,
+            currency: purchase.currency,
+            totalMinor: purchase.totalMinor,
+            status: "CONFIRMED",
+            rawDocId: opts.rawDocId ?? null,
+            deliveryStatus,
+            etaAt,
+            trackingCode: purchase.trackingCode ?? null,
+            deliveredAt: deliveryStatus === "DELIVERED" ? purchasedAt : null,
+            returnWindowDeadline,
+            exchangeWindowDeadline,
+          })
+          // A second email about the same order ("placed", then "shipped") is the same purchase:
+          // one per (user, merchant, order_ref), as the API's createMerchantPurchase does.
+          .onConflictDoNothing({
+            target: [merchantPurchases.userId, merchantPurchases.merchant, merchantPurchases.orderRef],
+            where: sql`${merchantPurchases.orderRef} IS NOT NULL`,
+          })
+          .returning({ id: merchantPurchases.id });
+
+        if (inserted.length === 0) {
+          const [existing] = await tx
+            .select({ id: merchantPurchases.id, deliveryStatus: merchantPurchases.deliveryStatus })
+            .from(merchantPurchases)
+            .where(
+              and(
+                eq(merchantPurchases.userId, userId),
+                eq(merchantPurchases.merchant, purchase.merchant),
+                eq(merchantPurchases.orderRef, purchase.orderRef ?? ""),
+              ),
+            )
+            .limit(1);
+          if (!existing) throw new Error("insertPurchase: order_ref conflict but no purchase found");
+          // The later email moves delivery on (placed → shipped → delivered), never back.
+          if (deliveryRank(deliveryStatus) > deliveryRank(existing.deliveryStatus)) {
+            await tx
+              .update(merchantPurchases)
+              .set({
+                deliveryStatus,
+                etaAt,
+                ...(purchase.trackingCode ? { trackingCode: purchase.trackingCode } : {}),
+                ...(deliveryStatus === "DELIVERED" ? { deliveredAt: purchasedAt } : {}),
+                updatedAt: now(),
+              })
+              .where(eq(merchantPurchases.id, existing.id));
+          }
+          if (opts.rawDocId) {
+            await tx
+              .update(ingestionDocuments)
+              .set({ status: "MATCHED", matchedPurchaseId: existing.id, userId, updatedAt: now() })
+              .where(eq(ingestionDocuments.id, opts.rawDocId));
+          }
+          return existing.id;
+        }
 
         if (purchase.items.length > 0) {
           await tx.insert(merchantPurchaseItems).values(

@@ -21,7 +21,7 @@ const CONNECTION_ALERT_INTERVAL_MS = 60_000;
 /** One queue's consumer: its payload contract and its handler (C6: `async (data, deps) => void`). */
 export type JobDefinition<D> = {
   queue: string;
-  schema: z.ZodType<unknown, z.ZodTypeDef, unknown>;
+  schema: z.ZodType<unknown, unknown>;
   handle: (data: unknown, deps: D) => Promise<void>;
   /** Jobs of this queue run at once in one process (default 1). */
   concurrency?: number;
@@ -32,7 +32,7 @@ export type JobDefinition<D> = {
 
 export function defineJob<T, D>(definition: {
   queue: string;
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+  schema: z.ZodType<T, unknown>;
   handle: (data: T, deps: D) => Promise<void>;
   concurrency?: number;
   timeoutMs?: number;

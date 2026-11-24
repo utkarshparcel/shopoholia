@@ -142,7 +142,7 @@ describe("ocr", () => {
     ).rejects.toThrow(/500/);
   });
 
-  it("hosted client posts google-vision payload shape when format set", async () => {
+  it("hosted client sends google-vision the key as ?key= and a fetchable image URL", async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -150,22 +150,69 @@ describe("ocr", () => {
       json: async () => ({
         responses: [{ textAnnotations: [{ description: "Nike\nShoes\nTotal 99.00" }] }],
       }),
-    })) as unknown as typeof fetch;
+    }));
+    const resolveImageUrl = vi.fn(async (key: string) => `https://media.example/${key}?sig=abc`);
 
     const client = new HostedOcrClient({
-      endpoint: "https://vision.example/v1",
+      endpoint: "https://vision.googleapis.com/v1/images:annotate",
+      apiKey: "vision-key",
       format: "google-vision",
-      fetchImpl,
+      resolveImageUrl,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const result = await client.recognize("gs://bucket/receipt.jpg");
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://vision.example/v1",
-      expect.objectContaining({
-        body: expect.stringContaining("DOCUMENT_TEXT_DETECTION"),
-      }),
+    const result = await client.recognize("u/user-1/receipts/r.jpg");
+    expect(resolveImageUrl).toHaveBeenCalledWith("u/user-1/receipts/r.jpg");
+    const [calledUrl, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(calledUrl).searchParams.get("key")).toBe("vision-key");
+    expect(new URL(calledUrl).pathname).toBe("/v1/images:annotate");
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    const body = JSON.parse(String(init.body)) as {
+      requests: Array<{ image: { source: { imageUri: string } }; features: Array<{ type: string }> }>;
+    };
+    expect(body.requests[0]!.image.source.imageUri).toBe(
+      "https://media.example/u/user-1/receipts/r.jpg?sig=abc",
     );
+    expect(body.requests[0]!.features[0]!.type).toBe("DOCUMENT_TEXT_DETECTION");
     expect(result.merchant).toBe("Nike");
     expect(result.totalMinor).toBe(9900);
+  });
+
+  it("hosted google-vision refuses a raw storage key when it can't sign one", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      new HostedOcrClient({
+        url: "https://vision.example/v1",
+        format: "google-vision",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }).recognize("u/user-1/receipts/r.jpg"),
+    ).rejects.toThrow(/resolveImageUrl/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("createOcrClientFromEnv wires the image resolver into google-vision", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ responses: [{}] }),
+    }));
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      const client = createOcrClientFromEnv(
+        {
+          OCR_PROVIDER_URL: "https://vision.example/v1",
+          OCR_PROVIDER_FORMAT: "google-vision",
+          OCR_PROVIDER_API_KEY: "k",
+        },
+        { resolveImageUrl: async (key) => `https://signed.example/${key}` },
+      );
+      await client.recognize("u/a/receipts/b.jpg");
+      const [calledUrl, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+      expect(calledUrl).toBe("https://vision.example/v1?key=k");
+      expect(String(init.body)).toContain("https://signed.example/u/a/receipts/b.jpg");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("hosted normalize always supplies a confidence number when provider omits it", () => {

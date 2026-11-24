@@ -1,9 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   type ListRenderItemInfo,
   Pressable,
@@ -18,6 +17,8 @@ import type { FeedPage } from '@/src/api/client';
 import { Chip, ListingCard, SectionHeader } from '@/src/components/ui';
 import type { PlaceholderTone } from '@/src/components/ui';
 import { listingQueryOptions, useCart, useFeed, useFeedCategories } from '@/src/hooks/catalog';
+import { confirmAsync, notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
 import { useLookbookStore } from '@/src/stores/lookbook';
 import {
   bg,
@@ -100,8 +101,14 @@ export default function FeedScreen() {
 
   const openListing = useCallback((id: string) => router.push(`/listing/${id}`), [router]);
 
+  // Pieces whose quick add is still in flight: a second tap on "+" (a double tap) would post
+  // another { quantity: 1 } and the server would make the line ×2.
+  const adding = useRef(new Set<string>());
+
   const quickAdd = useCallback(
     (item: FeedItem) => {
+      if (adding.current.has(item.id)) return;
+      adding.current.add(item.id);
       void (async () => {
         try {
           const detail = await queryClient.fetchQuery(listingQueryOptions(item.id));
@@ -111,15 +118,17 @@ export default function FeedScreen() {
             return;
           }
           await addToHaul({ variantId });
-          Alert.alert('Added to haul', `${item.title} · ${detail.variants[0]!.size}`, [
-            { text: 'Keep browsing', style: 'cancel' },
-            { text: 'View haul', onPress: () => router.push('/cart') },
-          ]);
-        } catch (error: unknown) {
-          Alert.alert(
-            'Couldn’t add',
-            error instanceof Error ? error.message : 'Try again',
+          adding.current.delete(item.id);
+          const viewHaul = await confirmAsync(
+            'Added to haul',
+            `${item.title} · ${detail.variants[0]!.size}`,
+            { confirmLabel: 'View haul', cancelLabel: 'Keep browsing' },
           );
+          if (viewHaul) router.push('/cart');
+        } catch (error: unknown) {
+          notify('Couldn’t add', errorText(error, 'Try again.'));
+        } finally {
+          adding.current.delete(item.id);
         }
       })();
     },

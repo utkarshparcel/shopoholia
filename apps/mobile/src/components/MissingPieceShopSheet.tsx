@@ -84,7 +84,7 @@ export function MissingPieceShopSheet() {
           <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.title}>Shop missing pieces</Text>
             <Text style={styles.muted}>
-              Affiliate CTAs record cashback clicks — Closet only, no Play blend.
+              Links go to partner stores. We may earn a commission.
             </Text>
             {rows.map((row) => (
               <View key={`${row.missingSlot}-${row.suggestion}`} style={styles.row}>

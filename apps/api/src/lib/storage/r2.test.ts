@@ -149,6 +149,30 @@ describe("createR2Storage", () => {
     expect(userUrl.searchParams.get("X-Amz-Signature")).toBeTruthy();
   });
 
+  it("never gives selfies, references, try-ons, reveals or receipts a permanent public URL", async () => {
+    const pub = createR2Storage({
+      accountId: "acc",
+      accessKeyId: "key",
+      secretAccessKey: "secret",
+      bucketName: "bucket",
+      publicUrl: "https://cdn.example.test/",
+    });
+    for (const key of [
+      "uploads/user-1/selfie.jpg",
+      "references/user-1/ref.jpg",
+      "tryon/fashn/pred.jpg",
+      "reveal/studio/tryon/fashn/pred.jpg",
+      "receipts/user-1/r.jpg",
+      "garments/../uploads/user-1/selfie.jpg",
+    ]) {
+      const url = new URL(await pub.getSignedUrl(key));
+      expect(url.host, key).toBe("bucket.acc.r2.cloudflarestorage.com");
+      expect(url.searchParams.get("X-Amz-Signature"), key).toBeTruthy();
+    }
+    expect(await pub.getSignedUrl("house-models/l1.jpg")).toBe("https://cdn.example.test/house-models/l1.jpg");
+    expect(await pub.getSignedUrl("products/s1/p.jpg")).toBe("https://cdn.example.test/products/s1/p.jpg");
+  });
+
   it("keeps long expiries within the SigV4 one-week limit", async () => {
     vi.useFakeTimers();
     const url = await signAt("2026-10-25T10:30:00.000Z", 7 * 24 * 3600);

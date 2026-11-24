@@ -24,8 +24,8 @@ import type {
 
 const FIXTURES = fileURLToPath(new URL("../../../test-fixtures/iap/", import.meta.url));
 
-export const TEST_BUNDLE_ID = "com.shopoholia.worn";
-export const TEST_PACKAGE_NAME = "com.shopoholia.worn";
+export const TEST_BUNDLE_ID = "com.worncloset.app";
+export const TEST_PACKAGE_NAME = "com.worncloset.app";
 
 export function fixturePem(name: string): string {
   return readFileSync(`${FIXTURES}${name}`, "utf8");

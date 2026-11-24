@@ -2,6 +2,8 @@
  * N13 — BNPL / EMI fashion tracker: remaining balance, due schedule, nudge delay.
  */
 
+import { localDateKey, resolveTimeZone } from "./local-time.js";
+
 export const EMI_NUDGE_LEAD_MS = 2 * 86_400_000; // 2 days before due
 
 /** Remaining after a payment (never negative). */
@@ -88,10 +90,17 @@ export function emiDueJobId(planId: string, dueOn: string): string {
   return `emi-due:${planId}:${dueOn}`;
 }
 
-/** Days until `YYYY-MM-DD` due (UTC midnight). Negative when overdue. */
-export function emiDaysUntilDue(dueOn: string, now: Date = new Date()): number {
+/**
+ * Days from today to the `YYYY-MM-DD` due date. Today is the calendar day in `timeZone` (the
+ * user's; UTC when absent). Negative when overdue.
+ */
+export function emiDaysUntilDue(
+  dueOn: string,
+  now: Date = new Date(),
+  timeZone?: string | null,
+): number {
   const due = parseYmd(dueOn).getTime();
-  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const start = parseYmd(localDateKey(now, timeZone === undefined ? "UTC" : resolveTimeZone(timeZone))).getTime();
   return Math.ceil((due - start) / 86_400_000);
 }
 
@@ -100,9 +109,10 @@ export function emiDueWithinDays(
   input: { status: string; remainingMinor: number; nextDueOn: string },
   withinDays = 7,
   now: Date = new Date(),
+  timeZone?: string | null,
 ): boolean {
   if (input.status !== "ACTIVE" || input.remainingMinor <= 0) return false;
-  const days = emiDaysUntilDue(input.nextDueOn, now);
+  const days = emiDaysUntilDue(input.nextDueOn, now, timeZone);
   return days <= withinDays;
 }
 
@@ -130,6 +140,8 @@ export function buildEmiDontMissCard(input: {
   nextDueOn: string;
   currency?: string;
   now?: Date;
+  /** The user's zone for "today" (UTC when absent). */
+  timeZone?: string | null;
 }): EmiDontMissCard | null {
   const now = input.now ?? new Date();
   if (
@@ -141,11 +153,12 @@ export function buildEmiDontMissCard(input: {
       },
       7,
       now,
+      input.timeZone,
     )
   ) {
     return null;
   }
-  const days = emiDaysUntilDue(input.nextDueOn, now);
+  const days = emiDaysUntilDue(input.nextDueOn, now, input.timeZone);
   const currency = input.currency ?? "INR";
   const label = input.merchant
     ? `${input.provider} · ${input.merchant}`

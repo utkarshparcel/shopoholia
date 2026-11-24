@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -18,6 +19,10 @@ export interface StorageClient {
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
   delete(key: string): Promise<void>;
   deleteMany(keys: string[]): Promise<void>;
+  /** A short-lived URL that uploads one object with an HTTP PUT of `contentType` (the render agent). */
+  getSignedPutUrl?(key: string, contentType: string, expiresInSeconds?: number): Promise<string>;
+  /** Whether an object is stored under `key`. */
+  exists?(key: string): Promise<boolean>;
 }
 
 // S3 and R2 cap object keys at 1024 bytes.
@@ -51,6 +56,30 @@ export function isUserObjectKey(key: string, userId: string): boolean {
     parts.slice(1).every(isKeyPart) &&
     Buffer.byteLength(key) <= MAX_KEY_BYTES
   );
+}
+
+/**
+ * True for a key this user's own uploads made: `u/{userId}/…`, or the older
+ * `{wardrobe|care-tags|wear}/{userId}/…` keys. Check every storage key a client sends with it,
+ * before signing, storing or (on erasure) deleting it.
+ */
+export function ownsStorageKey(key: string, userId: string): boolean {
+  if (isUserObjectKey(key, userId)) return true;
+  const parts = key.split("/");
+  return (
+    parts.length === 3 &&
+    ["wardrobe", "care-tags", "wear"].includes(parts[0]!) &&
+    parts[1] === userId &&
+    isKeyPart(parts[2]!)
+  );
+}
+
+/** Key prefixes of catalog images (listing photos, garments, seller product shots). */
+const PUBLIC_CATALOG_PREFIXES = ["house-models/", "garments/", "products/"];
+
+/** True for a catalog image, which may be served from the public bucket URL. */
+export function isPublicCatalogKey(key: string): boolean {
+  return PUBLIC_CATALOG_PREFIXES.some((prefix) => key.startsWith(prefix)) && !key.split("/").includes("..");
 }
 
 export type R2Config = {
@@ -137,8 +166,9 @@ export function createR2Storage(config: R2Config): StorageClient {
     },
 
     async getSignedUrl(key, expiresInSeconds = SIGNED_URL_SECONDS) {
-      // A user's objects are never served from the public bucket URL.
-      if (config.publicUrl && !key.startsWith("u/")) {
+      // Only catalog images are served from the public bucket URL. Everything else (selfies,
+      // avatar references, try-ons, reveals, receipts, u/ keys) gets a short-lived signed URL.
+      if (config.publicUrl && isPublicCatalogKey(key)) {
         return `${config.publicUrl.replace(/\/$/, "")}/${key}`;
       }
 
@@ -157,6 +187,25 @@ export function createR2Storage(config: R2Config): StorageClient {
           expiresIn: Math.min(expiresInSeconds + SIGNING_WINDOW_SECONDS, MAX_PRESIGNED_SECONDS),
         },
       );
+    },
+
+    async getSignedPutUrl(key, contentType, expiresInSeconds = SIGNED_URL_SECONDS) {
+      return getSignedUrl(
+        client,
+        new PutObjectCommand({ Bucket: config.bucketName, Key: key, ContentType: contentType }),
+        { expiresIn: Math.min(expiresInSeconds, MAX_PRESIGNED_SECONDS) },
+      );
+    },
+
+    async exists(key) {
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: config.bucketName, Key: key }));
+        return true;
+      } catch (error) {
+        const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+        if (status === 404 || (error as { name?: string }).name === "NotFound") return false;
+        throw error;
+      }
     },
 
     async delete(key) {
@@ -209,6 +258,12 @@ export function createMockStorage(baseUrl = "https://picsum.photos"): StorageCli
       // without real R2. Seed includes the storage key for stable per-listing images.
       const seed = key.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "worn";
       return `${baseUrl}/seed/${seed}/720/960`;
+    },
+    async getSignedPutUrl(key) {
+      return `mock-storage://put/${encodeURIComponent(key)}`;
+    },
+    async exists(key) {
+      return objects.has(key);
     },
     async delete(key) {
       objects.delete(key);

@@ -1,3 +1,4 @@
+import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -5,6 +6,8 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,7 +17,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { signInWithGoogle, sendOtp, verifyOtp } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
+import { appleSignInAvailable, signInWithApple } from '@/src/lib/appleSignIn';
 import { DEV_OTP, DEV_PHONE } from '@/src/lib/devAuth';
+import { getPrivacyPolicyUrl } from '@/src/lib/privacyLinks';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -43,7 +48,19 @@ WebBrowser.maybeCompleteAuthSession();
 const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const androidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
-const googleConfigured = Boolean(webClientId || iosClientId || androidClientId);
+/**
+ * A native Google sign-in needs this platform's own client id (its redirect is the app's bundle id
+ * scheme, which the web client refuses). Release builds can't be made without it (app.config.js);
+ * dev builds also accept the web client id, for the web and Expo Go.
+ */
+const platformClientId = Platform.select({
+  ios: iosClientId,
+  android: androidClientId,
+  default: webClientId,
+});
+const googleConfigured = Boolean(
+  platformClientId || (__DEV__ && (webClientId || iosClientId || androidClientId)),
+);
 
 type GoogleButtonProps = {
   busy: boolean;
@@ -112,6 +129,52 @@ function GoogleSignInButton({ busy, setBusy, setError, onTokens }: GoogleButtonP
         </>
       )}
     </Pressable>
+  );
+}
+
+type TokensHandler = GoogleButtonProps['onTokens'];
+
+/** iOS only: Apple's own button, as App Review expects it, as prominent as Google's. */
+function AppleSignInButton({
+  busy,
+  setBusy,
+  setError,
+  onTokens,
+}: Omit<GoogleButtonProps, 'onTokens'> & { onTokens: TokensHandler }) {
+  const [available, setAvailable] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void appleSignInAvailable().then((ok) => {
+      if (live) setAvailable(ok);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!available) return null;
+
+  const onPress = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    void signInWithApple()
+      .then((result) => {
+        if (result.status === 'signed-in') onTokens(result.tokens);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : 'Sign in with Apple failed');
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <AppleAuthentication.AppleAuthenticationButton
+      buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+      cornerRadius={12}
+      style={styles.appleBtn}
+      onPress={onPress}
+    />
   );
 }
 
@@ -187,6 +250,12 @@ export default function LoginScreen() {
 
       <View style={[styles.sheet, { paddingBottom: insets.bottom + space6 }]}>
         <View style={styles.card}>
+          <AppleSignInButton
+            busy={busy}
+            onTokens={applyTokens}
+            setBusy={setBusy}
+            setError={setError}
+          />
           {googleConfigured ? (
             <GoogleSignInButton
               busy={busy}
@@ -229,12 +298,22 @@ export default function LoginScreen() {
         <Text style={styles.footer}>
           By continuing you agree to try pieces on your avatar and spend WORN coins in-app.
         </Text>
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => void Linking.openURL(getPrivacyPolicyUrl()).catch(() => undefined)}
+        >
+          <Text style={[styles.footer, styles.footerLink]}>Privacy policy</Text>
+        </Pressable>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  appleBtn: {
+    height: 52,
+    width: '100%',
+  },
   card: {
     backgroundColor: surface,
     borderColor: border,
@@ -261,6 +340,10 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: space4,
     textAlign: 'center',
+  },
+  footerLink: {
+    marginTop: 8,
+    textDecorationLine: 'underline',
   },
   googleBtn: {
     alignItems: 'center',

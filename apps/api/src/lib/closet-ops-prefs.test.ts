@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CPW_THRESHOLD, DEFAULT_LAUNDRY_RULES } from "@worn/shared";
 import {
+  appendLentWasteNote,
   dismissMissingLayer,
+  getKeepSnooze,
+  getPhotoDumpTriageAt,
+  listLentWasteNotes,
+  setKeepSnooze,
+  setPhotoDumpTriageAt,
   getCpwThreshold,
   getLaundryRules,
   listDismissedMissingLayers,
@@ -79,5 +85,39 @@ describe("closet ops prefs live in users.prefs", () => {
       headers: { authorization: `Bearer ${a.accessToken}` },
     });
     expect(tooLong.statusCode).toBe(400);
+  });
+});
+
+describe("closet ops state lives in the repositories, not the process", () => {
+  it("keep snooze and photo-dump triage are on the user's item only", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000105");
+    const { user: other } = await repos.createUser("+919800000106");
+    const item = await repos.createWardrobeItem({ userId: user.id, category: "top" });
+    expect(await getKeepSnooze(repos, user.id, item.id)).toBeNull();
+    expect(await setKeepSnooze(repos, user.id, item.id, "2026-12-01T00:00:00.000Z")).toBe(true);
+    expect(await getKeepSnooze(repos, user.id, item.id)).toBe("2026-12-01T00:00:00.000Z");
+    // Another user can neither read nor set it.
+    expect(await getKeepSnooze(repos, other.id, item.id)).toBeNull();
+    expect(await setKeepSnooze(repos, other.id, item.id, "2027-01-01T00:00:00.000Z")).toBe(false);
+
+    const at = new Date("2026-11-12T09:00:00.000Z");
+    await setPhotoDumpTriageAt(repos, user.id, item.id, at);
+    expect(await getPhotoDumpTriageAt(repos, user.id, item.id)).toBe(at.toISOString());
+    // Setting one mark leaves the other alone; null clears.
+    expect(await getKeepSnooze(repos, user.id, item.id)).toBe("2026-12-01T00:00:00.000Z");
+    await setPhotoDumpTriageAt(repos, user.id, item.id, null);
+    expect(await getPhotoDumpTriageAt(repos, user.id, item.id)).toBeNull();
+  });
+
+  it("lent write-off notes are stored per user", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000107");
+    const { user: other } = await repos.createUser("+919800000108");
+    const item = await repos.createWardrobeItem({ userId: user.id, category: "jacket" });
+    await appendLentWasteNote(repos, user.id, item.id, "Lost while lent to Ria — jacket written off.");
+    expect(await listLentWasteNotes(repos, user.id)).toEqual(["Lost while lent to Ria — jacket written off."]);
+    expect(await listLentWasteNotes(repos, other.id)).toEqual([]);
+    expect((await repos.listLentWasteNotes(user.id))[0]).toMatchObject({ wardrobeItemId: item.id });
   });
 });

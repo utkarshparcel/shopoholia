@@ -123,6 +123,45 @@ describe('useTryon', () => {
     expect((failure as Error).message).toBe("This try-on didn't work. Try again in 15 min.");
   });
 
+  it('stops asking, without failing, once the preview is waiting for the render agent', async () => {
+    const WAITING: TryonResponse = {
+      status: 'PROCESSING',
+      previewUrl: null,
+      rendersWaiting: true,
+      expectedReadyAt: '2026-11-05T01:30:00.000Z',
+    };
+    vi.mocked(requestTryon).mockResolvedValueOnce(PROCESSING).mockResolvedValue(WAITING);
+    const { result } = renderTryon();
+
+    act(() => {
+      void result.current.mutateAsync();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    expect(requestTryon).toHaveBeenCalledTimes(2);
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.data).toEqual(WAITING);
+
+    // Asking every 2s would not bring it sooner: no more requests.
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(requestTryon).toHaveBeenCalledTimes(2);
+  });
+
+  it('a preview already waiting (the agent is down, no time) resolves on the first answer', async () => {
+    const WAITING: TryonResponse = { status: 'PROCESSING', previewUrl: null, rendersWaiting: true, expectedReadyAt: null };
+    vi.mocked(requestTryon).mockResolvedValue(WAITING);
+    const { result } = renderTryon();
+
+    let resolved: TryonResponse | undefined;
+    await act(async () => {
+      resolved = await result.current.mutateAsync();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(requestTryon).toHaveBeenCalledTimes(1);
+    expect(resolved).toEqual(WAITING);
+    expect(result.current.data).toEqual(WAITING);
+  });
+
   it('gives up after a minute, with a failure that is not about the avatar', async () => {
     vi.mocked(requestTryon).mockResolvedValue(PROCESSING);
     const { result } = renderTryon();

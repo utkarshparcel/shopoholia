@@ -83,7 +83,7 @@ export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 export function oauthStateSecret(env: NodeJS.ProcessEnv = process.env): string | null {
   if (env.OAUTH_STATE_SECRET) return env.OAUTH_STATE_SECRET;
   if (env.NODE_ENV === "production") return null;
-  return env.JWT_ACCESS_SECRET ?? "dev-only-change-me";
+  return env.JWT_ACCESS_SECRET || "dev-only-change-me";
 }
 
 /** Gmail connect needs a client id and a state secret; in production neither has a stand-in. */
@@ -317,7 +317,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           204: z.null(),
           401: ErrorSchema,
@@ -368,7 +368,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("EMAIL")],
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PatchIngestionSourceBodySchema,
         response: {
           200: z.object({ source: CreateIngestionSourceResponseSchema.shape.source }),
@@ -611,7 +611,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("EMAIL")],
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: IngestionActivityResponseSchema,
           401: ErrorSchema,
@@ -652,7 +652,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CorrectIngestionDocumentBodySchema,
         response: {
           200: CorrectIngestionDocumentResponseSchema,
@@ -728,7 +728,8 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const correctedFields = Object.keys(request.body);
-      const fixture = buildParserTrainingFixture({
+      const fixture = await buildParserTrainingFixture(app.deps.repos, {
+        userId,
         documentId: docId,
         kind: updated.kind,
         beforeParsed: prev,
@@ -831,11 +832,11 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
           200: z.object({
             items: z.array(
               z.object({
-                documentId: z.string().uuid(),
+                documentId: z.uuid(),
                 kind: z.string(),
                 rawMerchant: z.string().nullable(),
-                matchedPurchaseId: z.string().uuid().nullable(),
-                createdAt: z.string().datetime(),
+                matchedPurchaseId: z.uuid().nullable(),
+                createdAt: z.iso.datetime(),
               }),
             ),
             picker: z.array(z.string()),
@@ -849,7 +850,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       const docs = await app.deps.repos.listIngestionDocumentsByUser(userId);
       return {
         items: buildUnknownMerchantQueue(docs),
-        picker: merchantPickerOptions(userId),
+        picker: await merchantPickerOptions(app.deps.repos, userId),
       };
     },
   );
@@ -863,13 +864,13 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         body: z.object({
           alias: z.string().min(1).max(200),
           canonical: z.string().min(1).max(200),
-          documentId: z.string().uuid().optional(),
+          documentId: z.uuid().optional(),
         }),
         response: {
           200: z.object({
             alias: z.string(),
             canonical: z.string(),
-            reprocessedPurchaseId: z.string().uuid().nullable(),
+            reprocessedPurchaseId: z.uuid().nullable(),
           }),
           401: ErrorSchema,
           404: ErrorSchema,
@@ -879,14 +880,14 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     async (request, reply) => {
       const userId = request.user!.sub;
       const { alias, canonical, documentId } = request.body;
-      const row = upsertMerchantAlias(userId, alias, canonical);
+      const doc = documentId ? await findOwnedDocument(app.deps.repos, userId, documentId) : null;
+      if (documentId && !doc) {
+        return reply.code(404).send({ error: "Not Found", message: "Document not found" });
+      }
+      const row = await upsertMerchantAlias(app.deps.repos, userId, alias, canonical);
       let reprocessedPurchaseId: string | null = null;
 
-      if (documentId) {
-        const doc = await findOwnedDocument(app.deps.repos, userId, documentId);
-        if (!doc) {
-          return reply.code(404).send({ error: "Not Found", message: "Document not found" });
-        }
+      if (documentId && doc) {
         const nextParsed = {
           ...(doc.parsedJson ?? {}),
           merchant: row.canonical,
@@ -935,7 +936,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           type: z.enum(["merchant", "sender", "subject"]),
           pattern: z.string().min(1).max(200),
@@ -979,7 +980,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           type: z.enum(["merchant", "sender", "subject"]),
           pattern: z.string().min(1).max(200),
@@ -990,7 +991,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
               id: z.string(),
               type: z.enum(["merchant", "sender", "subject"]),
               pattern: z.string(),
-              mutedAt: z.string().datetime(),
+              mutedAt: z.iso.datetime(),
               previewCount: z.number().int(),
             }),
             undoDays: z.number().int(),
@@ -1041,7 +1042,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid(), ruleId: z.string().min(1) }),
+        params: z.object({ id: z.uuid(), ruleId: z.string().min(1) }),
         response: {
           200: z.object({ undone: z.boolean(), error: z.string().nullable() }),
           401: ErrorSchema,
@@ -1090,7 +1091,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["ingestion"],
         response: {
           200: z.object({
-            lastSyncAt: z.string().datetime().nullable(),
+            lastSyncAt: z.iso.datetime().nullable(),
             scopes: z.array(
               z.object({
                 scope: z.string(),
@@ -1132,14 +1133,14 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
           200: z.object({
             items: z.array(
               z.object({
-                documentId: z.string().uuid(),
+                documentId: z.uuid(),
                 kind: z.enum(["EMAIL", "SMS", "RECEIPT"]),
-                createdAt: z.string().datetime(),
+                createdAt: z.iso.datetime(),
                 retentionDays: z.number().int(),
-                expiresAt: z.string().datetime(),
+                expiresAt: z.iso.datetime(),
                 daysRemaining: z.number().int(),
                 rawPresent: z.boolean(),
-                matchedPurchaseId: z.string().uuid().nullable(),
+                matchedPurchaseId: z.uuid().nullable(),
               }),
             ),
           }),
@@ -1160,17 +1161,17 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["ingestion"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({ confirm: z.literal(true) }),
         response: {
           200: z.object({
-            id: z.string().uuid(),
+            id: z.uuid(),
             rawDeleted: z.boolean(),
-            matchedPurchaseId: z.string().uuid().nullable(),
+            matchedPurchaseId: z.uuid().nullable(),
             countdown: z
               .object({
                 daysRemaining: z.number().int(),
-                expiresAt: z.string().datetime(),
+                expiresAt: z.iso.datetime(),
               })
               .nullable(),
           }),
@@ -1249,7 +1250,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
                 merchant: z.string(),
                 broken: z.boolean(),
                 reason: z.string(),
-                setAt: z.string().datetime(),
+                setAt: z.iso.datetime(),
               }),
             ),
           }),
@@ -1259,10 +1260,11 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      return {
-        banner: buildParserBreakBanner(userId),
-        flags: listParserBreakFlags(),
-      };
+      const [banner, flags] = await Promise.all([
+        buildParserBreakBanner(app.deps.repos, userId),
+        listParserBreakFlags(app.deps.repos),
+      ]);
+      return { banner, flags };
     },
   );
 
@@ -1292,8 +1294,8 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
     },
     async (request) => {
       const userId = request.user!.sub;
-      dismissParserBreakBanner(userId, request.body.merchant);
-      return { banner: buildParserBreakBanner(userId) };
+      await dismissParserBreakBanner(app.deps.repos, userId, request.body.merchant);
+      return { banner: await buildParserBreakBanner(app.deps.repos, userId) };
     },
   );
 
@@ -1327,7 +1329,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
             merchant: z.string(),
             broken: z.boolean(),
             reason: z.string(),
-            setAt: z.string().datetime(),
+            setAt: z.iso.datetime(),
           }),
           401: ErrorSchema,
           403: ErrorSchema,
@@ -1335,7 +1337,7 @@ export const ingestionRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async (request) => {
-      const flag = setParserBreakFlag(request.body);
+      const flag = await setParserBreakFlag(app.deps.repos, request.body);
       audit(app.log, "parser.break.flagged", {
         userId: request.user!.sub,
         merchant: flag.merchant,

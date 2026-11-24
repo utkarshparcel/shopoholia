@@ -43,6 +43,7 @@ import {
   canUndoPhotoDumpTriage,
   canUndoWearLog,
   careRulesOrNull,
+  affiliateIdsFromEnv,
   detectMissingLayers,
   extractOcrPlainText,
   isLentOverdue,
@@ -83,10 +84,8 @@ import { categorySlot, rankGoesWith } from "../lib/outfit-goes-with.js";
 import { detectMissingPieces } from "../lib/missing-piece.js";
 import {
   appendLentWasteNote,
-  clearPhotoDumpTriageAt,
   dismissMissingLayer,
   getLaundryRules,
-  getPhotoDumpTriageAt,
   listDismissedMissingLayers,
   setLaundryRules,
   setPhotoDumpTriageAt,
@@ -105,7 +104,7 @@ import { decodeCursor, InvalidCursorError } from "../lib/paging.js";
 import { enqueueJob, jobIdFrom } from "../lib/queues/enqueue.js";
 import { renderProviderAvailable } from "../lib/render/provider.js";
 import type { CreateWardrobeItemInput, WardrobeItemRecord } from "../lib/repositories/types.js";
-import { isUserObjectKey, userObjectKey } from "../lib/storage/r2.js";
+import { ownsStorageKey, userObjectKey } from "../lib/storage/r2.js";
 import {
   handleWardrobeTryon,
   RENDER_CLAIM_STALE_MS,
@@ -132,16 +131,11 @@ const UploadFieldsSchema = z.object({
   colors: z.array(z.string().max(50)).max(20),
   brand: z.string().max(100).nullable(),
   costMinor: z.number().int().nonnegative().max(1_000_000_000),
+  /** The closet profile it was added from (a kid's closet); none is the user's own. */
+  profileId: z.uuid().nullable(),
 });
 
 const OCR_UNAVAILABLE = { error: "ocr_unavailable", message: "Couldn't read the tag right now. Try again later." };
-
-/** A key this user's uploads made: `u/{userId}/…`, or the older `{area}/{userId}/…` keys. */
-function ownsStorageKey(key: string, userId: string): boolean {
-  if (isUserObjectKey(key, userId)) return true;
-  const parts = key.split("/");
-  return parts.length === 3 && ["wardrobe", "care-tags", "wear"].includes(parts[0]!) && parts[1] === userId;
-}
 
 /** 404 body when a client-sent storage key isn't one of the caller's uploads (checked before any storage call). */
 function foreignKeyError(userId: string, keys: Array<string | null | undefined>) {
@@ -226,7 +220,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["wardrobe"],
         querystring: PageQuerySchema.extend({
           /** N27 — scope to closet profile. */
-          profileId: z.string().uuid().optional(),
+          profileId: z.uuid().optional(),
         }),
         response: { 200: WardrobeListResponseSchema, 400: ErrorSchema, 401: ErrorSchema },
       },
@@ -903,7 +897,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdateWardrobeItemBodySchema,
         response: { 200: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -993,7 +987,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CareOcrBodySchema,
         response: {
           200: CareOcrResponseSchema.extend({ item: WardrobeItemSchema }),
@@ -1031,7 +1025,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         consumes: ["multipart/form-data"],
         response: {
           200: CareOcrResponseSchema.extend({ item: WardrobeItemSchema }),
@@ -1091,7 +1085,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: DryCleanDropOffBodySchema,
         response: {
           200: DryCleanActionResponseSchema,
@@ -1160,7 +1154,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: DryCleanActionResponseSchema,
           400: ErrorSchema,
@@ -1207,7 +1201,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: DryCleanActionResponseSchema,
           400: ErrorSchema,
@@ -1295,7 +1289,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: RepairLogsResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -1318,7 +1312,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CreateRepairLogBodySchema,
         response: {
           201: RepairLogSchema,
@@ -1371,7 +1365,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: LendBodySchema,
         response: {
           200: LendActionResponseSchema,
@@ -1441,7 +1435,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: LendActionResponseSchema,
           400: ErrorSchema,
@@ -1487,7 +1481,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 204: z.null(), 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -1511,7 +1505,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: z.object({ limit: z.coerce.number().int().min(1).max(50).optional() }),
         response: { 200: GoesWithResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -1570,7 +1564,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         consumes: ["multipart/form-data"],
-        response: { 201: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema },
+        response: { 201: WardrobeItemSchema, 400: ErrorSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (request, reply) => {
@@ -1603,11 +1597,14 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         colors: colorsJson,
         brand: fields.brand ?? null,
         costMinor: fields.costMinor ? Number(fields.costMinor) : 0,
+        profileId: fields.profileId || null,
       });
       if (!parsed.success) {
         return reply.code(400).send({ error: "Bad Request", message: "Invalid item fields" });
       }
-      const { category, colors, brand, costMinor } = parsed.data;
+      const { category, colors, brand, costMinor, profileId } = parsed.data;
+      const refError = await foreignRefError(userId, [], [profileId]);
+      if (refError) return reply.code(404).send(refError);
       const { key: imageKey } = await app.deps.storage.put({
         key: userObjectKey(userId, "wardrobe", `${randomUUID()}.jpg`),
         body: file.body,
@@ -1620,6 +1617,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         colors,
         brand,
         costMinor,
+        profileId,
         imageKeys: [imageKey],
         garmentImageKey: imageKey,
       });
@@ -1637,7 +1635,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: WardrobeTryonResponseSchema,
           202: WardrobeTryonResponseSchema,
@@ -1895,11 +1893,11 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({
             ok: z.literal(true),
-            id: z.string().uuid(),
+            id: z.uuid(),
           }),
           400: ErrorSchema,
           401: ErrorSchema,
@@ -1985,10 +1983,10 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["wardrobe"],
         body: z.object({
-          itemIds: z.array(z.string().uuid()).min(1).max(50).optional(),
+          itemIds: z.array(z.uuid()).min(1).max(50).optional(),
         }),
         response: {
-          200: z.object({ cleaned: z.number().int().nonnegative(), itemIds: z.array(z.string().uuid()) }),
+          200: z.object({ cleaned: z.number().int().nonnegative(), itemIds: z.array(z.uuid()) }),
           401: ErrorSchema,
         },
       },
@@ -2062,6 +2060,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         occasion: q.occasion,
         owned,
         dismissedIds: await listDismissedMissingLayers(app.deps.repos, userId),
+        affiliateIds: affiliateIdsFromEnv(process.env),
       });
       return { gaps };
     },
@@ -2096,7 +2095,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: LentOverdueActionBodySchema,
         response: {
           200: LentOverdueActionResponseSchema,
@@ -2141,7 +2140,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       let wasteNote: string | null = null;
       if (decision.action === "lost") {
         wasteNote = decision.wasteNote;
-        appendLentWasteNote(userId, decision.wasteNote);
+        await appendLentWasteNote(app.deps.repos, userId, id, decision.wasteNote);
         audit(app.log, "wardrobe.lend.lost", { userId, itemId: id, wasteNote });
         trackServerEvent("wardrobe_lent_lost", { userId, itemId: id });
       } else {
@@ -2170,7 +2169,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           decision: z.enum(["keep", "wardrobe", "discard"]),
         }),
@@ -2179,7 +2178,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
             decision: z.enum(["keep", "wardrobe", "discard"]),
             item: WardrobeItemSchema.nullable(),
             deleted: z.boolean(),
-            undoUntil: z.string().datetime().nullable(),
+            undoUntil: z.iso.datetime().nullable(),
           }),
           400: ErrorSchema,
           401: ErrorSchema,
@@ -2199,7 +2198,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(400).send({ error: "Bad Request", message: "Not a photo-dump item" });
       }
       const decidedAt = new Date();
-      setPhotoDumpTriageAt(id, decidedAt.toISOString());
+      await setPhotoDumpTriageAt(app.deps.repos, userId, id, decidedAt);
       audit(app.log, "wardrobe.photo_dump.triage", { userId, itemId: id, decision });
       trackServerEvent("photo_dump_triaged", { userId, itemId: id, decision });
 
@@ -2240,7 +2239,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["wardrobe"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({ ok: z.literal(true), item: WardrobeItemSchema }),
           400: ErrorSchema,
@@ -2260,7 +2259,12 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
       );
       let updated = restored;
       if (!restored) {
-        const at = getPhotoDumpTriageAt(id);
+        // null: not the caller's item (discarded or not).
+        const marks = await app.deps.repos.getWardrobeItemMarks(id, userId);
+        if (!marks) {
+          return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
+        }
+        const at = marks.photoDumpTriagedAt?.toISOString() ?? null;
         if (!at || !canUndoPhotoDumpTriage(at)) {
           return reply.code(400).send({ error: "Bad Request", message: "Triage undo window expired" });
         }
@@ -2273,7 +2277,7 @@ export const wardrobeRoutes: FastifyPluginAsyncZod = async (app) => {
         updated = await app.deps.repos.updateWardrobeItem(id, userId, { tags: undoPhotoDumpTriageTags(restored.tags) });
       }
       if (!updated) return reply.code(404).send({ error: "Not Found", message: "Wardrobe item not found" });
-      clearPhotoDumpTriageAt(id);
+      await setPhotoDumpTriageAt(app.deps.repos, userId, id, null);
       audit(app.log, "wardrobe.photo_dump.triage_undo", { userId, itemId: id });
       trackServerEvent("photo_dump_triage_undone", { userId, itemId: id });
       return { ok: true as const, item: await signedWardrobeJson(updated) };

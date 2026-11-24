@@ -6,6 +6,8 @@ import { Platform } from 'react-native';
 import { clearPushToken, registerPushToken } from '@/src/api/client';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { trackEvent } from '@/src/lib/analytics';
+import { onBeforeSignOut } from '@/src/lib/signOut';
+import { useSessionStore } from '@/src/stores/session';
 
 /** Where a tapped push leads: the order tracker, or the reveal once the haul is here. */
 export type PushTarget = {
@@ -83,6 +85,8 @@ export async function registerForPushNotifications(accessToken: string): Promise
 
 let registered: { accessToken: string; token: string } | null = null;
 let queue: Promise<void> = Promise.resolve();
+/** Sync calls queued or running. */
+let pending = 0;
 
 /**
  * Keeps the device's push registration in step with the session: registers after sign-in and
@@ -90,6 +94,7 @@ let queue: Promise<void> = Promise.resolve();
  * registration it undoes.
  */
 export function syncPushRegistration(accessToken: string | null): Promise<void> {
+  pending += 1;
   queue = queue
     .then(async () => {
       if (accessToken) {
@@ -104,11 +109,31 @@ export function syncPushRegistration(accessToken: string | null): Promise<void> 
       } else if (registered) {
         const previous = registered;
         registered = null;
-        await clearPushToken(previous.accessToken, previous.token);
+        // The session's current token when there still is one (sign-out runs this first).
+        await clearPushToken(
+          useSessionStore.getState().accessToken ?? previous.accessToken,
+          previous.token,
+        );
       }
     })
     .catch((error: unknown) => {
       if (__DEV__) console.warn('[push]', error instanceof Error ? error.message : error);
+    })
+    .finally(() => {
+      pending -= 1;
     });
   return queue;
 }
+
+/**
+ * Sign-out unregisters this device's push token first, while the session can still sign (and if
+ * need be renew) the request. Clearing it after the session was gone sent the last saved access
+ * token, usually expired by then: the server answered 401, nothing could renew it, and the
+ * signed-out device kept getting the previous user's order pushes.
+ */
+export function unregisterPushBeforeSignOut(): Promise<void> | null {
+  if (!registered && pending === 0) return null;
+  return syncPushRegistration(null);
+}
+
+onBeforeSignOut(unregisterPushBeforeSignOut);

@@ -7,15 +7,20 @@ export function supportsSmsInboxRead(): boolean {
   return false;
 }
 
-export function getSmsForwardingAddress(): string {
-  return (
-    process.env.EXPO_PUBLIC_FORWARDING_ADDRESS ?? 'forward@inbox.shopoholia.app'
-  );
+/**
+ * The inbox forwarded texts go to, from the build's EXPO_PUBLIC_FORWARDING_ADDRESS, or null.
+ * There is no fallback: an address that nothing reads must never be shown (S2-09), so with none
+ * configured every forwarding prompt stays hidden.
+ */
+export function getSmsForwardingAddress(): string | null {
+  const address = process.env.EXPO_PUBLIC_FORWARDING_ADDRESS?.trim();
+  return address && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) ? address : null;
 }
 
-/** Forwarding copy for every platform: the app doesn't read texts itself. */
-export function getIosSmsForwardingCopy(address?: string): string {
+/** Forwarding copy for every platform (the app doesn't read texts itself), or null without an address. */
+export function getIosSmsForwardingCopy(address?: string): string | null {
   const addr = address ?? getSmsForwardingAddress();
+  if (!addr) return null;
   return (
     `WORN doesn't read your texts. Forward any order or shipping text to ${addr} — ` +
     `we'll parse it just like an email receipt. You can skip this and connect email only.`

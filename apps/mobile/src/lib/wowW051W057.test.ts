@@ -103,7 +103,8 @@ describe('W051–W057 Today/wardrobe occasion polish', () => {
     expect(expired.actions).toContain('edit');
     expect(expired.canCancel).toBe(false);
 
-    expect(parseInterviewEventAt('2026-10-15')).toBe('2026-10-15T12:00:00.000Z');
+    // Midday on the user's clock (S2-10), not noon UTC.
+    expect(parseInterviewEventAt('2026-10-15')).toBe(new Date(2026, 9, 15, 12).toISOString());
     expect(parseInterviewEventAt('not-a-date')).toBeNull();
   });
 

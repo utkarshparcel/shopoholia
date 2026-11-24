@@ -52,9 +52,10 @@ export const merchantPurchases = pgTable(
   },
   (t) => [
     index("merchant_purchases_user_created_idx").on(t.userId, t.createdAt.desc().nullsFirst()),
-    // #38: one purchase per (user, order_ref); createMerchantPurchase returns the existing row.
-    uniqueIndex("merchant_purchases_user_order_ref_idx")
-      .on(t.userId, t.orderRef)
+    // #38: one purchase per (user, merchant, order_ref); createMerchantPurchase returns the
+    // existing row. Two merchants can use the same ref (Swiggy and Zomato order numbers).
+    uniqueIndex("merchant_purchases_user_merchant_order_ref_idx")
+      .on(t.userId, t.merchant, t.orderRef)
       .where(sql`${t.orderRef} IS NOT NULL`),
     index("merchant_purchases_assignee_idx")
       .on(t.assigneeUserId)

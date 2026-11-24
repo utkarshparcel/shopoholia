@@ -9,6 +9,7 @@ import {
 } from "@worn/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { trackServerEvent } from "../lib/analytics.js";
 import { requireAuth } from "../lib/auth/guard.js";
 import { validateCoinPurchase } from "../lib/coin-purchases.js";
 
@@ -65,7 +66,7 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["coins"],
         querystring: z.object({
-          cursor: z.string().uuid().optional(),
+          cursor: z.uuid().optional(),
           limit: z.coerce.number().int().min(1).max(50).default(20),
         }),
         response: {
@@ -131,6 +132,17 @@ export const coinsRoutes: FastifyPluginAsyncZod = async (app) => {
           );
         }
         return reply.code(outcome.status).send({ error: outcome.error, message: outcome.message });
+      }
+      if (!outcome.alreadyGranted) {
+        // Test purchases (App Review, TestFlight, license testers) credit coins too; the
+        // environment keeps them apart from revenue here and on the purchase row.
+        trackServerEvent("iap_purchase", {
+          userId: request.user.sub,
+          store: request.body.store,
+          productId: outcome.pack.storeProductId,
+          coins: outcome.purchase.coinsGranted,
+          environment: outcome.purchase.environment ?? "unknown",
+        });
       }
       return {
         success: true as const,

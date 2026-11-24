@@ -1,8 +1,65 @@
 # WORN — ~$0 Launch & GTM Brief (India + Global)
 
-> Synced from swarm research 2026-08-26. India: [Zero-spend](agent:67913b2a), [WhatsApp/creators](agent:e823dc7d). Global sections filled by parallel agents (channels, regional wedge, PH/HN/ASO).
+> **Scope (read first).** This release launches **Worn Play only**: coins, hauls, delivery timers (Express 2 h / Standard 12 h / Slow burn 48 h) and a reveal of AI renders of the user wearing the pieces. **Worn Closet** (gift-card / store-credit vault, returns, wardrobe, Gmail) is behind `FEATURE_CLOSET`, which is **off in every release build**, and is **not launching yet**. Part A below is the launch playbook. Everything from "Part B" onward is the **Closet playbook, kept for a later phase**: do not run it, recruit testers for it, or market any of its claims until Closet ships.
 >
-> **Operating principle (everywhere):** Sell the found-money vault **without requiring public Gmail**; treat OAuth verification + CASA as a parallel compliance project. Lead with Closet, not Play.
+> Last revised 2026-11-12. Original Closet research synced 2026-08-26 (internal agent-id references removed).
+
+---
+
+# Part A — Worn Play launch (current)
+
+## What the product is
+
+- Pick pieces, drop them in a haul, choose a delivery timer, and get a reveal of AI renders of **you** wearing them. Express 2 h / Standard 12 h / Slow burn 48 h.
+- Coins: about 1 coin per ₹10. Each piece includes 1 free reveal scene (Studio); other scenes cost coins.
+- Renders are made by the owner's render agent (`docs/RENDER_AGENT.md`); FASHN is off by default and only an opt-in overflow.
+- Cashback is hidden (`FEATURE_CASHBACK` off): do not mention cashback in any copy.
+- App ID `com.worncloset.app`; website worncloset.app.
+
+## Positioning and aha
+
+- **Aha:** "See yourself wearing it before it arrives." Screenshot #1 = the reveal of the user's own render; #2 = the haul with delivery timers; #3 = coin balance and the free Studio scene.
+- Do not claim: gift cards, found money, returns, cashback, Gmail or inbox features, bank or wallet.
+- Likeness photos are personal data: lead trust copy with consent, deletion and who processes them (`docs/TRUST_DPDP_GDPR.md`).
+
+## Launch channels (all $0)
+
+1. Warm WhatsApp 1:1 and college groups (ask admins): send the app link plus one reveal screenshot.
+2. Instagram Reels / TikTok / Shorts: screen-record the timer countdown and the reveal. Nano-creator barter (see Part B mechanics; offer a render of *their* haul), labelled `#Collaboration` / `#Ad`.
+3. Reddit (value first, then invite), Indie Hackers, Product Hunt (tagline example: `See yourself in it before it ships`).
+4. Android first-wave via closed testing; iOS needs the Apple Developer account, so enrol early instead of deferring it.
+
+## Launch copy
+
+```
+Pick the fits. Choose how fast you want the reveal (2 h, 12 h or 48 h).
+Then see AI renders of YOU wearing them. WORN Play, free to start.
+```
+
+## Store / ASO
+
+Store listing work lives in `docs/STORE_LISTINGS.md` (Worn Play copy, Data Safety, App Privacy, screenshot plan), which is the source for launch titles and screenshots. The "WORN Closet: ..." titles in Part B are Closet-phase drafts, not the launch titles.
+
+## Analytics and consent
+
+The app ships PostHog, not GA4. Plan EU consent and disclosure around PostHog. Any GA4 mention in Part B is stale.
+
+## Success bar before any paid spend
+
+Define it on Play metrics: reveal-viewed rate, D7 reopen and unprompted shares of reveal screenshots. Keep paid acquisition at $0 / ₹0 until D7 reopen holds. Targets from Part B (≥40% D7 reopen, ≥5 organic shares) carry over; the "non-zero vault" bar does not apply to Play.
+
+## Compliance pointers (apply to Play too)
+
+- Limited Use rules and CASA only matter once Closet / Gmail ships: see [`docs/CASA.md`](./CASA.md) (Limited Use, `gmail.readonly`, 100-user test cap, annual CASA). Not a Play launch gate. No test cap applies to Play.
+- Privacy and DPDP/GDPR: [`docs/TRUST_DPDP_GDPR.md`](./TRUST_DPDP_GDPR.md); pentest readiness: [`docs/PENTEST_READINESS.md`](./PENTEST_READINESS.md).
+
+---
+
+# Part B — Worn Closet playbook (LATER PHASE: after `FEATURE_CLOSET` ships)
+
+> Everything below describes Closet marketing. It is **not current**: the launched app contains none of the vault, gift-card, Gmail or return features it promises. Statements such as "Lead with Closet, not Play" and "Never buy ads for Play" apply only to this later phase and are superseded by Part A for the launch.
+>
+> **Closet operating principle:** Sell the found-money vault **without requiring public Gmail**; treat OAuth verification + CASA as a parallel compliance project.
 
 ---
 
@@ -31,7 +88,7 @@ Until then: **$0 / ₹0 paid acquisition**
 
 **Global EN Closet aha:** Reddit (`r/personalfinance`, `r/Frugal`, `r/declutter`, `r/BuyItForLife`) → TikTok/Reels nano thrift barter → Product Hunt + Show HN → Indie Hackers → Discord Buy Nothing / declutter → Play/ASO English  
 
-**Do not lead with Play try-on in either track.**
+**(Closet phase only) Do not lead with Play try-on in either Closet track.**
 
 ### India track (detail in sections below)
 
@@ -43,7 +100,7 @@ Until then: **$0 / ₹0 paid acquisition**
 
 **Positioning:** “Your inbox is sitting on forgotten money.” Anti: not shopping, not outfit AI, not bank/wallet, not coupon spam.
 
-**Paid-spend gates (hold 2 weeks before any ₹ UA):** email-connect ≥55% · median found money ≥₹800 · time-to-₹ ≤90s · D1 ≥35% · D7 ≥18% · soft K-factor ≥0.4. Kill marketing if median find &lt; ₹300. Never buy ads for Play.
+**Paid-spend gates (hold 2 weeks before any ₹ UA):** email-connect ≥55% · median found money ≥₹800 · time-to-₹ ≤90s · D1 ≥35% · D7 ≥18% · soft K-factor ≥0.4. Kill marketing if median find &lt; ₹300. (Closet phase.)
 
 Interactive India playbook canvas: `canvases/worn-closet-gtm.canvas.tsx` (open beside chat).
 
@@ -71,7 +128,7 @@ Interactive India playbook canvas: `canvases/worn-closet-gtm.canvas.tsx` (open b
 |-----|------|------------|
 | Landing + email | [beehiiv Launch](https://www.beehiiv.com/pricing) | ≤2,500 subs free |
 | Forms | [Tally](https://tally.so/) | Free fair use |
-| Analytics | GA4 (+ privacy disclosure) | Free |
+| Analytics | PostHog (shipped in the app; GA4 only for the landing page, with disclosure) | Free tier |
 | Social schedule | [Buffer Free](https://buffer.com/pricing) | 3 channels / 10 posts |
 | Demo video | Loom free / phone screen record | OAuth + PH video |
 | Design | Figma free + phone screenshots | — |
@@ -184,7 +241,7 @@ Cadence: ≤1 promo/week; IST 10am–1pm or 7–8pm; watch block rate.
 ## Do NOT spend until retention proven
 
 1. Meta / Google UAC / influencer cash
-2. Apple Developer ($99) — Android/APK/WA first
+2. (Closet-phase note) Apple Developer ($99): needed for any iOS launch, so for Worn Play enrol early; this deferral only applied to the Closet test
 3. CASA assessor fees until non-Gmail vault retains **and** Gmail is the unlock
 4. Broader Gmail scopes than `gmail.readonly`
 5. Play try-on creatives before Closet converts
@@ -236,7 +293,7 @@ Cursor: [skills docs](https://cursor.com/docs/skills)
 
 ## Soft-launch ops (India + shared) — distilled
 
-From [PH waitlist ASO](agent:6150311a):
+From PH waitlist ASO research:
 
 1. **Waitlist:** Carrd/Framer/GitHub Pages + Loops (~1k free) or Buttondown (100 free). Target **300–400** emails before PH.
 2. **Play gate:** personal accounts need **≥12 closed testers opted in continuously 14 days** — recruit **15–20**. Internal ≠ closed.

@@ -48,6 +48,10 @@ export const wardrobeItems = pgTable(
     profileId: uuid("profile_id").references(() => closetProfiles.id, { onDelete: "set null" }),
     /** Photo-dump discard: hidden from every list until undone or purged after the undo window. */
     discardedAt: timestamp("discarded_at", { withTimezone: true }),
+    /** Photo-dump triage decision time; the undo window runs from it. */
+    photoDumpTriagedAt: timestamp("photo_dump_triaged_at", { withTimezone: true }),
+    /** U035 — "keep" in the dispose tree snoozes the waste nudge for this item until then. */
+    keepSnoozedUntil: timestamp("keep_snoozed_until", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -150,6 +154,8 @@ export const dispositionListings = pgTable(
     status: dispositionStatusEnum("status").notNull().default("ACTIVE"),
     /** Marketplace seller when mode reuses sellers/listings rails (SELL / optional BARTER). */
     sellerId: uuid("seller_id").references(() => sellers.id, { onDelete: "set null" }),
+    /** DISP-LOGISTICS — the booked pickup (partner, slot, ETA), null until one is booked. */
+    pickupBooking: jsonb("pickup_booking").$type<Record<string, unknown>>(),
     ...timestamps,
   },
   (t) => [

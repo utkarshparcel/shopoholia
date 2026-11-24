@@ -148,6 +148,48 @@
       "when": 1793610486861,
       "tag": "0020_render_combined_items",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793702457988,
+      "tag": "0021_users_apple_sub",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793720799031,
+      "tag": "0022_catalog_coin_prices",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793725111412,
+      "tag": "0023_users_apple_refresh_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793728477185,
+      "tag": "0024_marketplace_settlements_merchant_order_ref",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793771486685,
+      "tag": "0025_render_agent_leases",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794484334484,
+      "tag": "0026_closet_state",
+      "breakpoints": true
     }
   ]
 }

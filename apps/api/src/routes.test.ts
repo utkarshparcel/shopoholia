@@ -62,9 +62,12 @@ async function login(app: Awaited<ReturnType<typeof buildServer>>, phone = "9198
   return verify.json() as { accessToken: string };
 }
 
+/** The start of a JPEG (the avatar route checks the bytes, not the declared type). */
+const SELFIE_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
+
 async function readyAvatar(app: Awaited<ReturnType<typeof buildServer>>, token: string) {
   const form = new FormData();
-  form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg", contentType: "image/jpeg" });
+  form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg", contentType: "image/jpeg" });
   await app.inject({
     method: "POST",
     url: "/avatar",
@@ -171,6 +174,82 @@ describe("auth", () => {
     expect(res.statusCode).toBe(401);
   });
 
+  describe("Sign in with Apple", () => {
+    const NONCE = "nonce-0123456789abcdef";
+    const signIn = (identityToken: string, extra: Record<string, unknown> = {}) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/apple",
+        payload: { identityToken, nonce: NONCE, ...extra },
+      });
+
+    it("creates the account with the onboarding coins, then signs the same user in again", async () => {
+      const first = await signIn(`test-apple:apple-sub-1:x7@privaterelay.appleid.com:${NONCE}`, {
+        fullName: "Asha Rao",
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ isNewUser: true, coinBalance: ONBOARDING_COIN_GRANT });
+      const firstUser = (app.jwt.verify(first.json().accessToken) as { sub: string }).sub;
+      expect(await app.deps.repos.findUserById(firstUser)).toMatchObject({
+        appleSub: "apple-sub-1",
+        email: "x7@privaterelay.appleid.com",
+        displayName: "Asha Rao",
+      });
+
+      // Later sign-ins carry no name (Apple sends it once) and keep the account.
+      const again = await signIn(`test-apple:apple-sub-1:x7@privaterelay.appleid.com:${NONCE}`);
+      expect(again.statusCode).toBe(200);
+      expect(again.json()).toMatchObject({ isNewUser: false, coinBalance: ONBOARDING_COIN_GRANT });
+      expect((app.jwt.verify(again.json().accessToken) as { sub: string }).sub).toBe(firstUser);
+      expect((await app.deps.repos.findUserById(firstUser))?.displayName).toBe("Asha Rao");
+
+      const refreshed = await app.inject({
+        method: "POST",
+        url: "/auth/refresh",
+        payload: { refreshToken: again.json().refreshToken },
+      });
+      expect(refreshed.statusCode).toBe(200);
+    });
+
+    it("signs in without an email when the user shared none", async () => {
+      const res = await signIn(`test-apple:apple-sub-2:-:${NONCE}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().isNewUser).toBe(true);
+    });
+
+    it("links to the Google account with the same email instead of making a second account", async () => {
+      const google = await app.inject({
+        method: "POST",
+        url: "/auth/google",
+        payload: { idToken: "test-google:g-sub:same@worncloset.app:Same" },
+      });
+      const googleUser = (app.jwt.verify(google.json().accessToken) as { sub: string }).sub;
+      const apple = await signIn(`test-apple:apple-sub-3:Same@worncloset.app:${NONCE}`);
+      expect(apple.statusCode).toBe(200);
+      expect(apple.json().isNewUser).toBe(false);
+      expect((app.jwt.verify(apple.json().accessToken) as { sub: string }).sub).toBe(googleUser);
+    });
+
+    it("refuses a token for another sign-in (nonce) or not from Apple", async () => {
+      expect((await signIn(`test-apple:apple-sub-4:a@b.co:other-nonce-0123456789`)).statusCode).toBe(401);
+      expect((await signIn("not-an-apple-identity-token")).statusCode).toBe(401);
+      expect((await signIn(`test-apple:apple-sub-4:a@b.co:${NONCE}`, { nonce: "short" })).statusCode).toBe(400);
+    });
+
+    it("answers 503 when no bundle id is configured", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("APPLE_BUNDLE_ID", "");
+      vi.stubEnv("APPLE_SIGN_IN_AUDIENCES", "");
+      try {
+        const res = await signIn(`test-apple:apple-sub-5:a@b.co:${NONCE}`);
+        expect(res.statusCode).toBe(503);
+        expect(res.json().message).toMatch(/APPLE_BUNDLE_ID/);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   it("refreshes tokens", async () => {
     await app.inject({ method: "POST", url: "/auth/otp", payload: { phone: "919876543210" } });
     const verify = await app.inject({
@@ -236,7 +315,7 @@ describe("avatar", () => {
 
   it("uploads avatar and processes job", async () => {
     const form = new FormData();
-    form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg", contentType: "image/jpeg" });
+    form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg", contentType: "image/jpeg" });
 
     const upload = await app.inject({
       method: "POST",
@@ -262,6 +341,65 @@ describe("avatar", () => {
     expect(body.referencePreviewUrl).toContain("references");
   });
 
+  it("deletes the old photos when a new avatar replaces them", async () => {
+    await readyAvatar(app, token);
+    const userId = (app.jwt.verify(token) as { sub: string }).sub;
+    const first = (await app.deps.repos.findAvatarByUserId(userId))!;
+    // A processed avatar keeps its reference image (the job deletes the uploads it used).
+    const oldKeys = [first.referenceImageKey!, ...first.sourceUploadKeys];
+    expect(first.referenceImageKey).toBeTruthy();
+    for (const key of oldKeys) await expect(app.deps.storage.getSignedUrl(key)).resolves.toBeTruthy();
+    const deleted: string[] = [];
+    const deleteMany = app.deps.storage.deleteMany.bind(app.deps.storage);
+    app.deps.storage.deleteMany = async (keys) => {
+      deleted.push(...keys);
+      await deleteMany(keys);
+    };
+
+    await readyAvatar(app, token);
+
+    expect(deleted).toEqual(expect.arrayContaining(oldKeys));
+    const second = (await app.deps.repos.findAvatarByUserId(userId))!;
+    // What erasure and DELETE /avatar can reach is only the new avatar's photos.
+    expect([second.referenceImageKey, ...second.sourceUploadKeys]).not.toContain(oldKeys[0]);
+    expect(await app.deps.repos.listUserStorageKeys(userId)).not.toContain(oldKeys[0]);
+  });
+
+  it("refuses a file that isn't a photo, whatever type it claims, and stores nothing", async () => {
+    const put = vi.spyOn(app.deps.storage, "put");
+    const form = new FormData();
+    form.append("photo", SELFIE_JPEG, { filename: "a.jpg", contentType: "image/jpeg" });
+    form.append("photo", Buffer.from("<html><script>alert(1)</script></html>"), {
+      filename: "selfie.jpg",
+      contentType: "image/jpeg",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/avatar",
+      headers: { authorization: `Bearer ${token}`, ...form.getHeaders() },
+      payload: form,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(put).not.toHaveBeenCalled();
+    put.mockRestore();
+  });
+
+  it("stores a photo with the type its bytes have, not the one the client sent", async () => {
+    const put = vi.spyOn(app.deps.storage, "put");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+    const form = new FormData();
+    form.append("photo", png, { filename: "selfie.jpg", contentType: "text/html" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/avatar",
+      headers: { authorization: `Bearer ${token}`, ...form.getHeaders() },
+      payload: form,
+    });
+    expect(res.statusCode).toBe(202);
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ contentType: "image/png", key: expect.stringMatching(/\.png$/) }));
+    put.mockRestore();
+  });
+
   it("rejects empty upload", async () => {
     const form = new FormData();
     const res = await app.inject({
@@ -275,7 +413,7 @@ describe("avatar", () => {
 
   it("deletes avatar", async () => {
     const form = new FormData();
-    form.append("photo", Buffer.from("fake-image"), { filename: "selfie.jpg" });
+    form.append("photo", SELFIE_JPEG, { filename: "selfie.jpg" });
     await app.inject({
       method: "POST",
       url: "/avatar",
@@ -736,6 +874,19 @@ describe("orders", () => {
     await app.close();
   });
 
+  it("places a first order whose referrer's account no longer exists", async () => {
+    // A row written before erasure cleared referred_by: it points at a missing user.
+    const userId = (app.jwt.verify(token) as { sub: string }).sub;
+    await app.deps.repos.updateUser(userId, { referredBy: "00000000-0000-4000-8000-00000000dead" });
+    const created = await app.inject({
+      method: "POST",
+      url: "/orders",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tier: "STANDARD" },
+    });
+    expect(created.statusCode).toBe(201);
+  });
+
   it("rejects checkout with empty cart", async () => {
     await app.inject({
       method: "DELETE",
@@ -978,8 +1129,18 @@ describe("reveal", () => {
     expect(unlock.statusCode).toBe(200);
     expect(unlock.json().coinsSpent).toBe(50);
     expect(unlock.json().renders[0].unlocked).toBe(true);
-    expect(unlock.json().renders[0].status).toBe("DONE");
-    expect(unlock.json().renders[0].imageUrl).toBeTruthy();
+    // Queued, not rendered inside the request; the app polls the reveal.
+    expect(unlock.json().renders[0].status).toBe("QUEUED");
+
+    await app.deps.jobQueue.flushRenderJobs!();
+    const after = await app.inject({
+      method: "GET",
+      url: `/orders/${orderId}/reveal`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const card = after.json().renders.find((r: { id: string }) => r.id === lockedId);
+    expect(card.status).toBe("DONE");
+    expect(card.imageUrl).toBeTruthy();
 
     const balanceAfter = (
       await app.inject({

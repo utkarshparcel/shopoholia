@@ -3,6 +3,8 @@
  * iOS cannot READ_SMS; forwarding is the only SMS path. No READ_SMS marketing.
  */
 
+import { getSmsForwardingAddress } from './sms';
+
 export type IosForwardWizardStepId = 1 | 2 | 3;
 
 export type IosForwardWizardStep = {
@@ -12,15 +14,16 @@ export type IosForwardWizardStep = {
   cta: string;
 };
 
-/** Stable plus-address for the user's forwarding inbox (Mail routing). */
+/**
+ * Stable plus-address for the user's forwarding inbox (Mail routing), or null when the build has
+ * no forwarding inbox configured (see getSmsForwardingAddress).
+ */
 export function buildIosForwardAddress(opts?: {
-  baseAddress?: string;
+  baseAddress?: string | null;
   userKey?: string | null;
-}): string {
-  const base =
-    opts?.baseAddress ??
-    process.env.EXPO_PUBLIC_FORWARDING_ADDRESS ??
-    'forward@inbox.shopoholia.app';
+}): string | null {
+  const base = opts?.baseAddress ?? getSmsForwardingAddress();
+  if (!base) return null;
   const key = (opts?.userKey ?? '').trim();
   if (!key) return base;
   const at = base.lastIndexOf('@');

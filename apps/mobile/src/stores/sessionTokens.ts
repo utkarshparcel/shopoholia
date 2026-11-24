@@ -127,6 +127,18 @@ export function saveStoredSession(session: StoredSession | null): Promise<void> 
   return writing;
 }
 
+/**
+ * Removes a session a previous install of the app left in the iOS Keychain, which (unlike the
+ * app's files) survives deleting the app: without this, reinstalling opened straight into the
+ * last user's account.
+ */
+export async function deleteStoredSessionFromPreviousInstall(): Promise<void> {
+  if (!SESSION_TOKENS_PERSISTED) return;
+  const store = await loadSecureStore();
+  await store.deleteItemAsync(SESSION_TOKENS_KEY, options(store));
+  lastSaved = null;
+}
+
 /** Test hook: forget what was read or written. */
 export function resetStoredSessionCacheForTests() {
   lastSaved = null;

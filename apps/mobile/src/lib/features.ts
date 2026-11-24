@@ -9,6 +9,14 @@
 
 export const FEATURE_CLOSET = process.env.EXPO_PUBLIC_FEATURE_CLOSET === '1';
 
+/**
+ * Affiliate cashback (coins back for a partner purchase). Off until the partner affiliate
+ * accounts exist: without them no purchase is ever attributed, so the app must not promise
+ * coins back, list a Cashback screen, or record "Buy for real" taps as pending cashback.
+ * Set EXPO_PUBLIC_FEATURE_CASHBACK=1 to switch it all back on.
+ */
+export const FEATURE_CASHBACK = process.env.EXPO_PUBLIC_FEATURE_CASHBACK === '1';
+
 /** Show the Closet paywall / trial CTA (App Store / Google Play subscriptions). */
 export const FEATURE_PAYWALL = process.env.EXPO_PUBLIC_FEATURE_PAYWALL === '1';
 

@@ -200,7 +200,7 @@ describe("restyle: the four checks", () => {
   it("composes a fix for what today's look trips, and says why", () => {
     const notWaxed = ok(restyle(input("NOT_WAXED", worn(MINI))));
     expect(composed(notWaxed, "NOT_WAXED").slots).toEqual(worn(MAXI));
-    expect(notWaxed.why).toBe("Monday’s strapless mini shows shoulders, underarms and legs.");
+    expect(notWaxed.why).toBe("Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.");
     expect(notWaxed.note).toBe("Floor-length linen with sleeves. It reads as a choice, not a cover-up.");
 
     const bloated = ok(restyle(input("BLOATED", worn(MINI))));
@@ -237,7 +237,7 @@ describe("restyle: the four checks", () => {
       outfit: null,
       source: "NONE",
       note: RESTYLE_NONE.NOT_WAXED,
-      why: "Monday’s strapless mini shows shoulders, underarms and legs.",
+      why: "Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.",
     });
   });
 });
@@ -249,7 +249,7 @@ describe("restyle: this week's backup", () => {
     const r = ok(restyle(input("NOT_WAXED", worn(MINI), { backups })));
     expect(r.source).toBe("BACKUP");
     expect(r.note).toBe("Kept from the week.");
-    expect(r.why).toBe("Monday’s strapless mini shows shoulders, underarms and legs.");
+    expect(r.why).toBe("Monday’s strapless mini is open at the shoulders and at the underarms, and ends above the knee.");
     expect(r.outfit).toMatchObject({
       kind: "RESTYLE",
       restyleReason: "NOT_WAXED",

@@ -141,7 +141,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
         currency: "INR",
       });
       const listings = await app.deps.repos.listDispositionListings(userId);
-      const declutter = declutterPayloadForUser(userId, listings);
+      const declutter = await declutterPayloadForUser(app.deps.repos, userId, listings);
       const rewearStreak = await loadRewearStreak(app, userId, { breakOnPurchase });
       const co2WaterSavings = computeCo2WaterSavings({
         metrics: metrics.map((m) => ({ wearCount: m.wearCount })),
@@ -221,7 +221,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         querystring: z.object({
           limit: z.coerce.number().int().min(1).max(20).optional(),
         }),
@@ -266,7 +266,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         body: ReplaceTwinClickBodySchema,
         response: {
           200: ReplaceTwinClickResponseSchema,
@@ -321,7 +321,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         response: {
           200: WearChallengeStartResponseSchema,
           401: ErrorSchema,
@@ -388,7 +388,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["waste"],
-        params: z.object({ itemId: z.string().uuid() }),
+        params: z.object({ itemId: z.uuid() }),
         body: DisposeBodySchema,
         response: { 200: DisposeResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -430,7 +430,7 @@ export const wasteRoutes: FastifyPluginAsyncZod = async (app) => {
       });
       trackServerEvent("waste_disposed", { userId, wardrobeItemId: itemId, mode });
       const all = await app.deps.repos.listDispositionListings(userId);
-      const declutter = declutterPayloadForUser(userId, all);
+      const declutter = await declutterPayloadForUser(app.deps.repos, userId, all);
       if (declutter.declutterChallenge.started && declutter.declutterChallenge.completed) {
         trackServerEvent("declutter_challenge_completed", {
           userId,

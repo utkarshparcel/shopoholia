@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   evaluateNotificationGateFromFlags,
   localDateKey,
@@ -105,11 +105,26 @@ export async function processOutfit(
     categories = planned.categories;
   } else {
     const styleProfile = (user.styleProfile as { tags?: string[] } | null) ?? null;
-    const items = await db
-      .select({ id: wardrobeItems.id, category: wardrobeItems.category, colors: wardrobeItems.colors })
+    // Only what's in the closet now: not discarded (soft-deleted until the purge) and not
+    // stored away, like every API read. Clean pieces first; worn ones only when nothing is clean.
+    const inCloset = await db
+      .select({
+        id: wardrobeItems.id,
+        category: wardrobeItems.category,
+        colors: wardrobeItems.colors,
+        laundryStatus: wardrobeItems.laundryStatus,
+      })
       .from(wardrobeItems)
-      .where(eq(wardrobeItems.userId, payload.userId))
+      .where(
+        and(
+          eq(wardrobeItems.userId, payload.userId),
+          isNull(wardrobeItems.discardedAt),
+          eq(wardrobeItems.closetStatus, "ACTIVE"),
+        ),
+      )
       .limit(MAX_CANDIDATE_ITEMS);
+    const clean = inCloset.filter((it) => it.laundryStatus === "CLEAN");
+    const items = clean.length > 0 ? clean : inCloset;
     if (items.length === 0) return { outfitId: null };
 
     let candidates = items;

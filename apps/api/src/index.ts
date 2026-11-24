@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
@@ -7,31 +9,66 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyError, type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { createDefaultDeps, type AppDeps } from "./lib/deps.js";
+import { agentSweep, createDefaultDeps, type AppDeps } from "./lib/deps.js";
 import { initServerAnalyticsFromEnv } from "./lib/analytics.js";
 import { isUniqueViolation, reportRequestError } from "./lib/error-reporting.js";
 import { resumeInFlightWork } from "./lib/jobs/resume.js";
+import { resolveEconomyMode } from "./lib/orders/state-machine.js";
 import { closeQueues } from "./lib/queues/enqueue.js";
+import pino from "pino";
+import { redactQueryError } from "./lib/redact-error.js";
 import { captureException, initSentry } from "./lib/sentry.js";
+import { installZod3Messages } from "./lib/zod-messages.js";
 import {
   bootConfigProblems,
+  fastifyTrustProxy,
   resolveCorsOrigin,
   resolveJwtSecret,
   resolveListenAddress,
+  resolveTrustProxy,
 } from "./lib/server-env.js";
 import { depsPlugin } from "./plugins/deps.js";
 import { responseEncodingPlugin } from "./plugins/response-encoding.js";
 import { apiRoutes } from "./routes/index.js";
 
+// Validation 400s keep the wording clients got before the zod 4 upgrade.
+installZod3Messages();
+
 const HealthResponseSchema = z.object({
   status: z.literal("ok"),
-  timestamp: z.string().datetime(),
+  timestamp: z.iso.datetime(),
 });
 
 /** Route groups with tighter rate limits (money, vault data, sign-in). */
 const RATE_LIMITED_GROUPS = ["/auth/", "/vault/consent", "/credits", "/accountant", "/ingestion", "/receipts"];
+
+/**
+ * What the request log keeps of a request: never its query string, which can carry an OAuth
+ * code and state (the Gmail callback), tokens or personal data.
+ */
+export function requestLogFields(request: {
+  method: string;
+  url: string;
+  host?: string;
+  ip?: string;
+  socket?: { remotePort?: number };
+}) {
+  return {
+    method: request.method,
+    url: request.url.split("?")[0],
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket?.remotePort,
+  };
+}
+
+/** The request log's serializers: requests without query strings, errors without query values. */
+export const logSerializers = {
+  req: requestLogFields,
+  err: (error: unknown) => pino.stdSerializers.err(redactQueryError(error as Error)),
+};
 
 export type BuildServerOptions = {
   deps?: Partial<AppDeps>;
@@ -42,11 +79,18 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const boot = bootConfigProblems();
   const deps = await createDefaultDeps(options.deps);
   const app = Fastify({
-    logger: options.logger ?? process.env.NODE_ENV !== "test",
+    logger: (options.logger ?? process.env.NODE_ENV !== "test") ? { serializers: logSerializers } : false,
+    // Behind the host's proxy the socket peer is the proxy: request.ip must come from
+    // X-Forwarded-For, or every user shares one rate-limit bucket.
+    trustProxy: fastifyTrustProxy(resolveTrustProxy()),
     // A slow client gets 2 minutes to send a request (10 MB uploads on a weak mobile link);
     // a socket idle for a minute is closed.
     requestTimeout: 120_000,
     connectionTimeout: 60_000,
+    // Fastify's default, set explicitly because it is a security control: no JSON body may exceed
+    // 1 MiB, which bounds what any schema validation has to walk. Uploads go through multipart,
+    // whose own limits are below.
+    bodyLimit: 1024 * 1024,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -56,8 +100,21 @@ export async function buildServer(options: BuildServerOptions = {}) {
   app.addHook("onClose", async () => closeQueues());
   // A unique-constraint race the route didn't handle is a conflict, not a server error.
   // Everything else goes to Fastify's default handler (and the onError hook above).
-  app.setErrorHandler(async (error, request, reply) => {
-    if (!isUniqueViolation(error)) throw error;
+  app.setErrorHandler(async (error: FastifyError, request, reply) => {
+    if (!isUniqueViolation(error)) {
+      const status = typeof error.statusCode === "number" ? error.statusCode : 500;
+      // In production a server error's message (SQL, ids, internals) stays in the log.
+      if (status >= 500 && process.env.NODE_ENV === "production") {
+        request.log.error({ err: error }, "request failed");
+        // The onError hook only runs for errors sent as errors: report this one here.
+        await reportRequestError(request, reply.code(status), error);
+        return reply.send({
+          error: "Internal Server Error",
+          message: "Something went wrong. Please try again.",
+        });
+      }
+      throw error;
+    }
     request.log.warn({ err: error }, "unique constraint conflict");
     return reply.code(409).send({
       error: "Conflict",
@@ -80,7 +137,15 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const jwtSecret = resolveJwtSecret();
   if (jwtSecret.warning) app.log.warn(jwtSecret.warning);
   for (const warning of [...boot.errors, ...boot.warnings]) app.log.warn(`[config] ${warning}`);
-  await app.register(jwt, { secret: jwtSecret.secret });
+  // Strict on purpose: fast-jwt accepted unsigned or empty-key tokens when a key was ''/null, and
+  // an unpinned algorithm allows algorithm confusion. HS256 only, a non-empty secret, and every
+  // token must carry an expiry (one signed without `exp` is refused, not treated as eternal).
+  if (jwtSecret.secret.trim().length === 0) throw new Error("JWT secret must not be empty");
+  await app.register(jwt, {
+    secret: jwtSecret.secret,
+    sign: { algorithm: "HS256" },
+    verify: { algorithms: ["HS256"], requiredClaims: ["exp", "sub"] },
+  });
   // Each route group has its own bucket per signed-in user (per IP when signed out), so one screen
   // that calls several groups never trips another group's limit, and users behind one IP don't share.
   const rateLimitKey = (request: FastifyRequest): string => {
@@ -146,6 +211,27 @@ export async function buildServer(options: BuildServerOptions = {}) {
   return app;
 }
 
+/** How often the agent queue reclaims lapsed leases, hands jobs to overflow, and checks the agent. */
+const AGENT_SWEEP_MS = 60_000;
+
+/** RENDER_BACKEND=agent: sweep the agent's queue every minute (in the server only, not in tests). */
+function startAgentSweeper(app: Awaited<ReturnType<typeof buildServer>>) {
+  const sweep = agentSweep(app.deps.jobQueue);
+  if (!sweep) return;
+  const { backend, window, overflow } = app.deps.renderConfig;
+  app.log.info(
+    { backend, window: window.kind === "always" ? "always" : window, overflow },
+    "Renders are made by the render agent",
+  );
+  const timer = setInterval(() => {
+    sweep().catch((error: unknown) => {
+      app.log.error(error, "Render agent sweep failed");
+      captureException(error, { tags: { area: "render-agent" } });
+    });
+  }, AGENT_SWEEP_MS);
+  timer.unref();
+}
+
 const { port, host } = resolveListenAddress();
 
 async function main() {
@@ -160,8 +246,10 @@ async function main() {
   const app = await buildServer();
 
   try {
+    app.log.info(`Delivery timers: ${resolveEconomyMode()} (WORN_ECONOMY_MODE)`);
     const resumed = await resumeInFlightWork(app.deps);
     app.log.info(resumed, "Resumed in-flight orders and renders");
+    startAgentSweeper(app);
   } catch (error) {
     app.log.error(error, "Failed to resume in-flight orders and renders");
     captureException(error);
@@ -176,6 +264,17 @@ async function main() {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+/** True when this file is the process's entry point (node dist/index.js, tsx src/index.ts). */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined = process.argv[1]): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1);
+  } catch {
+    return false;
+  }
+}
+
+// Importing buildServer (tests, scripts) must not start a second API with its timers.
+if (process.env.NODE_ENV !== "test" && isEntryPoint(import.meta.url)) {
   void main();
 }

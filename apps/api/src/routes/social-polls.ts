@@ -37,7 +37,7 @@ const AskFriendTallySchema = z.object({
 });
 
 const ReturnPollPublicSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.literal("return"),
   itemLabel: z.string(),
   expiresAt: z.string(),
@@ -53,7 +53,7 @@ const ReturnPollPublicSchema = z.object({
 });
 
 const AskFriendPollPublicSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.literal("outfit"),
   options: z.array(
     z.object({
@@ -203,7 +203,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
         tags: ["social"],
         body: z.object({
           itemLabel: z.string().min(1).max(120),
-          returnRequestId: z.string().uuid().optional(),
+          returnRequestId: z.uuid().optional(),
           ttlMs: z.number().int().positive().max(7 * 24 * 60 * 60 * 1000).optional(),
         }),
         response: {
@@ -239,7 +239,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["social"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: ReturnPollPublicSchema,
           401: ErrorSchema,
@@ -262,7 +262,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["social"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           choice: z.enum(["KEEP", "RETURN"]),
           voterKey: VoterKeySchema,
@@ -351,7 +351,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
               z.object({
                 id: z.string().min(1).max(64).optional(),
                 label: z.string().min(1).max(120),
-                itemIds: z.array(z.string().uuid()).min(1).max(12),
+                itemIds: z.array(z.uuid()).min(1).max(12),
                 occasion: z.string().max(40).nullable().optional(),
               }),
             )
@@ -417,7 +417,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["social"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: AskFriendPollPublicSchema,
           401: ErrorSchema,
@@ -440,7 +440,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["social"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z.object({
           optionId: z.string().min(1).max(64),
           voterKey: VoterKeySchema,
@@ -523,7 +523,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["social"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: z
           .object({
             plannedFor: z
@@ -536,7 +536,7 @@ export const socialPollRoutes: FastifyPluginAsyncZod = async (app) => {
           200: z.object({
             applied: z.literal(true),
             plannedFor: z.string(),
-            outfitId: z.string().uuid(),
+            outfitId: z.uuid(),
             winnerId: z.string(),
             poll: AskFriendPollPublicSchema,
           }),

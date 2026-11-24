@@ -12,6 +12,7 @@ import {
 } from "@worn/shared";
 import { captureNodeException, initNodeSentry } from "@worn/shared/node-sentry";
 import { processReturnDeadline } from "./handler.js";
+import { r2ImageSignerFromEnv } from "./r2-sign.js";
 import {
   RETURN_DEADLINE_JOB,
   RETURN_DEADLINE_QUEUE,
@@ -34,6 +35,8 @@ export interface BullmqReturnsOptions {
   /** Where final failures go; defaults to job_dead_letters in `db`. */
   recordDeadLetter?: (entry: DeadLetter) => Promise<void>;
   concurrency?: number;
+  /** Signs item image keys at send time; defaults to R2_* env (none: the placeholder image). */
+  signImageKey?: ((key: string) => string) | null;
 }
 
 export function createBullmqReturnsWorker(
@@ -48,10 +51,11 @@ export function createBullmqReturnsWorker(
   if (!db && !(options.handler && options.recordDeadLetter)) {
     throw new Error("A Db is required for the returns worker");
   }
+  const signImageKey = options.signImageKey === undefined ? r2ImageSignerFromEnv() : options.signImageKey;
   const handle: ReturnsHandler =
     options.handler ??
     (async (payload) =>
-      settlePushResult(RETURN_DEADLINE_QUEUE, await processReturnDeadline(payload, db!)));
+      settlePushResult(RETURN_DEADLINE_QUEUE, await processReturnDeadline(payload, db!, { signImageKey })));
   const recordDeadLetter =
     options.recordDeadLetter ?? (async (entry: DeadLetter) => void (await recordJobDeadLetter(db!, entry)));
 

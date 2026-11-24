@@ -7,6 +7,11 @@ export type HostedOcrConfig = {
   endpoint?: string;
   /** `generic` (default) or `google-vision` response mapping. */
   format?: "generic" | "google-vision";
+  /**
+   * Turns a storage key (`u/<uid>/receipts/…`) into a URL the provider can fetch. Google Vision
+   * needs it: a raw key isn't fetchable. The API passes the storage client's signed URL.
+   */
+  resolveImageUrl?: (key: string) => Promise<string>;
   fetchImpl?: typeof fetch;
 };
 
@@ -43,8 +48,9 @@ type GenericProviderBody = {
  * Decision: default remains mock when `OCR_PROVIDER_URL` is unset —
  * deterministic, no external dependency. Hosted is selected automatically
  * when `OCR_PROVIDER_URL` (or `OCR_PROVIDER_ENDPOINT`) is set. Optional
- * `OCR_PROVIDER_API_KEY` is sent as Bearer when present.
- * Optional OCR_PROVIDER_FORMAT=google-vision maps Vision annotate responses;
+ * `OCR_PROVIDER_API_KEY` is sent as Bearer when present (generic format). With
+ * OCR_PROVIDER_FORMAT=google-vision the key goes in the `?key=` query (Vision API keys are not
+ * bearer tokens), the image is sent as a signed URL, and Vision annotate responses are mapped;
  * default is a generic JSON contract. Confidence is always returned.
  */
 export class HostedOcrClient implements OcrClient {
@@ -61,6 +67,32 @@ export class HostedOcrClient implements OcrClient {
     const fetchFn = this.config.fetchImpl ?? fetch;
     const format = this.config.format ?? "generic";
 
+    if (format === "google-vision") {
+      if (!this.config.resolveImageUrl) {
+        throw new Error("HostedOcrClient: google-vision needs resolveImageUrl (a storage key isn't fetchable)");
+      }
+      const imageUri = await this.config.resolveImageUrl(imageKey);
+      const target = new URL(url);
+      if (apiKey) target.searchParams.set("key", apiKey);
+      const res = await fetchFn(target.toString(), {
+        method: "POST",
+        signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          requests: [
+            {
+              image: { source: { imageUri } },
+              features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+            },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`HostedOcrClient request failed: ${res.status} ${res.statusText}`);
+      }
+      return normalizeHostedResponse((await res.json()) as GenericProviderBody, format);
+    }
+
     const res = await fetchFn(url, {
       method: "POST",
       signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
@@ -68,18 +100,7 @@ export class HostedOcrClient implements OcrClient {
         "content-type": "application/json",
         ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify(
-        format === "google-vision"
-          ? {
-              requests: [
-                {
-                  image: { source: { imageUri: imageKey } },
-                  features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
-                },
-              ],
-            }
-          : { imageKey },
-      ),
+      body: JSON.stringify({ imageKey }),
     });
     if (!res.ok) {
       throw new Error(`HostedOcrClient request failed: ${res.status} ${res.statusText}`);

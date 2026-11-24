@@ -3,6 +3,8 @@
  * Tracker only — WORN is not a lender and does not pay EMIs.
  */
 
+import { addDaysToKey, localDateKey, resolveTimeZone } from "./local-time.js";
+
 export type ParsedEmiSignal = {
   provider: string;
   merchant: string | null;
@@ -56,7 +58,7 @@ function extractAmountNear(
   return null;
 }
 
-function extractDueOn(text: string, fallbackNow = new Date()): string | null {
+function extractDueOn(text: string, fallbackNow = new Date(), tz = "UTC"): string | null {
   const iso = text.match(
     /(?:due\s*(?:on|by|date)?|next\s*due)\s*[:-]?\s*(\d{4}-\d{2}-\d{2})/i,
   );
@@ -87,21 +89,14 @@ function extractDueOn(text: string, fallbackNow = new Date()): string | null {
   }
 
   // "due tomorrow" / "due today"
+  // "today" is the recipient's calendar day, not UTC's.
   if (/\bdue\s+today\b/i.test(text)) {
-    return formatYmd(fallbackNow);
+    return localDateKey(fallbackNow, tz);
   }
   if (/\bdue\s+tomorrow\b/i.test(text)) {
-    const t = new Date(fallbackNow.getTime() + 86_400_000);
-    return formatYmd(t);
+    return addDaysToKey(localDateKey(fallbackNow, tz), 1);
   }
   return null;
-}
-
-function formatYmd(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 function extractMerchant(text: string): string | null {
@@ -121,6 +116,8 @@ export function detectEmiSignal(
   subject: string,
   text: string,
   now: Date = new Date(),
+  /** The user's IANA zone, for "due today" / "due tomorrow" (UTC when absent). */
+  timeZone?: string | null,
 ): ParsedEmiSignal | null {
   const hay = `${subject}\n${text}`;
   if (!EMI_SIGNAL_RE.test(hay)) return null;
@@ -137,7 +134,7 @@ export function detectEmiSignal(
   const principal =
     extractAmountNear(hay, /(?:principal|loan\s*amount|financed)/) ?? remaining;
 
-  const nextDueOn = extractDueOn(hay, now);
+  const nextDueOn = extractDueOn(hay, now, timeZone === undefined ? "UTC" : resolveTimeZone(timeZone));
   if (!nextDueOn) return null;
 
   const providerMatch = hay.match(PROVIDER_RE);

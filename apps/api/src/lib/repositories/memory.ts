@@ -3,11 +3,12 @@ import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, buildRichOptions, normali
 import { missingRegionPacks } from "../region-packs.js";
 import { itemMetricStatusAt } from "../item-metric-status.js";
 import { pageInMemory } from "../paging.js";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { withNewReferralCode } from "../referral-code.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
 import {
   PurchaseMergeSplitError,
@@ -22,6 +23,7 @@ import {
   matchesStyleKeywords,
   normalizeStyleKeywords,
 } from "./listing-feed.js";
+import type { DispositionPickupBooking, SettlementRow } from "@worn/shared";
 import type {
   BudgetRecord,
   CustomizationTemplateRecord,
@@ -54,6 +56,12 @@ import type {
   FitPreviewRecord,
   PreviewResult,
   UpdateWardrobeItemInput,
+  MerchantAliasRecord,
+  ParserBreakFlagRecord,
+  GiftBudgetLockRecord,
+  ParserTrainingFixtureRecord,
+  LentWasteNoteRecord,
+  WardrobeItemMarks,
 } from "./types.js";
 import type {
   AvatarRecord,
@@ -99,6 +107,7 @@ import type {
   SellerRecord,
   TryonPreviewRecord,
   UserRecord,
+  AgentJobLease,
 } from "./types.js";
 
 function now() {
@@ -150,8 +159,25 @@ function appendLedger(
   return entry;
 }
 
+/** The render_scenario enum's declared order, which is how Postgres sorts it. */
+
 export function createMemoryRepositories(): Repositories {
+  const marketplaceSettlementsStore: SettlementRow[] = [];
+  // Closet state that lived in module-level maps (S6-13); the user-owned ones go with the user.
+  const merchantAliasesStore = new Map<string, MerchantAliasRecord & { userId: string }>();
+  const parserBreakFlagsStore = new Map<string, ParserBreakFlagRecord>();
+  const giftBudgetLocksStore = new Map<string, GiftBudgetLockRecord>();
+  const parserTrainingFixturesStore: ParserTrainingFixtureRecord[] = [];
+  const lentWasteNotesStore: LentWasteNoteRecord[] = [];
+  /** By wardrobe item id. */
+  const wardrobeItemMarksStore = new Map<string, WardrobeItemMarks & { userId: string }>();
+  /** By money account id. */
+  const reconcileInvestigatedStore = new Map<string, { userId: string; investigatedAt: Date }>();
+  /** By disposition listing id. */
+  const dispositionPickupBookingsStore = new Map<string, { userId: string; booking: DispositionPickupBooking }>();
   const users = new Map<string, UserRecord>();
+  /** users.apple_refresh_token_enc, kept off UserRecord like in Postgres. */
+  const appleRefreshTokens = new Map<string, string>();
   const usersByPhone = new Map<string, string>();
   const avatars = new Map<string, AvatarRecord>();
   const avatarsByUser = new Map<string, string>();
@@ -202,6 +228,24 @@ export function createMemoryRepositories(): Repositories {
   const wardrobeTryonPreviewKey = (userId: string, wardrobeItemId: string) =>
     `${userId}:w:${wardrobeItemId}`;
   const fitPreviewsStore = new Map<string, FitPreviewRecord>();
+  /** This user's seller listings that another user's order or cart points at (they outlive erasure). */
+  const listingsKeptForOthers = (userId: string): Set<string> => {
+    const ownCart = cartsByUser.get(userId);
+    const ownOrders = new Set(ordersByUser.get(userId) ?? []);
+    const referenced = new Set<string>();
+    for (const item of orderItems.values()) {
+      if (!ownOrders.has(item.orderId)) referenced.add(item.listingVariantId);
+    }
+    for (const item of cartItems.values()) {
+      if (item.cartId !== ownCart) referenced.add(item.listingVariantId);
+    }
+    const kept = new Set<string>();
+    for (const vid of referenced) {
+      const variant = variants.get(vid);
+      if (variant) kept.add(variant.listingId);
+    }
+    return kept;
+  };
   const fitPreviewKey = (userId: string, templateId: string, selectionsKey: string) =>
     `${userId}:${templateId}:${selectionsKey}`;
   const cartsByUser = new Map<string, string>();
@@ -214,6 +258,23 @@ export function createMemoryRepositories(): Repositories {
   const orderItems = new Map<string, OrderItemRecord>();
   const orderItemsByOrder = new Map<string, string[]>();
   const renders = new Map<string, RenderRecord>();
+  const renderAgents = new Map<string, { version: string; lastHeartbeatAt: Date }>();
+  /** A job's lease view; a render whose order line is gone has none. */
+  const memoryAgentJob = (
+    job: { kind: "render"; record: RenderRecord } | { kind: "tryon"; record: TryonPreviewRecord },
+  ): AgentJobLease | null => {
+    const base = {
+      id: job.record.id,
+      attempts: job.record.attempts ?? 0,
+      leaseOwner: job.record.leaseOwner ?? null,
+      leaseExpiresAt: job.record.leaseExpiresAt ?? null,
+      createdAt: job.record.createdAt,
+    };
+    if (job.kind === "tryon") return { ...base, kind: "tryon", preview: job.record };
+    const item = orderItems.get(job.record.orderItemId);
+    if (!item) return null;
+    return { ...base, kind: "render", render: job.record, orderId: item.orderId };
+  };
   const rendersByOrderItem = new Map<string, string[]>();
   const pushEvents: PushEventRecord[] = [];
   const cashbackEvents = new Map<string, { id: string; userId: string; listingId: string | null; platform: string; clickId: string; coinsEarned: number; status: string; createdAt: Date }>();
@@ -418,6 +479,13 @@ export function createMemoryRepositories(): Repositories {
       return null;
     },
 
+    async findUserByAppleSub(appleSub) {
+      for (const user of users.values()) {
+        if (user.appleSub === appleSub) return user;
+      }
+      return null;
+    },
+
     async findUserByEmail(email) {
       const normalized = email.toLowerCase();
       for (const user of users.values()) {
@@ -444,6 +512,7 @@ export function createMemoryRepositories(): Repositories {
         phone,
         email: null,
         googleSub: null,
+        appleSub: null,
         displayName: null,
         avatarStatus: "NONE",
         coinBalanceCache: 0,
@@ -498,6 +567,7 @@ export function createMemoryRepositories(): Repositories {
         phone: null,
         email: email.toLowerCase(),
         googleSub,
+        appleSub: null,
         displayName: displayName ?? null,
         avatarStatus: "NONE",
         coinBalanceCache: 0,
@@ -518,6 +588,55 @@ export function createMemoryRepositories(): Repositories {
       return { user, isNew: true };
     },
 
+    async findOrCreateAppleUser({ appleSub, email, displayName }) {
+      const byApple = await this.findUserByAppleSub(appleSub);
+      if (byApple) {
+        if (!byApple.referralCode) {
+          const updated = { ...byApple, referralCode: await freshReferralCode(), updatedAt: now() };
+          users.set(byApple.id, updated);
+          return { user: updated, isNew: false };
+        }
+        return { user: byApple, isNew: false };
+      }
+
+      const byEmail = email ? await this.findUserByEmail(email) : null;
+      if (byEmail) {
+        const linked = {
+          ...byEmail,
+          appleSub,
+          displayName: byEmail.displayName ?? displayName ?? null,
+          updatedAt: now(),
+        };
+        if (!linked.referralCode) linked.referralCode = await freshReferralCode();
+        users.set(byEmail.id, linked);
+        return { user: linked, isNew: false };
+      }
+
+      const user: UserRecord = {
+        id: randomUUID(),
+        phone: null,
+        email: email ? email.toLowerCase() : null,
+        googleSub: null,
+        appleSub,
+        displayName: displayName ?? null,
+        avatarStatus: "NONE",
+        coinBalanceCache: 0,
+        consentFlags: {},
+        prefs: {},
+        timeZone: DEFAULT_TIME_ZONE,
+        pushToken: null,
+        referralCode: await freshReferralCode(),
+        referredBy: null,
+        streakCount: 0,
+        lastStreakClaimAt: null,
+        styleProfile: null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      users.set(user.id, user);
+      return { user, isNew: true };
+    },
+
     async findUserByReferralCode(code) {
       for (const user of users.values()) {
         if (user.referralCode === code) return user;
@@ -530,7 +649,10 @@ export function createMemoryRepositories(): Repositories {
       if (!user || user.referredBy) return null;
       const referrer = await this.findUserByReferralCode(referralCode);
       if (!referrer || referrer.id === userId) return null;
-      const updated = { ...user, referredBy: referrer.id, updatedAt: now() };
+      // Re-read after the await: a concurrent apply may have referred the user meanwhile.
+      const current = users.get(userId);
+      if (!current || current.referredBy) return null;
+      const updated = { ...current, referredBy: referrer.id, updatedAt: now() };
       users.set(userId, updated);
       return updated;
     },
@@ -676,6 +798,16 @@ export function createMemoryRepositories(): Repositories {
       return updated;
     },
 
+    async setAppleRefreshToken(userId, encrypted) {
+      if (!users.has(userId)) return;
+      if (encrypted) appleRefreshTokens.set(userId, encrypted);
+      else appleRefreshTokens.delete(userId);
+    },
+
+    async getAppleRefreshToken(userId) {
+      return appleRefreshTokens.get(userId) ?? null;
+    },
+
     async setUserTimeZone(userId, timeZone) {
       const user = users.get(userId);
       if (!user) return null;
@@ -769,9 +901,13 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listCoinTransactions({ userId, cursor, limit }: ListCoinTransactionsInput) {
+      // Newest first; entries in one millisecond newest first too (the ledger is append-only),
+      // as Postgres orders them by their microsecond timestamps.
       const all = ledger
-        .filter((e) => e.userId === userId)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => entry.userId === userId)
+        .sort((a, b) => b.entry.createdAt.getTime() - a.entry.createdAt.getTime() || b.index - a.index)
+        .map(({ entry }) => entry);
 
       let start = 0;
       if (cursor) {
@@ -1119,10 +1255,29 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async clearCatalog() {
-      listings.clear();
-      variants.clear();
-      variantsByListing.clear();
-      lookbooks.clear();
+      // Listings someone ordered are archived, so order lines keep their variant.
+      const ordered = new Set<string>();
+      for (const item of orderItems.values()) {
+        const variant = variants.get(item.listingVariantId);
+        if (variant) ordered.add(variant.listingId);
+      }
+      cartItems.clear();
+      cartItemsByCart.clear();
+      for (const [id, listing] of listings) {
+        if (ordered.has(id)) {
+          listings.set(id, { ...listing, status: "ARCHIVED" });
+          continue;
+        }
+        listings.delete(id);
+        for (const variantId of variantsByListing.get(id) ?? []) variants.delete(variantId);
+        variantsByListing.delete(id);
+      }
+      for (const [key, preview] of tryonPreviews) {
+        if (preview.listingVariantId && !variants.has(preview.listingVariantId)) tryonPreviews.delete(key);
+      }
+      for (const saved of lookbooks.values()) {
+        for (const listingId of saved.keys()) if (!listings.has(listingId)) saved.delete(listingId);
+      }
     },
 
     async listListings({ cursor, limit, sellerId, category, styleKeywords }: ListListingsInput) {
@@ -1354,6 +1509,8 @@ export function createMemoryRepositories(): Repositories {
       if (existing && !previewClaimable(existing, staleBefore, timestamp)) {
         return { claimed: false, preview: existing };
       }
+      // A PROCESSING row keeps its lease (an agent may be rendering it); any other starts afresh.
+      const keepLease = existing?.status === "PROCESSING";
       const preview: TryonPreviewRecord = {
         id: existing?.id ?? randomUUID(),
         userId,
@@ -1365,6 +1522,9 @@ export function createMemoryRepositories(): Repositories {
         retryAfter: null,
         provider,
         costMicros: existing?.costMicros ?? 0,
+        leaseOwner: keepLease ? (existing?.leaseOwner ?? null) : null,
+        leaseExpiresAt: keepLease ? (existing?.leaseExpiresAt ?? null) : null,
+        attempts: keepLease ? (existing?.attempts ?? 0) : 0,
         createdAt: existing?.createdAt ?? timestamp,
         updatedAt: timestamp,
       };
@@ -1541,7 +1701,7 @@ export function createMemoryRepositories(): Repositories {
           const existing = await this.findOrderByIdempotencyKey(input.idempotencyKey);
           if (existing) {
             if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
+              throw new IdempotencyKeyConflictError();
             }
             return {
               order: existing,
@@ -1553,6 +1713,22 @@ export function createMemoryRepositories(): Repositories {
 
         const balanceAfter = (await this.getCoinBalance(input.userId)) - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the coin lock: a second checkout of the same cart finds these lines gone.
+          const lines = input.cartItems.map((line) => ({ line, stored: cartItems.get(line.id) }));
+          if (lines.some(({ line, stored }) => !stored || stored.quantity !== line.quantity)) {
+            throw new CartChangedError();
+          }
+          for (const { stored } of lines) {
+            cartItems.delete(stored!.id);
+            const ids = cartItemsByCart.get(stored!.cartId) ?? [];
+            cartItemsByCart.set(
+              stored!.cartId,
+              ids.filter((id) => id !== stored!.id),
+            );
+          }
+        }
 
         const { order, items } = await this.createOrder(input);
         appendLedger(
@@ -1667,6 +1843,9 @@ export function createMemoryRepositories(): Repositories {
           combinedItemIds: row.combinedItemIds ?? null,
           status: row.status,
           costMicros: row.costMicros,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          attempts: 0,
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -1696,7 +1875,7 @@ export function createMemoryRepositories(): Repositories {
           if (render) all.push(render);
         }
       }
-      return all.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      return sortRendersForReveal(all);
     },
 
     async listPendingRenders() {
@@ -1714,7 +1893,14 @@ export function createMemoryRepositories(): Repositories {
     async updateRender(id, patch) {
       const existing = renders.get(id);
       if (!existing) return null;
-      const updated: RenderRecord = { ...existing, ...patch, updatedAt: now() };
+      // Only a RUNNING render is held by a lease: any other status lets it go.
+      const releases = patch.status !== undefined && patch.status !== "RUNNING";
+      const updated: RenderRecord = {
+        ...existing,
+        ...patch,
+        ...(releases ? { leaseOwner: null, leaseExpiresAt: null } : {}),
+        updatedAt: now(),
+      };
       renders.set(id, updated);
       return updated;
     },
@@ -1814,6 +2000,191 @@ export function createMemoryRepositories(): Repositories {
       });
     },
 
+    async failRender(input) {
+      const fail = () => {
+        const existing = renders.get(input.renderId);
+        if (!existing) return null;
+        const failed: RenderRecord = {
+          ...existing,
+          status: "FAILED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          updatedAt: now(),
+        };
+        renders.set(failed.id, failed);
+        return failed;
+      };
+      const refund = input.refund;
+      if (!refund || refund.coins <= 0) return { render: fail(), coinsRefunded: 0 };
+      return withCoinLock(refund.userId, async () => {
+        const balance = await this.getCoinBalance(refund.userId);
+        // No await from here to the ledger entry: the repeat check, the status and the credit are one step.
+        const render = fail();
+        if (!render) return { render, coinsRefunded: 0 };
+        const prior = ledger.find(
+          (e) =>
+            e.userId === refund.userId &&
+            e.type === "REFUND" &&
+            e.refType === "render_failed" &&
+            e.refId === input.renderId,
+        );
+        if (prior) return { render, coinsRefunded: 0 };
+        const balanceAfter = balance + refund.coins;
+        appendLedger(
+          ledger,
+          { userId: refund.userId, delta: refund.coins, type: "REFUND", refType: "render_failed", refId: input.renderId },
+          balanceAfter,
+        );
+        const user = users.get(refund.userId);
+        if (user) users.set(refund.userId, { ...user, coinBalanceCache: balanceAfter, updatedAt: now() });
+        return { render, coinsRefunded: refund.coins };
+      });
+    },
+
+    async requeueFailedFreeRenders(input) {
+      const order = orders.get(input.orderId);
+      if (!order || order.userId !== input.userId) return [];
+      const itemIds = new Set(orderItemsByOrder.get(order.id) ?? []);
+      const flipped: RenderRecord[] = [];
+      for (const id of new Set(input.renderIds)) {
+        const render = renders.get(id);
+        if (!render || !itemIds.has(render.orderItemId) || !render.isFree || render.status !== "FAILED") continue;
+        const queued: RenderRecord = {
+          ...render,
+          status: "QUEUED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          attempts: 0,
+          updatedAt: now(),
+        };
+        renders.set(id, queued);
+        flipped.push(queued);
+      }
+      return flipped;
+    },
+
+    async leaseAgentJobs(input) {
+      if (input.max <= 0) return [];
+      const ids = input.ids ? new Set(input.ids) : null;
+      const waitedLongEnough = (updatedAt: Date) =>
+        !input.queuedBefore || updatedAt.getTime() <= input.queuedBefore.getTime();
+      // No await from here to the end: picking and leasing are one step, so parallel calls
+      // never lease the same job.
+      const candidates: Array<{ kind: "render" | "tryon"; id: string; createdAt: Date }> = [];
+      for (const render of renders.values()) {
+        if (!render.unlocked || render.status !== "QUEUED") continue;
+        if (ids && !ids.has(render.id)) continue;
+        if (!waitedLongEnough(render.updatedAt)) continue;
+        candidates.push({ kind: "render", id: render.id, createdAt: render.createdAt });
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (!preview.listingVariantId || preview.status !== "PROCESSING" || preview.leaseOwner) continue;
+        if (ids && !ids.has(preview.id)) continue;
+        if (!waitedLongEnough(preview.updatedAt)) continue;
+        candidates.push({ kind: "tryon", id: preview.id, createdAt: preview.createdAt });
+      }
+      candidates.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+      const leased: AgentJobLease[] = [];
+      for (const candidate of candidates.slice(0, input.max)) {
+        const lease = {
+          leaseOwner: input.owner,
+          leaseExpiresAt: input.leaseExpiresAt,
+          updatedAt: input.now,
+        };
+        if (candidate.kind === "render") {
+          const render = renders.get(candidate.id)!;
+          const updated: RenderRecord = {
+            ...render,
+            ...lease,
+            status: "RUNNING",
+            attempts: (render.attempts ?? 0) + 1,
+          };
+          renders.set(updated.id, updated);
+          const job = memoryAgentJob({ kind: "render", record: updated });
+          if (job) leased.push(job);
+        } else {
+          const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === candidate.id)!;
+          const updated: TryonPreviewRecord = {
+            ...entry[1],
+            ...lease,
+            attempts: (entry[1].attempts ?? 0) + 1,
+          };
+          tryonPreviews.set(entry[0], updated);
+          leased.push(memoryAgentJob({ kind: "tryon", record: updated })!);
+        }
+      }
+      return leased;
+    },
+
+    async listExpiredAgentLeases(at) {
+      const expired: AgentJobLease[] = [];
+      const lapsed = (r: { leaseOwner?: string | null; leaseExpiresAt?: Date | null }) =>
+        Boolean(r.leaseOwner && r.leaseExpiresAt && r.leaseExpiresAt.getTime() < at.getTime());
+      for (const render of renders.values()) {
+        if (render.status !== "RUNNING" || !lapsed(render)) continue;
+        const job = memoryAgentJob({ kind: "render", record: render });
+        if (job) expired.push(job);
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (preview.status !== "PROCESSING" || !preview.listingVariantId || !lapsed(preview)) continue;
+        expired.push(memoryAgentJob({ kind: "tryon", record: preview })!);
+      }
+      return expired;
+    },
+
+    async releaseAgentLease({ kind, id, owner, expiredBy }) {
+      const held = (r: { leaseOwner?: string | null; leaseExpiresAt?: Date | null }) =>
+        r.leaseOwner === owner &&
+        (!expiredBy || (r.leaseExpiresAt !== null && r.leaseExpiresAt !== undefined && r.leaseExpiresAt.getTime() <= expiredBy.getTime()));
+      if (kind === "render") {
+        const render = renders.get(id);
+        if (!render || render.status !== "RUNNING" || !held(render)) return null;
+        const updated: RenderRecord = { ...render, leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+        renders.set(id, updated);
+        return memoryAgentJob({ kind: "render", record: updated });
+      }
+      const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === id);
+      if (!entry || entry[1].status !== "PROCESSING" || !held(entry[1])) return null;
+      const updated: TryonPreviewRecord = { ...entry[1], leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+      tryonPreviews.set(entry[0], updated);
+      return memoryAgentJob({ kind: "tryon", record: updated });
+    },
+
+    async updateTryonPreviewById(id, patch) {
+      const entry = [...tryonPreviews.entries()].find(([, p]) => p.id === id);
+      if (!entry) return null;
+      const updated: TryonPreviewRecord = { ...entry[1], ...patch, updatedAt: now() };
+      tryonPreviews.set(entry[0], updated);
+      return updated;
+    },
+
+    async findTryonPreviewById(id) {
+      return [...tryonPreviews.values()].find((p) => p.id === id) ?? null;
+    },
+
+    async recordAgentHeartbeat({ agentId, version, at }) {
+      renderAgents.set(agentId, { version, lastHeartbeatAt: at });
+    },
+
+    async countWaitingAgentJobs() {
+      let count = 0;
+      for (const render of renders.values()) {
+        if (render.unlocked && (render.status === "QUEUED" || render.status === "RUNNING")) count += 1;
+      }
+      for (const preview of tryonPreviews.values()) {
+        if (preview.listingVariantId && preview.status === "PROCESSING") count += 1;
+      }
+      return count;
+    },
+
+    async latestAgentHeartbeat() {
+      let latest: Date | null = null;
+      for (const agent of renderAgents.values()) {
+        if (!latest || agent.lastHeartbeatAt.getTime() > latest.getTime()) latest = agent.lastHeartbeatAt;
+      }
+      return latest;
+    },
+
     async recordRevealRating(input) {
       const order = orders.get(input.orderId);
       if (!order || order.userId !== input.userId) return;
@@ -1898,8 +2269,12 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async listPushEvents(userId) {
-      if (!userId) return [...pushEvents];
-      return pushEvents.filter((e) => e.userId === userId);
+      // Newest first, as Postgres lists them (pushEvents is in insertion order).
+      const listed = userId ? pushEvents.filter((e) => e.userId === userId) : [...pushEvents];
+      return listed
+        .map((event, index) => ({ event, index }))
+        .sort((a, b) => b.event.createdAt.getTime() - a.event.createdAt.getTime() || b.index - a.index)
+        .map(({ event }) => event);
     },
 
     async updatePushEvent(id, patch) {
@@ -1930,9 +2305,11 @@ export function createMemoryRepositories(): Repositories {
       if (onlyIf !== undefined && user.pushToken !== onlyIf) return;
       users.set(userId, { ...user, pushToken: null, updatedAt: now() });
     },
-    async updatePushEventStatus(id, status, _expoTicketId) {
+    async updatePushEventStatus(id, status, expoTicketId) {
       const event = pushEvents.find((e) => e.id === id);
-      if (event) event.status = status;
+      if (!event) return;
+      event.status = status;
+      if (expoTicketId !== undefined) event.expoTicketId = expoTicketId ?? null;
     },
 
     async findActiveConsent(userId, scope) {
@@ -2020,6 +2397,7 @@ export function createMemoryRepositories(): Repositories {
 
     async listUserStorageKeys(userId) {
       const keys = new Set<string>();
+      const keptListings = listingsKeptForOthers(userId);
       const add = (k: string | null | undefined) => {
         if (typeof k === "string" && k.trim() && !/^[a-z][a-z0-9+.-]*:\/\//i.test(k) && !k.startsWith("data:")) {
           keys.add(k.trim());
@@ -2057,6 +2435,16 @@ export function createMemoryRepositories(): Repositories {
         if (d.rawKey && (d.userId ?? ingestionDocumentUser.get(d.id)) === userId) add(d.rawKey);
       }
       for (const r of privacyRequestsStore.values()) if (r.userId === userId) add(r.resultKey);
+      for (const f of fitPreviewsStore.values()) if (f.userId === userId) add(f.imageKey);
+      const sellerId = sellersByUser.get(userId);
+      if (sellerId) {
+        for (const [lid, l] of listings) {
+          if (l.sellerId !== sellerId || keptListings.has(lid)) continue;
+          add(l.houseModelRenderKey);
+          l.productImageKeys.forEach(add);
+          for (const vid of variantsByListing.get(lid) ?? []) add(variants.get(vid)?.garmentImageKey);
+        }
+      }
       return [...keys];
     },
 
@@ -2107,7 +2495,13 @@ export function createMemoryRepositories(): Repositories {
         "ingestion_documents",
         [...ingestionDocuments.values()].filter((d) => (d.userId ?? ingestionDocumentUser.get(d.id)) === userId),
       );
-      put("money_accounts", mine(moneyAccounts.values()));
+      put(
+        "money_accounts",
+        mine(moneyAccounts.values()).map((a) => ({
+          ...a,
+          reconcileInvestigatedAt: reconcileInvestigatedStore.get(a.id)?.investigatedAt ?? null,
+        })),
+      );
       put("money_ledger", mine(moneyLedger.values()));
       const purchases = mine(merchantPurchasesStore.values());
       put("merchant_purchases", purchases);
@@ -2120,12 +2514,28 @@ export function createMemoryRepositories(): Repositories {
       );
       put("receipts", mine(receiptsStore.values()));
       put("warranties", mine(warrantiesStore.values()));
-      put("wardrobe_items", mine(wardrobeItemsStore.values()));
+      put(
+        "wardrobe_items",
+        mine(wardrobeItemsStore.values()).map((w) => {
+          const marks = wardrobeItemMarksStore.get(w.id);
+          return {
+            ...w,
+            keepSnoozedUntil: marks?.keepSnoozedUntil ?? null,
+            photoDumpTriagedAt: marks?.photoDumpTriagedAt ?? null,
+          };
+        }),
+      );
       put("outfits", mine(outfitsStore.values()));
       put("wear_log", mine(wearLogsStore.values()));
       put("item_metrics", mine(itemMetricsStore.values()));
       put("repair_logs", mine(repairLogsStore.values()));
-      put("disposition_listings", mine(dispositionStore.values()));
+      put(
+        "disposition_listings",
+        mine(dispositionStore.values()).map((d) => ({
+          ...d,
+          pickupBooking: dispositionPickupBookingsStore.get(d.id)?.booking ?? null,
+        })),
+      );
       put("budgets", mine(budgetsStore.values()));
       put("spend_rollups", mine(spendRollupsStore.values()));
       const returns = mine(returnRequestsStore.values());
@@ -2167,6 +2577,13 @@ export function createMemoryRepositories(): Repositories {
       put("emi_plans", mine(emiPlansStore.values()));
       put("cashback_claims", mine(cashbackClaimsStore.values()));
       put("cashback_events", mine(cashbackEvents.values()));
+      put(
+        "merchant_aliases",
+        [...merchantAliasesStore.values()].filter((a) => a.userId === userId),
+      );
+      put("gift_budget_locks", mine(giftBudgetLocksStore.values()));
+      put("parser_training_fixtures", mine(parserTrainingFixturesStore));
+      put("lent_waste_notes", mine(lentWasteNotesStore));
       return { tables, truncated };
     },
 
@@ -2386,6 +2803,25 @@ export function createMemoryRepositories(): Repositories {
         if (wi.userId === userId) wardrobeItemsStore.delete(id);
       }
 
+      // Closet state (S6-13).
+      for (const [key, a] of merchantAliasesStore) {
+        if (a.userId === userId) merchantAliasesStore.delete(key);
+      }
+      for (const [key, l] of giftBudgetLocksStore) {
+        if (l.userId === userId) giftBudgetLocksStore.delete(key);
+      }
+      for (let i = parserTrainingFixturesStore.length - 1; i >= 0; i--) {
+        if (parserTrainingFixturesStore[i]!.userId === userId) parserTrainingFixturesStore.splice(i, 1);
+      }
+      for (let i = lentWasteNotesStore.length - 1; i >= 0; i--) {
+        if (lentWasteNotesStore[i]!.userId === userId) lentWasteNotesStore.splice(i, 1);
+      }
+      for (const store of [wardrobeItemMarksStore, reconcileInvestigatedStore, dispositionPickupBookingsStore]) {
+        for (const [key, v] of store) {
+          if (v.userId === userId) store.delete(key);
+        }
+      }
+
       // 5. push, cashback, coins, iap
       for (let i = pushEvents.length - 1; i >= 0; i--) {
         if (pushEvents[i]!.userId === userId) pushEvents.splice(i, 1);
@@ -2438,8 +2874,15 @@ export function createMemoryRepositories(): Repositories {
         cartsByUser.delete(userId);
       }
 
-      // 8. sellers / listings / variants (variants cascade from listings)
+      // 8. sellers / listings / variants (variants cascade from listings). As in Postgres, a
+      // listing another user ordered or carted is archived and loses its seller instead.
+      const keptListings = listingsKeptForOthers(userId);
       for (const lid of listingIds) {
+        const listing = listings.get(lid);
+        if (keptListings.has(lid) && listing) {
+          listings.set(lid, { ...listing, status: "ARCHIVED", sellerId: null });
+          continue;
+        }
         const vIds = variantsByListing.get(lid) ?? [];
         for (const vid of vIds) variants.delete(vid);
         variantsByListing.delete(lid);
@@ -2574,11 +3017,18 @@ export function createMemoryRepositories(): Repositories {
         if (state.userId === userId) oauthStates.delete(nonce);
       }
 
-      // 17. finally user
+      // 17. other users' referred_by, and the sign-in codes sent to the user's phone
+      for (const [id, other] of users) {
+        if (other.referredBy === userId) users.set(id, { ...other, referredBy: null });
+      }
       const user = users.get(userId);
+      if (user?.phone) otps.delete(user.phone);
+
+      // 18. finally user
       if (user) {
         if (user.phone) usersByPhone.delete(user.phone);
       }
+      appleRefreshTokens.delete(userId);
       users.delete(userId);
     },
 
@@ -3276,13 +3726,13 @@ export function createMemoryRepositories(): Repositories {
     },
 
     async createMerchantPurchase(input) {
-      // #38: one purchase per (user, orderRef); a repeat gets the existing one and its lines.
-      // Looked up synchronously so the check and the insert below cannot interleave.
+      // #38: one purchase per (user, merchant, orderRef); a repeat gets the existing one and its
+      // lines. Looked up synchronously so the check and the insert below cannot interleave.
       const existing =
         input.orderRef == null
           ? undefined
           : [...merchantPurchasesStore.values()].find(
-              (p) => p.userId === input.userId && p.orderRef === input.orderRef,
+              (p) => p.userId === input.userId && p.merchant === input.merchant && p.orderRef === input.orderRef,
             );
       if (existing) {
         return { purchase: existing, items: await this.listMerchantPurchaseItems(existing.id), created: false };
@@ -3361,6 +3811,19 @@ export function createMemoryRepositories(): Repositories {
       } finally {
         receiptConfirms.delete(input.receiptId);
       }
+    },
+
+    async insertMarketplaceSettlement(row) {
+      const existing = marketplaceSettlementsStore.find((s) => s.kind === row.kind && s.orderRef === row.orderRef);
+      if (existing) return { row: existing, created: false };
+      marketplaceSettlementsStore.push({ ...row });
+      return { row: { ...row }, created: true };
+    },
+
+    async listMarketplaceSettlements(opts) {
+      return marketplaceSettlementsStore
+        .filter((s) => (!opts?.kind || s.kind === opts.kind) && (!opts?.sellerId || s.sellerId === opts.sellerId))
+        .map((s) => ({ ...s }));
     },
 
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
@@ -4036,6 +4499,7 @@ export function createMemoryRepositories(): Repositories {
         userId,
         vaultAccess: "VIEW",
         spendCapMinor: null,
+        spendCapCurrency: null,
         spentMinor: 0,
         updatedAt: now(),
       };
@@ -4044,6 +4508,10 @@ export function createMemoryRepositories(): Repositories {
     async upsertHouseholdVaultSettings(input) {
       const key = `${input.householdId}:${input.userId}`;
       const prev = householdVaultSettingsStore.get(key);
+      const prevCurrency = prev?.spendCapCurrency ?? null;
+      const spendCapCurrency = input.spendCapCurrency !== undefined ? input.spendCapCurrency : prevCurrency;
+      // The spent total counts the old currency's minor units: it can't carry over to another.
+      const currencyChanged = prevCurrency !== null && spendCapCurrency !== null && spendCapCurrency !== prevCurrency;
       const next: HouseholdVaultSettingsRecord = {
         householdId: input.householdId,
         userId: input.userId,
@@ -4052,10 +4520,13 @@ export function createMemoryRepositories(): Repositories {
           input.spendCapMinor !== undefined
             ? input.spendCapMinor
             : (prev?.spendCapMinor ?? null),
+        spendCapCurrency,
         spentMinor:
           input.spentMinor !== undefined
             ? input.spentMinor
-            : (prev?.spentMinor ?? 0),
+            : currencyChanged
+              ? 0
+              : (prev?.spentMinor ?? 0),
         updatedAt: now(),
       };
       householdVaultSettingsStore.set(key, next);
@@ -4066,12 +4537,19 @@ export function createMemoryRepositories(): Repositories {
         (s) => s.householdId === householdId,
       );
     },
-    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor, currency) {
       const key = `${householdId}:${userId}`;
       const prev = householdVaultSettingsStore.get(key);
       if (!prev || prev.vaultAccess !== "SPEND") return null;
       if (prev.spendCapMinor !== null && prev.spentMinor + amountMinor > prev.spendCapMinor) return null;
-      const next = { ...prev, spentMinor: prev.spentMinor + amountMinor, updatedAt: now() };
+      const capped = prev.spendCapMinor !== null;
+      if (capped && currency && prev.spendCapCurrency && prev.spendCapCurrency !== currency) return null;
+      const next = {
+        ...prev,
+        spendCapCurrency: capped && currency ? (prev.spendCapCurrency ?? currency) : prev.spendCapCurrency,
+        spentMinor: prev.spentMinor + amountMinor,
+        updatedAt: now(),
+      };
       householdVaultSettingsStore.set(key, next);
       return next;
     },
@@ -4778,6 +5256,7 @@ export function createMemoryRepositories(): Repositories {
         measurementSnapshot: snapshot,
         state: "PENDING",
         expectedPickupOn: input.expectedPickupOn ?? null,
+        pickupNudgeSentAt: null,
         createdAt: now(),
         updatedAt: now(),
       };
@@ -5014,6 +5493,123 @@ export function createMemoryRepositories(): Repositories {
       return [...repairLogsStore.values()]
         .filter((r) => r.userId === userId && r.wardrobeItemId === wardrobeItemId)
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+
+    // --- Closet state (S6-13) ---
+    async upsertMerchantAlias(userId, alias, canonical) {
+      const key = `${userId}:${alias}`;
+      const prev = merchantAliasesStore.get(key);
+      const at = now();
+      const row = { userId, alias, canonical, createdAt: prev?.createdAt ?? at, updatedAt: at };
+      merchantAliasesStore.set(key, row);
+      const { userId: _u, ...out } = row;
+      return out;
+    },
+    async listMerchantAliases(userId) {
+      return [...merchantAliasesStore.values()]
+        .filter((a) => a.userId === userId)
+        .map(({ userId: _u, ...a }) => a)
+        .sort((a, b) => (a.alias < b.alias ? -1 : a.alias > b.alias ? 1 : 0));
+    },
+    async setParserBreakFlag(flag) {
+      parserBreakFlagsStore.set(flag.merchantKey, { ...flag });
+    },
+    async clearParserBreakFlag(merchantKey) {
+      parserBreakFlagsStore.delete(merchantKey);
+    },
+    async listParserBreakFlags() {
+      return [...parserBreakFlagsStore.values()]
+        .map((f) => ({ ...f }))
+        .sort((a, b) => a.setAt.getTime() - b.setAt.getTime());
+    },
+    async upsertGiftBudgetLock(input) {
+      const recipient = recipientsStore.get(input.recipientId);
+      if (!recipient || recipient.userId !== input.userId) return null;
+      const key = `${input.recipientId}:${input.occasion}:${input.occasionDay}`;
+      const prev = giftBudgetLocksStore.get(key);
+      const row: GiftBudgetLockRecord = { ...input, shortlistIds: [...input.shortlistIds], id: prev?.id ?? randomUUID() };
+      giftBudgetLocksStore.set(key, row);
+      return { ...row, shortlistIds: [...row.shortlistIds] };
+    },
+    async listGiftBudgetLocks(userId) {
+      return [...giftBudgetLocksStore.values()]
+        .filter((l) => l.userId === userId)
+        .map((l) => ({ ...l, shortlistIds: [...l.shortlistIds] }));
+    },
+    async insertParserTrainingFixture(fixture) {
+      const row = structuredClone(fixture);
+      parserTrainingFixturesStore.push(row);
+      return structuredClone(row);
+    },
+    async listParserTrainingFixtures(opts) {
+      const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 1000);
+      return parserTrainingFixturesStore
+        .filter((f) => !opts?.exportStatus || f.exportStatus === opts.exportStatus)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((f) => structuredClone(f));
+    },
+    async appendLentWasteNote(input) {
+      const row: LentWasteNoteRecord = { id: randomUUID(), ...input, createdAt: now() };
+      lentWasteNotesStore.push(row);
+      return { ...row };
+    },
+    async listLentWasteNotes(userId) {
+      return lentWasteNotesStore.filter((n) => n.userId === userId).map((n) => ({ ...n }));
+    },
+    async markMoneyAccountReconcileInvestigated(accountId, userId, at) {
+      const account = moneyAccounts.get(accountId);
+      if (!account || account.userId !== userId) return null;
+      reconcileInvestigatedStore.set(accountId, { userId, investigatedAt: at });
+      return at;
+    },
+    async listReconcileInvestigatedAccounts(userId) {
+      return [...reconcileInvestigatedStore]
+        .filter(([id, v]) => v.userId === userId && moneyAccounts.has(id))
+        .map(([accountId, v]) => ({ accountId, investigatedAt: v.investigatedAt }));
+    },
+    async setWardrobeItemMarks(id, userId, patch) {
+      const item = wardrobeItemsStore.get(id);
+      if (!item || item.userId !== userId) return false;
+      const prev = wardrobeItemMarksStore.get(id);
+      wardrobeItemMarksStore.set(id, {
+        userId,
+        keepSnoozedUntil: patch.keepSnoozedUntil !== undefined ? patch.keepSnoozedUntil : (prev?.keepSnoozedUntil ?? null),
+        photoDumpTriagedAt:
+          patch.photoDumpTriagedAt !== undefined ? patch.photoDumpTriagedAt : (prev?.photoDumpTriagedAt ?? null),
+      });
+      return true;
+    },
+    async getWardrobeItemMarks(id, userId) {
+      const item = wardrobeItemsStore.get(id);
+      if (!item || item.userId !== userId) return null;
+      const marks = wardrobeItemMarksStore.get(id);
+      return { keepSnoozedUntil: marks?.keepSnoozedUntil ?? null, photoDumpTriagedAt: marks?.photoDumpTriagedAt ?? null };
+    },
+    async updateTailoringOrderPickup(id, userId, patch) {
+      const r = tailoringOrdersStore.get(id);
+      if (!r || r.userId !== userId) return null;
+      const dayChanged = patch.expectedPickupOn !== undefined && patch.expectedPickupOn !== (r.expectedPickupOn ?? null);
+      const updated: TailoringOrderRecord = {
+        ...r,
+        expectedPickupOn: patch.expectedPickupOn ?? r.expectedPickupOn ?? null,
+        pickupNudgeSentAt:
+          patch.pickupNudgeSentAt !== undefined ? patch.pickupNudgeSentAt : dayChanged ? null : (r.pickupNudgeSentAt ?? null),
+        updatedAt: now(),
+      };
+      tailoringOrdersStore.set(id, updated);
+      return updated;
+    },
+    async setDispositionPickupBooking(id, userId, booking) {
+      const listing = dispositionStore.get(id);
+      if (!listing || listing.userId !== userId) return false;
+      dispositionPickupBookingsStore.set(id, { userId, booking: { ...booking } });
+      return true;
+    },
+    async getDispositionPickupBooking(id, userId) {
+      const row = dispositionPickupBookingsStore.get(id);
+      if (!row || row.userId !== userId || !dispositionStore.has(id)) return null;
+      return { ...row.booking };
     },
 
   };

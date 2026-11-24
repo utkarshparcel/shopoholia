@@ -104,7 +104,7 @@ export function isFinalAttempt(job: Pick<ProcessableJob, "attemptsMade" | "opts"
 export type JobProcessorOptions<T> = {
   queue: string;
   /** Payload contract: a payload that fails it is dead-lettered at once (no retries). */
-  schema?: z.ZodType<T, z.ZodTypeDef, unknown>;
+  schema?: z.ZodType<T, unknown>;
   handle: (data: T, job: ProcessableJob) => Promise<void>;
   timeoutMs?: number;
   /** Durable sink for final failures (Postgres job_dead_letters). */
@@ -337,5 +337,5 @@ export const IngestDeadLetterJobSchema = z.object({
 export type IngestDeadLetterJob = z.infer<typeof IngestDeadLetterJobSchema>;
 
 /** Scheduler template for the daily retention sweep (the run time comes from the scheduler). */
-export const RetentionSweepJobSchema = z.object({}).passthrough();
+export const RetentionSweepJobSchema = z.looseObject({});
 export type RetentionSweepJob = z.infer<typeof RetentionSweepJobSchema>;

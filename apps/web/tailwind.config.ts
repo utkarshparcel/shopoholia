@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 
 const config: Config = {
   content: [
@@ -135,7 +136,14 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // `short:` a phone with little height to spare: iPhone SE / small Androids once the browser's bars
+    // are counted (about 550-700px), where a 100svh stage has no room for every line of its captions.
+    // A variant, not a screen: an object in `screens` turns off the max-[…] variants.
+    plugin(({ addVariant }) => {
+      addVariant('short', '@media (max-width: 639px) and (max-height: 700px)');
+    }),
+  ],
 };
 
 export default config;

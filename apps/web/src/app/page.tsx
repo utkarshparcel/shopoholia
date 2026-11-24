@@ -10,11 +10,11 @@ import { DownloadCTA } from '@/components/DownloadCTA';
 import { Footer } from '@/components/Footer';
 import { Navigation } from '@/components/Navigation';
 import { FAQ, FAQS } from '@/components/FAQ';
-import { SITE_URL } from '@/lib/site';
+import { APP_LIVE, APP_STORE_URL, PLAY_STORE_URL, SITE_URL } from '@/lib/site';
 
-const TITLE = 'Worn Play — the fashion haul without the bill';
+const TITLE = 'Worn Play — a nicotine patch for shopaholics';
 const DESCRIPTION =
-  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
+  'A nicotine patch for shopaholics. Skip the ₹2,000 dress you wear once for a café photo: try real pieces on your AI avatar, pay with free coins, and unbox photos of you wearing them.';
 
 export const metadata: Metadata = {
   title: { absolute: TITLE },
@@ -38,8 +38,13 @@ const STRUCTURED_DATA = [
     description: DESCRIPTION,
     operatingSystem: 'iOS, Android',
     applicationCategory: 'LifestyleApplication',
-    // No `offers` until it is on a store: an Offer says it can be had now, and it can't yet. At launch
-    // add { '@type': 'Offer', price: '0', priceCurrency: 'INR' } (free, priced for the Indian market).
+    // An Offer says it can be had now, so only once a store link is set: free, priced for India.
+    ...(APP_LIVE
+      ? {
+          offers: { '@type': 'Offer', price: '0', priceCurrency: 'INR' },
+          downloadUrl: [APP_STORE_URL, PLAY_STORE_URL].filter(Boolean),
+        }
+      : {}),
     publisher: { '@type': 'Organization', name: 'Worn', url: SITE_URL },
   },
   {

@@ -44,9 +44,10 @@ import type {
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const HouseholdVaultMemberSettingsOut = z.object({
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   vaultAccess: z.enum(["VIEW", "SPEND"]),
   spendCapMinor: z.number().int().nonnegative().nullable(),
+  spendCapCurrency: z.string().nullable(),
   spentMinor: z.number().int().nonnegative(),
 });
 
@@ -223,7 +224,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdDetailResponseSchema,
           401: ErrorSchema,
@@ -259,7 +260,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdInviteResponseSchema,
           401: ErrorSchema,
@@ -291,7 +292,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdWardrobeResponseSchema,
           401: ErrorSchema,
@@ -338,7 +339,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid(), itemId: z.string().uuid() }),
+        params: z.object({ id: z.uuid(), itemId: z.uuid() }),
         body: PatchHouseholdWardrobeBodySchema,
         response: {
           200: WardrobeItemSchema,
@@ -394,7 +395,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: HouseholdVaultResponseSchema,
           401: ErrorSchema,
@@ -443,6 +444,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
           userId: m.userId,
           vaultAccess: (s?.vaultAccess ?? "VIEW") as "VIEW" | "SPEND",
           spendCapMinor: s?.spendCapMinor ?? null,
+          spendCapCurrency: s?.spendCapCurrency ?? null,
           spentMinor: s?.spentMinor ?? 0,
         };
       });
@@ -450,6 +452,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         householdId: id,
         myAccess: mySettings.vaultAccess,
         mySpendCapMinor: mySettings.spendCapMinor,
+        mySpendCapCurrency: mySettings.spendCapCurrency,
         mySpentMinor: mySettings.spentMinor,
         accounts,
         members: memberSettings,
@@ -464,10 +467,11 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PatchHouseholdVaultMemberBodySchema,
         response: {
           200: HouseholdVaultMemberSettingsOut,
+          400: ErrorSchema,
           401: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
@@ -496,11 +500,31 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!members.some((m) => m.userId === body.userId)) {
         return reply.code(404).send({ error: "Not Found", message: "Member not found" });
       }
+      // A cap counts one currency: the one given, else the one the owner's shared credits are in.
+      // Spends against credits in another currency are refused, never added as raw minor units.
+      let spendCapCurrency: string | null | undefined = body.spendCapCurrency;
+      if (body.spendCapMinor === null) spendCapCurrency = null;
+      else if (body.spendCapMinor !== undefined && spendCapCurrency === undefined) {
+        const ownerIds = members.filter((m) => m.role === "OWNER").map((m) => m.userId);
+        const currencies = new Set(
+          (await app.deps.repos.listMoneyAccountsByUsers(ownerIds))
+            .filter((a) => !a.status || a.status === "ACTIVE")
+            .map((a) => a.currency),
+        );
+        if (currencies.size !== 1) {
+          return reply.code(400).send({
+            error: "Bad Request",
+            message: "Say which currency the spend cap is in (spendCapCurrency)",
+          });
+        }
+        spendCapCurrency = [...currencies][0]!;
+      }
       const updated = await app.deps.repos.upsertHouseholdVaultSettings({
         householdId: id,
         userId: body.userId,
         vaultAccess: body.vaultAccess,
         spendCapMinor: body.spendCapMinor,
+        spendCapCurrency,
       });
       trackServerEvent("household_vault_member_patched", {
         userId,
@@ -512,6 +536,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
         userId: updated.userId,
         vaultAccess: updated.vaultAccess,
         spendCapMinor: updated.spendCapMinor,
+        spendCapCurrency: updated.spendCapCurrency,
         spentMinor: updated.spentMinor,
       };
     },
@@ -524,7 +549,7 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["households"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: HouseholdVaultSpendBodySchema,
         response: {
           200: HouseholdVaultSpendResponseSchema,
@@ -555,6 +580,18 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
       if (!account) {
         return reply.code(404).send({ error: "Not Found", message: "Credit not found in shared vault" });
       }
+      // SPEND access is granted by the household owner, so it reaches only the owner's credits
+      // (and the caller's own). Another member's credit needs that member's say, which this
+      // route has no way to give: they see it, but nobody else spends it.
+      const householdOwnerIds = new Set(
+        members.filter((m) => m.role === "OWNER").map((m) => m.userId),
+      );
+      if (account.userId !== userId && !householdOwnerIds.has(account.userId)) {
+        return reply.code(403).send({
+          error: "Forbidden",
+          message: "Only the household owner's credits can be spent from the shared vault",
+        });
+      }
       const owner = account.userId;
       const remaining = (s: { spendCapMinor: number | null; spentMinor: number }) =>
         s.spendCapMinor == null ? null : Math.max(0, s.spendCapMinor - s.spentMinor);
@@ -584,9 +621,25 @@ export const householdRoutes: FastifyPluginAsyncZod = async (app) => {
 
       // One conditional update checks access and cap and adds the amount, so two concurrent
       // spends cannot both fit under the cap.
-      const reserved = await app.deps.repos.tryReserveHouseholdVaultSpend(id, userId, body.amountMinor);
+      const reserved = await app.deps.repos.tryReserveHouseholdVaultSpend(
+        id,
+        userId,
+        body.amountMinor,
+        account.currency,
+      );
       if (!reserved) {
         const settings = await app.deps.repos.getHouseholdVaultSettings(id, userId);
+        if (
+          settings.vaultAccess === "SPEND" &&
+          settings.spendCapMinor !== null &&
+          settings.spendCapCurrency !== null &&
+          settings.spendCapCurrency !== account.currency
+        ) {
+          return reply.code(409).send({
+            error: "Conflict",
+            message: `Your household spend cap is in ${settings.spendCapCurrency} and this credit is in ${account.currency}; caps don't convert between currencies`,
+          });
+        }
         const capCheck = checkHouseholdVaultSpendCap({
           isMember: true,
           vaultAccess: settings.vaultAccess,

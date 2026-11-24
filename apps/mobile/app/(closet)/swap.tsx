@@ -14,6 +14,7 @@ import { ClosetScreen } from '@/src/components/ClosetScreen';
 import { createSwapListing, fetchSwapInvite } from '@/src/api/client';
 import {
   useBorrowSwapListing,
+  useReturnSwapListing,
   useCreateSwapCircle,
   useJoinSwapCircle,
   useSwapCircles,
@@ -52,6 +53,7 @@ export default function SwapCircleScreen() {
   const create = useCreateSwapCircle();
   const join = useJoinSwapCircle();
   const borrow = useBorrowSwapListing();
+  const giveBack = useReturnSwapListing();
   // A page of pieces at a time (MOB 14); "Show more pieces" loads the next one.
   const wardrobe = useWardrobe(undefined, { limit: 20 });
   const userId = useSessionUserId();
@@ -232,7 +234,26 @@ export default function SwapCircleScreen() {
                     (l.ownerUserId === userId ? 'One of your pieces' : 'A friend’s piece')}{' '}
                   · {LISTING_STATUS_LABEL[l.status] ?? l.status.toLowerCase()}
                 </Text>
-                {l.status === 'LISTED' ? (
+                {l.status === 'BORROWED' &&
+                (l.borrowerUserId === userId || l.ownerUserId === userId) ? (
+                  <Button
+                    label={l.borrowerUserId === userId ? 'Return' : 'Mark returned'}
+                    size="sm"
+                    variant="secondary"
+                    disabled={giveBack.isPending}
+                    onPress={() =>
+                      giveBack.mutate(
+                        { circleId: activeId, listingId: l.id },
+                        {
+                          onSuccess: () => Alert.alert('Returned', 'Thanks — it’s back with its owner.'),
+                          onError: (e) => Alert.alert('Failed', closetAlertText(e)),
+                        },
+                      )
+                    }
+                  />
+                ) : null}
+                {/* The API refuses to lend you your own piece. */}
+                {l.status === 'LISTED' && l.ownerUserId !== userId ? (
                   <Button
                     label="Borrow"
                     size="sm"

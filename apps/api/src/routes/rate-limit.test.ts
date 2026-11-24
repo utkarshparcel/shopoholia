@@ -50,7 +50,7 @@ describe("rate limiting (DoD: rate-limited)", () => {
     try {
       const a = (await app.deps.repos.createUser("919800000101")).user;
       const b = (await app.deps.repos.createUser("919800000102")).user;
-      const bearer = (sub: string) => ({ authorization: `Bearer ${app.jwt.sign({ sub, phone: "x" })}` });
+      const bearer = (sub: string) => ({ authorization: `Bearer ${app.jwt.sign({ sub, phone: "x" }, { expiresIn: "15m" })}` });
       const get = (url: string, headers: Record<string, string> = {}) =>
         app.inject({ method: "GET", url, headers });
 
@@ -78,6 +78,28 @@ describe("rate limiting (DoD: rate-limited)", () => {
       expect(otp.headers["x-ratelimit-limit"]).toBe("20");
     } finally {
       process.env.NODE_ENV = saved;
+      await app.close();
+    }
+  });
+
+  it("behind the host's proxy, keys signed-out callers by their own address, not the proxy's", async () => {
+    const saved = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = "1";
+    const app = await buildServer({ logger: false });
+    try {
+      const fromProxy = (client: string) =>
+        app.inject({
+          method: "GET",
+          url: "/health",
+          remoteAddress: "10.0.0.1",
+          headers: { "x-forwarded-for": client },
+        });
+      const first = await fromProxy("203.0.113.9");
+      const second = await fromProxy("198.51.100.7");
+      expect(first.headers["x-ratelimit-remaining"]).toBe(second.headers["x-ratelimit-remaining"]);
+    } finally {
+      if (saved === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = saved;
       await app.close();
     }
   });

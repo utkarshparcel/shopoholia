@@ -5,6 +5,7 @@ import {
   EMI_NUDGE_LEAD_MS,
   computeEmiNudgeDelayMs,
   emiDueJobId,
+  formatMinor,
   type sendExpoPush,
 } from "@worn/shared";
 import type { EmiPlanRecord, Repositories } from "./repositories/types.js";
@@ -88,7 +89,9 @@ export async function processEmiDueNudge(
   }
   const user = await repos.findUserById(payload.userId);
   if (!user) return { status: "skipped" as const };
-  const amount = (payload.installmentMinor / 100).toFixed(0);
+  // The plan's own currency, with its minor units (a $45.50 installment is not "₹46").
+  const amount = formatMinor(payload.installmentMinor, payload.currency);
+  const remaining = formatMinor(payload.remainingMinor, payload.currency);
   const label = payload.merchant ? `${payload.provider} · ${payload.merchant}` : payload.provider;
   return runClosetPushDelivery({
     eventType: EMI_DUE_EVENT,
@@ -96,7 +99,7 @@ export async function processEmiDueNudge(
     timeZone: user.timeZone,
     pushToken: user.pushToken,
     title: `EMI due ${payload.dueOn}`,
-    body: `${label}: ₹${amount} installment (₹${(payload.remainingMinor / 100).toFixed(0)} left)`,
+    body: `${label}: ${amount} installment (${remaining} left)`,
     deepLinkExtra: { planId: payload.planId },
     payloadExtra: { ...payload },
     now: opts.now,

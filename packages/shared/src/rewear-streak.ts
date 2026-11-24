@@ -4,6 +4,8 @@
  * (anti-impulse / sustainability habit before new buy).
  */
 
+import { localDateKey, resolveTimeZone } from "./local-time.js";
+
 const DAY_MS = 86_400_000;
 
 /** Milestone days that warrant a celebrate push. */
@@ -32,6 +34,8 @@ export type RewearStreakInput = {
   /** When true, only wears strictly after the latest purchase count. Default false. */
   breakOnPurchase?: boolean;
   now?: Date;
+  /** The user's IANA zone: a wear counts on its local day. UTC when absent; default zone when null. */
+  timeZone?: string | null;
 };
 
 /** Format a Date as UTC calendar YYYY-MM-DD. */
@@ -48,12 +52,12 @@ function prevKey(key: string): string {
   return toUtcDateKey(new Date(parseKey(key).getTime() - DAY_MS));
 }
 
-function uniqueDayKeys(dates: Array<Date | string>): Set<string> {
+function uniqueDayKeys(dates: Array<Date | string>, tz: string): Set<string> {
   const keys = new Set<string>();
   for (const raw of dates) {
     const d = raw instanceof Date ? raw : new Date(raw);
     if (Number.isNaN(d.getTime())) continue;
-    keys.add(toUtcDateKey(d));
+    keys.add(localDateKey(d, tz));
   }
   return keys;
 }
@@ -117,21 +121,22 @@ export function isRewearStreakMilestone(currentStreak: number): boolean {
 /**
  * Compute rewear streak from wear_log (and optional purchase) dates.
  *
- * - A day counts if there is ≥1 wear_log that UTC calendar day.
+ * - A day counts if there is ≥1 wear_log that calendar day in `timeZone` (UTC when absent).
  * - Current streak ends on today if logged, else yesterday (grace).
  * - With `breakOnPurchase`, wears on/before the latest purchase day are ignored
  *   for current + longest (purchase resets the habit window).
  */
 export function computeRewearStreak(input: RewearStreakInput): RewearStreak {
   const now = input.now ?? new Date();
-  const todayKey = toUtcDateKey(now);
+  const tz = input.timeZone === undefined ? "UTC" : resolveTimeZone(input.timeZone);
+  const todayKey = localDateKey(now, tz);
   const yesterdayKey = prevKey(todayKey);
 
-  let wearDays = uniqueDayKeys(input.wearDates);
+  let wearDays = uniqueDayKeys(input.wearDates, tz);
   let brokenByPurchase = false;
 
   if (input.breakOnPurchase) {
-    const purchaseDays = uniqueDayKeys(input.purchaseDates ?? []);
+    const purchaseDays = uniqueDayKeys(input.purchaseDates ?? [], tz);
     if (purchaseDays.size > 0) {
       const latestPurchase = [...purchaseDays].sort().at(-1)!;
       const filtered = new Set<string>();

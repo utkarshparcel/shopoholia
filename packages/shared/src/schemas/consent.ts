@@ -15,11 +15,11 @@ export type ConsentScope = z.infer<typeof ConsentScopeSchema>;
 export const CONSENT_NOTICE_VERSION = "2026-10-26";
 
 export const ConsentGrantSchema = z.object({
-  id: z.string().uuid(),
-  userId: z.string().uuid(),
+  id: z.uuid(),
+  userId: z.uuid(),
   scope: ConsentScopeSchema,
-  grantedAt: z.string().datetime(),
-  revokedAt: z.string().datetime().nullable(),
+  grantedAt: z.iso.datetime(),
+  revokedAt: z.iso.datetime().nullable(),
   source: z.string(),
   meta: z.record(z.string(), z.unknown()).nullable(),
   /** Privacy notice version the grant was given under (null on grants from before v2). */
@@ -28,7 +28,7 @@ export const ConsentGrantSchema = z.object({
 
 export const GrantConsentBodySchema = z.object({
   /** Ignored: the grant is always for the signed-in user. Optional so old clients still parse. */
-  userId: z.string().uuid().optional(),
+  userId: z.uuid().optional(),
   scope: ConsentScopeSchema,
   source: z.string().min(1).max(64),
   meta: z.record(z.string(), z.unknown()).optional(),
@@ -37,7 +37,7 @@ export const GrantConsentBodySchema = z.object({
 });
 
 export const RevokeConsentBodySchema = z.object({
-  grantId: z.string().uuid(),
+  grantId: z.uuid(),
 });
 
 export const ConsentListResponseSchema = z.object({
@@ -46,13 +46,13 @@ export const ConsentListResponseSchema = z.object({
 
 /** One append-only consent event (a grant or a withdrawal). */
 export const ConsentRecordSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   scope: ConsentScopeSchema,
   action: z.enum(["GRANT", "WITHDRAW"]),
   noticeVersion: z.string().nullable(),
   source: z.string(),
-  grantId: z.string().uuid().nullable(),
-  createdAt: z.string().datetime(),
+  grantId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
 });
 
 /** Full self-service data export (GDPR-style). Complex sub-objects are carried
@@ -111,11 +111,11 @@ export const GrantConsentResponseSchema = ConsentGrantSchema;
 
 /** A queued or finished erasure / export request (DELETE /vault, POST /vault/export). */
 export const PrivacyRequestSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.enum(["ERASE", "EXPORT"]),
   status: z.enum(["PENDING", "RUNNING", "DONE", "FAILED"]),
-  requestedAt: z.string().datetime(),
-  completedAt: z.string().datetime().nullable(),
+  requestedAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().nullable(),
   /** EXPORT when DONE: short-lived signed URL of the JSON file. */
   downloadUrl: z.string().nullable().optional(),
 });

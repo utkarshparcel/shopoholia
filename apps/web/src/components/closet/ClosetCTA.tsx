@@ -5,6 +5,7 @@ import { motion, type Variants } from 'framer-motion';
 import { reveal } from '@/lib/motion';
 import { ArrowRight } from 'lucide-react';
 import { WaitlistForm } from '@/components/WaitlistForm';
+import { APP_LIVE, LIVE_PLATFORMS } from '@/lib/site';
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -48,7 +49,8 @@ export function ClosetCTA() {
         </motion.h2>
         <motion.p {...reveal} variants={rise} custom={0.16} className="mx-auto mt-6 max-w-[56ch] text-body-l text-worn-paper/70">
           Worn Closet is the next chapter of Worn. Join the Closet list and you’ll hear first when it
-          opens. Want the haul first? Worn Play is coming to iPhone and Android, and its list is open too.
+          opens. Want the haul first?{' '}
+          {APP_LIVE ? `Worn Play is out now on ${LIVE_PLATFORMS}.` : 'Worn Play is coming to iPhone and Android, and its list is open too.'}
         </motion.p>
         <motion.div {...reveal} variants={rise} custom={0.24} className="mt-10 flex flex-col items-center gap-4">
           <WaitlistForm list="closet" />

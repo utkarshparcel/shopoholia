@@ -91,10 +91,10 @@ const FEATURES: Feature[] = [
   {
     n: '05',
     title: 'The reveal',
-    copy: 'Your haul is here. Six scenes of you in each piece. Studio and Golden hour are free. Street, Editorial dark, Night and Candid unlock for coins.',
+    copy: 'Your haul is here. Six scenes of you in each piece. Studio is free. Golden hour, Street, Editorial dark, Night and Candid unlock for coins.',
     icon: Sparkles,
     chip: [
-      { k: 'Free scenes', v: '2' },
+      { k: 'Free scenes', v: '1' },
       { k: 'Unlock a scene', v: '50 coins' },
     ],
     screen: RevealMock,

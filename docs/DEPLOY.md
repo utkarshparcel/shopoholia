@@ -11,7 +11,10 @@ which needs the Apple and Google developer accounts.
 ## Phase 1: the website
 
 `apps/web` is a static Next.js site (every page is prerendered, no middleware) plus one small Worker,
-`apps/web/worker/index.ts`, which answers the early-access form at `/api/join`.
+`apps/web/worker/index.ts`, which answers the early-access form at `/api/join`. The links the app
+shares (`/r/<code>`, `/c/<code>`, `/h/<code>`, `/p/outfit/<id>`, `/p/return/<id>`) are mapped onto
+their static pages by `apps/web/public/_redirects` (status 200, so the address keeps the code).
+`/privacy` is rendered from `docs/legal/PRIVACY_POLICY_DRAFT.md` at build time.
 
 1. **Host.** Cloudflare Workers with static assets. `apps/web/next.config.js` sets
    `output: 'export'`, so `next build` writes the whole site to `apps/web/out`, and
@@ -24,8 +27,16 @@ which needs the Apple and Google developer accounts.
    secret: in the Cloudflare dashboard, My Profile, API Tokens, create a token from the "Edit
    Cloudflare Workers" template scoped to this account, then add it on GitHub under Settings,
    Secrets and variables, Actions. Until then the workflow skips with a notice.
-2. **Configuration.** `NEXT_PUBLIC_SITE_URL` is read at build time and only needed if the site is
-   not served from `https://worncloset.app`. The inbox the form writes to is the Worker secret
+2. **Configuration.** Read at build time (change one, then redeploy):
+   - `NEXT_PUBLIC_SITE_URL`, only if the site is not served from `https://worncloset.app`.
+   - `NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL`: the Worn Play store listings.
+     **Leave them unset until the app is live in that store.** Unset, the site says "coming to
+     iPhone and Android" and shows the early-access form. Set one or both and redeploy: the site
+     shows App Store / Google Play buttons, its copy switches to "out now" / "Get the app", the FAQ
+     and its search data follow, and the form stays only for a platform that isn't out yet. For
+     automatic deploys, add them as repository variables and pass them to the build step in
+     `.github/workflows/deploy-web.yml`.
+ The inbox the form writes to is the Worker secret
    `JOIN_TO`, a verified Email Routing destination address of the account:
    `printf '%s' you@example.com | pnpm --filter @worn/web exec wrangler secret put JOIN_TO`.
    Secrets live on the Worker, not in the repository; `wrangler dev` reads the same name from
@@ -47,18 +58,29 @@ which needs the Apple and Google developer accounts.
    arrives through the forwarding). So that this mail is not quarantined, the zone's `_dmarc` TXT
    has to be relaxed to `v=DMARC1; p=none;` and the root SPF TXT extended to
    `v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all` (still to do).
-5. **Check after deploy:** `/`, `/closet`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`,
-   `/closet/opengraph-image` all load; submit the form on each page and see the email arrive;
+5. **Check after deploy:** `/`, `/closet`, `/privacy`, `/support`, `/r/TEST1234`, `/c/TEST1234`,
+   `/h/TEST1234`, `/robots.txt`, `/sitemap.xml`, `/opengraph-image`, `/closet/opengraph-image` all
+   load, and `/nope` shows the 404 page; submit the form on each page and see the email arrive;
    paste the URL into a chat app to see the share card.
 
 ### Known gaps on the website
 
-- **`/privacy` doesn't exist yet.** The app links to it, Google sign-in's consent screen and both
-  stores require a privacy policy URL. A draft is in `docs/legal/PRIVACY_POLICY_DRAFT.md`; it needs
-  your sign-off before it's published.
-- **Share links aren't served yet.** The app builds links like `/r/<code>` (referrals),
-  `/c/<code>`, `/h/<code>`, `/p/outfit/<id>` and `/p/return/<id>`, and the site has no pages for
-  them. They only matter once people can install the app.
+- **`/privacy` needs your sign-off.** The page is built from `docs/legal/PRIVACY_POLICY_DRAFT.md`
+  at deploy time (wording, placeholders and its "Draft" notice included), so whatever that file
+  says is what the site shows. The app links to it (login screen and Profile), Google sign-in's
+  consent screen and both stores require it, and Play's account-deletion URL is its
+  `#delete-account` section. The draft describes Worn Play as it ships: fill in the
+  `[placeholders]` (legal entity, address, grievance officer, minimum age, hosting provider, backup
+  retention), remove the draft notice, and approve it before you give the URL to Apple, Google or
+  the OAuth consent screen.
+- **Share links land on static pages.** `/r/<code>` (Worn Play referrals) shows the code and how to
+  use it (Profile → Refer & earn); `/c/<code>`, `/h/<code>` (Closet invites), `/p/outfit/<id>` and
+  `/p/return/<id>` (Closet polls) say Closet hasn't opened and offer its list. Nothing is looked up,
+  so a poll can't be shown or voted on from the web yet, and the pages are `noindex`.
+- **No app links on the domain.** The app declares no associated domains, so these links open in
+  the browser, not the app. Universal Links / App Links would need
+  `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` here plus
+  `associatedDomains` / intent filters in `apps/mobile/app.json`.
 
 ## Phase 2: the backend and the apps
 
@@ -67,8 +89,8 @@ which needs the Apple and Google developer accounts.
 | Process | Command | Notes |
 |---|---|---|
 | API | `pnpm --filter @worn/api build && pnpm --filter @worn/api start` | **One instance only**: order delivery timers run inside this process (they resume after a restart). |
-| API worker | `pnpm --filter @worn/api start:worker` | Privacy erase/export, store-purchase reconciliation, cooling-off and Closet jobs, via Redis (BullMQ). |
-| Closet workers | `services/worker-*` (`pnpm --filter <name> start`) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
+| API worker | `pnpm --filter @worn/api start:worker` | **Run it at launch.** Retries of account deletion (stored objects left after a storage error), data exports, Google Play purchase reconciliation, cooling-off and Closet jobs, via Redis (BullMQ). |
+| Closet workers | `pnpm --filter <name> build && pnpm --filter <name> start` for `@worn/worker-ingest`, `-expiry`, `-wardrobe`, `-returns`, `-gifts` and `-nudge` (`start` runs `dist/main.js`, the BullMQ consumer; see infra/README.md for each one's queues and settings) | Only needed when Closet is on in the app (`EXPO_PUBLIC_FEATURE_CLOSET=1`). |
 | Postgres 16 | managed | Run `pnpm --filter @worn/db db:migrate` with `DATABASE_URL` before each API release. |
 | Redis 7 | managed | `maxmemory-policy noeviction` (BullMQ requires it). |
 | Cloudflare R2 | bucket + custom domain `media.worncloset.app` | Catalog images, avatars, renders. |
@@ -77,7 +99,7 @@ Railway, Render or Fly.io can host the API, the worker, Postgres and Redis in on
 
 ### Migrations to run on first deploy
 
-All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0020 on
+All of `packages/db/migrations` apply in order on an empty database (tested 0000 → 0026 on
 Postgres 16). On an existing database, the newest ones also repair data:
 
 - `0016_emi_due_day`: EMI plans get a due day, taken from their next due date.
@@ -87,6 +109,22 @@ Postgres 16). On an existing database, the newest ones also repair data:
 - `0019_coin_ledger_render_types`: new coin-history types for paid renders and combines.
 - `0020_render_combined_items`: a combined render's pieces get their own column, copied from the
   old `combined:` marker where present.
+- `0021_users_apple_sub`: users get `apple_sub` (Sign in with Apple).
+- `0022_catalog_coin_prices`: shop listings are repriced to about a coin per ₹10 (nearest 5, at
+  least 10), get their shop price as the partner price and a partner link; open carts holding them
+  are repriced. Order lines keep what they were bought at.
+- `0025_render_agent_leases`: renders and try-on previews get `lease_owner`, `lease_expires_at`
+  and `attempts` (the render agent's leases), and a new `render_agents` table keeps each agent's
+  last heartbeat. Additive only.
+- `0026_closet_state`: Closet state the API used to hold in process memory (lost on every
+  restart) gets tables: `merchant_aliases`, `gift_budget_locks`, `parser_training_fixtures`,
+  `lent_waste_notes` (all the user's, in the vault export and erased with the account) and
+  `parser_break_flags` (ops flags, no user column); and columns: wardrobe items' keep-snooze and
+  photo-dump triage times, money accounts' reconcile "investigated" time, measurement profiles'
+  change note and previous version, tailoring orders' expected pickup day and pickup-nudge time,
+  disposition listings' booked pickup, and household vault caps' currency
+  (`spend_cap_currency`). Additive only; a cap set before it takes the currency of the first spend
+  against it.
 
 ### API environment
 
@@ -97,31 +135,142 @@ The API refuses to start in production if any of these is missing:
 | `NODE_ENV=production` | |
 | `DATABASE_URL` | Postgres. Without it everything would live in memory. |
 | `JWT_ACCESS_SECRET` | Signs access tokens: a long random string. |
+| `PRIVACY_HMAC_SECRET` | Keys the pseudonymous ids kept after account deletion, consent/audit subject refs and poll share links: a random string of at least 16 characters. Never change it once set (old refs and links stop matching). |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` | Storage. |
-| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
+| `OCR_PROVIDER_URL` | Receipt scanning. Google Cloud Vision works (`OCR_PROVIDER_URL=https://vision.googleapis.com/v1/images:annotate`, `OCR_PROVIDER_FORMAT=google-vision`, key in `OCR_PROVIDER_API_KEY`); its free tier covers 1,000 images a month. |
 
-Set these too (the API starts without them, but the feature answers 503 or refuses calls):
+Required for the app to pass store review. The API starts without them, but sign-in, purchases or
+renders fail, and the boot log warns:
 
 | Variable | Without it |
 |---|---|
-| `REDIS_URL` | The API worker can't start. |
-| `R2_PUBLIC_URL=https://media.worncloset.app` | Image links point nowhere. |
+| `GOOGLE_CLIENT_IDS` | Google sign-in answers 503. Web, iOS and Android client ids, comma-separated (the same ids the EAS build uses, `docs/EAS.md`). Phone sign-in is off in production, so this and Apple are the only ways in. |
+| `APPLE_BUNDLE_ID=com.worncloset.app` | Sign in with Apple and App Store purchases answer 503. (`APPLE_SIGN_IN_AUDIENCES` overrides the Sign in with Apple audience, comma-separated, if it ever differs.) |
+| `APPLE_SIGN_IN_KEY_ID`, `APPLE_TEAM_ID`, `APPLE_SIGN_IN_PRIVATE_KEY`, `OAUTH_TOKEN_SECRET` | Deleting an account doesn't revoke the user's Sign in with Apple tokens, which App Review requires. The Sign in with Apple key from Apple Developer → Keys (`docs/EAS.md`, owner checklist): its Key ID, your Team ID, and the downloaded `.p8` file's contents (PEM; one line with literal `\n` works). The client id is `APPLE_BUNDLE_ID` (else the first `APPLE_SIGN_IN_AUDIENCES` entry). `OAUTH_TOKEN_SECRET` encrypts the stored Apple refresh token (and Gmail tokens); a long random string, rotated as in `.env.example`. |
+| `ANDROID_PACKAGE_NAME=com.worncloset.app`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play purchases answer 503. |
+| `RENDER_BACKEND=agent`, `RENDER_AGENT_TOKEN` | No AI renders (Worn Play's core). The recommended production renderer is the render agent on the owner's Mac (see "Renders" below and `docs/RENDER_AGENT.md`): `RENDER_BACKEND=agent`, `RENDER_AGENT_WINDOW=always`, `RENDER_OVERFLOW=none`, and a long random `RENDER_AGENT_TOKEN`. Without a token the agent can't sign in and every reveal waits. |
+| `REDIS_URL` + the API worker running | See "Account deletion" below: deletion itself works, but the retries for leftover stored objects, data exports and Play purchase reconciliation never run, and routes that enqueue a job answer 503. Redis with `maxmemory-policy noeviction`. |
+| `R2_PUBLIC_URL=https://media.worncloset.app` | Catalog image links point nowhere. Only catalog images (`house-models/`, `garments/`, `products/`) are linked through it; selfies, avatar references, try-ons, reveals and receipts always get 15-minute signed URLs. A custom domain makes every object in the bucket readable by anyone who knows its key, so keep user photos out of reach: put a Cloudflare WAF/transform rule on `media.` that only allows those three prefixes (or serve the catalog from a separate public bucket). |
+
+Set these too:
+
+| Variable | Without it |
+|---|---|
+| `TRUST_PROXY` | Defaults to `1` in production: one proxy hop (the host's load balancer) in front of the API, so rate limits key on the caller's address from `X-Forwarded-For`. A hop count only trusts hops from private, loopback or 100.64.0.0/10 addresses; if your balancer connects from public addresses, list its CIDRs instead. Set the hop count your host uses, `true` behind a fully trusted network, or a comma-separated list of proxy addresses/CIDRs. Set `false` only if clients reach the API directly; otherwise every user shares the proxy's sign-in rate limit (20 a minute). |
+| `WORN_ECONOMY_MODE` | Delivery timers. Production defaults to `prod`, the launch timers (Express 2 h, Standard 12 h, Slow burn 48 h); `beta` gives minutes (Express 2 min, Standard 5 min, Slow burn 8 min) and logs a warning. The boot log names the active mode. |
+| `CATALOG_SEED_FILE` | Optional. The catalog file (JSON lines) an empty production catalog is filled from at boot; the bundled `dist/lib/seed/scraped-catalog.jsonl` is used otherwise. A catalog that has listings is never cleared or reseeded at boot. |
+| `FEATURE_SELLERS` | Leave unset. Seller self-service (`/sellers/*`: anyone signed in publishes listings straight into the feed, unmoderated, with no app screen) is off in production; `1` turns it on. |
 | `CORS_ORIGIN=https://worncloset.app` | (This is the default.) |
-| `GOOGLE_CLIENT_IDS` | Google sign-in fails. Web, iOS and Android client ids, comma-separated. |
 | `ADMIN_SECRET` | Admin routes are refused. |
 | `CASHBACK_WEBHOOK_SECRET` | Affiliate cashback confirmations are refused. |
-| `APPLE_BUNDLE_ID`, `ANDROID_PACKAGE_NAME`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Coin purchases answer 503. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_STATE_SECRET`, `OAUTH_TOKEN_SECRET`, `API_PUBLIC_URL` | Gmail connect (Closet) answers 503. Register `https://api.worncloset.app/ingestion/sources/oauth/callback` on the Google OAuth web client. |
 | `SENTRY_DSN`, `POSTHOG_KEY` | No error reports or server analytics. |
+| `IAP_ACCEPT_TEST_PURCHASES` | Leave unset. App Review and TestFlight buy with sandbox accounts against the production API, and Play license testers make test purchases; they are credited and recorded as `sandbox` (purchase row and the `iap_purchase` event). `0` refuses them, which fails App Review. |
 
 The boot log lists every missing setting as an error or a warning.
+
+#### Renders
+
+Reveal looks and try-on previews ("Try on me") are made by one of three backends, picked with
+`RENDER_BACKEND`:
+
+| `RENDER_BACKEND` | What renders | When to use |
+|---|---|---|
+| `agent` | The render agent on the owner's Apple-silicon Mac (`services/render-agent`, `docs/RENDER_AGENT.md`). Jobs wait in Postgres; the agent leases them over HTTPS and moves images through signed R2 URLs. Nothing renders in the API process. | **Production (recommended).** |
+| `fashn` | FASHN in the API process (below). | Only if you opt in: it costs per image. |
+| `mock` | Placeholder images. | Development and tests. |
+
+Unset, it is what it was before the agent: `fashn` when `FASHN_API_KEY` is set, otherwise the mock
+(and in production, no renderer at all).
+
+Recommended production settings:
+
+```
+RENDER_BACKEND=agent
+RENDER_AGENT_WINDOW=always
+RENDER_OVERFLOW=none
+RENDER_AGENT_TOKEN=<openssl rand -hex 32>   # the same value goes in the Mac's Keychain
+```
+
+| Variable | Default | What it does |
+|---|---|---|
+| `RENDER_BACKEND` | see above | `agent`, `fashn` or `mock`. |
+| `RENDER_AGENT_TOKEN` | — | The agent's bearer token on `/agent/*`, compared in constant time. Unset: every agent call is refused (401). Use at least 32 random bytes; rotate by changing it here and in the Mac's Keychain. |
+| `RENDER_AGENT_WINDOW` | `always` | When the agent is expected to work: `always`, or a daily range like `23:00-06:30` (overnight). Outside it, jobs wait (or overflow, below). |
+| `RENDER_AGENT_TIME_ZONE` | `Asia/Kolkata` | The window's time zone. |
+| `RENDER_OVERFLOW` | `none` | `fashn` hands jobs to FASHN outside the window, while the agent is silent (no heartbeat for 3 minutes), or when a job is still unleased after `RENDER_OVERFLOW_AFTER_MINUTES`. Needs `FASHN_API_KEY`. `none`: jobs wait for the agent. |
+| `RENDER_OVERFLOW_AFTER_MINUTES` | `15` | With overflow on: how long a job may wait unleased inside the window before FASHN takes it. |
+| `RENDER_AGENT_LEASE_MINUTES` | `10` | How long a lease lasts. A lapsed lease goes back to the queue (checked every minute and on each lease). |
+| `RENDER_AGENT_MAX_ATTEMPTS` | `3` | Leases a job may take. Past them it fails; a paid render (unlock, generate, combine) refunds its coins once. |
+| `RENDER_AGENT_AVG_RENDER_SECONDS` | `60` | Seconds per render, all in, for the reveal's "ready by about…" estimate. |
+| `FASHN_API_KEY` | — | Only for `RENDER_BACKEND=fashn` or `RENDER_OVERFLOW=fashn`. |
+| `FASHN_RESOLUTION` | `1k` | FASHN's output resolution (`1k`, `2k`, `4k`), always in balanced mode. 1k is the cheaper render. |
+
+With the agent:
+
+- The API never accepts images from the agent directly: the agent PUTs to a signed R2 URL, and
+  `complete` checks the object exists before the render is marked done. A free render settling
+  opens the reveal and sends its push exactly as before.
+- When renders wait (the agent is down, the queue is long, or a night window is closed), the
+  reveal response carries `rendersWaiting` and `expectedReadyAt`, and the app says "Delivered —
+  your reveal is being styled and will be ready by about 7 AM. We'll send you a push." (or
+  "shortly" with no estimate) instead of a spinner.
+- The API checks the agent every minute. Inside the window, no heartbeat for 5 minutes while jobs
+  are queued is logged and reported to Sentry (`area: render-agent`), once per outage. There is no
+  boot warning for `RENDER_OVERFLOW=none`: waiting for the agent is the intended setup.
+
+#### FASHN renders (optional overflow)
+
+FASHN is off unless you opt in (`RENDER_BACKEND=fashn`, or `RENDER_OVERFLOW=fashn` with the agent).
+It renders with [FASHN](https://fashn.ai) (`tryon-max`, balanced, `FASHN_RESOLUTION`, default 1k,
+via `https://api.fashn.ai/v1/run` and `/status`). Create an API key in the FASHN dashboard, buy
+credits, and set it as `FASHN_API_KEY` on the API and the API worker.
+
+- FASHN fetches the images itself: the avatar photo and stored renders go as signed R2 URLs, and
+  catalog images that are already full URLs go as they are. Both must be reachable from the
+  internet.
+- An avatar is the user's uploaded photo, kept as it is (there is no normalisation step).
+- FASHN has no scene endpoint in our client, so each reveal scene is its own try-on render, not a
+  restyled background. (Each piece has one free scene, Studio; the other five unlock for coins.)
+- Reveal renders run in the API process, three at a time, retried twice on timeouts, 429s and 5xx.
+  A render that still fails is reported to Sentry; a paid one (unlock, generate, combine) refunds
+  its coins (a `REFUND` ledger entry, ref `render_failed`), and a free one can be retried from the
+  reveal.
+
+### Account deletion
+
+Both stores require in-app account deletion. Worn Play: Profile → Delete account, which calls
+`DELETE /vault`. The API erases the account **before it answers** (every user row, refresh tokens,
+the user's stored photos, avatar, renders and uploads), so it works with or without Redis and the
+worker. What can be left is a stored object whose delete failed (R2 error): the account is already
+gone, the request stays `RUNNING` with the keys in `privacy_requests.storage_keys`, and the API
+worker's `privacy-erase` job retries them. Without the worker, delete those keys by hand
+(`docs/playbooks/data-deletion.md`). Only when the database itself fails before anything is deleted
+and no retry can be queued does the app get a 503 and keep the user signed in to try again.
+
+Sign in with Apple accounts: when the app signs in it sends Apple's one-time authorization code,
+and the API (with the `APPLE_SIGN_IN_*` settings above) trades it at Apple for a refresh token,
+stored encrypted in `users.apple_refresh_token_enc`. Account deletion revokes that token at Apple
+(`https://appleid.apple.com/auth/revoke`, 5-second timeout) before the rows are deleted. A failed
+exchange never blocks sign-in, and a failed revoke never blocks deletion: the encrypted token waits
+in `privacy_requests.steps.appleTokenPending` (`appleTokenRevoke: "pending"`) and the worker's
+`privacy-erase` retry revokes it. Both failures are logged (`apple.token_exchange.failed`,
+`apple.token_revoke.failed`) and sent to Sentry. Accounts that signed in before this (or from an
+app build that sends no code) have no stored token, so there is nothing to revoke for them.
+
+The API worker (`start:worker`) reads the same settings as the API: give it the same environment,
+`REDIS_URL` included (it refuses to start without Redis).
 
 ### The apps
 
 Release builds (`apps/mobile/eas.json`: `preview`, `production`, `testflight`, `play-internal`)
 already point at `https://api.worncloset.app`. Closet is off in all of them; Worn Play ships first,
 matching the website. Build and submit steps are in the README ("Beta deploy") and
-[`docs/EAS.md`](./EAS.md); they need `eas init` plus the Apple and Google developer accounts.
+[`docs/EAS.md`](./EAS.md); they need `eas init`, the Apple and Google developer accounts, and the
+Google client ids in the EAS environment (a release build without them fails). The owner
+checklist for both stores (products, OAuth clients, signing SHA-1s, notifications) is at the end
+of `docs/EAS.md`; the listing, review notes and privacy answers are in
+[`docs/STORE_LISTINGS.md`](./STORE_LISTINGS.md).
 
 ## Before each release
 
@@ -129,5 +278,7 @@ matching the website. Build and submit steps are in the README ("Beta deploy") a
    Postgres repository tests.
 2. `pnpm --filter @worn/db db:migrate` against production (phase 2).
 3. Deploy the API, then the worker, then the website.
-4. Smoke test: sign in, check out a small haul, watch it reach the reveal, unlock one look; the
-   coin balance in the profile matches the coin history.
+4. Smoke test: sign in (Apple and Google), check out a small haul, watch it reach the reveal,
+   unlock one look, buy the smallest coin pack with a sandbox / license-tester account; the coin
+   balance in the profile matches the coin history. Delete a test account and check it can't sign
+   back in to the old data.

@@ -1,9 +1,12 @@
 /**
  * Pluggable notification permission request for Closet deadline nudges.
  *
- * Production can inject an Expo Notifications adapter; tests / Expo Go
- * without a bridge use the in-memory stub (undetermined → granted/denied).
+ * By default this asks the OS through expo-notifications. Tests switch to the in-memory stub
+ * with `resetPushPermissionStub` (the stub "grants" without a prompt, so it must never be the
+ * default: a release build would record a permission the user was never asked for).
  */
+
+import { expoPushPermissionAdapter } from './expoNotificationAdapters';
 
 export type PushPermissionStatus = 'granted' | 'denied' | 'undetermined';
 
@@ -37,15 +40,15 @@ export function setPushPermissionAdapter(next: PushPermissionAdapter | null): vo
 }
 
 export function getPushPermissionAdapter(): PushPermissionAdapter {
-  return adapter ?? memoryStub;
+  return adapter ?? expoPushPermissionAdapter;
 }
 
-/** Reset the default memory stub (tests only). */
+/** Reset the memory stub and use it instead of the OS (tests only). */
 export function resetPushPermissionStub(
   status: PushPermissionStatus = 'undetermined',
 ): void {
   memoryStub._reset(status);
-  adapter = null;
+  adapter = memoryStub;
 }
 
 export async function getPushPermissionStatus(): Promise<PushPermissionStatus> {

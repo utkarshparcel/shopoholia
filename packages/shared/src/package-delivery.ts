@@ -13,13 +13,19 @@ export function detectDeliveryFromText(
   trackingCode: string | null;
 } {
   const hay = `${subject}\n${text}`;
+  // "will be delivered by 8 Nov" is a promise, not a delivery: drop future-tense phrases before
+  // looking for DELIVERED.
+  const pastTense = hay.replace(
+    /\b(?:will|shall|should|would|to|expected\s+to|scheduled\s+to|going\s+to)\s+(?:be\s+|get\s+)?delivered\b/gi,
+    " ",
+  );
   let deliveryStatus: PackageDeliveryStatus = "ORDERED";
 
   if (/\b(cancelled|canceled|order\s+cancelled)\b/i.test(hay)) {
     deliveryStatus = "CANCELLED";
   } else if (/\b(delivery\s+failed|undelivered|rto|return\s+to\s+origin)\b/i.test(hay)) {
     deliveryStatus = "FAILED";
-  } else if (/\b(delivered|successfully\s+delivered|was\s+delivered)\b/i.test(hay)) {
+  } else if (/\b(delivered|successfully\s+delivered|was\s+delivered)\b/i.test(pastTense)) {
     deliveryStatus = "DELIVERED";
   } else if (/\b(out\s+for\s+delivery)\b/i.test(hay)) {
     deliveryStatus = "OUT_FOR_DELIVERY";
@@ -114,7 +120,7 @@ export function carrierTrackingUrl(
 /** Parse common ETA phrases into ISO datetime (noon UTC on that day). */
 export function extractEta(hay: string, now: Date = new Date()): string | null {
   const byDate = hay.match(
-    /(?:estimated\s+delivery|arriving(?:\s+by)?|expected\s+(?:by|on)|delivery\s+(?:by|on))\s*[:-]?\s*(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})/i,
+    /(?:estimated\s+delivery|arriving(?:\s+by)?|expected\s+(?:by|on)|deliver(?:y|ed)\s+(?:by|on))\s*[:-]?\s*(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})/i,
   );
   if (byDate) {
     const day = Number(byDate[1]);

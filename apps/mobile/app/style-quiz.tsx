@@ -6,6 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getStyleQuiz, submitStyleQuiz } from '@/src/api/client';
 import { Button } from '@/src/components/ui';
+import { notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
+import { goBack } from '@/src/lib/goBack';
 import { useSessionStore } from '@/src/stores/session';
 import {
   accent,
@@ -45,6 +48,8 @@ export default function StyleQuizScreen() {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // Bumped by "Try again" to load the quiz once more.
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!accessToken) {
@@ -53,6 +58,8 @@ export default function StyleQuizScreen() {
     }
 
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     getStyleQuiz(accessToken)
       .then((data) => {
@@ -61,7 +68,7 @@ export default function StyleQuizScreen() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'Failed to load quiz');
+        setError(errorText(e, 'Failed to load quiz'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -70,7 +77,7 @@ export default function StyleQuizScreen() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, loadAttempt]);
 
   if (loading) {
     return (
@@ -92,7 +99,7 @@ export default function StyleQuizScreen() {
           },
         ]}
       >
-        <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+        <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <View style={styles.emptyState}>
@@ -100,6 +107,9 @@ export default function StyleQuizScreen() {
           <Text style={styles.emptyBody}>
             {error ?? 'No questions available right now. Try again later.'}
           </Text>
+          {error ? (
+            <Button label="Try again" onPress={() => setLoadAttempt((n) => n + 1)} variant="secondary" />
+          ) : null}
         </View>
       </View>
     );
@@ -126,6 +136,9 @@ export default function StyleQuizScreen() {
         // The feed ranks pieces by this profile, so cached pages are now out of date.
         void queryClient.invalidateQueries({ queryKey: ['feed'] });
         router.replace('/(tabs)/feed');
+      } catch (e: unknown) {
+        // The answers stay, so "Finish" sends them again.
+        notify('Couldn’t save your quiz', errorText(e, 'Try again.'));
       } finally {
         setSubmitting(false);
       }
@@ -146,7 +159,7 @@ export default function StyleQuizScreen() {
         },
       ]}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 

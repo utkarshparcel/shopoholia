@@ -5,9 +5,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { RushToExpress } from '@/src/components/order/RushToExpress';
+import { RevealWaitNote } from '@/src/components/order/RevealWaitNote';
 import { trackPlayBuyInCloset } from '@/src/api/client';
 import { TrackBuySuccessSheet } from '@/src/components/TrackBuySuccessSheet';
-import { Button, OrderTracker, SectionHeader } from '@/src/components/ui';
+import { Button, isNotFoundError, LoadError, OrderTracker, SectionHeader } from '@/src/components/ui';
 import { useOrder } from '@/src/hooks/orders';
 import { useNow } from '@/src/hooks/useNow';
 import { trackEvent } from '@/src/lib/analytics';
@@ -16,6 +17,7 @@ import {
   TRACK_BUY_WARDROBE_HREF,
 } from '@/src/lib/bridgeWow';
 import { FEATURE_CLOSET } from '@/src/lib/features';
+import { goBack } from '@/src/lib/goBack';
 import { buildTrackerSteps, nextEtaLabel } from '@/src/lib/order-tracking';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -67,7 +69,8 @@ export default function OrderTrackingScreen() {
         created: result.created,
         wardrobeCount: result.wardrobeItemIds.length,
       });
-      void queryClient.invalidateQueries({ queryKey: ['order', id, accessToken] });
+      // Prefix match: the cached order is keyed on the shopper (orderKeys.detail), not the token.
+      void queryClient.invalidateQueries({ queryKey: ['order', id] });
     },
     onError: (e) => setTrackNote((e as Error).message),
   });
@@ -91,13 +94,28 @@ export default function OrderTrackingScreen() {
       }}
       style={styles.screen}
     >
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}>
+      <Pressable accessibilityRole="button" onPress={() => goBack(router)} style={styles.back}>
         <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
       <SectionHeader kicker="Tracker" title="Your haul" />
 
-      {orderQuery.isLoading || !orderQuery.data ? (
+      {!orderQuery.data && orderQuery.isError ? (
+        isNotFoundError(orderQuery.error) ? (
+          <LoadError
+            body="This order isn’t on your account. It may belong to another sign-in."
+            onSecondary={() => router.replace('/(tabs)/profile')}
+            secondaryLabel="See your orders"
+            title="Order not found"
+          />
+        ) : (
+          <LoadError
+            error={orderQuery.error}
+            onRetry={() => void orderQuery.refetch()}
+            title="Couldn’t load your order"
+          />
+        )
+      ) : !orderQuery.data ? (
         <ActivityIndicator color={wornInk} style={styles.loader} />
       ) : (
         <>
@@ -135,6 +153,8 @@ export default function OrderTrackingScreen() {
               ) : null}
             </View>
           ) : null}
+
+          {orderQuery.data.state === 'DELIVERED' ? <RevealWaitNote orderId={orderQuery.data.id} /> : null}
 
           {orderQuery.data.state === 'REVEAL_READY' ? (
             <Button

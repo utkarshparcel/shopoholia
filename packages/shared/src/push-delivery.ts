@@ -159,14 +159,19 @@ export function formatQuietHoursNextSendPreview(
 export function notificationCategoryForEvent(
   eventType: string,
 ): NotificationCategory | null {
+  // Every Closet push type has a category, so opt-outs, frequency caps and the Android channel
+  // apply to it.
   switch (eventType) {
     case "RETURN_DEADLINE":
+    case "PACKAGE_ASSIGNED":
       return "returns";
     case "WARRANTY_EXPIRY":
       return "warranty";
     case "CREDIT_EXPIRY":
     case "CREDIT_BALANCE_RECHECK":
     case "FOUND_MONEY_WAITING":
+    case "EMI_DUE":
+    case "CASHBACK_CLAIM_DEADLINE":
       return "credits";
     case "OUTFIT_READY":
     case "WEAR_CHALLENGE":
@@ -177,12 +182,16 @@ export function notificationCategoryForEvent(
     case "LENT_OVERDUE":
     case "CAL_EVENT_OUTFIT":
     case "INTERVIEW_KIT_REMINDER":
+    case "tailoring_update":
       return "outfits";
     case "WEEKLY_DIGEST":
       return "digest";
     case "MONTHLY_DIGEST":
       return "digest";
     case "SPEND_ENVELOPE":
+    case "PRICE_DROP":
+    case "gift_occasion":
+    case "cooling_off_released":
       return "digest";
     default:
       return null;

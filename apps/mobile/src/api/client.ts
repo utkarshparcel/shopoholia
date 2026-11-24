@@ -296,6 +296,29 @@ export async function signInWithGoogle(idToken: string) {
   }>(res);
 }
 
+/**
+ * Sign in with Apple: the credential's identity token plus the raw nonce whose hash Apple got, and
+ * the one-time authorization code (the API trades it for the token it revokes on account deletion).
+ */
+export async function signInWithApple(body: {
+  identityToken: string;
+  nonce: string;
+  fullName?: string | null;
+  authorizationCode?: string | null;
+}) {
+  const res = await apiFetch(`${API_URL}/auth/apple`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return parseJson<{
+    accessToken: string;
+    refreshToken: string;
+    isNewUser?: boolean;
+    coinBalance?: number;
+  }>(res);
+}
+
 export async function getAvatar(accessToken: string) {
   const res = await apiFetch(`${API_URL}/avatar`, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -380,6 +403,10 @@ export type TryonResponse = {
   status: 'READY' | 'PROCESSING' | 'FAILED';
   previewUrl: string | null;
   retryAfter?: string | null;
+  /** PROCESSING, but waiting for the render agent (overnight, or while it is down). */
+  rendersWaiting?: boolean;
+  /** When a waiting preview should be ready; null when there is no estimate ("shortly"). */
+  expectedReadyAt?: string | null;
 };
 
 function authHeaders(accessToken: string) {
@@ -463,12 +490,6 @@ export async function removeFromCart(accessToken: string, variantId: string) {
 
 export type CoinBalanceResponse = {
   balance: number;
-};
-
-export type IapValidateResponse = {
-  success: true;
-  coinsGranted: number;
-  balanceAfter: number;
 };
 
 export type GenerateRenderResponse = {
@@ -717,6 +738,10 @@ export type RenderCard = {
 export type RevealResponse = {
   orderId: string;
   renders: RenderCard[];
+  /** The renders are waiting for the render agent: show when they should be ready. */
+  rendersWaiting?: boolean;
+  /** When they should be ready; null means "shortly". */
+  expectedReadyAt?: string | null;
 };
 
 export async function fetchReveal(accessToken: string, orderId: string) {
@@ -743,22 +768,6 @@ export async function unlockRenders(
   return parseJson<{ renders: RenderCard[]; coinsSpent: number }>(res);
 }
 
-export async function validateIap(
-  accessToken: string,
-  productId: string,
-  receipt: string,
-) {
-  const res = await apiFetch(`${API_URL}/coins/iap/validate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(accessToken),
-    },
-    body: JSON.stringify({ productId, receipt }),
-  });
-  return parseJson<IapValidateResponse>(res);
-}
-
 export async function generateRenders(
   accessToken: string,
   orderId: string,
@@ -775,6 +784,19 @@ export async function generateRenders(
     body: JSON.stringify({ orderItemIds, scenario, idempotencyKey }),
   });
   return parseJson<GenerateRenderResponse>(res);
+}
+
+/** Renders an included look that FAILED again; it comes back QUEUED and the reveal polls it. */
+export async function retryRenders(accessToken: string, orderId: string, renderIds: string[]) {
+  const res = await apiFetch(`${API_URL}/orders/${orderId}/reveal/retry`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(accessToken),
+    },
+    body: JSON.stringify({ renderIds }),
+  });
+  return parseJson<{ renders: RenderCard[] }>(res);
 }
 
 export async function submitRevealRating(
@@ -1203,6 +1225,8 @@ export async function checkCreditBalance(accessToken: string, id: string) {
   const res = await apiFetch(`${API_URL}/credits/${id}/balance-check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    // Fastify rejects an empty body sent as application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+    body: '{}',
   });
   return parseJson<BalanceCheckResponse>(res);
 }
@@ -1227,8 +1251,11 @@ export async function uploadReceipt(
   accessToken: string,
   imageUri: string,
   fileName = 'receipt.jpg',
+  currency?: string,
 ) {
   const form = new FormData();
+  // Before the file: the API reads fields that arrive ahead of it. Without one it assumes INR.
+  if (currency) form.append('currency', currency);
   form.append('file', await photoPart(imageUri, fileName));
 
   const res = await apiFetch(`${API_URL}/receipts`, {
@@ -1578,13 +1605,15 @@ export async function deleteWardrobeItem(accessToken: string, id: string) {
   return parseJson<void>(res);
 }
 
-export async function uploadWardrobeItem(accessToken: string, imageUri: string, meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number }) {
+export async function uploadWardrobeItem(accessToken: string, imageUri: string, meta: { category: string; colors?: string[]; brand?: string | null; costMinor?: number; profileId?: string | null }) {
   const form = new FormData();
   form.append('file', jpegPart(imageUri, 'wardrobe.jpg'));
   form.append('category', meta.category);
   if (meta.colors) form.append('colors', JSON.stringify(meta.colors));
   if (meta.brand) form.append('brand', meta.brand);
   if (meta.costMinor) form.append('costMinor', String(meta.costMinor));
+  // The closet profile it is added from (a kid's closet); without one it goes to the user's own.
+  if (meta.profileId) form.append('profileId', meta.profileId);
   const res = await apiFetch(`${API_URL}/wardrobe/upload`, { method: 'POST', headers: { ...authHeaders(accessToken), 'Content-Type': 'multipart/form-data' }, body: form });
   return parseJson<WardrobeItem>(res);
 }
@@ -1704,6 +1733,7 @@ export async function uploadWardrobeItemsBulk(
     colors?: string[];
     brand?: string | null;
     costMinor?: number;
+    profileId?: string | null;
   },
   opts?: {
     /** Per-item progress (W059). */
@@ -1716,6 +1746,7 @@ export async function uploadWardrobeItemsBulk(
       colors?: string[];
       brand?: string | null;
       costMinor?: number;
+      profileId?: string | null;
     }>;
   },
 ) {
@@ -2272,6 +2303,8 @@ export async function startWearChallenge(accessToken: string, itemId: string) {
   const res = await apiFetch(`${API_URL}/waste/${itemId}/challenge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
+    // Fastify rejects an empty body sent as application/json (FST_ERR_CTP_EMPTY_JSON_BODY).
+    body: '{}',
   });
   return parseJson<{
     wardrobeItemId: string;
@@ -2598,6 +2631,8 @@ export type HouseholdVaultResponse = {
   householdId: string;
   myAccess: 'VIEW' | 'SPEND';
   mySpendCapMinor: number | null;
+  /** The cap's currency (null: no cap, or a cap set before caps had one). */
+  mySpendCapCurrency?: string | null;
   mySpentMinor: number;
   accounts: Array<{
     id: string;
@@ -2612,6 +2647,7 @@ export type HouseholdVaultResponse = {
     userId: string;
     vaultAccess: 'VIEW' | 'SPEND';
     spendCapMinor: number | null;
+    spendCapCurrency?: string | null;
     spentMinor: number;
   }>;
 };
@@ -2630,6 +2666,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess?: 'VIEW' | 'SPEND';
     spendCapMinor?: number | null;
+    spendCapCurrency?: string;
   },
 ) {
   const res = await apiFetch(`${API_URL}/households/${householdId}/vault/members`, {
@@ -2641,6 +2678,7 @@ export async function patchHouseholdVaultMember(
     userId: string;
     vaultAccess: 'VIEW' | 'SPEND';
     spendCapMinor: number | null;
+    spendCapCurrency: string | null;
     spentMinor: number;
   }>(res);
 }
@@ -3562,59 +3600,6 @@ export async function fetchEntitlementSnapshot(accessToken: string) {
     headers: authHeaders(accessToken),
   });
   return parseJson<EntitlementSnapshotDto>(res);
-}
-
-/** Simulated trial start — never sends a real App Store / Play receipt. */
-export async function syncEntitlementTrial(
-  accessToken: string,
-  productId: string,
-) {
-  const res = await apiFetch(`${API_URL}/entitlements/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({
-      productId,
-      startTrial: true,
-      receiptOrToken: 'simulated-dev-token',
-    }),
-  });
-  return parseJson<{ snapshot: Awaited<ReturnType<typeof fetchEntitlementSnapshot>> }>(res);
-}
-
-export async function createUpiPaymentIntent(
-  accessToken: string,
-  body: { productId: string; region?: 'IN' | 'US' | 'GLOBAL'; method?: 'upi' | 'iap' | 'card' },
-) {
-  const res = await apiFetch(`${API_URL}/payments/intents`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify(body),
-  });
-  return parseJson<{
-    id: string;
-    provider: string;
-    productId: string;
-    amountMinor: number;
-    currency: string;
-    upiIntentUrl: string | null;
-    status: string;
-    publicKeyHint: string | null;
-  }>(res);
-}
-
-export async function confirmUpiPayment(
-  accessToken: string,
-  intentId: string,
-) {
-  const res = await apiFetch(`${API_URL}/payments/confirm`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
-    body: JSON.stringify({ intentId }),
-  });
-  return parseJson<{
-    intent: { id: string; status: string; upiIntentUrl: string | null };
-    entitlementsGranted: string[];
-  }>(res);
 }
 
 /** N12 / W029 — brand price watches + scan hits. */

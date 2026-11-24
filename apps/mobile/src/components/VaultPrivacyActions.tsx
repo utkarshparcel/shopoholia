@@ -11,6 +11,7 @@ import { usePathname, useRouter } from 'expo-router';
 
 import { usePrompt } from '@/src/components/PromptSheet';
 import { Button } from '@/src/components/ui';
+import { DELETE_ACCOUNT_MESSAGE_WITH_CLOSET, DELETE_ACCOUNT_TITLE } from '@/src/hooks/account';
 import { useDeleteVault, useExportVault } from '@/src/hooks/closet/useCloset';
 import {
   exportCanRetry,
@@ -96,8 +97,8 @@ export function VaultPrivacyActions() {
       return;
     }
     const ok = await ask({
-      title: 'Delete your account?',
-      message: 'This permanently erases your Vault and Closet data. This cannot be undone.',
+      title: DELETE_ACCOUNT_TITLE,
+      message: DELETE_ACCOUNT_MESSAGE_WITH_CLOSET,
       fields: [],
       confirmLabel: 'Delete',
     });

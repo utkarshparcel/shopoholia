@@ -17,7 +17,7 @@ describe("N31 missing-piece gap heuristic", () => {
     const bottoms = report.gaps.find((g) => g.missingSlot === "bottom");
     expect(bottoms).toBeTruthy();
     expect(bottoms!.unlockedByCount).toBeGreaterThanOrEqual(4);
-    expect(bottoms!.affiliateUrl).toContain("shopoholia");
+    expect(bottoms!.affiliateUrl).toContain("myntra.com");
     expect(report.summary.toLowerCase()).toMatch(/gap/);
   });
 
@@ -38,5 +38,20 @@ describe("N31 missing-piece gap heuristic", () => {
     expect(affiliateSuggestionUrl("black trousers")).toContain("myntra");
     expect(affiliateSuggestionUrl("white sneakers", "amazon")).toContain("amazon.in");
     expect(affiliateSuggestionUrl("belt", "flipkart")).toContain("flipkart");
+  });
+
+  it("tags shopping URLs only with configured affiliate ids", () => {
+    const none = {};
+    expect(affiliateSuggestionUrl("black trousers", "myntra", none)).toBe(
+      "https://www.myntra.com/black-trousers",
+    );
+    expect(affiliateSuggestionUrl("belt", "flipkart", none)).toBe("https://www.flipkart.com/search?q=belt");
+    expect(affiliateSuggestionUrl("belt", "amazon", none)).not.toMatch(/tag=/);
+    expect(affiliateSuggestionUrl("belt", "amazon", { amazon: "worn-21" })).toBe(
+      "https://www.amazon.in/s?k=belt&tag=worn-21",
+    );
+    expect(affiliateSuggestionUrl("belt", "flipkart", { flipkart: "wornfk" })).toBe(
+      "https://www.flipkart.com/search?q=belt&affid=wornfk",
+    );
   });
 });

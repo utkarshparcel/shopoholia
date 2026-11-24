@@ -49,6 +49,8 @@ export class FashnApiError extends Error {
   constructor(
     message: string,
     readonly details?: unknown,
+    /** The HTTP status FASHN answered with, when the error is an HTTP refusal. */
+    readonly status?: number,
   ) {
     super(message);
     this.name = "FashnApiError";
@@ -86,6 +88,7 @@ export function createFashnClient(options: FashnClientOptions) {
       throw new FashnApiError(
         body.message ?? body.error ?? `FASHN /run failed (${response.status})`,
         body,
+        response.status,
       );
     }
     if (!body.id) {
@@ -111,6 +114,7 @@ export function createFashnClient(options: FashnClientOptions) {
         throw new FashnApiError(
           `FASHN /status failed (${response.status})`,
           body,
+          response.status,
         );
       }
 

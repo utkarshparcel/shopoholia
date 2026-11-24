@@ -150,6 +150,8 @@ export const ListingCard = memo(function ListingCard({
   return (
     <AnimatedView style={[styles.card, isFeed && styles.feedCard, isCompact && styles.compactCard, shadowSm, animatedStyle, style]} {...props}>
       <AnimatedPressable
+        // The photo is the card's main button: name it, as the feed layout's text overlay does.
+        accessibilityLabel={onPress ? `${title}, ${coinPrice} coins` : undefined}
         accessibilityRole={onPress ? 'button' : undefined}
         disabled={!onPress}
         onPress={onPress}

@@ -33,4 +33,14 @@ describe('sms (MOB 7: no inbox reading)', () => {
     expect(copy).toContain("doesn't read your texts");
     expect(copy).not.toMatch(/READ_SMS|permission/i);
   });
+
+  it('S2-09: has no placeholder address; with none configured there is nothing to show', () => {
+    delete process.env.EXPO_PUBLIC_FORWARDING_ADDRESS;
+    expect(getSmsForwardingAddress()).toBeNull();
+    expect(getIosSmsForwardingCopy()).toBeNull();
+    process.env.EXPO_PUBLIC_FORWARDING_ADDRESS = '  ';
+    expect(getSmsForwardingAddress()).toBeNull();
+    process.env.EXPO_PUBLIC_FORWARDING_ADDRESS = 'not-an-address';
+    expect(getSmsForwardingAddress()).toBeNull();
+  });
 });

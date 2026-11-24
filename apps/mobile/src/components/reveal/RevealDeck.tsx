@@ -1,3 +1,4 @@
+import { REVEAL_UNLOCK_COST_COINS } from '@worn/shared';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -57,17 +58,25 @@ type RevealDeckProps = {
   unlockingId?: string | null;
   /** A card to show — a look just generated, which the deck appends at the end. */
   focusId?: string | null;
+  /** Renders an included look that failed again; without it the card offers no retry. */
+  onRetry?: (renderId: string) => void;
+  retryingId?: string | null;
 };
 
 function RenderCardView({
   card,
   onUnlock,
   unlocking,
+  onRetry,
+  retrying,
 }: {
   card: RenderCard;
   onUnlock: (id: string) => void;
   unlocking: boolean;
+  onRetry?: (id: string) => void;
+  retrying: boolean;
 }) {
+  const failed = card.status === 'FAILED' && (card.isFree || card.unlocked);
   const locked = !card.isFree && !card.unlocked;
   // A locked look sits QUEUED until it's unlocked: it shows the lock, not "Rendering…".
   const processing = isRenderInProgress(card);
@@ -94,13 +103,33 @@ function RenderCardView({
             label={
               unlocking
                 ? 'Unlocking…'
-                : `Unlock · ${card.unlockCostCoins ?? 50} coins`
+                : `Unlock · ${card.unlockCostCoins ?? REVEAL_UNLOCK_COST_COINS} coins`
             }
             onPress={() => onUnlock(card.id)}
             size="md"
             style={styles.unlockBtn}
             variant="secondary"
           />
+        </View>
+      ) : null}
+
+      {failed ? (
+        <View style={styles.lockOverlay}>
+          <Text style={styles.lockTitle}>Couldn’t render this look</Text>
+          {card.isFree ? (
+            onRetry ? (
+              <Button
+                disabled={retrying}
+                label={retrying ? 'Retrying…' : 'Try again'}
+                onPress={() => onRetry(card.id)}
+                size="md"
+                style={styles.unlockBtn}
+                variant="secondary"
+              />
+            ) : null
+          ) : (
+            <Text style={styles.lockBody}>Your coins were refunded. Generate it again below.</Text>
+          )}
         </View>
       ) : null}
 
@@ -118,7 +147,7 @@ function RenderCardView({
   );
 }
 
-export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDeckProps) {
+export function RevealDeck({ renders, onUnlock, unlockingId, focusId, onRetry, retryingId }: RevealDeckProps) {
   const [index, setIndex] = useState(0);
 
   // Jump to a newly generated look once it is in the deck (once per focus, so later polls that
@@ -178,12 +207,18 @@ export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDe
         translateX.value = startXRef.current + gestureState.dx;
       },
       onPanResponderRelease: (_e, gestureState) => {
+        // The card changes only when its fly-out finished; an interrupted spring (a new touch
+        // grabbed the card) leaves it where it is.
         if (gestureState.dx < -SWIPE_THRESHOLD) {
-          translateX.value = withSpring(-240, {}, () => runOnJS(swipeEnd)('left'));
+          translateX.value = withSpring(-240, {}, (finished) => {
+            if (finished) runOnJS(swipeEnd)('left');
+          });
           return;
         }
         if (gestureState.dx > SWIPE_THRESHOLD) {
-          translateX.value = withSpring(240, {}, () => runOnJS(swipeEnd)('right'));
+          translateX.value = withSpring(240, {}, (finished) => {
+            if (finished) runOnJS(swipeEnd)('right');
+          });
           return;
         }
         translateX.value = withSpring(0);
@@ -202,20 +237,31 @@ export function RevealDeck({ renders, onUnlock, unlockingId, focusId }: RevealDe
       <Animated.View style={animatedStyle} {...panResponder.panHandlers}>
         <RenderCardView
           card={card}
+          onRetry={onRetry}
           onUnlock={onUnlock}
+          retrying={retryingId === card.id}
           unlocking={unlockingId === card.id}
         />
       </Animated.View>
 
       <View style={styles.controls}>
-        <Pressable accessibilityRole="button" disabled={index === 0} onPress={goPrev} style={styles.navBtn}>
+        <Pressable
+          accessibilityLabel="Previous look"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: index === 0 }}
+          disabled={index === 0}
+          onPress={goPrev}
+          style={styles.navBtn}
+        >
           <Text style={styles.navText}>←</Text>
         </Pressable>
         <Text style={styles.counter}>
           {index + 1} / {renders.length}
         </Text>
         <Pressable
+          accessibilityLabel="Next look"
           accessibilityRole="button"
+          accessibilityState={{ disabled: index >= renders.length - 1 }}
           disabled={index >= renders.length - 1}
           onPress={goNext}
           style={styles.navBtn}

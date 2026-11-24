@@ -74,4 +74,14 @@ describe("price drop alert card (W029)", () => {
     expect(isPriceDropDismissReason("WRONG_SIZE")).toBe(true);
     expect(isPriceDropDismissReason("nope")).toBe(false);
   });
+
+  it("matches brands as whole words, never on a tag that is only part of the brand", () => {
+    expect(listingMatchesBrand("New Balance", { title: "Linen shirt", tags: ["New"] })).toBe(false);
+    expect(listingMatchesBrand("Zara", { title: "Linen shirt", tags: [""] })).toBe(false);
+    expect(listingMatchesBrand("H&M", { title: "Linen shirt", tags: ["M"] })).toBe(false);
+    expect(listingMatchesBrand("Zara", { title: "Bazaar print dress", tags: [] })).toBe(false);
+    expect(listingMatchesBrand("Zara", { title: "ZARA linen shirt", tags: [] })).toBe(true);
+    expect(listingMatchesBrand("H&M", { title: "Tee", tags: ["h&m"] })).toBe(true);
+    expect(listingMatchesBrand("New Balance", { title: "Runner", tags: ["New  Balance 574"] })).toBe(true);
+  });
 });

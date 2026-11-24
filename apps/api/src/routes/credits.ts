@@ -21,6 +21,7 @@ import {
   SpendCreditResponseSchema,
   UndoSpendCreditBodySchema,
   UndoSpendCreditResponseSchema,
+  affiliateIdsFromEnv,
   giftCardCapturePrefill,
   merchantDeepLink,
 } from "@worn/shared";
@@ -45,6 +46,7 @@ import {
   CREDIT_SNOOZE_DEFAULT_MS,
   scheduleExpiryReminder,
   snoozeCreditReminder,
+  capCreditSnooze,
 } from "../lib/expiry.js";
 import type {
   MoneyAccountRecord,
@@ -69,7 +71,7 @@ function toAccountJson(a: MoneyAccountRecord) {
     balanceCacheMinor: a.balanceCacheMinor,
     expiresAt: a.expiresAt ? a.expiresAt.toISOString() : null,
     status: a.status,
-    link: merchantDeepLink(a.merchant),
+    link: merchantDeepLink(a.merchant, affiliateIdsFromEnv(process.env)),
     ...balanceCheckMetaForAccount(a),
   };
 }
@@ -88,8 +90,11 @@ function toLedgerJson(l: MoneyLedgerRecord) {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  const code = (err as { code?: string })?.code;
-  if (code === "23505") return true;
+  // drizzle-orm >= 0.44 wraps driver errors in DrizzleQueryError; postgres-js's error is its `cause`.
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
   const msg = (err as Error)?.message ?? "";
   return /duplicate|unique/i.test(msg);
 }
@@ -135,7 +140,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: PageQuerySchema,
         response: {
           200: MoneyTransactionsResponseSchema,
@@ -454,7 +459,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: SpendCreditBodySchema,
         response: {
           200: SpendCreditResponseSchema,
@@ -547,7 +552,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       },
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UndoSpendCreditBodySchema,
         response: {
           200: UndoSpendCreditResponseSchema,
@@ -723,7 +728,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ExpiryHandledBodySchema,
         response: {
           200: ExpiryHandledResponseSchema,
@@ -745,7 +750,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const nowMs = Date.now();
-      const snoozedUntil = request.body.until
+      let snoozedUntil = request.body.until
         ? new Date(request.body.until)
         : new Date(nowMs + CREDIT_SNOOZE_DEFAULT_MS);
 
@@ -757,6 +762,8 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       }
 
       const status = await snoozeCreditReminder(account, snoozedUntil);
+      // The reminder fires no later than a day before the credit expires.
+      if (account.expiresAt) snoozedUntil = capCreditSnooze(snoozedUntil, account.expiresAt);
       audit(app.log, "money.credit.expiry_handled", {
         userId,
         accountId: id,
@@ -782,7 +789,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: BalanceCheckResponseSchema,
           401: ErrorSchema,
@@ -818,7 +825,7 @@ export const creditsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["credits"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: ConfirmBalanceBodySchema,
         response: {
           200: ConfirmBalanceResponseSchema,

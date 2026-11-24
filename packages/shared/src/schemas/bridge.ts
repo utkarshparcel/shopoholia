@@ -13,7 +13,7 @@ export type TrackPlayBuyBody = z.infer<typeof TrackPlayBuyBodySchema>;
 
 /** Alternate body for POST /purchases/from-order (order id in body). */
 export const TrackPlayBuyFromOrderBodySchema = z.object({
-  orderId: z.string().uuid(),
+  orderId: z.uuid(),
   seedWardrobe: z.boolean().optional().default(false),
 });
 export type TrackPlayBuyFromOrderBody = z.infer<typeof TrackPlayBuyFromOrderBodySchema>;
@@ -21,10 +21,10 @@ export type TrackPlayBuyFromOrderBody = z.infer<typeof TrackPlayBuyFromOrderBody
 export const TrackPlayBuyResponseSchema = z.object({
   purchase: MerchantPurchaseSchema,
   items: z.array(MerchantPurchaseItemSchema),
-  wardrobeItemIds: z.array(z.string().uuid()),
+  wardrobeItemIds: z.array(z.uuid()),
   created: z.boolean(),
   /** Convenience aliases for clients / tests. */
-  purchaseId: z.string().uuid(),
+  purchaseId: z.uuid(),
   itemCount: z.number().int().nonnegative(),
 });
 export type TrackPlayBuyResponse = z.infer<typeof TrackPlayBuyResponseSchema>;
@@ -36,7 +36,7 @@ export const PrebuyCandidateSchema = z.object({
   brand: z.string().nullable().optional(),
   priceMinor: z.number().int().nonnegative(),
   qty: z.number().int().positive().optional(),
-  listingId: z.string().uuid().nullable().optional(),
+  listingId: z.uuid().nullable().optional(),
 });
 export type PrebuyCandidateBody = z.infer<typeof PrebuyCandidateSchema>;
 
@@ -44,7 +44,7 @@ export const PrebuyFitBodySchema = z.object({
   /** Score current Play cart against closet. */
   useCart: z.boolean().optional(),
   /** Score specific Play listings. */
-  listingIds: z.array(z.string().uuid()).optional(),
+  listingIds: z.array(z.uuid()).optional(),
   /** Direct candidates (tests / custom carts). */
   candidates: z.array(PrebuyCandidateSchema).optional(),
   /** Alias for candidates (Play checkout / legacy). */
@@ -54,7 +54,7 @@ export type PrebuyFitBody = z.infer<typeof PrebuyFitBodySchema>;
 
 export const PrebuyOverlapSchema = z.object({
   candidateTitle: z.string(),
-  wardrobeItemId: z.string().uuid(),
+  wardrobeItemId: z.uuid(),
   wardrobeLabel: z.string(),
   score: z.number(),
   reason: z.enum(["TITLE", "CATEGORY_BRAND", "CATEGORY"]),

@@ -11,7 +11,7 @@ import {
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
 const SettlementSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: z.enum(["tailoring", "resale"]),
   orderRef: z.string(),
   sellerId: z.string(),
@@ -53,7 +53,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
       },
     },
     async (request, reply) => {
-      const row = settleCompletedOrder({
+      const row = await settleCompletedOrder(app.deps.repos, {
         kind: request.body.kind,
         orderRef: request.body.orderRef,
         sellerId: request.body.sellerId,
@@ -89,7 +89,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
       },
     },
     async (request) => ({
-      settlements: listSettlements({
+      settlements: await listSettlements(app.deps.repos, {
         kind: request.query.kind,
         sellerId: request.query.sellerId,
       }),
@@ -114,7 +114,7 @@ export const marketplaceSettlementsRoutes: FastifyPluginAsyncZod = async (app) =
       },
     },
     async (request, reply) => {
-      const csv = exportSettlementsCsv({
+      const csv = await exportSettlementsCsv(app.deps.repos, {
         kind: request.query.kind,
         sellerId: request.query.sellerId,
       });

@@ -6,6 +6,7 @@ import {
   PayEmiBodySchema,
   addEmiMonths,
   detectEmiSignal,
+  resolveTimeZone,
   nextDueSchedule,
   remainingAfterPayment,
   type CreateEmiPlanBody,
@@ -119,7 +120,8 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       const userId = request.user!.sub;
       const body = request.body as z.infer<typeof FromSmsBodySchema>;
       const subject = body.subject ?? (body.from ? `SMS from ${body.from}` : "SMS");
-      const signal = detectEmiSignal(subject, body.body);
+      const user = await app.deps.repos.findUserById(userId);
+      const signal = detectEmiSignal(subject, body.body, new Date(), resolveTimeZone(user?.timeZone));
       if (!signal) {
         return reply.code(400).send({
           error: "Bad Request",
@@ -152,7 +154,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: { 200: EmiScheduleResponseSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
     },
@@ -183,7 +185,7 @@ export const emiRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: [requireAuth, requireConsent("FINANCIAL")],
       schema: {
         tags: ["accountant"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: PayEmiBodySchema,
         response: { 200: EmiPlanSchema, 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
       },

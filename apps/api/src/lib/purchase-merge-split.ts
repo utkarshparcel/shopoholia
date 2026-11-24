@@ -139,7 +139,7 @@ export async function mergePurchases(
     return { purchase, items, mergedFromId: input.sourcePurchaseId };
   } catch (err) {
     // Both purchases have an open whole-order return (one open return per line, #61).
-    if ((err as { code?: string })?.code === "23505") {
+    if (isUniqueViolation(err)) {
       throw new PurchaseMergeSplitError(
         "CONFLICT",
         "Both purchases have an open return; finish or cancel one first",
@@ -162,4 +162,14 @@ export async function splitPurchase(
   split: { purchase: MerchantPurchaseRecord; items: MerchantPurchaseItemRecord[] };
 }> {
   return repos.splitMerchantPurchase(userId, input);
+}
+
+/** Postgres unique_violation (23505). */
+function isUniqueViolation(err: unknown): boolean {
+  // drizzle-orm >= 0.44 wraps driver errors in DrizzleQueryError; postgres-js's error is its `cause`.
+  for (let e: unknown = err, depth = 0; e && depth < 3; depth++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }

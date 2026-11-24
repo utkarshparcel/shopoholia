@@ -23,17 +23,15 @@ export const IngestionDocStatusSchema = z.enum([
 
 export type IngestionDocStatus = z.infer<typeof IngestionDocStatusSchema>;
 
-export const IngestionSourceMetaSchema = z
-  .object({
-    mutedMerchants: z.array(z.string().min(1)).optional(),
-    /** Last human-readable sync/token error (never tokens). */
-    lastError: z.string().optional(),
-    lastErrorAt: z.string().datetime().optional(),
-    /** Machine code: DISCONNECTED | TOKEN_REVOKED | INVALID_GRANT | NO_TOKEN | AUTH_FAILED | … */
-    errorCode: z.string().optional(),
-    disconnectedAt: z.string().datetime().optional(),
-  })
-  .passthrough();
+export const IngestionSourceMetaSchema = z.looseObject({
+  mutedMerchants: z.array(z.string().min(1)).optional(),
+  /** Last human-readable sync/token error (never tokens). */
+  lastError: z.string().optional(),
+  lastErrorAt: z.iso.datetime().optional(),
+  /** Machine code: DISCONNECTED | TOKEN_REVOKED | INVALID_GRANT | NO_TOKEN | AUTH_FAILED | … */
+  errorCode: z.string().optional(),
+  disconnectedAt: z.iso.datetime().optional(),
+});
 
 export const AccountHealthToneSchema = z.enum([
   "ok",
@@ -47,20 +45,20 @@ export const AccountHealthSchema = z.object({
   tone: AccountHealthToneSchema,
   label: z.string(),
   status: IngestionStatusSchema,
-  lastSyncAt: z.string().datetime().nullable(),
+  lastSyncAt: z.iso.datetime().nullable(),
   error: z.string().nullable(),
   needsReconnect: z.boolean(),
   hasToken: z.boolean(),
 });
 
 export const IngestionSourceSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: IngestionKindSchema,
   provider: z.string(),
-  consentGrantId: z.string().uuid(),
+  consentGrantId: z.uuid(),
   status: IngestionStatusSchema,
   cursor: z.string().nullable(),
-  lastSyncAt: z.string().datetime().nullable(),
+  lastSyncAt: z.iso.datetime().nullable(),
   meta: IngestionSourceMetaSchema.nullable().optional(),
   /** Derived lastError for UI (also nested under health.error). */
   error: z.string().nullable().optional(),
@@ -71,18 +69,18 @@ export const IngestionSourceSchema = z.object({
 });
 
 export const IngestionDocumentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: IngestionKindSchema,
   rawKey: z.string(),
   parsedJson: z.record(z.string(), z.unknown()),
-  matchedPurchaseId: z.string().uuid().nullable(),
+  matchedPurchaseId: z.uuid().nullable(),
   status: IngestionDocStatusSchema,
 });
 
 export const RegisterIngestionSourceBodySchema = z.object({
   kind: IngestionKindSchema,
   provider: z.string().min(1),
-  consentGrantId: z.string().uuid(),
+  consentGrantId: z.uuid(),
 });
 
 export const IngestionSourcesResponseSchema = z.object({
@@ -96,31 +94,31 @@ export const IngestionDocumentsResponseSchema = z.object({
 export const IngestSmsBodySchema = z.object({
   from: z.string().min(1),
   body: z.string().min(1),
-  receivedAt: z.string().datetime().optional(),
+  receivedAt: z.iso.datetime().optional(),
 });
 
 export const IngestSmsResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   status: IngestionDocStatusSchema,
 });
 
 export const CreateIngestionSourceResponseSchema = z.object({
   source: IngestionSourceSchema,
-  oauthUrl: z.string().url(),
+  oauthUrl: z.url(),
 });
 
 /** Safe summary of a read document — never includes raw body or tokens. */
 export const IngestionActivityItemSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   kind: IngestionKindSchema,
   merchant: z.string().nullable(),
   status: IngestionDocStatusSchema,
-  matchedPurchaseId: z.string().uuid().nullable(),
+  matchedPurchaseId: z.uuid().nullable(),
   subject: z.string().nullable(),
   snippet: z.string().nullable(),
   totalMinor: z.number().int().nullable(),
   currency: z.string().nullable(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 });
 
 export const IngestionActivityResponseSchema = z.object({
@@ -147,13 +145,13 @@ export const CorrectIngestionDocumentBodySchema = z
       b.totalMinor !== undefined ||
       b.currency !== undefined ||
       (b.items !== undefined && b.items.length > 0),
-    { message: "At least one correction field is required" },
+    { error: "At least one correction field is required" },
   );
 
 export const CorrectIngestionDocumentResponseSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   status: IngestionDocStatusSchema,
-  matchedPurchaseId: z.string().uuid().nullable(),
+  matchedPurchaseId: z.uuid().nullable(),
   merchant: z.string().nullable(),
   totalMinor: z.number().int().nullable(),
   currency: z.string().nullable(),
@@ -168,7 +166,7 @@ export const MuteRuleSchema = z.object({
   id: z.string().min(1),
   type: MuteRuleTypeSchema,
   pattern: z.string().min(1),
-  mutedAt: z.string().datetime(),
+  mutedAt: z.iso.datetime(),
   previewCount: z.number().int().nonnegative(),
 });
 
@@ -184,7 +182,7 @@ export const PatchIngestionSourceBodySchema = z
       b.status !== undefined ||
       b.mutedMerchants !== undefined ||
       b.muteRules !== undefined,
-    { message: "Provide status, mutedMerchants, and/or muteRules" },
+    { error: "Provide status, mutedMerchants, and/or muteRules" },
   );
 
 export type IngestionSource = z.infer<typeof IngestionSourceSchema>;

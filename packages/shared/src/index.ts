@@ -43,12 +43,14 @@ export {
   OtpResponseSchema,
   VerifyRequestSchema,
   GoogleAuthRequestSchema,
+  AppleAuthRequestSchema,
   TokenResponseSchema,
   RefreshRequestSchema,
   type OtpRequest,
   type OtpResponse,
   type VerifyRequest,
   type GoogleAuthRequest,
+  type AppleAuthRequest,
   type TokenResponse,
   type RefreshRequest,
 } from "./schemas/auth.js";
@@ -76,6 +78,9 @@ export {
   REVEAL_COMBINE_COST_COINS,
   REVEAL_COMBINE_MAX_ITEMS,
   RUSH_TO_EXPRESS_COST_COINS,
+  CATALOG_RUPEES_PER_COIN,
+  CATALOG_MIN_COIN_PRICE,
+  coinPriceForRupees,
   COIN_PACKS,
   coinPackById,
   coinPackByStoreProductId,
@@ -109,6 +114,8 @@ export {
   UnlockResponseSchema,
   GenerateRenderBodySchema,
   GenerateRenderResponseSchema,
+  RetryRendersBodySchema,
+  RetryRendersResponseSchema,
   type RenderStatus,
   type RenderCard,
   type RevealResponse,
@@ -116,6 +123,8 @@ export {
   type UnlockResponse,
   type GenerateRenderBody,
   type GenerateRenderResponse,
+  type RetryRendersBody,
+  type RetryRendersResponse,
 } from "./schemas/reveal.js";
 export {
   ListingCardSchema,
@@ -799,6 +808,14 @@ export {
   merchantDeepLink,
   normalizeMerchantKey,
 } from "./merchantDeepLink.js";
+export {
+  AFFILIATE_ENV_VARS,
+  AFFILIATE_PLATFORMS,
+  affiliateIdsFromEnv,
+  tagAffiliateUrl,
+  type AffiliateIds,
+  type AffiliatePlatform,
+} from "./affiliate-ids.js";
 export {
   BALANCE_RECHECK_INTERVAL_MS,
   balanceRecheckCopy,

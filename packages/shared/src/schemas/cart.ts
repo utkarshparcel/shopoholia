@@ -1,21 +1,21 @@
 import { z } from "zod";
 
 export const CartItemSchema = z.object({
-  variantId: z.string().uuid(),
-  listingId: z.string().uuid(),
+  variantId: z.uuid(),
+  listingId: z.uuid(),
   title: z.string(),
   size: z.string(),
   color: z.string(),
   coinPriceSnapshot: z.number().int().nonnegative(),
   quantity: z.number().int().positive(),
-  imageUrl: z.string().url(),
+  imageUrl: z.url(),
 });
 
 export const CartCoolingOffSchema = z
   .object({
     active: z.boolean(),
-    heldAt: z.string().datetime(),
-    releaseAt: z.string().datetime(),
+    heldAt: z.iso.datetime(),
+    releaseAt: z.iso.datetime(),
     category: z.string(),
     projectedMinor: z.number().int().nonnegative(),
     limitMinor: z.number().int().nonnegative(),
@@ -31,12 +31,12 @@ export const CartResponseSchema = z.object({
 });
 
 export const AddToCartBodySchema = z.object({
-  variantId: z.string().uuid(),
+  variantId: z.uuid(),
   quantity: z.number().int().min(1).max(10).default(1),
 });
 
 export const RemoveFromCartBodySchema = z.object({
-  variantId: z.string().uuid(),
+  variantId: z.uuid(),
 });
 
 export type CartItem = z.infer<typeof CartItemSchema>;

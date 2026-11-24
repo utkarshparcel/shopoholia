@@ -208,7 +208,7 @@ export default function ConsentScreen() {
       const result = await startGmailReconnect({
         accessToken,
         createSource: createIngestionSource,
-        openBrowser: (url) => WebBrowser.openBrowserAsync(url),
+        openAuthSession: (url, redirectUrl) => WebBrowser.openAuthSessionAsync(url, redirectUrl),
       });
       if (result.status === 'cancelled') {
         setError('OAuth was cancelled. Try again when you are ready.');

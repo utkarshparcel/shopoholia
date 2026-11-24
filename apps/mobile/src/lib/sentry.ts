@@ -2,6 +2,8 @@ import * as Sentry from '@sentry/react-native';
 import { sentrySmokeMessage, wornSentryTags } from '@worn/shared';
 
 let initialized = false;
+/** The surface on screen (Play unless the Closet is open); every event is tagged with it. */
+let surface: 'play' | 'closet' = 'play';
 
 /** Env-gated Sentry init — no-op without EXPO_PUBLIC_SENTRY_DSN. */
 export function initSentry(): void {
@@ -16,14 +18,23 @@ export function initSentry(): void {
     tracesSampleRate: 0.2,
     enableAutoSessionTracking: true,
     initialScope: {
-      tags: wornSentryTags({ surface: 'closet' }),
+      tags: wornSentryTags({ surface }),
     },
   });
   initialized = true;
 
   if (process.env.EXPO_PUBLIC_SENTRY_SMOKE === '1') {
-    Sentry.captureMessage(sentrySmokeMessage('closet'), 'info');
+    Sentry.captureMessage(sentrySmokeMessage(surface), 'info');
   }
+}
+
+/**
+ * Tags later events with the surface the user is on. Play is the default (and the only surface
+ * in release builds); the root layout calls this when the Closet surface opens or closes.
+ */
+export function setSentrySurface(next: 'play' | 'closet'): void {
+  surface = next;
+  if (initialized) Sentry.setTag('worn_surface', next);
 }
 
 export function captureException(
@@ -56,10 +67,11 @@ export function captureClosetException(
 /** Preview smoke — returns true when a message was queued. */
 export function captureSmokeEvent(): boolean {
   if (!initialized) return false;
-  Sentry.captureMessage(sentrySmokeMessage('closet'), 'info');
+  Sentry.captureMessage(sentrySmokeMessage(surface), 'info');
   return true;
 }
 
 export function resetSentryForTests(): void {
   initialized = false;
+  surface = 'play';
 }

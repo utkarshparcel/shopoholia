@@ -31,6 +31,7 @@ import { computeNextOccasion, indianFestivalDates } from "../lib/festivals.js";
 import { regionFestivalDates } from "../lib/region-pack-defaults.js";
 import {
   buildGiftDeadlineBoard,
+  listGiftBudgetLocks,
   GIFT_DEADLINE_LEAD_DAYS,
   lockShortlistOfThree,
   setGiftBudgetLock,
@@ -194,7 +195,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["gifts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: UpdateWishlistBodySchema,
         response: { 200: RecipientSchema, 401: ErrorSchema, 404: ErrorSchema },
       },
@@ -220,7 +221,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["gifts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         querystring: z.object({
           budgetCap: z.coerce.number().int().nonnegative().optional(),
         }),
@@ -348,7 +349,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["gifts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         response: {
           200: z.object({
             gift: GiftOrderResponseSchema,
@@ -380,7 +381,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       preHandler: requireAuth,
       schema: {
         tags: ["gifts"],
-        params: z.object({ id: z.string().uuid() }),
+        params: z.object({ id: z.uuid() }),
         body: CreateGroupContributeBodySchema,
         response: {
           200: GroupContributeResponseSchema,
@@ -440,11 +441,11 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
           200: z.object({
             board: z.array(
               z.object({
-                recipientId: z.string().uuid(),
+                recipientId: z.uuid(),
                 recipientName: z.string(),
                 occasion: z.string(),
                 label: z.string(),
-                date: z.string().datetime(),
+                date: z.iso.datetime(),
                 daysUntil: z.number().int(),
                 budgetLockMinor: z.number().int().nullable(),
                 currency: z.string().nullable(),
@@ -482,8 +483,14 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
           });
         }
       }
+      const user = await app.deps.repos.findUserById(userId);
       return {
-        board: buildGiftDeadlineBoard(rows),
+        board: buildGiftDeadlineBoard(
+          rows,
+          await listGiftBudgetLocks(app.deps.repos, userId),
+          new Date(),
+          user?.timeZone ?? "Asia/Kolkata",
+        ),
         reminderLeads: [...GIFT_DEADLINE_LEAD_DAYS],
       };
     },
@@ -496,9 +503,9 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
       schema: {
         tags: ["gifts"],
         body: z.object({
-          recipientId: z.string().uuid(),
+          recipientId: z.uuid(),
           occasion: z.string().min(1),
-          date: z.string().datetime(),
+          date: z.iso.datetime(),
           budgetLockMinor: z.number().int().nonnegative(),
           currency: z.string().optional(),
           shortlistIds: z.array(z.string()).max(3).optional(),
@@ -506,12 +513,12 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         response: {
           200: z.object({
             lock: z.object({
-              recipientId: z.string().uuid(),
+              recipientId: z.uuid(),
               occasion: z.string(),
-              date: z.string().datetime(),
+              date: z.iso.datetime(),
               budgetLockMinor: z.number().int(),
               currency: z.string(),
-              lockedAt: z.string().datetime(),
+              lockedAt: z.iso.datetime(),
               shortlistIds: z.array(z.string()),
             }),
             reminders: z.array(
@@ -538,7 +545,7 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         body.shortlistIds ?? [],
         body.budgetLockMinor,
       );
-      const lock = setGiftBudgetLock({
+      const lock = await setGiftBudgetLock(app.deps.repos, userId, {
         recipientId: body.recipientId,
         occasion: body.occasion,
         date: body.date,
@@ -546,6 +553,10 @@ export const giftsRoutes: FastifyPluginAsyncZod = async (app) => {
         currency: body.currency,
         shortlistIds: short.shortlistIds,
       });
+      if (!lock) {
+        // The recipient was deleted between the check above and the write.
+        return reply.code(404).send({ error: "Not Found", message: "Recipient not found" });
+      }
       const reminders = GIFT_DEADLINE_LEAD_DAYS.map((leadDays) => ({
         leadDays,
         jobId: giftDeadlineReminderJobId(

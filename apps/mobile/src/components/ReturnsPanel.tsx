@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { formatMinor, merchantReturnUrl, sizeMapTipForBrand, REFUND_DESTINATION_LABELS, buildPortalFieldChecklist, needsRefundChase, REFUND_CHASE_STEPS, SIZE_RETURN_REASONS, type RefundDestination } from '@worn/shared';
 import { useRouter } from 'expo-router';
@@ -84,6 +84,30 @@ const RETURN_STATE_LABEL: Record<string, string> = {
 };
 
 /** "Pickup booked" for PICKUP_SCHEDULED; an unknown state reads in lower case, never as an enum. */
+/**
+ * S3-26 — the currency a return's refund is in: its purchase's (return records carry none), else
+ * the user's Closet currency. Refunds were always formatted in the preferred currency.
+ */
+function useReturnCurrency() {
+  const preferred = useClosetPrefsStore((s) => s.preferredCurrency);
+  const { data: purchasesData } = usePurchases();
+  const { data: returnsData } = useReturns();
+  return useMemo(() => {
+    const byPurchase = new Map(
+      (purchasesData?.purchases ?? []).map((row) => [row.purchase.id, row.purchase.currency]),
+    );
+    const byReturn = new Map(
+      (returnsData?.returns ?? []).map((r) => [r.id, r.purchaseId ? byPurchase.get(r.purchaseId) : undefined]),
+    );
+    return {
+      forPurchase: (purchaseId: string | null | undefined): string =>
+        (purchaseId ? byPurchase.get(purchaseId) : undefined) ?? preferred,
+      forReturn: (returnId: string | null | undefined): string =>
+        (returnId ? byReturn.get(returnId) : undefined) ?? preferred,
+    };
+  }, [purchasesData, returnsData, preferred]);
+}
+
 export function returnStateLabel(state: string | null | undefined): string {
   if (!state) return '—';
   return RETURN_STATE_LABEL[state] ?? state.replace(/_/g, ' ').toLowerCase();
@@ -105,7 +129,7 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
   const [expiredOpen, setExpiredOpen] = useState(false);
   const [celebration, setCelebration] = useState<string | null>(null);
   const now = useNow();
-  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const currencyOf = useReturnCurrency();
   const { data: ledger } = useAccountantLedger();
   const { data: etaBoard, isLoading: etaLoading } = useRefundEtaBoard({ all: true });
   const boardRows = etaBoard?.board ?? [];
@@ -176,7 +200,9 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
             {row.ledgerCredited ? (
               <Text style={styles.refundLanded} testID={`eta-landed-${row.returnId}`}>
                 {liveEta}
-                {row.ledgerAmountMinor != null ? ` · ${formatMinor(row.ledgerAmountMinor, currency)}` : ''}
+                {row.ledgerAmountMinor != null
+                  ? ` · ${formatMinor(row.ledgerAmountMinor, currencyOf.forReturn(row.returnId))}`
+                  : ''}
               </Text>
             ) : (
               <Text style={styles.expiry} testID={`eta-live-${row.returnId}`}>
@@ -235,7 +261,8 @@ export function ReturnsPanel({ showLedgerRefunds = false }: ReturnsPanelProps) {
             refundEntries.slice(0, 8).map((e) => (
               <View key={e.id} style={styles.card} testID={`ledger-refund-${e.id}`}>
                 <Text style={styles.merchant}>{e.description}</Text>
-                <Text style={styles.balance}>{formatMinor(e.amountMinor, currency)}</Text>
+                {/* A refund row's refId is its return (ledger rows carry no currency of their own). */}
+                <Text style={styles.balance}>{formatMinor(e.amountMinor, currencyOf.forReturn(e.refId))}</Text>
                 <Text style={styles.expiry}>{formatClosetDateTime(e.createdAt)} · in your ledger</Text>
               </View>
             ))
@@ -268,7 +295,7 @@ function ReturnListCard({
   onView: () => void;
 }) {
   const c = returnCountdown(r.windowDeadline, now);
-  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const currency = useReturnCurrency().forPurchase(r.purchaseId);
   const title = r.itemTitle?.trim() || r.merchant?.trim() || 'Return';
   return (
     <View style={styles.card}>
@@ -335,12 +362,13 @@ function ReturnDetail({
   const [windowReason, setWindowReason] = useState('');
   const [windowError, setWindowError] = useState<string | null>(null);
   const [refundError, setRefundError] = useState<string | null>(null);
-  const currency = useClosetPrefsStore((s) => s.preferredCurrency);
+  const currencyOf = useReturnCurrency();
   const router = useRouter();
 
   if (isLoading) return <Text style={styles.muted}>Loading…</Text>;
   if (!data) return <Text style={styles.muted}>Not found</Text>;
   const r = data.request;
+  const currency = currencyOf.forPurchase(r.purchaseId);
   const c = returnCountdown(r.windowDeadline, now);
   const timeline = returnStatusTimeline(r.state, data.events);
   const portalUrl =
@@ -817,7 +845,7 @@ function ReturnDetail({
       {r.state === 'CONFIRMED' ? (
         <View style={styles.form}>
           <Text style={styles.muted}>
-            When the merchant refunds you, mark where it landed — we post to money_ledger.
+            When the merchant refunds you, mark where it landed.
           </Text>
           <Text style={styles.muted} accessibilityLabel="Refund destination">
             Refund destination
@@ -917,8 +945,12 @@ function InitiateExisting({ id }: { id: string }) {
 }
 
 function InitiateForm() {
-  const initiate = useInitiateReturn();
+  // The button used to watch its own useInitiateReturn instance, which never ran: the returns
+  // were made through useCreateReturnLocal's, so the button never disabled and a double tap
+  // opened every return twice (S3-26). One guard now covers the whole start, every item.
   const create = useCreateReturnLocal();
+  const startingRef = useRef(false);
+  const [starting, setStarting] = useState(false);
   const markDeadlineSetup = useClosetStore((s) => s.markDeadlineSetup);
   const { data: purchasesData } = usePurchases();
   const purchases = purchasesData?.purchases ?? [];
@@ -936,6 +968,9 @@ function InitiateForm() {
   }
 
   async function startReturns() {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
     try {
       if (selectedItemIds.length > 0) {
         for (const itemId of selectedItemIds) {
@@ -949,9 +984,12 @@ function InitiateForm() {
       setPurchaseId('');
       setSelectedItemIds([]);
       markDeadlineSetup();
-      Alert.alert('Return opened', 'Continue on this list — one initiate per item when split.');
+      Alert.alert('Return opened', 'Track it in your returns list.');
     } catch (e) {
       Alert.alert('Failed', closetAlertText(e));
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
     }
   }
 
@@ -998,8 +1036,8 @@ function InitiateForm() {
         ))}
       </View>
       <Button
-        label={initiate.isPending ? 'Starting…' : 'Initiate'}
-        disabled={initiate.isPending || !purchaseId}
+        label={starting ? 'Starting…' : 'Initiate'}
+        disabled={starting || !purchaseId}
         onPress={() => void startReturns()}
       />
     </View>

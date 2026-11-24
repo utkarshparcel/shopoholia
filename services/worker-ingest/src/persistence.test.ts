@@ -7,7 +7,14 @@ import {
 } from "./persistence.js";
 import type { ParsedPurchase } from "./parsers/types.js";
 
-function mockDb(opts: { matchedPurchaseId?: string | null; failItems?: boolean } = {}) {
+function mockDb(
+  opts: {
+    matchedPurchaseId?: string | null;
+    failItems?: boolean;
+    /** The (user, merchant, order_ref) already has this purchase: the insert conflicts. */
+    existingPurchase?: { id: string; deliveryStatus: string };
+  } = {},
+) {
   const inserts: Array<{ values: unknown }> = [];
   const updates: Array<{ values: unknown }> = [];
   const committed = { inserts, updates };
@@ -15,8 +22,14 @@ function mockDb(opts: { matchedPurchaseId?: string | null; failItems?: boolean }
     insert: () => ({
       values: (v: unknown) => {
         if (opts.failItems && Array.isArray(v)) return Promise.reject(new Error("items insert failed"));
-        staged.inserts.push({ values: v });
-        return Promise.resolve();
+        const conflict = !Array.isArray(v) && opts.existingPurchase != null;
+        if (!conflict) staged.inserts.push({ values: v });
+        const done = Promise.resolve();
+        return Object.assign(done, {
+          onConflictDoNothing: () => ({
+            returning: () => Promise.resolve(conflict ? [] : [{ id: (v as { id: string }).id }]),
+          }),
+        });
       },
     }),
     update: () => ({
@@ -31,6 +44,7 @@ function mockDb(opts: { matchedPurchaseId?: string | null; failItems?: boolean }
       from: () => ({
         where: () => ({
           for: () => Promise.resolve([{ matchedPurchaseId: opts.matchedPurchaseId ?? null }]),
+          limit: () => Promise.resolve(opts.existingPurchase ? [opts.existingPurchase] : []),
         }),
       }),
     }),
@@ -240,6 +254,33 @@ describe("createDbPersister", () => {
     });
     expect(id).toBe("existing-purchase");
     expect(db.inserts).toHaveLength(0);
+    expect(db.updates).toHaveLength(0);
+  });
+
+  it("a second email about the same order returns that purchase instead of failing", async () => {
+    const db = mockDb({ existingPurchase: { id: "placed-purchase", deliveryStatus: "ORDERED" } });
+    const persister = createDbPersister(db);
+    const id = await persister.insertPurchase(
+      { ...basePurchase, deliveryStatus: "SHIPPED", trackingCode: "AWB123" },
+      { sourceKind: "EMAIL", rawDocId: "doc-2", userId: "user-1" },
+    );
+    expect(id).toBe("placed-purchase");
+    // No second purchase and no duplicate lines.
+    expect(db.inserts).toHaveLength(0);
+    // Delivery moves on, and the document links to the existing purchase.
+    expect(db.updates.map((u) => u.values)).toEqual([
+      expect.objectContaining({ deliveryStatus: "SHIPPED", trackingCode: "AWB123" }),
+      expect.objectContaining({ status: "MATCHED", matchedPurchaseId: "placed-purchase" }),
+    ]);
+  });
+
+  it("an older email about a delivered order doesn't move its status back", async () => {
+    const db = mockDb({ existingPurchase: { id: "p1", deliveryStatus: "DELIVERED" } });
+    const id = await createDbPersister(db).insertPurchase(
+      { ...basePurchase, deliveryStatus: "SHIPPED" },
+      { sourceKind: "EMAIL", userId: "user-1" },
+    );
+    expect(id).toBe("p1");
     expect(db.updates).toHaveLength(0);
   });
 

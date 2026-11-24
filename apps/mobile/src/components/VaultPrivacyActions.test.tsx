@@ -27,6 +27,11 @@ describe('VaultPrivacyActions', () => {
     render(<VaultPrivacyActions />);
     fireEvent.click(screen.getByText('Delete my account'));
     expect(screen.getByText('Delete your account?')).toBeTruthy();
+    // The same list as Worn Play's Delete account, plus what Closet holds.
+    const message = screen.getByText(/permanently deletes your WORN account/).textContent ?? '';
+    for (const what of [/photos you uploaded/, /coins/, /can’t be\s+refunded/, /Vault/, /can’t be undone/]) {
+      expect(message).toMatch(what);
+    }
     await act(async () => {
       fireEvent.click(within(screen.getByTestId('prompt-sheet')).getByText('Cancel'));
     });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../index.js";
 import { privacyErase } from "../jobs/privacy-erase.js";
 import { privacyExport } from "../jobs/privacy-export.js";
@@ -44,7 +44,7 @@ describe("vault", () => {
     await app.close();
   });
 
-  /** DELETE /vault answers 202 and the privacy-erase job does the work; run it here. */
+  /** DELETE /vault erases the account before it answers (no worker needed). */
   async function deleteVault() {
     const del = await app.inject({
       method: "DELETE",
@@ -53,7 +53,8 @@ describe("vault", () => {
     });
     expect(del.statusCode).toBe(202);
     const body = del.json() as { id: string; kind: string; status: string };
-    expect(body).toMatchObject({ kind: "ERASE", status: "PENDING" });
+    expect(body).toMatchObject({ kind: "ERASE", status: "DONE" });
+    // The job (the retry path) finds the request done and leaves it alone.
     await privacyErase({ requestId: body.id }, { repos, storage, log: app.log });
     return body.id;
   }
@@ -632,35 +633,126 @@ describe("vault", () => {
       totalMinor: 100,
       ocrJson: {},
     });
+    // Storage is down for the first delete, which DELETE /vault makes itself.
+    const trackedDelete = storage.delete.bind(storage);
+    let failOnce = true;
+    storage.delete = async (key) => {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("R2 down");
+      }
+      await trackedDelete(key);
+    };
     const del = await app.inject({
       method: "DELETE",
       url: "/vault",
       headers: { authorization: `Bearer ${token}` },
     });
+    // The account is gone already; only the stored object waits for the retry.
+    expect(del.statusCode).toBe(202);
+    expect(del.json()).toMatchObject({ kind: "ERASE", status: "RUNNING" });
     const requestId = (del.json() as { id: string }).id;
-    let failOnce = true;
-    const flaky: StorageClient = {
-      ...storage,
-      async delete(key) {
-        if (failOnce) {
-          failOnce = false;
-          throw new Error("R2 down");
-        }
-        await storage.delete(key);
-      },
-    };
-    await expect(
-      privacyErase({ requestId }, { repos, storage: flaky, log: app.log }),
-    ).rejects.toThrow(/not deleted/);
     const mid = await repos.getPrivacyRequest(requestId);
     expect(mid!.status).toBe("RUNNING");
     expect(mid!.storageKeys).toEqual(["receipts/user/a.jpg"]);
     expect(await repos.findUserById(userId)).toBeNull();
 
-    await privacyErase({ requestId }, { repos, storage: flaky, log: app.log });
-    await privacyErase({ requestId }, { repos, storage: flaky, log: app.log });
+    await privacyErase({ requestId }, { repos, storage, log: app.log });
+    await privacyErase({ requestId }, { repos, storage, log: app.log });
     const done = await repos.getPrivacyRequest(requestId);
     expect(done).toMatchObject({ status: "DONE", userId: null, storageKeys: [] });
     expect(storage.deletedKeys.filter((k) => k === "receipts/user/a.jpg")).toHaveLength(1);
+  });
+
+  it("deletes the account before answering, so the app's session can't be renewed", async () => {
+    const phone = "919999123477";
+    await app.inject({ method: "POST", url: "/auth/otp", payload: { phone } });
+    const verify = await app.inject({
+      method: "POST",
+      url: "/auth/verify",
+      payload: { phone, otp: "123456" },
+    });
+    const tokens = verify.json() as { accessToken: string; refreshToken: string };
+    const session = {
+      ...tokens,
+      userId: (app.jwt.verify(tokens.accessToken) as { sub: string }).sub,
+    };
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/vault",
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(del.statusCode).toBe(202);
+    expect(del.json()).toMatchObject({ kind: "ERASE", status: "DONE" });
+    expect(await repos.findUserById(session.userId)).toBeNull();
+    const refresh = await app.inject({
+      method: "POST",
+      url: "/auth/refresh",
+      payload: { refreshToken: session.refreshToken },
+    });
+    expect(refresh.statusCode).toBe(401);
+    // The other account is untouched.
+    expect(await repos.findUserById(userId)).not.toBeNull();
+  });
+
+  describe("when the queue can't take the retry", () => {
+    beforeEach(() => {
+      // Production without REDIS_URL: every enqueue throws QueueUnavailableError.
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("REDIS_URL", "");
+      vi.stubEnv("PRIVACY_HMAC_SECRET", "test-privacy-secret-0123456789");
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("answers 503 and keeps the account when nothing could be deleted", async () => {
+      const deleteAllUserData = repos.deleteAllUserData;
+      repos.deleteAllUserData = async () => {
+        throw new Error("database down");
+      };
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/vault",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(del.statusCode).toBe(503);
+      expect(del.json().message).toMatch(/couldn’t be deleted right now/);
+      expect(await repos.findUserById(userId)).not.toBeNull();
+
+      // Trying again reuses the open request and finishes the job.
+      repos.deleteAllUserData = deleteAllUserData;
+      const again = await app.inject({
+        method: "DELETE",
+        url: "/vault",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(again.statusCode).toBe(202);
+      expect(again.json()).toMatchObject({ status: "DONE" });
+      expect(await repos.findUserById(userId)).toBeNull();
+    });
+
+    it("still answers 202 once the account is gone, leaving the failed objects on the request", async () => {
+      await repos.createReceipt({
+        userId,
+        imageKey: "receipts/user/b.jpg",
+        merchant: "Mock",
+        purchasedAt: new Date(),
+        totalMinor: 100,
+        ocrJson: {},
+      });
+      storage.delete = async () => {
+        throw new Error("R2 down");
+      };
+      const del = await app.inject({
+        method: "DELETE",
+        url: "/vault",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(del.statusCode).toBe(202);
+      expect(await repos.findUserById(userId)).toBeNull();
+      const request = await repos.getPrivacyRequest((del.json() as { id: string }).id);
+      expect(request).toMatchObject({ status: "RUNNING", storageKeys: ["receipts/user/b.jpg"] });
+    });
   });
 });

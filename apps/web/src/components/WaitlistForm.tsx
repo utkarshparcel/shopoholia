@@ -64,8 +64,10 @@ export function WaitlistForm({ list }: { list: List }) {
     if (!phoneOk(phone)) return reject('phone', 'Enter a phone number with its country code, like +91 98765 43210.');
     setState({ kind: 'sending' });
     try {
+      // A stalled request ends in the error message (with the email fallback), not "Adding you…" forever.
       const res = await fetch('/api/join', {
         method: 'POST',
+        signal: AbortSignal.timeout(15000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,

@@ -12,14 +12,8 @@ const baseEnvSchema = z.object({
 
 /** API + worker services */
 export const serverEnvSchema = baseEnvSchema.extend({
-  DATABASE_URL: z
-    .string()
-    .url()
-    .describe("PostgreSQL connection string"),
-  REDIS_URL: z
-    .string()
-    .url()
-    .describe("Redis connection string (BullMQ + cache)"),
+  DATABASE_URL: z.url().describe("PostgreSQL connection string"),
+  REDIS_URL: z.url().describe("Redis connection string (BullMQ + cache)"),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   API_PORT: z.coerce.number().int().positive().default(3000),
@@ -30,16 +24,16 @@ export const serverEnvSchema = baseEnvSchema.extend({
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET_NAME: z.string().optional(),
-  R2_PUBLIC_URL: z.string().url().optional(),
+  R2_PUBLIC_URL: z.url().optional(),
   // OTP providers (optional in local dev)
   MSG91_AUTH_KEY: z.string().optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),
   // Render providers (optional until Week 2 spike)
   FASHN_API_KEY: z.string().optional(),
-  COMFYUI_BASE_URL: z.string().url().optional(),
+  COMFYUI_BASE_URL: z.url().optional(),
   // Observability (optional — no-op without DSN)
-  SENTRY_DSN: z.string().url().optional(),
+  SENTRY_DSN: z.url().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

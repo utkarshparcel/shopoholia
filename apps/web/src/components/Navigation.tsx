@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { SectionsMenu } from './SectionsMenu';
 import { SiteSwitch } from './SiteSwitch';
+import { APP_LIVE, GET_APP_LABEL } from '@/lib/site';
 
 /* How far the page has to move in one direction before the header reacts (stops jitter) */
 const SCROLL_THRESHOLD = 8;
@@ -125,8 +126,8 @@ export function Navigation() {
             <SectionsMenu items={navLinks} label="Main navigation" />
             <SiteSwitch current="play" />
             <Link href="#download" className="btn-primary btn-md !min-h-[44px] !px-4 !py-2 text-caption sm:!min-h-[40px]">
-              <span className="sm:hidden">Join</span>
-              <span className="hidden sm:inline">Get early access</span>
+              <span className="sm:hidden">{APP_LIVE ? 'Get' : 'Join'}</span>
+              <span className="hidden sm:inline">{GET_APP_LABEL}</span>
             </Link>
           </div>
         </div>

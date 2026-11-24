@@ -41,11 +41,21 @@ function jobIds(job: object): Record<string, string> {
   return ids;
 }
 
+/** Renders run in the API process; FASHN calls take minutes, so only a few run at once. */
+export const DEFAULT_RENDER_CONCURRENCY = 3;
+
+/** Waits before each new attempt of a delivery step that failed (a passing database error…). */
+export const ORDER_STEP_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000, 2 * 60_000, 10 * 60_000];
+
 type QueueOptions = {
   autoProcess?: boolean;
   repos: Repositories;
   /** Defaults to console.error. */
   onError?: JobErrorReporter;
+  /** How many render jobs run at once. Defaults to DEFAULT_RENDER_CONCURRENCY. */
+  renderConcurrency?: number;
+  /** Defaults to ORDER_STEP_RETRY_DELAYS_MS; its length is the number of retries. */
+  orderStepRetryDelaysMs?: readonly number[];
 };
 
 export function createMemoryJobQueue(
@@ -70,17 +80,24 @@ export function createMemoryJobQueue(
   // that come due together (e.g. overdue ones after a restart) can't race each other.
   const orderChains = new Map<string, Promise<void>>();
   const onError = options.onError ?? logJobError;
+  const renderConcurrency = Math.max(1, options.renderConcurrency ?? DEFAULT_RENDER_CONCURRENCY);
+  const orderStepRetryDelaysMs = options.orderStepRetryDelaysMs ?? ORDER_STEP_RETRY_DELAYS_MS;
 
-  /** Runs a job nobody awaits: a failure goes to the reporter, and the returned promise never rejects. */
+  /**
+   * Runs a job nobody awaits: a failure goes to the reporter, and the returned promise never
+   * rejects. Resolves to whether the job succeeded.
+   */
   const runJob = async <T extends object>(kind: JobKind, handler: JobHandler<T>, job: T) => {
     try {
       await handler(job);
+      return true;
     } catch (error) {
       try {
         onError(error, { kind, ids: jobIds(job) });
       } catch {
         // A failing reporter must not change how the queue runs.
       }
+      return false;
     }
   };
 
@@ -92,11 +109,21 @@ export function createMemoryJobQueue(
     }
   };
 
-  const runOrderTransition = (job: OrderTransitionJob) => {
+  /**
+   * A failed step is tried again after a while, a bounded number of times, so a passing error
+   * doesn't leave the order stuck in its state (the step handler also catches up missed steps).
+   */
+  const runOrderTransition = (job: OrderTransitionJob, attempt = 0): Promise<void> => {
     const previous = orderChains.get(job.orderId) ?? Promise.resolve();
-    const current = previous.then(() =>
-      runJob("orderTransition", handlers.orderTransition, job),
-    );
+    const current = previous.then(async () => {
+      const ok = await runJob("orderTransition", handlers.orderTransition, job);
+      const delay = orderStepRetryDelaysMs[attempt];
+      if (!ok && delay !== undefined) {
+        setTimeout(() => {
+          void runOrderTransition(job, attempt + 1);
+        }, delay);
+      }
+    });
     orderChains.set(job.orderId, current);
     void current.then(() => {
       if (orderChains.get(job.orderId) === current) orderChains.delete(job.orderId);
@@ -120,8 +147,24 @@ export function createMemoryJobQueue(
     }, delayMs);
   };
 
-  const runRender = async (job: RenderProcessingJob) => {
-    await handlers.render(job);
+  // Render jobs: at most `renderConcurrency` at once, and one job per render. A render queued
+  // again while its job runs (a retry) runs once more after it.
+  const renderActive = new Set<string>();
+  const renderAgain = new Map<string, RenderProcessingJob>();
+  const pumpRenders = () => {
+    while (renderActive.size < renderConcurrency && renderPending.length > 0) {
+      const job = renderPending.shift()!;
+      renderActive.add(job.renderId);
+      void runJob("render", handlers.render, job).then(() => {
+        renderActive.delete(job.renderId);
+        const again = renderAgain.get(job.renderId);
+        if (again) {
+          renderAgain.delete(job.renderId);
+          renderPending.push(again);
+        }
+        pumpRenders();
+      });
+    }
   };
 
   const queue: JobQueue = {
@@ -144,20 +187,21 @@ export function createMemoryJobQueue(
     },
     async enqueueDeliveredRender(job) {
       if (autoProcess) {
-        schedule(() => runJob("deliveredRender", handlers.deliveredRender, job));
+        schedule(async () => {
+          await runJob("deliveredRender", handlers.deliveredRender, job);
+        });
         return;
       }
       await handlers.deliveredRender(job);
     },
     async enqueueRender(job) {
-      renderPending.push(job);
-      if (autoProcess) {
-        schedule(async () => {
-          const next = renderPending.shift();
-          if (next) await runJob("render", runRender, next);
-        });
+      if (renderPending.some((pending) => pending.renderId === job.renderId)) return;
+      if (renderActive.has(job.renderId)) {
+        renderAgain.set(job.renderId, job);
         return;
       }
+      renderPending.push(job);
+      schedule(async () => pumpRenders());
     },
     async flushOrderTransitions() {
       for (const entry of orderPending) {
@@ -168,10 +212,11 @@ export function createMemoryJobQueue(
       }
       orderPending.length = 0;
     },
+    /** Runs every queued render now, one at a time (tests, with autoProcess off). */
     async flushRenderJobs() {
       while (renderPending.length > 0) {
         const job = renderPending.shift()!;
-        await runRender(job);
+        await runJob("render", handlers.render, job);
       }
     },
     async drain() {

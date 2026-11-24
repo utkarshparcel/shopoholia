@@ -82,18 +82,15 @@ export const VAULT_EXPIRY_HREF = {
   params: { focus: 'expiry' as const },
 };
 
-/** W017 — next Saturday 10:00 UTC for “use this weekend” reminders. */
-export function nextSaturdayMorning(now: Date = new Date(), hourUtc = 10): Date {
-  const d = new Date(now.getTime());
-  const day = d.getUTCDay(); // 0 Sun … 6 Sat
-  let add = (6 - day + 7) % 7;
-  if (add === 0) {
-    // Already Saturday — if before hour, keep today; else next week.
-    if (d.getUTCHours() >= hourUtc) add = 7;
-  }
-  d.setUTCDate(d.getUTCDate() + add);
-  d.setUTCHours(hourUtc, 0, 0, 0);
-  return d;
+/**
+ * W017 — next Saturday at `hour` (10:00) on the user's own clock, for “use this weekend”
+ * reminders. It was 10:00 UTC: 15:30 in India and 05:00 in New York (S2-10).
+ */
+export function nextSaturdayMorning(now: Date = new Date(), hour = 10): Date {
+  let add = (6 - now.getDay() + 7) % 7; // 0 Sun … 6 Sat
+  // Already Saturday — if before the hour, keep today; else next week.
+  if (add === 0 && now.getHours() >= hour) add = 7;
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + add, hour, 0, 0, 0);
 }
 
 function toGoogleCalStamp(d: Date): string {
@@ -167,6 +164,22 @@ export function multiCardStackA11yLabel(
   const total = formatMinor(Math.max(0, totalMinor), currency);
   const n = Math.max(0, accountCount);
   return `${n} credits stacked · ${total} found money`;
+}
+
+/**
+ * S3-28 — the stack's label with one total per currency (₹1,200 + $50), never a sum of
+ * balances in different currencies.
+ */
+export function multiCardStackA11yLabelForAccounts(
+  accounts: ReadonlyArray<{ balanceCacheMinor: number; currency?: string | null }>,
+): string {
+  const totals = new Map<string, number>();
+  for (const a of accounts) {
+    const code = a.currency || 'INR';
+    totals.set(code, (totals.get(code) ?? 0) + Math.max(0, a.balanceCacheMinor));
+  }
+  const parts = [...totals].map(([code, minor]) => formatMinor(minor, code));
+  return `${accounts.length} credits stacked · ${parts.join(' + ') || formatMinor(0, 'INR')} found money`;
 }
 
 /** Top layers for the visual stack (soonest expiry first, then balance). */

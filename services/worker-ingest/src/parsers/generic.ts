@@ -1,4 +1,5 @@
 import { detectCreditSignal } from "./credit-detect.js";
+import { extractOrderRef } from "./order-ref.js";
 import { detectDeliveryFromText } from "@worn/shared";
 import type { MerchantParser, ParsedPurchase, RawEmailMessage } from "./types.js";
 
@@ -172,10 +173,7 @@ function parseItems(text: string, totalMinor: number, currency: string): ParsedP
 }
 
 function findOrderRef(text: string): string | undefined {
-  const m = text.match(
-    /(?:order(?:\s*id)?|order\s*#|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,})/i,
-  );
-  return m?.[1];
+  return extractOrderRef(text, { allowBareHash: true });
 }
 
 function domainFrom(from: string): string {

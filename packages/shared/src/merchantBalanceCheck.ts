@@ -6,7 +6,7 @@
  * to manually re-check on a cadence.
  */
 
-import { normalizeMerchantKey } from "./merchantDeepLink.js";
+import { merchantKeyMatches, normalizeMerchantKey } from "./merchantDeepLink.js";
 
 /** Default: nudge re-check 30 days after last check / update. */
 export const BALANCE_RECHECK_INTERVAL_MS = 30 * 86_400_000;
@@ -49,18 +49,15 @@ export function merchantBalanceCapability(
   merchant: string,
 ): MerchantBalanceCapability {
   const key = normalizeMerchantKey(merchant);
-  const apiCapable = key.length > 0 && API_CAPABLE_MERCHANTS.has(key)
-    ? true
-    : [...API_CAPABLE_MERCHANTS].some(
-        (known) => key.startsWith(known) || known.startsWith(key),
-      );
+  // An empty key (a label of only symbols) matches no merchant: manual, no URL.
+  const apiCapable = [...API_CAPABLE_MERCHANTS].some((known) => merchantKeyMatches(key, known));
 
   let checkUrl: string | null = null;
   if (key && MANUAL_CHECK_URL[key]) {
     checkUrl = MANUAL_CHECK_URL[key]!;
   } else if (key) {
     for (const [known, url] of Object.entries(MANUAL_CHECK_URL)) {
-      if (key.startsWith(known) || known.startsWith(key)) {
+      if (merchantKeyMatches(key, known)) {
         checkUrl = url;
         break;
       }

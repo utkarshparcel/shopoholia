@@ -1,15 +1,24 @@
 import { useIsFocused, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, FlatList, Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PRIVACY_EMAIL, type OrderState } from '@worn/shared';
 
-import { Button, CoinWallet } from '@/src/components/ui';
+import { Button, CoinWallet, LoadError } from '@/src/components/ui';
 import { fetchOrders } from '@/src/api/client';
+import {
+  DELETE_ACCOUNT_MESSAGE,
+  DELETE_ACCOUNT_TITLE,
+  useDeleteAccount,
+} from '@/src/hooks/account';
 import { useAvatar, useDeletePhotos } from '@/src/hooks/avatar';
 import { orderKeys, useCoinBalance } from '@/src/hooks/orders';
 import { userIdFromAccessToken } from '@/src/lib/access-token';
 import { confirmAsync } from '@/src/lib/confirm';
+import { FEATURE_CASHBACK } from '@/src/lib/features';
 import { orderBadgeLabel, orderHref, profileOrderList, tierLabel } from '@/src/lib/order-tracking';
+import { getPrivacyPolicyUrl } from '@/src/lib/privacyLinks';
 import { signOut } from '@/src/lib/signOut';
 import { useSessionStore } from '@/src/stores/session';
 import {
@@ -33,15 +42,20 @@ import {
   text,
   textMuted,
   wornGold,
+  wornInk,
   wornPaper,
   trackingTight,
 } from '@/src/theme/tokens';
 
+/** States an order doesn't leave by itself: everything else is still on its way. */
+const SETTLED_ORDER_STATES: readonly OrderState[] = ['REVEAL_READY', 'CANCELLED', 'FAILED'];
+
+// Cashback is listed only while FEATURE_CASHBACK is on (no partner attributes a purchase yet).
 const MENU = [
   { label: 'Get more coins', href: '/coins/buy' },
   { label: 'Daily streak', href: '/streaks' },
   { label: 'Refer & earn', href: '/referral' },
-  { label: 'Cashback', href: '/cashback' },
+  ...(FEATURE_CASHBACK ? [{ label: 'Cashback', href: '/cashback' }] : []),
   { label: 'Style quiz', href: '/style-quiz' },
   { label: 'Edit avatar', href: '/(onboarding)/avatar' },
 ] as const;
@@ -68,12 +82,36 @@ export default function ProfileScreen() {
     if (ok) deletePhotos.mutate();
   };
 
-  const { data: ordersData } = useQuery({
+  // Account deletion has to be in the app itself (App Store 5.1.1(v), Google Play), with or
+  // without Closet.
+  const deleteAccount = useDeleteAccount();
+  const confirmDeleteAccount = async () => {
+    const ok = await confirmAsync(DELETE_ACCOUNT_TITLE, DELETE_ACCOUNT_MESSAGE, {
+      confirmLabel: 'Delete account',
+      destructive: true,
+    });
+    if (ok) deleteAccount.mutate();
+  };
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const openPrivacyPolicy = () => {
+    const url = getPrivacyPolicyUrl();
+    setPrivacyError(null);
+    Linking.openURL(url).catch(() => setPrivacyError(`Couldn’t open ${url}`));
+  };
+
+  const ordersQuery = useQuery({
     queryKey: orderKeys.list(userId),
     queryFn: () => fetchOrders(useSessionStore.getState().accessToken ?? ''),
-    enabled: signedIn,
+    // Orders move on by themselves (the delivery timers run on the server) and this tab stays
+    // mounted, so a cached list kept a delivered haul "in transit": refetch whenever the tab is
+    // shown again, and every 15s while it is shown and something is still on its way.
+    enabled: signedIn && isFocused,
+    staleTime: 0,
+    refetchInterval: (query) =>
+      query.state.data?.orders.some((o) => !SETTLED_ORDER_STATES.includes(o.state)) ? 15_000 : false,
   });
 
+  const ordersData = ordersQuery.data;
   const orders = ordersData?.orders ?? [];
   // Every order is listed so each ready haul can be opened; the banner points at the newest one.
   const { newestReady: revealReady, list: listOrders } = profileOrderList(orders);
@@ -134,7 +172,7 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>
-                {orders.filter((o) => !['REVEAL_READY', 'CANCELLED', 'FAILED'].includes(o.state)).length}
+                {orders.filter((o) => !SETTLED_ORDER_STATES.includes(o.state)).length}
               </Text>
               <Text style={styles.statLabel}>In transit</Text>
             </View>
@@ -146,6 +184,16 @@ export default function ProfileScreen() {
         </View>
       }
       ListEmptyComponent={
+        // A failed load isn't "no orders": say so and offer a retry.
+        !ordersData && ordersQuery.isError ? (
+          <LoadError
+            error={ordersQuery.error}
+            onRetry={() => void ordersQuery.refetch()}
+            title="Couldn’t load your orders"
+          />
+        ) : !ordersData ? (
+          <ActivityIndicator color={wornInk} style={styles.ordersLoader} />
+        ) : (
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No orders yet</Text>
           <Text style={styles.emptyBody}>
@@ -158,6 +206,7 @@ export default function ProfileScreen() {
             block
           />
         </View>
+        )
       }
       renderItem={({ item }) => (
         <Pressable
@@ -212,12 +261,38 @@ export default function ProfileScreen() {
           <Pressable
             accessibilityRole="button"
             // The root layout's auth gate goes to the login screen once the session is cleared.
-            onPress={signOut}
+            onPress={() => void signOut()}
             style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.menuItemText}>Sign out</Text>
             <Text style={styles.menuItemArrow}>→</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="link"
+            onPress={openPrivacyPolicy}
+            style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.menuItemText}>Privacy policy</Text>
+            <Text style={styles.menuItemArrow}>→</Text>
+          </Pressable>
+          {privacyError ? <Text style={[styles.photosNote, styles.danger]}>{privacyError}</Text> : null}
+          <Pressable
+            accessibilityRole="button"
+            disabled={deleteAccount.isPending}
+            onPress={() => void confirmDeleteAccount()}
+            style={({ pressed }) => [styles.menuItem, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={[styles.menuItemText, styles.danger]}>
+              {deleteAccount.isPending ? 'Deleting your account…' : 'Delete account'}
+            </Text>
+            <Text style={styles.menuItemArrow}>→</Text>
+          </Pressable>
+          {deleteAccount.isError ? (
+            <Text style={[styles.photosNote, styles.danger]}>
+              Couldn’t delete your account. {deleteAccount.error.message} If this keeps happening,
+              email {PRIVACY_EMAIL}.
+            </Text>
+          ) : null}
           <View style={styles.divider} />
           <Text style={styles.footerNote}>WORN · The shopping arc is the product</Text>
         </View>
@@ -232,6 +307,9 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  ordersLoader: {
+    marginVertical: space6,
+  },
   avatarCircle: {
     alignItems: 'center',
     backgroundColor: wornGold,

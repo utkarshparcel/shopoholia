@@ -1,11 +1,13 @@
 import type {
   DeliveryTier,
+  DispositionPickupBooking,
   OrderState,
   PageResponse,
   RenderScenario,
   RenderStatus,
   RevealRating,
   StateEta,
+  SettlementRow,
   UserPrefs,
   UserPrefsPatch,
 } from "@worn/shared";
@@ -18,6 +20,8 @@ export type UserRecord = {
   phone: string | null;
   email: string | null;
   googleSub: string | null;
+  /** Sign in with Apple user id. */
+  appleSub: string | null;
   displayName: string | null;
   avatarStatus: AvatarStatus;
   coinBalanceCache: number;
@@ -164,6 +168,12 @@ export type PurchaseRenderInput = {
   idempotencyKey?: string;
 };
 
+export type FailRenderInput = {
+  renderId: string;
+  /** The coins to give back to the render's buyer; null for a free render. */
+  refund: { userId: string; coins: number } | null;
+};
+
 export type PurchaseRenderResult =
   /** The render this call created and charged `coinsSpent` for. */
   | { status: "created"; render: RenderRecord; coinsSpent: number; balanceAfter: number }
@@ -294,6 +304,12 @@ export type TryonPreviewRecord = {
   retryAfter?: Date | null;
   provider: string;
   costMicros: number;
+  /** Who holds the job's lease (the render agent, or the overflow renderer); null when unleased. */
+  leaseOwner?: string | null;
+  /** When the lease lapses. */
+  leaseExpiresAt?: Date | null;
+  /** Leases taken so far. */
+  attempts?: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -372,13 +388,60 @@ export type RenderRecord = {
   combinedItemIds: string[] | null;
   status: RenderStatus;
   costMicros: number;
+  /** Who holds the job's lease (the render agent, or the overflow renderer); null when unleased. */
+  leaseOwner?: string | null;
+  /** When the lease lapses. */
+  leaseExpiresAt?: Date | null;
+  /** Leases taken so far. */
+  attempts?: number;
   createdAt: Date;
   updatedAt: Date;
 };
 
 /** A render to create; `combinedItemIds` defaults to null (one item's render). */
-export type NewRenderRecord = Omit<RenderRecord, "id" | "createdAt" | "updatedAt" | "combinedItemIds"> & {
+export type NewRenderRecord = Omit<
+  RenderRecord,
+  "id" | "createdAt" | "updatedAt" | "combinedItemIds" | "leaseOwner" | "leaseExpiresAt" | "attempts"
+> & {
   combinedItemIds?: string[] | null;
+};
+
+/**
+ * A job the render agent (or the overflow renderer) can lease: a reveal render, or a Play
+ * listing's try-on preview. A QUEUED render or an unleased PROCESSING preview is waiting.
+ */
+export type AgentJobLease =
+  | {
+      kind: "render";
+      id: string;
+      attempts: number;
+      leaseOwner: string | null;
+      leaseExpiresAt: Date | null;
+      createdAt: Date;
+      render: RenderRecord;
+      orderId: string;
+    }
+  | {
+      kind: "tryon";
+      id: string;
+      attempts: number;
+      leaseOwner: string | null;
+      leaseExpiresAt: Date | null;
+      createdAt: Date;
+      preview: TryonPreviewRecord;
+    };
+
+export type AgentJobKind = AgentJobLease["kind"];
+
+export type LeaseAgentJobsInput = {
+  owner: string;
+  max: number;
+  now: Date;
+  leaseExpiresAt: Date;
+  /** Only jobs waiting since this time or earlier (by `updatedAt`). */
+  queuedBefore?: Date;
+  /** Only these job ids. */
+  ids?: string[];
 };
 
 export type PushEventPayload = {
@@ -746,6 +809,12 @@ export type CreateOrderInput = {
     coinPriceSnapshot: number;
     quantity: number;
   }>;
+  /**
+   * placeOrder only: the cart lines the order is made from. They are removed in the same step as
+   * the debit; when any is gone or its quantity changed (a concurrent checkout of the same cart
+   * already took it) nothing is placed and CartChangedError is thrown.
+   */
+  cartItems?: Array<{ id: string; quantity: number }>;
 };
 
 export type PlaceOrderResult = {
@@ -774,6 +843,7 @@ export interface Repositories {
   findUserByPhone(phone: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
   findUserByGoogleSub(googleSub: string): Promise<UserRecord | null>;
+  findUserByAppleSub(appleSub: string): Promise<UserRecord | null>;
   findUserByEmail(email: string): Promise<UserRecord | null>;
   findUserByReferralCode(code: string): Promise<UserRecord | null>;
   createUser(phone: string): Promise<{ user: UserRecord; isNew: boolean }>;
@@ -782,7 +852,24 @@ export interface Repositories {
     email: string;
     displayName?: string | null;
   }): Promise<{ user: UserRecord; isNew: boolean }>;
+  /**
+   * Sign in with Apple: the user with this Apple id, else the one with this (Apple-verified) email,
+   * which gets the Apple id linked, else a new user. `email` is null when the user shared none.
+   */
+  findOrCreateAppleUser(input: {
+    appleSub: string;
+    email: string | null;
+    displayName?: string | null;
+  }): Promise<{ user: UserRecord; isNew: boolean }>;
   updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord>;
+  /**
+   * `users.apple_refresh_token_enc`: the Sign in with Apple refresh token, already encrypted
+   * (@worn/shared/token-crypto). Null clears it. A no-op for an unknown user. Kept off UserRecord
+   * so it never reaches a response or an export; deleteAllUserData deletes it with the user.
+   */
+  setAppleRefreshToken(userId: string, encrypted: string | null): Promise<void>;
+  /** The stored encrypted Apple refresh token, or null. */
+  getAppleRefreshToken(userId: string): Promise<string | null>;
   /** Writes only `users.time_zone`; returns it, or null when the user doesn't exist. Validate first. */
   setUserTimeZone(userId: string, timeZone: string): Promise<string | null>;
   /** `users.prefs`, or null when the user doesn't exist. */
@@ -933,7 +1020,10 @@ export interface Repositories {
     listings: ListingRecord[],
     variants: ListingVariantRecord[],
   ): Promise<void>;
-  /** Wipe catalog listings/variants (and cascaded cart/tryon rows). Dev/reseed only. */
+  /**
+   * Dev reseed only: empties carts and removes the catalog. Listings an order references are
+   * archived (hidden from the feed) rather than deleted, so no order line or render is lost.
+   */
   clearCatalog(): Promise<void>;
   listListings(input: ListListingsInput): Promise<ListListingsResult>;
   /** Categories of ACTIVE listings with their counts, largest first (ties by name). */
@@ -1067,6 +1157,51 @@ export interface Repositories {
    * and charges nothing. `not_found` when `render.orderItemId` isn't a line of the user's order.
    */
   purchaseRender(input: PurchaseRenderInput): Promise<PurchaseRenderResult>;
+  /**
+   * Marks a render FAILED and, with `refund`, credits the coins paid for it back as one REFUND
+   * entry (ref `render_failed`/render id), in one step under the user's coin lock. A render is
+   * refunded once however often this runs; `coinsRefunded` is 0 on a repeat.
+   */
+  failRender(input: FailRenderInput): Promise<{ render: RenderRecord | null; coinsRefunded: number }>;
+  /**
+   * Puts the user's order's FAILED free renders among `renderIds` back to QUEUED and returns the
+   * ones this call flipped, so parallel retries of one render queue it once.
+   */
+  requeueFailedFreeRenders(input: {
+    userId: string;
+    orderId: string;
+    renderIds: string[];
+  }): Promise<RenderRecord[]>;
+
+  /**
+   * Atomically leases up to `max` waiting jobs, oldest first: unlocked QUEUED renders (which
+   * become RUNNING) and unleased PROCESSING listing try-ons. Each gets `owner`, `leaseExpiresAt`
+   * and one more attempt. Parallel callers never lease the same job.
+   */
+  leaseAgentJobs(input: LeaseAgentJobsInput): Promise<AgentJobLease[]>;
+  /** Leased jobs (RUNNING renders, PROCESSING try-ons) whose lease lapsed before `now`. */
+  listExpiredAgentLeases(now: Date): Promise<AgentJobLease[]>;
+  /**
+   * Clears the lease if `owner` still holds it (and, with `expiredBy`, only if it lapsed by then),
+   * leaving the job's status as it is for the caller to move on. Null when the lease is not held.
+   */
+  releaseAgentLease(input: {
+    kind: AgentJobKind;
+    id: string;
+    owner: string;
+    expiredBy?: Date;
+  }): Promise<AgentJobLease | null>;
+  /** A leased try-on preview's status change by id (READY, FAILED, or back to waiting). */
+  updateTryonPreviewById(
+    id: string,
+    patch: Partial<Pick<TryonPreviewRecord, "status" | "imageKey" | "error" | "retryAfter" | "provider" | "costMicros">>,
+  ): Promise<TryonPreviewRecord | null>;
+  findTryonPreviewById(id: string): Promise<TryonPreviewRecord | null>;
+  recordAgentHeartbeat(input: { agentId: string; version: string; at: Date }): Promise<void>;
+  /** Jobs the agent has yet to finish: unlocked QUEUED/RUNNING renders and PROCESSING listing try-ons. */
+  countWaitingAgentJobs(): Promise<number>;
+  /** The most recent heartbeat from any render agent, or null if none ever came in. */
+  latestAgentHeartbeat(): Promise<Date | null>;
 
   findVariantsByIds(ids: string[]): Promise<ListingVariantRecord[]>;
   findListingsByIds(ids: string[]): Promise<ListingRecord[]>;
@@ -1520,6 +1655,13 @@ export interface Repositories {
     warranties: WarrantyRecord[];
     created: boolean;
   } | null>;
+  /**
+   * MON-TAKE-RATE: stores a settlement, or returns the one already stored for its
+   * (kind, orderRef), so a retried settle never makes a second payout row.
+   */
+  insertMarketplaceSettlement(row: SettlementRow): Promise<{ row: SettlementRow; created: boolean }>;
+  /** Settlements, oldest first, optionally for one kind or seller. */
+  listMarketplaceSettlements(opts?: { kind?: SettlementRow["kind"]; sellerId?: string }): Promise<SettlementRow[]>;
   /** Idempotency for Play→Closet bridge (orderRef = Play order id). */
   findMerchantPurchaseByOrderRef(
     userId: string,
@@ -1881,11 +2023,16 @@ export interface Repositories {
     householdId: string,
     userId: string,
   ): Promise<HouseholdVaultSettingsRecord>;
+  /**
+   * A key left out is unchanged. Changing the cap to a currency other than the stored one starts
+   * the spent total again at 0 (it counted another currency's minor units).
+   */
   upsertHouseholdVaultSettings(input: {
     householdId: string;
     userId: string;
     vaultAccess?: "VIEW" | "SPEND";
     spendCapMinor?: number | null;
+    spendCapCurrency?: string | null;
     spentMinor?: number;
   }): Promise<HouseholdVaultSettingsRecord>;
   listHouseholdVaultSettings(
@@ -1894,11 +2041,14 @@ export interface Repositories {
   /**
    * Atomically adds `amountMinor` to the member's spent total if it stays within the cap
    * and the member has SPEND access. Returns the new settings, or null when refused.
+   * With `currency` (the spent credit's), a cap in another currency refuses the spend, and a
+   * cap stored without a currency takes this one.
    */
   tryReserveHouseholdVaultSpend(
     householdId: string,
     userId: string,
     amountMinor: number,
+    currency?: string,
   ): Promise<HouseholdVaultSettingsRecord | null>;
   /** Gives back a reservation whose ledger write failed. */
   releaseHouseholdVaultSpend(
@@ -2067,7 +2217,121 @@ export interface Repositories {
   }): Promise<RepairLogRecord>;
   listRepairLogs(userId: string): Promise<RepairLogRecord[]>;
   listRepairLogsByItem(wardrobeItemId: string, userId: string): Promise<RepairLogRecord[]>;
+
+  // --- Closet state that lived in process memory (S6-13) ---
+  /** U042 — sets the canonical merchant for a normalised alias (one row per user and alias). */
+  upsertMerchantAlias(userId: string, alias: string, canonical: string): Promise<MerchantAliasRecord>;
+  /** The user's aliases, by alias. */
+  listMerchantAliases(userId: string): Promise<MerchantAliasRecord[]>;
+  /** U050 — raises (or replaces) the ops flag for a merchant whose parser is broken. */
+  setParserBreakFlag(flag: ParserBreakFlagRecord): Promise<void>;
+  /** Clears a merchant's flag; a missing flag is not an error. */
+  clearParserBreakFlag(merchantKey: string): Promise<void>;
+  /** Every raised flag, oldest first. */
+  listParserBreakFlags(): Promise<ParserBreakFlagRecord[]>;
+  /**
+   * U049 — sets the budget lock for (recipient, occasion, occasion day). The recipient must be the
+   * user's: a lock is refused (null) for anyone else's recipient.
+   */
+  upsertGiftBudgetLock(input: Omit<GiftBudgetLockRecord, "id">): Promise<GiftBudgetLockRecord | null>;
+  listGiftBudgetLocks(userId: string): Promise<GiftBudgetLockRecord[]>;
+  /** U041 — stores a parse-correction fixture (structured fields only, never a raw body). */
+  insertParserTrainingFixture(fixture: ParserTrainingFixtureRecord): Promise<ParserTrainingFixtureRecord>;
+  /** Fixtures newest first, optionally only those waiting for export; for ops. */
+  listParserTrainingFixtures(opts?: {
+    limit?: number;
+    exportStatus?: ParserTrainingFixtureRecord["exportStatus"];
+  }): Promise<ParserTrainingFixtureRecord[]>;
+  /** U039 — a "lost while lent" write-off note. */
+  appendLentWasteNote(input: { userId: string; wardrobeItemId: string | null; note: string }): Promise<LentWasteNoteRecord>;
+  /** The user's write-off notes, oldest first. */
+  listLentWasteNotes(userId: string): Promise<LentWasteNoteRecord[]>;
+  /** U046 — marks a reconcile mismatch on the user's account as investigated; null if not theirs. */
+  markMoneyAccountReconcileInvestigated(accountId: string, userId: string, at: Date): Promise<Date | null>;
+  /** Accounts of the user's that are marked investigated. */
+  listReconcileInvestigatedAccounts(userId: string): Promise<Array<{ accountId: string; investigatedAt: Date }>>;
+  /**
+   * Keep-snooze (U035) and photo-dump triage time (U040) on the user's wardrobe item, discarded
+   * or not. A key left out is unchanged, null clears it. false: no such item for the user.
+   */
+  setWardrobeItemMarks(
+    id: string,
+    userId: string,
+    patch: { keepSnoozedUntil?: Date | null; photoDumpTriagedAt?: Date | null },
+  ): Promise<boolean>;
+  getWardrobeItemMarks(id: string, userId: string): Promise<WardrobeItemMarks | null>;
+  /**
+   * Sets the tailoring order's expected pickup day and/or nudge time. A new pickup day clears
+   * the nudge time, so the nudge goes out again for the new day.
+   */
+  updateTailoringOrderPickup(
+    id: string,
+    userId: string,
+    patch: { expectedPickupOn?: string; pickupNudgeSentAt?: Date | null },
+  ): Promise<TailoringOrderRecord | null>;
+  /** DISP-LOGISTICS — stores the booked pickup on the user's listing; false if not theirs. */
+  setDispositionPickupBooking(id: string, userId: string, booking: DispositionPickupBooking): Promise<boolean>;
+  getDispositionPickupBooking(id: string, userId: string): Promise<DispositionPickupBooking | null>;
 }
+
+export type MerchantAliasRecord = {
+  /** Normalised (trimmed, upper-cased, single-spaced). */
+  alias: string;
+  canonical: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type ParserBreakFlagRecord = {
+  /** Upper-cased merchant. */
+  merchantKey: string;
+  merchant: string;
+  reason: string;
+  region: string | null;
+  setAt: Date;
+};
+
+export type GiftBudgetLockRecord = {
+  id: string;
+  userId: string;
+  recipientId: string;
+  occasion: string;
+  /** YYYY-MM-DD of the occasion. */
+  occasionDay: string;
+  occasionDate: Date;
+  budgetLockMinor: number;
+  currency: string;
+  shortlistIds: string[];
+  lockedAt: Date;
+};
+
+export type ParserFixtureFields = { merchant: string | null; totalMinor: number | null; currency: string | null };
+
+export type ParserTrainingFixtureRecord = {
+  id: string;
+  userId: string;
+  documentId: string;
+  kind: string;
+  merchantHint: string | null;
+  fields: string[];
+  before: ParserFixtureFields;
+  after: ParserFixtureFields;
+  exportStatus: "QUEUED" | "EXPORTED" | "SKIPPED";
+  createdAt: Date;
+};
+
+export type LentWasteNoteRecord = {
+  id: string;
+  userId: string;
+  wardrobeItemId: string | null;
+  note: string;
+  createdAt: Date;
+};
+
+export type WardrobeItemMarks = {
+  keepSnoozedUntil: Date | null;
+  photoDumpTriagedAt: Date | null;
+};
 
 export type WardrobeItemRecord = {
   id: string;
@@ -2270,6 +2534,8 @@ export type HouseholdVaultSettingsRecord = {
   userId: string;
   vaultAccess: "VIEW" | "SPEND";
   spendCapMinor: number | null;
+  /** ISO currency of the cap and of `spentMinor`; null for no cap or a cap set before 0026. */
+  spendCapCurrency: string | null;
   spentMinor: number;
   updatedAt: Date;
 };
@@ -2455,6 +2721,8 @@ export type TailoringOrderRecord = {
   measurementSnapshot: Record<string, unknown> | null;
   state: "PENDING" | "CONFIRMED" | "IN_STITCHING" | "SHIPPED" | "DELIVERED" | "CANCELLED";
   expectedPickupOn?: string | null;
+  /** When the day-before pickup nudge went out for `expectedPickupOn`. */
+  pickupNudgeSentAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };

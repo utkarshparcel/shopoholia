@@ -24,3 +24,24 @@
 
 /apple-icon
   Content-Type: image/png
+
+/privacy/opengraph-image
+  Content-Type: image/png
+
+/support/opengraph-image
+  Content-Type: image/png
+
+/r/opengraph-image
+  Content-Type: image/png
+
+/c/opengraph-image
+  Content-Type: image/png
+
+/h/opengraph-image
+  Content-Type: image/png
+
+/p/outfit/opengraph-image
+  Content-Type: image/png
+
+/p/return/opengraph-image
+  Content-Type: image/png

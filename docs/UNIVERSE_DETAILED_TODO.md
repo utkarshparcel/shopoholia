@@ -1,5 +1,7 @@
 # WORN Universe — Detailed Executable Backlog
 
+> **Historical planning document, 2026-11-12: describes the plan at the time, not the current product.** Items ticked or marked SHIPPED here were not re-verified against the code; some cite migrations that do not exist (the repo has `0000`-`0025`, none of those names; see `packages/db/migrations/`), RevenueCat (removed; no `/webhooks/revenuecat`) or Android SMS ingestion (`READ_SMS` is blocked in `app.json`). Worn Closet is behind `FEATURE_CLOSET` (off in release builds). Current behaviour: `docs/DEPLOY.md`, `docs/EAS.md`, `docs/RENDER_AGENT.md` and the code.
+
 > Master engineer backlog · synced 2026-08-26 from `UNIVERSE_ARCHITECTURE.md`, `UNIVERSE_DEV_PLAN.md`, `UNIVERSE_TODO.md`, `UNIVERSE_QA_REPORT.md` (esp. QA 2026-08-26), `GTM_ZERO_SPEND.md` product constraints, and gap canvas `universe-feature-gaps.canvas.tsx`.
 >
 > Companion (lighter checklist): [`UNIVERSE_TODO.md`](./UNIVERSE_TODO.md). **This file is the executable source of truth for sequencing.**
@@ -136,7 +138,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: primary signal for morning generator; used every wash cycle
   - Status: SHIPPED (2026-08-26) — `laundry_status` + PATCH/DELETE; mobile laundry basket + toggles; outfits skip dirty
   - Depends: none
-  - Files: migration `0015_laundry_wear_photo.sql`, wardrobe.ts, outfits.ts, wardrobe.tsx
+  - Files: migration `0015_laundry_wear_photo.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], wardrobe.ts, outfits.ts, wardrobe.tsx
   - Acceptance: met — wardrobe 8 + outfits 5 tests
   - Est: S
 
@@ -195,7 +197,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: same aha as GC, higher frequency in India
   - Status: SHIPPED (2026-08-26) — `LOYALTY_POINTS` + vault Loyalty tab; `GET /credits?kind=`
   - Depends: WV02-AUTOFILL (shared money surface)
-  - Files: migration `0014_money_account_kind_loyalty.sql`, credits routes, vault.tsx
+  - Files: migration `0014_money_account_kind_loyalty.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], credits routes, vault.tsx
   - Acceptance: met — credits create/list by kind; mobile hook kind filter
   - Est: M
 
@@ -213,7 +215,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 ## Ingestion
 
-- [x] **INGEST-SMS-ANDROID** · P1 · [Ingestion] Android native SMS adapter → `POST /ingestion/sms`
+- [ ] **INGEST-SMS-ANDROID** *(correction 2026-11-12: not shipped; `READ_SMS` is blocked in `app.json`)* · P1 · [Ingestion] Android native SMS adapter → `POST /ingestion/sms`
   - Why: GTM beachhead without Gmail; iOS stays forward-only
   - Status: SHIPPED (2026-08-26) — `createAndroidSmsInboxAdapter` + `WornSmsInbox`/`SmsAndroid` bridge; connect-email Sync SMS (Android) / forwarding copy (iOS); registered from `_layout`
   - Depends: none
@@ -465,7 +467,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: plan week from clean wardrobe; reopen every morning
   - Status: SHIPPED (2026-08-26) — `planned_for` on outfits; `GET /outfits/week` + generate/patch; today Mon–Sun strip
   - Depends: N04-LAUNDRY-BASKET, WV04-SWIPE-ALT
-  - Files: migration `0018_outfit_week_calendar.sql`, outfits.ts, today.tsx
+  - Files: migration `0018_outfit_week_calendar.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], outfits.ts, today.tsx
   - Acceptance: met — week CRUD vitest in outfits.test.ts
   - Est: M
 
@@ -556,7 +558,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: drives laundry + damage claims
   - Status: SHIPPED (2026-08-26) — `parseCareLabel` fixtures; `POST /wardrobe/:id/care-ocr` (+ `/photo` multipart); careRules on item; mobile Snap care tag
   - Depends: WV03-OCR-REAL
-  - Files: `packages/shared/src/careLabel.ts`, wardrobe schema/migration `0022_care_dryclean.sql`, wardrobe routes, OCR mock care fixtures, mobile wardrobe
+  - Files: `packages/shared/src/careLabel.ts`, wardrobe schema/migration `0022_care_dryclean.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], wardrobe routes, OCR mock care fixtures, mobile wardrobe
   - Acceptance: met — snap/OCR → care rules on item; vitest careLabel fixtures + care-ocr route
   - Est: M
 
@@ -572,7 +574,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: India winter/summer ritual — huge reopen
   - Status: SHIPPED (2026-08-26) — `closet_status` ACTIVE/STORED + season:* tags; `POST /wardrobe/seasonal-swap`; today generator `preferActiveCloset`; wardrobe Summer/Winter/Monsoon swap
   - Depends: wardrobe
-  - Files: `apps/api/src/lib/seasonal-swap.ts`, migration `0020_wardrobe_seasonal_tags.sql`, wardrobe routes, outfits generate, `apps/mobile/app/(closet)/wardrobe.tsx`
+  - Files: `apps/api/src/lib/seasonal-swap.ts`, migration `0020_wardrobe_seasonal_tags.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], wardrobe routes, outfits generate, `apps/mobile/app/(closet)/wardrobe.tsx`
   - Acceptance: met — bulk ACTIVE/STORED by season; today prefers active; vitest filter + route
   - Est: M
 
@@ -850,7 +852,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: friends/family borrow constantly
   - Status: SHIPPED (2026-08-26) — `lent_to`/`lent_due_on`; POST lend/return; GET `/wardrobe/lent?due=`; overdue BullMQ nudge; mobile Lend/Returned
   - Depends: wardrobe
-  - Files: migration `0024_household_borrow_profiles.sql`, `borrow-lent.ts`, wardrobe routes, mobile wardrobe
+  - Files: migration `0024_household_borrow_profiles.sql` [no migration with this name exists; the `0000`-`0025` set replaced it], `borrow-lent.ts`, wardrobe routes, mobile wardrobe
   - Acceptance: met — lent-to + due date; overdue nudge; vitest due query
   - Est: S
 
@@ -858,7 +860,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: couples & roommates share inventory + laundry
   - Status: SHIPPED (2026-08-26) — `households`/`members`; invite `worncloset.app/h/{code}`; shared wardrobe ACL + partner laundry PATCH; mobile household screen
   - Depends: N04-LAUNDRY-BASKET
-  - Files: `household.ts`, `routes/households.ts`, migration `0024_*`, mobile household.tsx
+  - Files: `household.ts`, `routes/households.ts`, migration `0024_*` [the real `0024` is `marketplace_settlements_merchant_order_ref`, unrelated], mobile household.tsx
   - Acceptance: met — invite partner; shared wardrobe ACL; vitest authz deny outsider
   - Est: L
 
@@ -942,7 +944,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: waste dispose must not be nominal
   - Status: SHIPPED (2026-08-26) — SELL/BARTER create INDIVIDUAL seller + marketplace listing/variant; DONATE disposition-only; `disposition_listings.seller_id` → `sellers.id` FK (migration 0024)
   - Depends: none
-  - Files: `disposition-marketplace.ts`, schema wardrobe, `0024_disposition_seller_fk.sql`
+  - Files: `disposition-marketplace.ts`, schema wardrobe, `0024_disposition_seller_fk.sql` [no migration with this name exists; the `0000`-`0025` set replaced it]
   - Acceptance: met — dispose creates seller listing row with FK; modes work; vitest: marketplace + unit tests
   - Est: M
 
@@ -1006,7 +1008,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: replacement buys
   - Status: SHIPPED (2026-08-26) — `POST/GET /price-watches` + `POST /price-watches/scan`; threshold vs affiliate `realPrice`; push job `PRICE_DROP`; vitest threshold + scan
   - Depends: affiliate catalog
-  - Files: `packages/shared/src/price-drop.ts`, `apps/api/src/lib/price-drop.ts`, `apps/api/src/routes/price-watches.ts`, migration `0027_recover_price_emi_cashback`
+  - Files: `packages/shared/src/price-drop.ts`, `apps/api/src/lib/price-drop.ts`, `apps/api/src/routes/price-watches.ts`, migration `0027_recover_price_emi_cashback` [does not exist]
   - Acceptance: met — watchlist brand drop notify; vitest: threshold
   - Est: L
 
@@ -1038,7 +1040,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
   - Why: returns → reorder confidence
   - Status: SHIPPED (2026-08-26) — return reason/orderedSize/preferredSize; `GET /returns/size-map` aggregate; vitest aggregate + route
   - Depends: returns + wardrobe
-  - Files: `packages/shared/src/size-map.ts`, returns schema/routes, migration `0025_rto_size_repair.sql`
+  - Files: `packages/shared/src/size-map.ts`, returns schema/routes, migration `0025_rto_size_repair.sql` [no migration with this name exists; the `0000`-`0025` set replaced it]
   - Acceptance: met — per-brand size history from returns; vitest aggregate + route
   - Est: M
 
@@ -1088,7 +1090,7 @@ Reuse launch gate from `UNIVERSE_TODO.md`:
 
 ## Monetization / marketplace
 
-- [x] **MON-REVENUECAT** · P2 · [Monetization] RevenueCat subscription (Accountant + Outfits)
+- [ ] **MON-REVENUECAT** *(correction 2026-11-12: removed; no RevenueCat integration or `/webhooks/revenuecat` route exists)* · P2 · [Monetization] RevenueCat subscription (Accountant + Outfits)
   - Why: settlement + retention monetization
   - Status: SHIPPED (2026-08-26) — env-gated entitlements + webhook scaffold; paywall trial; gates accountant/outfits when FEATURE_PREMIUM_GATES=1; no store secrets
   - Depends: Wave 2 habit proof preferred

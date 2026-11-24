@@ -337,6 +337,9 @@ describe("N36 family share attribution", () => {
     const land = await app.inject({ method: "GET", url: "/r/FAM123" });
     expect(land.statusCode).toBe(200);
     expect(land.json().attributed).toBe(true);
+    // A /r/ link is the Play referral the app shares: its landing copy is Play's, not Closet's.
+    expect(land.json().landing.body).toMatch(/Refer & earn/);
+    expect(JSON.stringify(land.json().landing)).not.toMatch(/Closet|gift card/i);
 
     const me = await app.inject({
       method: "GET",

@@ -11,7 +11,7 @@ import { fetchCredits, fetchPrebuyFit } from '@/src/api/client';
 import { Button, CoinIcon, CoinWallet, SectionHeader } from '@/src/components/ui';
 import { useCart } from '@/src/hooks/catalog';
 import { useConsentGate } from '@/src/hooks/closet/useConsent';
-import { haulKeyOf, useCheckout, useCoinBalance } from '@/src/hooks/orders';
+import { haulKeyOf, isInsufficientCoinsError, useCheckout, useCoinBalance } from '@/src/hooks/orders';
 import {
   BUDGET_NUDGE_SOFT_FOOTER,
   closetBudgetSoftGateCopy,
@@ -19,8 +19,10 @@ import {
   prebuyFitPanelSections,
   TRACK_BUY_VAULT_HREF,
 } from '@/src/lib/bridgeWow';
+import { confirmAsync, notify } from '@/src/lib/confirm';
+import { errorText } from '@/src/lib/errorText';
 import { FEATURE_CLOSET } from '@/src/lib/features';
-import { TIER_LABELS } from '@/src/lib/order-tracking';
+import { TIER_LABELS, tierDurationLabel } from '@/src/lib/order-tracking';
 import { useSessionStore } from '@/src/stores/session';
 import {
   bg,
@@ -47,16 +49,16 @@ const TIERS: Array<{
   detail: string;
   icon: string;
 }> = [
-  { id: 'EXPRESS', label: TIER_LABELS.EXPRESS, detail: 'Fastest arc — ~2 min in beta', icon: '▸' },
-  { id: 'STANDARD', label: TIER_LABELS.STANDARD, detail: 'Balanced pace — beta ~5 min', icon: '→' },
-  { id: 'SLOW_BURN', label: TIER_LABELS.SLOW_BURN, detail: 'Maximum anticipation — beta ~8 min', icon: '⟳' },
+  { id: 'EXPRESS', label: TIER_LABELS.EXPRESS, detail: `Fastest arc — ${tierDurationLabel('EXPRESS')}`, icon: '▸' },
+  { id: 'STANDARD', label: TIER_LABELS.STANDARD, detail: `Balanced pace — ${tierDurationLabel('STANDARD')}`, icon: '→' },
+  { id: 'SLOW_BURN', label: TIER_LABELS.SLOW_BURN, detail: `Maximum anticipation — ${tierDurationLabel('SLOW_BURN')}`, icon: '⟳' },
 ];
 
 export default function CheckoutScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { query: cartQuery } = useCart();
-  const { data: balanceData } = useCoinBalance();
+  const { data: balanceData, refetch: refetchBalance } = useCoinBalance();
   const items = cartQuery.data?.items ?? [];
   const coinTotal = cartQuery.data?.coinTotal ?? 0;
   // Retries of this haul reuse one idempotency key, so a lost response can't place it twice.
@@ -105,6 +107,33 @@ export default function CheckoutScreen() {
    * The order opens on top of the app, not in place of this modal: replacing checkout left the
    * cart modal (now an empty haul) underneath, which is where Back from the order went.
    */
+  /**
+   * Every refusal is told: a 402 (the balance shown was stale) offers the coin store, the rest
+   * (an emptied or changed haul, a timeout, no network) say what happened. The haul and the
+   * balance are reloaded, since either may not be what this screen showed.
+   */
+  const onCheckoutError = (
+    err: Error & { code?: string | null; coolingOff?: { releaseAt: string } | null },
+  ) => {
+    if (err.code === 'COOLING_OFF') {
+      setCoolingHold({ message: err.message, releaseAt: err.coolingOff?.releaseAt });
+      void cartQuery.refetch();
+      return;
+    }
+    void cartQuery.refetch();
+    void refetchBalance();
+    if (isInsufficientCoinsError(err)) {
+      void confirmAsync('Not enough coins', 'Your balance changed. Top up to place this order.', {
+        confirmLabel: 'Get coins',
+        cancelLabel: 'Not now',
+      }).then((ok) => {
+        if (ok) router.push('/coins/buy' as never);
+      });
+      return;
+    }
+    notify('Couldn’t place your order', errorText(err, 'Try again.'));
+  };
+
   const openPlacedOrder = (orderId: string) => {
     setCoolingHold(null);
     if (router.canDismiss()) router.dismissAll();
@@ -361,15 +390,7 @@ export default function CheckoutScreen() {
                 void checkout
                   .mutateAsync(tier)
                   .then((order) => openPlacedOrder(order.id))
-                  .catch((err: Error & { code?: string; coolingOff?: { releaseAt: string } | null }) => {
-                    if (err.code === 'COOLING_OFF') {
-                      setCoolingHold({
-                        message: err.message,
-                        releaseAt: err.coolingOff?.releaseAt,
-                      });
-                      void cartQuery.refetch();
-                    }
-                  });
+                  .catch(onCheckoutError);
               }}
             />
             {FEATURE_CLOSET && showCooling ? (
@@ -380,7 +401,8 @@ export default function CheckoutScreen() {
                 onPress={() => {
                   void checkout
                     .mutateAsync({ tier, coolingOffOverride: true })
-                    .then((order) => openPlacedOrder(order.id));
+                    .then((order) => openPlacedOrder(order.id))
+                    .catch(onCheckoutError);
                 }}
                 variant="secondary"
               />

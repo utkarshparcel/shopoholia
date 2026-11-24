@@ -4,10 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReturnsPanel } from './ReturnsPanel';
 
-const { trackEvent, bookMutate, correctMutate } = vi.hoisted(() => ({
+const { trackEvent, bookMutate, correctMutate, rp } = vi.hoisted(() => ({
   trackEvent: vi.fn(),
   bookMutate: vi.fn(),
   correctMutate: vi.fn(),
+  rp: {
+    detail: {} as Record<string, unknown>,
+    purchases: [] as unknown[],
+    initiateMutate: vi.fn(),
+  },
 }));
 
 vi.mock('expo-router', () => ({
@@ -179,6 +184,7 @@ vi.mock('@/src/hooks/closet/useCloset', () => ({
         pickupSlotAt: null,
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:00.000Z',
+        ...rp.detail,
       },
       events: [],
     },
@@ -209,7 +215,7 @@ vi.mock('@/src/hooks/closet/useCloset', () => ({
       ],
     },
   }),
-  useInitiateReturn: () => ({ mutate: vi.fn(), isPending: false }),
+  useInitiateReturn: () => ({ mutate: rp.initiateMutate, isPending: false }),
   useConfirmReturn: () => ({ mutate: vi.fn(), isPending: false }),
   useBookReturnPickup: () => ({ mutate: bookMutate, isPending: false }),
   useRescheduleReturnPickup: () => ({ mutate: vi.fn(), isPending: false }),
@@ -219,7 +225,7 @@ vi.mock('@/src/hooks/closet/useCloset', () => ({
   useCorrectReturnWindow: () => ({ mutate: correctMutate, isPending: false }),
   useMarkReturnRefunded: () => ({ mutate: vi.fn(), isPending: false }),
   usePurchases: () => ({
-    data: { purchases: [] },
+    data: { purchases: rp.purchases },
     isLoading: false,
   }),
 }));
@@ -229,6 +235,9 @@ describe('ReturnsPanel (W031–W036)', () => {
     trackEvent.mockClear();
     bookMutate.mockClear();
     correctMutate.mockClear();
+    rp.detail = {};
+    rp.purchases = [];
+    rp.initiateMutate.mockReset();
   });
 
   it('lists soonest deadline first, collapses expired, live ETA + ledger', () => {
@@ -348,5 +357,46 @@ describe('ReturnsPanel (W031–W036)', () => {
       expect.objectContaining({ brand: 'Myntra' }),
     );
     expect(screen.queryByTestId('size-map-tip')).toBeNull();
+  });
+
+  function renderPanel() {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ReturnsPanel />
+      </QueryClientProvider>,
+    );
+  }
+
+  const PURCHASE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const usdPurchase = {
+    purchase: { id: PURCHASE, merchant: 'Target', currency: 'USD' },
+    items: [{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', title: 'Tee' }],
+  };
+
+  it('S3-27: the confirmed-return detail shows no table names', () => {
+    rp.detail = { state: 'CONFIRMED' };
+    renderPanel();
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]!);
+    expect(screen.getByText(/mark where it landed/)).toBeTruthy();
+    expect(screen.queryByText(/money_ledger/i)).toBeNull();
+  });
+
+  it('S3-26: a refund is shown in its purchase\'s currency, not the preferred one', () => {
+    rp.purchases = [usdPurchase];
+    rp.detail = { state: 'REFUNDED', refundMinor: 2599, purchaseId: PURCHASE };
+    renderPanel();
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]!);
+    expect(screen.getByText(/Refund: \$25\.99/)).toBeTruthy();
+    expect(screen.queryByText(/₹25\.99/)).toBeNull();
+  });
+
+  it('S3-26: a double tap on Initiate opens one return, not two', () => {
+    rp.purchases = [usdPurchase];
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Target · 1 item(s)' }));
+    // The first request is still running (mutate never calls back).
+    fireEvent.click(screen.getByRole('button', { name: 'Initiate' }));
+    fireEvent.click(screen.getByRole('button', { name: /Initiate|Starting/ }));
+    expect(rp.initiateMutate).toHaveBeenCalledTimes(1);
   });
 });

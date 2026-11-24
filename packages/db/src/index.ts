@@ -63,9 +63,11 @@ export { paymentIntents } from "./schema/payment-intents.js";
 export { listings } from "./schema/listings.js";
 export { listingVariants } from "./schema/listing-variants.js";
 export { lookbookItems } from "./schema/lookbook-items.js";
+export { marketplaceSettlements } from "./schema/marketplace.js";
 export { orders } from "./schema/orders.js";
 export { orderItems } from "./schema/order-items.js";
 export { renders } from "./schema/renders.js";
+export { renderAgents } from "./schema/render-agents.js";
 export { tryonPreviews } from "./schema/tryon-previews.js";
 export { pushEvents } from "./schema/push-events.js";
 export { oauthStates } from "./schema/oauth-states.js";
@@ -108,7 +110,16 @@ export {
   type HouseholdMemberRow,
   type ClosetProfileRow,
 } from "./schema/household.js";
-export { wearChallenges, interviewKits, householdVaultSettings } from "./schema/closet-state.js";
+export {
+  wearChallenges,
+  interviewKits,
+  householdVaultSettings,
+  merchantAliases,
+  parserBreakFlags,
+  giftBudgetLocks,
+  parserTrainingFixtures,
+  lentWasteNotes,
+} from "./schema/closet-state.js";
 export { socialPolls, socialPollVotes } from "./schema/social-polls.js";
 export {
   getCoinBalance,

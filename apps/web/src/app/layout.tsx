@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { DM_Sans, DM_Serif_Display, DM_Mono } from 'next/font/google';
+import localFont from 'next/font/local';
 import './globals.css';
 import { SmoothScroll } from '@/components/providers/SmoothScroll';
 import { MotionProvider } from '@/components/providers/MotionProvider';
@@ -7,35 +7,49 @@ import { ScrollProgress } from '@/components/ScrollProgress';
 import { GrainOverlay } from '@/components/GrainOverlay';
 import { SITE_URL } from '@/lib/site';
 
-const dmSans = DM_Sans({
-  subsets: ['latin'],
+/*
+ * The fonts ship with the site (src/app/_fonts: the Latin subsets of DM Sans, DM Serif Display and
+ * DM Mono from Fontsource 5.3.0, SIL Open Font License), so a build never waits on Google Fonts: a
+ * bad answer from it once failed CI, and the deploy runs the same build.
+ */
+const dmSans = localFont({
+  src: [
+    { path: './_fonts/dm-sans-latin-300-normal.woff2', weight: '300', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-500-normal.woff2', weight: '500', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-600-normal.woff2', weight: '600', style: 'normal' },
+  ],
   display: 'swap',
   variable: '--font-sans',
-  weight: ['300', '400', '500', '600'],
 });
 
-const dmSerifDisplay = DM_Serif_Display({
-  subsets: ['latin'],
+const dmSerifDisplay = localFont({
+  src: [
+    { path: './_fonts/dm-serif-display-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-serif-display-latin-400-italic.woff2', weight: '400', style: 'italic' },
+  ],
   display: 'swap',
   variable: '--font-display',
-  weight: ['400'],
-  style: ['normal', 'italic'],
+  adjustFontFallback: 'Times New Roman',
 });
 
-const dmMono = DM_Mono({
-  subsets: ['latin'],
+const dmMono = localFont({
+  src: [
+    { path: './_fonts/dm-mono-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-mono-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  ],
   display: 'swap',
   variable: '--font-mono',
-  weight: ['400', '500'],
+  adjustFontFallback: false,
 });
 
 const DESCRIPTION =
-  'Worn Play is a free fashion shopping app where you pay with coins, not money. Try real pieces on your own AI avatar, check out, track the delivery and unbox photos of you wearing them. All the fun of a haul, none of the bill or the pile.';
+  'A nicotine patch for shopaholics. Skip the ₹2,000 dress you wear once for a café photo: try real pieces on your AI avatar, pay with free coins, and unbox photos of you wearing them.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: 'Worn Play — the fashion haul without the bill',
+    default: 'Worn Play — a nicotine patch for shopaholics',
     template: '%s | Worn',
   },
   description: DESCRIPTION,
@@ -46,6 +60,8 @@ export const metadata: Metadata = {
     'virtual try-on app',
     'virtual shopping',
     'dopamine shopping',
+    'shopaholic',
+    'impulse shopping',
   ],
   authors: [{ name: 'Worn Team' }],
   creator: 'Worn',
@@ -66,18 +82,21 @@ export const metadata: Metadata = {
     locale: 'en_US',
     url: SITE_URL,
     siteName: 'Worn',
-    title: 'Worn Play — the fashion haul without the bill',
+    title: 'Worn Play — a nicotine patch for shopaholics',
     description: DESCRIPTION,
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Worn Play — the fashion haul without the bill',
+    title: 'Worn Play — a nicotine patch for shopaholics',
     description: DESCRIPTION,
   },
   // icon.svg, apple-icon.tsx and opengraph-image.tsx in this folder supply the icons and the share image
   manifest: '/site.webmanifest',
   category: 'Lifestyle',
 };
+
+/* Marks an <img> that failed with data-img-failed, and clears it if a new src loads later. */
+const IMAGE_FALLBACK = `(function(){function f(e){var t=e.target;if(t&&t.tagName==='IMG'){if(e.type==='error')t.setAttribute('data-img-failed','');else t.removeAttribute('data-img-failed');}}document.addEventListener('error',f,true);document.addEventListener('load',f,true);})();`;
 
 export const viewport: Viewport = {
   themeColor: [
@@ -99,6 +118,9 @@ export default function RootLayout({
       <head>
         {/* fonts are self-hosted by next/font; the only third-party origin is the catalog's image CDN */}
         <link rel="preconnect" href="https://assets.newme.asia" />
+        {/* Before any image loads: one that fails (the catalog CDN down or refusing us) hides instead of
+            showing the browser's broken-image icon over its card's placeholder (globals.css). */}
+        <script dangerouslySetInnerHTML={{ __html: IMAGE_FALLBACK }} />
       </head>
       <body className="min-h-screen flex flex-col">
         <ScrollProgress />

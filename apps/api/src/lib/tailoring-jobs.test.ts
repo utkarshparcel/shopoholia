@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SettlementRow } from "@worn/shared";
 
 const queueMocks = vi.hoisted(() => ({
   add: vi.fn(async () => ({})),
@@ -140,6 +141,8 @@ describe("processTailoringTransition", () => {
           pushes.set(String(input.dedupeKey), input);
           return { id: "evt" };
         }),
+        insertMarketplaceSettlement: vi.fn(async (row: SettlementRow) => ({ row, created: true })),
+        listMarketplaceSettlements: vi.fn(async () => [] as SettlementRow[]),
       },
     };
   }

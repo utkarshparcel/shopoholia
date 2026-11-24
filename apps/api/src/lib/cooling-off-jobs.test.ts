@@ -130,8 +130,9 @@ describe("cooling-off release job (N34)", () => {
       {
         recordPushEvent,
         findUserById: async () => ({
-          consentFlags: { coolingOff: hold },
-          prefs: {},
+          // checkout.ts writes the hold into prefs, never consentFlags.
+          consentFlags: {},
+          prefs: { coolingOff: hold },
           timeZone: "Asia/Kolkata",
           pushToken: "ExponentPushToken[test]",
         }),
@@ -168,14 +169,14 @@ describe("cooling-off release job (N34)", () => {
       "fp2",
     );
     // Checked out or overrode (flag cleared), then a newer hold (another release time).
-    for (const consentFlags of [{}, { coolingOff: later }]) {
+    for (const prefs of [{}, { coolingOff: later }]) {
       const result = await processCoolingOffRelease(
         holdToReleasePayload("u1", hold),
         {
           recordPushEvent,
           findUserById: async () => ({
-            consentFlags,
-            prefs: {},
+            consentFlags: { coolingOff: hold },
+            prefs,
             timeZone: "Asia/Kolkata",
             pushToken: "ExponentPushToken[test]",
           }),

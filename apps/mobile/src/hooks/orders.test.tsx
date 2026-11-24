@@ -3,9 +3,9 @@ import { act, render, renderHook, screen, waitFor } from '@testing-library/react
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createOrder } from '@/src/api/client';
+import { createOrder, fetchCoinBalance, fetchOrder } from '@/src/api/client';
 
-import { haulKeyOf, useCheckout, useOrder } from './orders';
+import { haulKeyOf, orderKeys, useCheckout, useOrder } from './orders';
 
 const session = vi.hoisted(() => ({ accessToken: 'token', setCoinBalance: () => undefined }));
 
@@ -99,5 +99,75 @@ describe('useCheckout', () => {
 
     const [first, second] = sentKeys();
     expect(second).not.toBe(first);
+  });
+});
+
+describe('useCheckout after the order is placed', () => {
+  it('reports the order as placed even when the balance refresh fails, and drops the haul', async () => {
+    vi.mocked(createOrder).mockReset().mockResolvedValue({ id: 'order-9', tier: 'EXPRESS', coinTotal: 48 } as never);
+    vi.mocked(fetchCoinBalance).mockRejectedValueOnce(new Error('Network request failed'));
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    client.setQueryData(['cart', null], { items: [{ variantId: 'v1', quantity: 1 }], coinTotal: 48 });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useCheckout('v1x1=48'), { wrapper });
+
+    let placed: unknown;
+    await act(async () => {
+      placed = await result.current.mutateAsync('EXPRESS');
+    });
+
+    expect(placed).toMatchObject({ id: 'order-9' });
+    expect(client.getQueryState(['cart', null])?.isInvalidated).toBe(true);
+    expect(client.getQueryData(orderKeys.detail('order-9', null))).toMatchObject({ id: 'order-9' });
+  });
+});
+
+describe('useOrder polling', () => {
+  it.each(['CANCELLED', 'FAILED', 'REVEAL_READY'])('stops polling a %s order', async (state) => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fetchOrder).mockClear().mockResolvedValue({
+        id: '22222222-2222-4222-8222-222222222222',
+        tier: 'EXPRESS',
+        state,
+        coinTotal: 48,
+        placedAt: '2026-06-18T12:00:00.000Z',
+      } as never);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <OrderProbe id="22222222-2222-4222-8222-222222222222" />
+        </QueryClientProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fetchOrder).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps polling an order on its way', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fetchOrder).mockClear().mockResolvedValue({
+        id: '33333333-3333-4333-8333-333333333333',
+        tier: 'EXPRESS',
+        state: 'PACKED',
+        coinTotal: 48,
+        placedAt: '2026-06-18T12:00:00.000Z',
+      } as never);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <OrderProbe id="33333333-3333-4333-8333-333333333333" />
+        </QueryClientProvider>,
+      );
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(vi.mocked(fetchOrder).mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

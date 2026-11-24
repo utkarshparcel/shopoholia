@@ -15,6 +15,7 @@ import { styleKeywordsForTags } from "../lib/catalog/style-match.js";
 import { listingCardDto, listingDetailDto } from "../lib/catalog/urls.js";
 import { RENDER_CLAIM_STALE_MS } from "../jobs/wardrobe-tryon.js";
 import { newJobId } from "../lib/jobs/avatar-processing.js";
+import { tryonWaitEstimate } from "../lib/render/agent-jobs.js";
 
 const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 
@@ -179,7 +180,14 @@ export const feedRoutes: FastifyPluginAsyncZod = async (app) => {
           retryAfter: preview.retryAfter?.toISOString() ?? null,
         };
       }
-      return reply.code(202).send({ status: "PROCESSING" as const, previewUrl: null });
+      // With the render agent, a preview can wait (overnight, or while the Mac is down): say until when.
+      const wait = await tryonWaitEstimate({ repos: app.deps.repos, config: app.deps.renderConfig }, preview);
+      return reply.code(202).send({
+        status: "PROCESSING" as const,
+        previewUrl: null,
+        rendersWaiting: wait.waiting,
+        expectedReadyAt: wait.expectedReadyAt,
+      });
     },
   );
 };

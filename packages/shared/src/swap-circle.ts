@@ -3,21 +3,14 @@
  */
 
 import { WEB_ORIGIN } from "./domains.js";
-
-const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+import { secureInviteCode } from "./invite-code.js";
 
 export const SWAP_INVITE_WEB_BASE = `${WEB_ORIGIN}/c`;
 export const SWAP_INVITE_DEEP_PREFIX = "worn://swap-circle";
 
-/** Generate an invite code (default 8 chars, Crockford-ish alphabet). */
+/** Generate an invite code (default 8 chars, Crockford-ish alphabet) from the CSPRNG. */
 export function generateSwapInviteCode(length = 8): string {
-  const n = Math.max(4, Math.min(16, Math.floor(length)));
-  let out = "";
-  for (let i = 0; i < n; i++) {
-    const idx = Math.floor(Math.random() * INVITE_ALPHABET.length);
-    out += INVITE_ALPHABET[idx]!;
-  }
-  return out;
+  return secureInviteCode(length);
 }
 
 export function normalizeSwapInviteCode(code: string): string {

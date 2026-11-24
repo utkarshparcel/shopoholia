@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
-import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline } from "@worn/shared";
+import { streakRewardForDay, AFFILIATE_CASHBACK_COINS, normalizeWishlist, buildRichOptions, splitUserPrefsPatch, compareCashbackClaimsByDeadline, type DispositionPickupBooking, type SettlementRow } from "@worn/shared";
 import { missingRegionPacks } from "../region-packs.js";
 import { withNewReferralCode } from "../referral-code.js";
 import {
@@ -57,6 +57,7 @@ import {
   recipientProfiles,
   recipients,
   renders,
+  renderAgents,
   returnEvents,
   returnRequests,
   sellers,
@@ -80,12 +81,19 @@ import {
   wardrobeItems,
   wearLog,
   repairLogs,
+  marketplaceSettlements,
+  merchantAliases,
+  parserBreakFlags,
+  giftBudgetLocks,
+  parserTrainingFixtures,
+  lentWasteNotes,
   type Db,
 } from "@worn/db";
-import { InsufficientCoinsError } from "./errors.js";
+import { CartChangedError, IdempotencyKeyConflictError, InsufficientCoinsError } from "./errors.js";
 import { subjectRefFor } from "../privacy-hmac.js";
 import { nextStreakDay, streakDay } from "../streak-day.js";
 import { cashbackLedgerRef, revealGenerateLedgerRef, revealUnlockLedgerRef, streakLedgerRef } from "./ledger-refs.js";
+import { sortRendersForReveal } from "./render-order.js";
 import { USER_DATA_TABLES, type UserTableSpec } from "./user-data-tables.js";
 import { keysetAfter, keysetCreatedAtText, keysetOrderBy, toPage } from "../paging.js";
 import { OPEN_RETURN_STATES, ReturnStateConflictError, returnStatesInto } from "../returns/state-machine.js";
@@ -131,6 +139,7 @@ import type {
   SellerRecord,
   SellerStatus,
   TryonPreviewRecord,
+  AgentJobLease,
   TryonPreviewStatus,
   FitPreviewRecord,
   PreviewResult,
@@ -169,6 +178,9 @@ import type {
   RepairLogRecord,
   ReturnRecord,
   TailoringOrderRecord,
+  GiftBudgetLockRecord,
+  ParserTrainingFixtureRecord,
+  LentWasteNoteRecord,
 } from "./types.js";
 
 type UserRow = typeof users.$inferSelect;
@@ -325,8 +337,23 @@ async function insertOrderWithItems(tx: Tx, input: CreateOrderInput) {
   };
 }
 
+function mapSettlement(row: typeof marketplaceSettlements.$inferSelect): SettlementRow {
+  return {
+    id: row.id,
+    kind: row.kind,
+    orderRef: row.orderRef,
+    sellerId: row.sellerId,
+    orderAmountMinor: row.orderAmountMinor,
+    platformFeeMinor: row.platformFeeMinor,
+    gstOnFeeMinor: row.gstOnFeeMinor,
+    sellerPayoutMinor: row.sellerPayoutMinor,
+    currency: row.currency,
+    completedAt: row.completedAt.toISOString(),
+  };
+}
+
 /**
- * Inserts a purchase and its lines. #38: a repeat (user, orderRef) inserts nothing and gets the
+ * Inserts a purchase and its lines. #38: a repeat (user, merchant, orderRef) inserts nothing and gets the
  * existing purchase and its lines back with `created: false` (also when it races another insert).
  */
 async function insertMerchantPurchaseWithItems(tx: Tx, input: CreateMerchantPurchaseInput) {
@@ -355,7 +382,13 @@ async function insertMerchantPurchaseWithItems(tx: Tx, input: CreateMerchantPurc
     const [existing] = await tx
       .select()
       .from(merchantPurchases)
-      .where(and(eq(merchantPurchases.userId, input.userId), eq(merchantPurchases.orderRef, input.orderRef)))
+      .where(
+        and(
+          eq(merchantPurchases.userId, input.userId),
+          eq(merchantPurchases.merchant, input.merchant),
+          eq(merchantPurchases.orderRef, input.orderRef),
+        ),
+      )
       .limit(1);
     if (!existing) throw new Error("merchant purchase orderRef conflict but no row found");
     const existingItems = await tx
@@ -458,6 +491,7 @@ function mapUser(row: UserRow): UserRecord {
     phone: row.phone ?? null,
     email: row.email ?? null,
     googleSub: row.googleSub ?? null,
+    appleSub: row.appleSub ?? null,
     displayName: row.displayName,
     avatarStatus: row.avatarStatus as AvatarStatus,
     coinBalanceCache: row.coinBalanceCache,
@@ -542,6 +576,20 @@ function mapSeller(row: SellerRow): SellerRecord {
   };
 }
 
+function mapMeasurementProfile(row: typeof measurementProfiles.$inferSelect): MeasurementProfileRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    region: row.region,
+    unit: row.unit as MeasurementProfileRecord["unit"],
+    points: (row.points ?? {}) as Record<string, number>,
+    changeNote: row.changeNote ?? null,
+    previousId: row.previousId ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function mapTailoringOrder(row: typeof tailoringOrders.$inferSelect): TailoringOrderRecord {
   return {
     id: row.id,
@@ -554,6 +602,8 @@ function mapTailoringOrder(row: typeof tailoringOrders.$inferSelect): TailoringO
     tailorSellerId: row.tailorSellerId ?? null,
     measurementSnapshot: (row.measurementSnapshot as Record<string, unknown> | null) ?? null,
     state: row.state,
+    expectedPickupOn: row.expectedPickupOn ?? null,
+    pickupNudgeSentAt: row.pickupNudgeSentAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -575,6 +625,9 @@ function mapTryonPreview(row: TryonPreviewRow): TryonPreviewRecord {
     retryAfter: row.retryAfter ?? null,
     provider: row.provider,
     costMicros: row.costMicros,
+    leaseOwner: row.leaseOwner ?? null,
+    leaseExpiresAt: row.leaseExpiresAt ?? null,
+    attempts: row.attempts ?? 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -684,8 +737,36 @@ function mapRender(row: RenderRow): RenderRecord {
     combinedItemIds: row.combinedItemIds ?? null,
     status: row.status,
     costMicros: row.costMicros,
+    leaseOwner: row.leaseOwner ?? null,
+    leaseExpiresAt: row.leaseExpiresAt ?? null,
+    attempts: row.attempts ?? 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+function renderJob(row: RenderRow, orderId: string): AgentJobLease {
+  return {
+    kind: "render",
+    id: row.id,
+    attempts: row.attempts,
+    leaseOwner: row.leaseOwner,
+    leaseExpiresAt: row.leaseExpiresAt,
+    createdAt: row.createdAt,
+    render: mapRender(row),
+    orderId,
+  };
+}
+
+function tryonJob(row: TryonPreviewRow): AgentJobLease {
+  return {
+    kind: "tryon",
+    id: row.id,
+    attempts: row.attempts,
+    leaseOwner: row.leaseOwner,
+    leaseExpiresAt: row.leaseExpiresAt,
+    createdAt: row.createdAt,
+    preview: mapTryonPreview(row),
   };
 }
 
@@ -822,8 +903,49 @@ function mapHouseholdVaultSettings(row: HouseholdVaultSettingsRow): HouseholdVau
     userId: row.userId,
     vaultAccess: row.vaultAccess,
     spendCapMinor: row.spendCapMinor ?? null,
+    spendCapCurrency: row.spendCapCurrency ?? null,
     spentMinor: row.spentMinor,
     updatedAt: row.updatedAt,
+  };
+}
+
+function mapGiftBudgetLock(row: typeof giftBudgetLocks.$inferSelect): GiftBudgetLockRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    recipientId: row.recipientId,
+    occasion: row.occasion,
+    occasionDay: row.occasionDay,
+    occasionDate: row.occasionDate,
+    budgetLockMinor: row.budgetLockMinor,
+    currency: row.currency,
+    shortlistIds: [...(row.shortlistIds ?? [])],
+    lockedAt: row.lockedAt,
+  };
+}
+
+function mapParserTrainingFixture(row: typeof parserTrainingFixtures.$inferSelect): ParserTrainingFixtureRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    documentId: row.documentId,
+    kind: row.kind,
+    merchantHint: row.merchantHint ?? null,
+    fields: [...(row.fields ?? [])],
+    before: row.before,
+    after: row.after,
+    exportStatus: row.exportStatus,
+    createdAt: row.createdAt,
+  };
+}
+
+function mapLentWasteNote(row: typeof lentWasteNotes.$inferSelect): LentWasteNoteRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    wardrobeItemId: row.wardrobeItemId ?? null,
+    note: row.note,
+    createdAt: row.createdAt,
   };
 }
 
@@ -1228,6 +1350,11 @@ export function createPostgresRepositories(db: Db): Repositories {
       return row ? mapUser(row) : null;
     },
 
+    async findUserByAppleSub(appleSub) {
+      const [row] = await db.select().from(users).where(eq(users.appleSub, appleSub)).limit(1);
+      return row ? mapUser(row) : null;
+    },
+
     async findUserByEmail(email) {
       const [row] = await db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
       return row ? mapUser(row) : null;
@@ -1312,34 +1439,97 @@ export function createPostgresRepositories(db: Db): Repositories {
       return { user: mapUser(row), isNew: true };
     },
 
+    async findOrCreateAppleUser({ appleSub, email, displayName }) {
+      const existingApple = await repos.findUserByAppleSub(appleSub);
+      if (existingApple) {
+        if (!existingApple.referralCode) {
+          return { user: await assignReferralCode(existingApple.id), isNew: false };
+        }
+        return { user: existingApple, isNew: false };
+      }
+
+      const existingEmail = email ? await repos.findUserByEmail(email) : null;
+      if (existingEmail) {
+        const updated = await repos.updateUser(existingEmail.id, {
+          appleSub,
+          displayName: existingEmail.displayName ?? displayName ?? null,
+        });
+        return { user: updated.referralCode ? updated : await assignReferralCode(updated.id), isNew: false };
+      }
+
+      const userId = randomUUID();
+      const row = await withNewReferralCode((referralCode) =>
+        db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(users)
+            .values({
+              id: userId,
+              phone: null,
+              email: email ? email.toLowerCase() : null,
+              googleSub: null,
+              appleSub,
+              displayName: displayName ?? null,
+              avatarStatus: "NONE",
+              coinBalanceCache: 0,
+              consentFlags: {},
+              pushToken: null,
+              referralCode,
+            })
+            .returning();
+          return inserted!;
+        }),
+      );
+
+      return { user: mapUser(row), isNew: true };
+    },
+
     async updateUser(id, patch) {
       const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
       if (!existing) throw new Error(`User not found: ${id}`);
 
+      // Only the fields given (null clears a nullable one, as in memory). Writing every column
+      // back from the row read above would undo a concurrent write: a streak claim committed in
+      // between got its streak count and claim time reset, so the day could be claimed again.
+      const set: Partial<typeof users.$inferInsert> = { updatedAt: now() };
+      if (patch.phone !== undefined) set.phone = patch.phone;
+      if (patch.email !== undefined) set.email = patch.email;
+      if (patch.googleSub !== undefined) set.googleSub = patch.googleSub;
+      if (patch.appleSub !== undefined) set.appleSub = patch.appleSub;
+      if (patch.displayName !== undefined) set.displayName = patch.displayName;
+      if (patch.avatarStatus != null) set.avatarStatus = patch.avatarStatus;
+      if (patch.coinBalanceCache != null) set.coinBalanceCache = patch.coinBalanceCache;
+      if (patch.consentFlags != null) set.consentFlags = patch.consentFlags;
+      if (patch.timeZone !== undefined) set.timeZone = patch.timeZone;
+      if (patch.pushToken !== undefined) set.pushToken = patch.pushToken;
+      if (patch.referralCode !== undefined) set.referralCode = patch.referralCode;
+      if (patch.referredBy !== undefined) set.referredBy = patch.referredBy;
+      if (patch.streakCount != null) set.streakCount = patch.streakCount;
+      if (patch.lastStreakClaimAt !== undefined) set.lastStreakClaimAt = patch.lastStreakClaimAt;
+      if (patch.styleProfile !== undefined) set.styleProfile = patch.styleProfile;
+
       const [row] = await db
         .update(users)
-        .set({
-          phone: patch.phone !== undefined ? patch.phone : existing.phone,
-          email: patch.email !== undefined ? patch.email : existing.email,
-          googleSub: patch.googleSub !== undefined ? patch.googleSub : existing.googleSub,
-          displayName: patch.displayName ?? existing.displayName,
-          avatarStatus: patch.avatarStatus ?? existing.avatarStatus,
-          coinBalanceCache: patch.coinBalanceCache ?? existing.coinBalanceCache,
-          consentFlags: patch.consentFlags ?? existing.consentFlags,
-          // Only when given, so an unrelated update never writes back a stale time zone.
-          ...(patch.timeZone !== undefined ? { timeZone: patch.timeZone } : {}),
-          pushToken: patch.pushToken ?? existing.pushToken,
-          referralCode: patch.referralCode ?? existing.referralCode,
-          referredBy: patch.referredBy ?? existing.referredBy,
-          streakCount: patch.streakCount ?? existing.streakCount,
-          lastStreakClaimAt: patch.lastStreakClaimAt ?? existing.lastStreakClaimAt,
-          styleProfile: patch.styleProfile ?? existing.styleProfile,
-          updatedAt: now(),
-        })
+        .set(set)
         .where(eq(users.id, id))
         .returning();
 
       return mapUser(row!);
+    },
+
+    async setAppleRefreshToken(userId, encrypted) {
+      await db
+        .update(users)
+        .set({ appleRefreshTokenEnc: encrypted, updatedAt: now() })
+        .where(eq(users.id, userId));
+    },
+
+    async getAppleRefreshToken(userId) {
+      const [row] = await db
+        .select({ token: users.appleRefreshTokenEnc })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      return row?.token ?? null;
     },
 
     async setUserTimeZone(userId, timeZone) {
@@ -1384,12 +1574,13 @@ export function createPostgresRepositories(db: Db): Repositories {
       if (!user || user.referredBy) return null;
       const [referrer] = await db.select().from(users).where(eq(users.referralCode, referralCode)).limit(1);
       if (!referrer || referrer.id === userId) return null;
+      // Only while still unreferred, so of two concurrent applies exactly one wins.
       const [row] = await db
         .update(users)
         .set({ referredBy: referrer.id, updatedAt: now() })
-        .where(eq(users.id, userId))
+        .where(and(eq(users.id, userId), isNull(users.referredBy)))
         .returning();
-      return mapUser(row!);
+      return row ? mapUser(row) : null;
     },
 
     async countReferrals(referrerId) {
@@ -1625,14 +1816,16 @@ export function createPostgresRepositories(db: Db): Repositories {
 
       if (cursor) {
         const [cursorRow] = await db
-          .select()
+          .select({ id: coinLedger.id })
           .from(coinLedger)
-          .where(eq(coinLedger.id, cursor))
+          .where(and(eq(coinLedger.id, cursor), eq(coinLedger.userId, userId)))
           .limit(1);
 
         if (cursorRow) {
+          // Compared in SQL against the cursor row itself: created_at has microseconds (a JS Date
+          // would drop them and skip rows), and postgres-js can't bind a Date in raw sql.
           conditions.push(
-            sql`(${coinLedger.createdAt} < ${cursorRow.createdAt} OR (${coinLedger.createdAt} = ${cursorRow.createdAt} AND ${coinLedger.id} < ${cursorRow.id}))`,
+            sql`(${coinLedger.createdAt}, ${coinLedger.id}) < (SELECT c.created_at, c.id FROM coin_ledger c WHERE c.id = ${cursorRow.id}::uuid)`,
           );
         }
       }
@@ -2097,9 +2290,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: listing.category,
             tags: listing.tags,
             coinPrice: listing.coinPrice,
+            realPrice: listing.realPrice ?? null,
             productImageKeys: listing.productImageKeys,
             houseModelRenderKey: listing.houseModelRenderKey,
             affiliateUrl: listing.affiliateUrl,
+            affiliateLinks: listing.affiliateLinks ?? null,
             status: listing.status,
             sortOrder: listing.sortOrder,
             createdAt: listing.createdAt,
@@ -2124,8 +2319,17 @@ export function createPostgresRepositories(db: Db): Repositories {
     },
 
     async clearCatalog() {
-      // CASCADE clears cart_items / tryon_previews that reference variants.
-      await db.execute(sql`TRUNCATE listing_variants, listings CASCADE`);
+      // Never TRUNCATE ... CASCADE: that empties every table referencing the catalog, including
+      // order_items and (through them) renders. Listings someone ordered are archived instead.
+      await db.transaction(async (tx) => {
+        const ordered = sql`(SELECT lv.listing_id FROM listing_variants lv JOIN order_items oi ON oi.listing_variant_id = lv.id)`;
+        await tx.execute(sql`DELETE FROM cart_items`);
+        await tx.execute(
+          sql`UPDATE listings SET status = 'ARCHIVED', updated_at = now() WHERE id IN ${ordered}`,
+        );
+        // Variants, try-on previews and lookbook rows go with the listing (ON DELETE CASCADE).
+        await tx.execute(sql`DELETE FROM listings WHERE id NOT IN ${ordered}`);
+      });
     },
 
     async listListings({
@@ -2329,9 +2533,11 @@ export function createPostgresRepositories(db: Db): Repositories {
             category: input.category,
             tags: input.tags,
             coinPrice: input.coinPrice,
+            realPrice: input.realPrice ?? null,
             productImageKeys: input.productImageKeys,
             houseModelRenderKey: input.houseModelRenderKey,
             affiliateUrl,
+            affiliateLinks: input.affiliateLinks ?? null,
             status: "ACTIVE",
             sortOrder,
             createdAt: timestamp,
@@ -2471,7 +2677,18 @@ export function createPostgresRepositories(db: Db): Repositories {
         })
         .onConflictDoUpdate({
           target: [tryonPreviews.userId, tryonPreviews.wardrobeItemId],
-          set: { status: "PROCESSING", imageKey: null, error: null, retryAfter: null, provider, updatedAt: timestamp },
+          set: {
+            status: "PROCESSING",
+            imageKey: null,
+            error: null,
+            retryAfter: null,
+            provider,
+            // A PROCESSING row keeps its lease (an agent may be rendering it); any other starts afresh.
+            leaseOwner: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.leaseOwner} ELSE NULL END`,
+            leaseExpiresAt: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.leaseExpiresAt} ELSE NULL END`,
+            attempts: sql`CASE WHEN ${tryonPreviews.status} = 'PROCESSING' THEN ${tryonPreviews.attempts} ELSE 0 END`,
+            updatedAt: timestamp,
+          },
           setWhere: previewClaimable(tryonPreviews, staleBefore, timestamp),
         })
         .returning();
@@ -2660,9 +2877,7 @@ export function createPostgresRepositories(db: Db): Repositories {
             .limit(1);
 
           if (existing) {
-            if (existing.userId !== input.userId) {
-              throw new Error("Idempotency key already used by another order");
-            }
+            if (existing.userId !== input.userId) throw new IdempotencyKeyConflictError();
             const itemRows = await tx
               .select()
               .from(orderItems)
@@ -2677,6 +2892,22 @@ export function createPostgresRepositories(db: Db): Repositories {
 
         const balanceAfter = balance - input.coinTotal;
         if (balanceAfter < 0) throw new InsufficientCoinsError();
+
+        if (input.cartItems) {
+          // Under the user's row lock: a second checkout of the same cart finds these lines gone.
+          const ids = input.cartItems.map((line) => line.id);
+          const removed =
+            ids.length === 0
+              ? []
+              : await tx
+                  .delete(cartItems)
+                  .where(inArray(cartItems.id, ids))
+                  .returning({ id: cartItems.id, quantity: cartItems.quantity });
+          const read = new Map(input.cartItems.map((line) => [line.id, line.quantity]));
+          if (removed.length !== ids.length || removed.some((line) => read.get(line.id) !== line.quantity)) {
+            throw new CartChangedError();
+          }
+        }
 
         const { order, items } = await insertOrderWithItems(tx, input);
         await appendCoinLedger(
@@ -2836,9 +3067,11 @@ export function createPostgresRepositories(db: Db): Repositories {
         .select()
         .from(renders)
         .where(inArray(renders.orderItemId, itemIds))
-        .orderBy(asc(renders.createdAt));
+        .orderBy(asc(renders.createdAt), asc(renders.id));
 
-      return rows.map(mapRender);
+      // One order's renders share a created_at: ties go by item, scenario and id, the same as
+      // memory, so the reveal's cards keep their places between polls instead of heap order.
+      return sortRendersForReveal(rows.map(mapRender));
     },
 
     async listPendingRenders() {
@@ -2863,6 +3096,10 @@ export function createPostgresRepositories(db: Db): Repositories {
           provider: patch.provider !== undefined ? patch.provider : existing.provider,
           status: patch.status !== undefined ? patch.status : existing.status,
           costMicros: patch.costMicros !== undefined ? patch.costMicros : existing.costMicros,
+          // Only a RUNNING render is held by a lease: any other status lets it go.
+          ...(patch.status !== undefined && patch.status !== "RUNNING"
+            ? { leaseOwner: null, leaseExpiresAt: null }
+            : {}),
           updatedAt: now(),
         })
         .where(eq(renders.id, id))
@@ -3001,6 +3238,244 @@ export function createPostgresRepositories(db: Db): Repositories {
         );
         return { status: "created" as const, render: mapRender(row!), coinsSpent: input.cost, balanceAfter };
       });
+    },
+
+    async failRender(input) {
+      const refund = input.refund && input.refund.coins > 0 ? input.refund : null;
+      return db.transaction(async (tx) => {
+        // The user's row first, as every coin write does: a repeat waits here, then finds the refund.
+        const balance = refund ? await lockedCoinBalance(tx, refund.userId) : 0;
+        const [row] = await tx
+          .update(renders)
+          .set({ status: "FAILED", leaseOwner: null, leaseExpiresAt: null, updatedAt: now() })
+          .where(eq(renders.id, input.renderId))
+          .returning();
+        if (!row || !refund) return { render: row ? mapRender(row) : null, coinsRefunded: 0 };
+
+        const [prior] = await tx
+          .select({ id: coinLedger.id })
+          .from(coinLedger)
+          .where(
+            and(
+              eq(coinLedger.userId, refund.userId),
+              eq(coinLedger.type, "REFUND"),
+              eq(coinLedger.refType, "render_failed"),
+              eq(coinLedger.refId, input.renderId),
+            ),
+          )
+          .limit(1);
+        if (prior) return { render: mapRender(row), coinsRefunded: 0 };
+
+        await appendCoinLedger(
+          tx,
+          { userId: refund.userId, delta: refund.coins, type: "REFUND", refType: "render_failed", refId: input.renderId },
+          balance + refund.coins,
+        );
+        return { render: mapRender(row), coinsRefunded: refund.coins };
+      });
+    },
+
+    async leaseAgentJobs(input) {
+      if (input.max <= 0) return [];
+      if (input.ids && input.ids.length === 0) return [];
+      return db.transaction(async (tx) => {
+        const renderWhere: SQL[] = [eq(renders.unlocked, true), eq(renders.status, "QUEUED")];
+        const tryonWhere: SQL[] = [
+          isNotNull(tryonPreviews.listingVariantId),
+          eq(tryonPreviews.status, "PROCESSING"),
+          isNull(tryonPreviews.leaseOwner),
+        ];
+        if (input.queuedBefore) {
+          renderWhere.push(lte(renders.updatedAt, input.queuedBefore));
+          tryonWhere.push(lte(tryonPreviews.updatedAt, input.queuedBefore));
+        }
+        if (input.ids) {
+          renderWhere.push(inArray(renders.id, input.ids));
+          tryonWhere.push(inArray(tryonPreviews.id, input.ids));
+        }
+        // SKIP LOCKED: a parallel lease takes other rows instead of waiting for (and then
+        // double-leasing) these.
+        const renderRows = await tx
+          .select({ id: renders.id, createdAt: renders.createdAt })
+          .from(renders)
+          .where(and(...renderWhere))
+          .orderBy(asc(renders.createdAt), asc(renders.id))
+          .limit(input.max)
+          .for("update", { skipLocked: true });
+        const tryonRows = await tx
+          .select({ id: tryonPreviews.id, createdAt: tryonPreviews.createdAt })
+          .from(tryonPreviews)
+          .where(and(...tryonWhere))
+          .orderBy(asc(tryonPreviews.createdAt), asc(tryonPreviews.id))
+          .limit(input.max)
+          .for("update", { skipLocked: true });
+        const picked = [
+          ...renderRows.map((row) => ({ kind: "render" as const, ...row })),
+          ...tryonRows.map((row) => ({ kind: "tryon" as const, ...row })),
+        ]
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
+          .slice(0, input.max);
+        const renderIds = picked.filter((job) => job.kind === "render").map((job) => job.id);
+        const tryonIds = picked.filter((job) => job.kind === "tryon").map((job) => job.id);
+        const lease = { leaseOwner: input.owner, leaseExpiresAt: input.leaseExpiresAt, updatedAt: input.now };
+
+        const leasedRenders = renderIds.length
+          ? await tx
+              .update(renders)
+              .set({ ...lease, status: "RUNNING", attempts: sql`${renders.attempts} + 1` })
+              .where(inArray(renders.id, renderIds))
+              .returning()
+          : [];
+        const leasedTryons = tryonIds.length
+          ? await tx
+              .update(tryonPreviews)
+              .set({ ...lease, attempts: sql`${tryonPreviews.attempts} + 1` })
+              .where(inArray(tryonPreviews.id, tryonIds))
+              .returning()
+          : [];
+        const itemOrders = leasedRenders.length
+          ? await tx
+              .select({ id: orderItems.id, orderId: orderItems.orderId })
+              .from(orderItems)
+              .where(inArray(orderItems.id, leasedRenders.map((row) => row.orderItemId)))
+          : [];
+        const orderOf = new Map(itemOrders.map((row) => [row.id, row.orderId]));
+        const jobs = [
+          ...leasedRenders.map((row) => renderJob(row, orderOf.get(row.orderItemId) ?? "")),
+          ...leasedTryons.map(tryonJob),
+        ];
+        return jobs.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+      });
+    },
+
+    async listExpiredAgentLeases(at) {
+      const renderRows = await db
+        .select({ render: renders, orderId: orderItems.orderId })
+        .from(renders)
+        .innerJoin(orderItems, eq(renders.orderItemId, orderItems.id))
+        .where(
+          and(
+            eq(renders.status, "RUNNING"),
+            isNotNull(renders.leaseOwner),
+            lt(renders.leaseExpiresAt, at),
+          ),
+        );
+      const tryonRows = await db
+        .select()
+        .from(tryonPreviews)
+        .where(
+          and(
+            eq(tryonPreviews.status, "PROCESSING"),
+            isNotNull(tryonPreviews.listingVariantId),
+            isNotNull(tryonPreviews.leaseOwner),
+            lt(tryonPreviews.leaseExpiresAt, at),
+          ),
+        );
+      return [...renderRows.map((row) => renderJob(row.render, row.orderId)), ...tryonRows.map(tryonJob)];
+    },
+
+    async releaseAgentLease({ kind, id, owner, expiredBy }) {
+      const released = { leaseOwner: null, leaseExpiresAt: null, updatedAt: now() };
+      if (kind === "render") {
+        const [row] = await db
+          .update(renders)
+          .set(released)
+          .where(
+            and(
+              eq(renders.id, id),
+              eq(renders.status, "RUNNING"),
+              eq(renders.leaseOwner, owner),
+              expiredBy ? lte(renders.leaseExpiresAt, expiredBy) : undefined,
+            ),
+          )
+          .returning();
+        if (!row) return null;
+        const [item] = await db
+          .select({ orderId: orderItems.orderId })
+          .from(orderItems)
+          .where(eq(orderItems.id, row.orderItemId))
+          .limit(1);
+        return renderJob(row, item?.orderId ?? "");
+      }
+      const [row] = await db
+        .update(tryonPreviews)
+        .set(released)
+        .where(
+          and(
+            eq(tryonPreviews.id, id),
+            eq(tryonPreviews.status, "PROCESSING"),
+            eq(tryonPreviews.leaseOwner, owner),
+            expiredBy ? lte(tryonPreviews.leaseExpiresAt, expiredBy) : undefined,
+          ),
+        )
+        .returning();
+      return row ? tryonJob(row) : null;
+    },
+
+    async updateTryonPreviewById(id, patch) {
+      const [row] = await db
+        .update(tryonPreviews)
+        .set({ ...patch, updatedAt: now() })
+        .where(eq(tryonPreviews.id, id))
+        .returning();
+      return row ? mapTryonPreview(row) : null;
+    },
+
+    async findTryonPreviewById(id) {
+      const [row] = await db.select().from(tryonPreviews).where(eq(tryonPreviews.id, id)).limit(1);
+      return row ? mapTryonPreview(row) : null;
+    },
+
+    async recordAgentHeartbeat({ agentId, version, at }) {
+      await db
+        .insert(renderAgents)
+        .values({ agentId, version, lastHeartbeatAt: at })
+        .onConflictDoUpdate({ target: renderAgents.agentId, set: { version, lastHeartbeatAt: at } });
+    },
+
+    async countWaitingAgentJobs() {
+      const [renderCount] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(renders)
+        .where(and(eq(renders.unlocked, true), inArray(renders.status, ["QUEUED", "RUNNING"])));
+      const [tryonCount] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(tryonPreviews)
+        .where(and(isNotNull(tryonPreviews.listingVariantId), eq(tryonPreviews.status, "PROCESSING")));
+      return (renderCount?.n ?? 0) + (tryonCount?.n ?? 0);
+    },
+
+    async latestAgentHeartbeat() {
+      const [row] = await db
+        .select({ at: renderAgents.lastHeartbeatAt })
+        .from(renderAgents)
+        .orderBy(desc(renderAgents.lastHeartbeatAt))
+        .limit(1);
+      return row?.at ?? null;
+    },
+
+    async requeueFailedFreeRenders(input) {
+      const uniqueIds = [...new Set(input.renderIds)];
+      if (uniqueIds.length === 0) return [];
+      const items = db
+        .select({ id: orderItems.id })
+        .from(orderItems)
+        .innerJoin(orders, eq(orderItems.orderId, orders.id))
+        .where(and(eq(orders.id, input.orderId), eq(orders.userId, input.userId)));
+      // Only rows still FAILED flip, so a parallel retry of the same render queues it once.
+      const rows = await db
+        .update(renders)
+        .set({ status: "QUEUED", leaseOwner: null, leaseExpiresAt: null, attempts: 0, updatedAt: now() })
+        .where(
+          and(
+            inArray(renders.id, uniqueIds),
+            inArray(renders.orderItemId, items),
+            eq(renders.isFree, true),
+            eq(renders.status, "FAILED"),
+          ),
+        )
+        .returning();
+      return rows.map(mapRender);
     },
 
     async recordRevealRating(input) {
@@ -3329,12 +3804,35 @@ export function createPostgresRepositories(db: Db): Repositories {
           await tx.delete(carts).where(inArray(carts.id, cartIds));
         }
 
-        // 8. sellers / listings / variants
+        // 8. sellers / listings / variants. A listing someone else ordered or has in a cart can't
+        // go (their order_items / cart_items point at its variants, ON DELETE RESTRICT): it is
+        // archived and loses its seller with the sellers row (ON DELETE SET NULL). The user's own
+        // orders and cart are gone by now, so any reference left is another user's.
         if (listingIds.length > 0) {
-          await tx
-            .delete(listingVariants)
-            .where(inArray(listingVariants.listingId, listingIds));
-          await tx.delete(listings).where(inArray(listings.id, listingIds));
+          const kept = await tx
+            .selectDistinct({ id: listingVariants.listingId })
+            .from(listingVariants)
+            .where(
+              and(
+                inArray(listingVariants.listingId, listingIds),
+                or(
+                  inArray(listingVariants.id, tx.select({ id: orderItems.listingVariantId }).from(orderItems)),
+                  inArray(listingVariants.id, tx.select({ id: cartItems.listingVariantId }).from(cartItems)),
+                ),
+              ),
+            );
+          const keptIds = new Set(kept.map((k) => k.id));
+          const dropIds = listingIds.filter((id) => !keptIds.has(id));
+          if (dropIds.length > 0) {
+            await tx.delete(listingVariants).where(inArray(listingVariants.listingId, dropIds));
+            await tx.delete(listings).where(inArray(listings.id, dropIds));
+          }
+          if (keptIds.size > 0) {
+            await tx
+              .update(listings)
+              .set({ status: "ARCHIVED", updatedAt: now() })
+              .where(inArray(listings.id, [...keptIds]));
+          }
         }
         if (sellerIds.length > 0) {
           await tx.delete(sellers).where(inArray(sellers.id, sellerIds));
@@ -3413,7 +3911,14 @@ export function createPostgresRepositories(db: Db): Repositories {
         await tx.delete(budgets).where(eq(budgets.userId, userId));
         await tx.delete(spendRollups).where(eq(spendRollups.userId, userId));
 
-        // 16. finally user
+        // 16. Other users' referred_by points at this id (a text column, no FK): cleared, so their
+        // first order doesn't try to pay a referrer who no longer exists.
+        await tx.update(users).set({ referredBy: null }).where(eq(users.referredBy, userId));
+        // Sign-in codes sent to the user's phone (phone number and code hash).
+        const [self] = await tx.select({ phone: users.phone }).from(users).where(eq(users.id, userId));
+        if (self?.phone) await tx.delete(otpCodes).where(eq(otpCodes.phone, self.phone));
+
+        // 17. finally user
         // Refresh tokens and lookbook items go with the user (ON DELETE CASCADE).
         await tx.delete(users).where(eq(users.id, userId));
       });
@@ -3426,7 +3931,35 @@ export function createPostgresRepositories(db: Db): Repositories {
         .from(merchantPurchases)
         .where(eq(merchantPurchases.userId, userId));
       const userSellers = db.select({ id: sellers.id }).from(sellers).where(eq(sellers.userId, userId));
-      const userListings = db.select({ id: listings.id }).from(listings).where(inArray(listings.sellerId, userSellers));
+      // Listings other users ordered or carted outlive the erasure (archived, see deleteAllUserData),
+      // and so do their images: only the rest are the user's to delete.
+      const userCarts = db.select({ id: carts.id }).from(carts).where(eq(carts.userId, userId));
+      const variantsKeptForOthers = db
+        .select({ id: listingVariants.listingId })
+        .from(listingVariants)
+        .where(
+          or(
+            inArray(
+              listingVariants.id,
+              db
+                .select({ id: orderItems.listingVariantId })
+                .from(orderItems)
+                .where(sql`${orderItems.orderId} NOT IN ${userOrders}`),
+            ),
+            inArray(
+              listingVariants.id,
+              db
+                .select({ id: cartItems.listingVariantId })
+                .from(cartItems)
+                .where(sql`${cartItems.cartId} NOT IN ${userCarts}`),
+            ),
+          ),
+        );
+      const ownListingFilter = and(
+        inArray(listings.sellerId, userSellers),
+        sql`${listings.id} NOT IN ${variantsKeptForOthers}`,
+      );
+      const userListings = db.select({ id: listings.id }).from(listings).where(ownListingFilter);
       const [
         avatarRows,
         wardrobeRows,
@@ -3442,6 +3975,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         listingRows,
         variantRows,
         exportRows,
+        fitPreviewRows,
       ] = await Promise.all([
         db.select({ a: avatars.referenceImageKey, b: avatars.sourceUploadKeys }).from(avatars).where(eq(avatars.userId, userId)),
         db.select({ a: wardrobeItems.garmentImageKey, b: wardrobeItems.imageKeys }).from(wardrobeItems).where(eq(wardrobeItems.userId, userId)),
@@ -3462,9 +3996,10 @@ export function createPostgresRepositories(db: Db): Repositories {
               sql`(${ingestionDocuments.userId} = ${userId} OR (${ingestionDocuments.userId} IS NULL AND (${ingestionDocuments.parsedJson}->>'__userId' = ${userId} OR ${ingestionDocuments.matchedPurchaseId} IN ${userPurchases})))`,
             ),
           ),
-        db.select({ a: listings.houseModelRenderKey, b: listings.productImageKeys }).from(listings).where(inArray(listings.sellerId, userSellers)),
+        db.select({ a: listings.houseModelRenderKey, b: listings.productImageKeys }).from(listings).where(ownListingFilter),
         db.select({ a: listingVariants.garmentImageKey }).from(listingVariants).where(inArray(listingVariants.listingId, userListings)),
         db.select({ a: privacyRequests.resultKey }).from(privacyRequests).where(eq(privacyRequests.userId, userId)),
+        db.select({ a: fitPreviews.imageKey }).from(fitPreviews).where(eq(fitPreviews.userId, userId)),
       ]);
       const values: Array<string | null | undefined> = [];
       const push = (a?: string | null, b?: string[] | null) => {
@@ -3473,7 +4008,7 @@ export function createPostgresRepositories(db: Db): Repositories {
       };
       for (const r of avatarRows) push(r.a, r.b);
       for (const r of wardrobeRows) push(r.a, r.b);
-      for (const rows of [wearRows, receiptRows, previewRows, renderRows, returnRows, purchaseItemRows, docRows, variantRows, exportRows]) {
+      for (const rows of [wearRows, receiptRows, previewRows, renderRows, returnRows, purchaseItemRows, docRows, variantRows, exportRows, fitPreviewRows]) {
         for (const r of rows) push(r.a);
       }
       for (const r of purchaseRows) {
@@ -4265,6 +4800,34 @@ export function createPostgresRepositories(db: Db): Repositories {
                 .where(eq(receipts.id, receipt.id));
             return { purchase, warranties: warrantyRows.map(mapWarranty), created: true };
         });
+    },
+    async insertMarketplaceSettlement(row) {
+      const [inserted] = await db
+        .insert(marketplaceSettlements)
+        .values({ ...row, completedAt: new Date(row.completedAt) })
+        .onConflictDoNothing({ target: [marketplaceSettlements.kind, marketplaceSettlements.orderRef] })
+        .returning();
+      if (inserted) return { row: mapSettlement(inserted), created: true };
+      const [existing] = await db
+        .select()
+        .from(marketplaceSettlements)
+        .where(and(eq(marketplaceSettlements.kind, row.kind), eq(marketplaceSettlements.orderRef, row.orderRef)))
+        .limit(1);
+      if (!existing) throw new Error("marketplace settlement conflict but no row found");
+      return { row: mapSettlement(existing), created: false };
+    },
+    async listMarketplaceSettlements(opts) {
+      const rows = await db
+        .select()
+        .from(marketplaceSettlements)
+        .where(
+          and(
+            opts?.kind ? eq(marketplaceSettlements.kind, opts.kind) : undefined,
+            opts?.sellerId ? eq(marketplaceSettlements.sellerId, opts.sellerId) : undefined,
+          ),
+        )
+        .orderBy(asc(marketplaceSettlements.completedAt), asc(marketplaceSettlements.id));
+      return rows.map(mapSettlement);
     },
     async findMerchantPurchaseByOrderRef(userId, orderRef) {
       const [row] = await db
@@ -5221,41 +5784,28 @@ export function createPostgresRepositories(db: Db): Repositories {
     // --- P4 fit ---
     async listMeasurementProfiles(userId) {
         const rows = await db.select().from(measurementProfiles).where(eq(measurementProfiles.userId, userId)).orderBy(desc(measurementProfiles.createdAt));
-        return rows.map((r) => ({
-          id: r.id,
-          userId: r.userId,
-          region: r.region,
-          unit: r.unit as MeasurementProfileRecord["unit"],
-          points: (r.points ?? {}) as Record<string, number>,
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt,
-        }));
+        return rows.map(mapMeasurementProfile);
     },
     async findMeasurementProfile(id, userId) {
         const [row] = await db.select().from(measurementProfiles).where(and(eq(measurementProfiles.id, id), eq(measurementProfiles.userId, userId))).limit(1);
         if (!row)
             return null;
-        return {
-          id: row.id,
-          userId: row.userId,
-          region: row.region,
-          unit: row.unit as MeasurementProfileRecord["unit"],
-          points: (row.points ?? {}) as Record<string, number>,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        };
+        return mapMeasurementProfile(row);
     },
     async createMeasurementProfile(input) {
-        const [row] = await db.insert(measurementProfiles).values({ id: randomUUID(), userId: input.userId, region: input.region ?? "IN", unit: (input.unit ?? "CM"), points: input.points }).returning();
-        return {
-          id: row.id,
-          userId: row.userId,
-          region: row.region,
-          unit: row.unit as MeasurementProfileRecord["unit"],
-          points: (row.points ?? {}) as Record<string, number>,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-        };
+        const [row] = await db
+          .insert(measurementProfiles)
+          .values({
+            id: randomUUID(),
+            userId: input.userId,
+            region: input.region ?? "IN",
+            unit: input.unit ?? "CM",
+            points: input.points,
+            changeNote: input.changeNote ?? null,
+            previousId: input.previousId ?? null,
+          })
+          .returning();
+        return mapMeasurementProfile(row!);
     },
     async listCustomizationTemplates(region) {
         const rows = region ? await db.select().from(customizationTemplates).where(eq(customizationTemplates.region, region)).orderBy(desc(customizationTemplates.createdAt)) : await db.select().from(customizationTemplates).orderBy(desc(customizationTemplates.createdAt));
@@ -5299,6 +5849,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           tailorSellerId: input.tailorSellerId ?? null,
           measurementSnapshot: snapshot,
           state: "PENDING",
+          expectedPickupOn: input.expectedPickupOn ?? null,
         }).returning();
         return mapTailoringOrder(row);
     },
@@ -5769,6 +6320,7 @@ export function createPostgresRepositories(db: Db): Repositories {
         userId,
         vaultAccess: "VIEW",
         spendCapMinor: null,
+        spendCapCurrency: null,
         spentMinor: 0,
         updatedAt: now(),
       } satisfies HouseholdVaultSettingsRecord;
@@ -5778,7 +6330,12 @@ export function createPostgresRepositories(db: Db): Repositories {
       const set: Record<string, unknown> = { updatedAt: now() };
       if (input.vaultAccess !== undefined) set.vaultAccess = input.vaultAccess;
       if (input.spendCapMinor !== undefined) set.spendCapMinor = input.spendCapMinor;
+      if (input.spendCapCurrency !== undefined) set.spendCapCurrency = input.spendCapCurrency;
       if (input.spentMinor !== undefined) set.spentMinor = input.spentMinor;
+      else if (input.spendCapCurrency != null) {
+        // The spent total counts the old currency's minor units: it can't carry over to another.
+        set.spentMinor = sql`CASE WHEN ${householdVaultSettings.spendCapCurrency} IS NOT NULL AND ${householdVaultSettings.spendCapCurrency} <> ${input.spendCapCurrency} THEN 0 ELSE ${householdVaultSettings.spentMinor} END`;
+      }
       const [row] = await db
         .insert(householdVaultSettings)
         .values({
@@ -5786,6 +6343,7 @@ export function createPostgresRepositories(db: Db): Repositories {
           userId: input.userId,
           vaultAccess: input.vaultAccess ?? "VIEW",
           spendCapMinor: input.spendCapMinor ?? null,
+          spendCapCurrency: input.spendCapCurrency ?? null,
           spentMinor: input.spentMinor ?? 0,
         })
         .onConflictDoUpdate({
@@ -5802,19 +6360,27 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(eq(householdVaultSettings.householdId, householdId));
       return rows.map(mapHouseholdVaultSettings);
     },
-    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor) {
+    async tryReserveHouseholdVaultSpend(householdId, userId, amountMinor, currency) {
+      const s = householdVaultSettings;
       const [row] = await db
-        .update(householdVaultSettings)
+        .update(s)
         .set({
-          spentMinor: sql`${householdVaultSettings.spentMinor} + ${amountMinor}`,
+          spentMinor: sql`${s.spentMinor} + ${amountMinor}`,
+          // A cap set before caps had a currency takes the first spend's.
+          ...(currency
+            ? { spendCapCurrency: sql`CASE WHEN ${s.spendCapMinor} IS NOT NULL THEN coalesce(${s.spendCapCurrency}, ${currency}) ELSE ${s.spendCapCurrency} END` }
+            : {}),
           updatedAt: now(),
         })
         .where(
           and(
-            eq(householdVaultSettings.householdId, householdId),
-            eq(householdVaultSettings.userId, userId),
-            eq(householdVaultSettings.vaultAccess, "SPEND"),
-            sql`(${householdVaultSettings.spendCapMinor} IS NULL OR ${householdVaultSettings.spentMinor} + ${amountMinor} <= ${householdVaultSettings.spendCapMinor})`,
+            eq(s.householdId, householdId),
+            eq(s.userId, userId),
+            eq(s.vaultAccess, "SPEND"),
+            sql`(${s.spendCapMinor} IS NULL OR ${s.spentMinor} + ${amountMinor} <= ${s.spendCapMinor})`,
+            currency
+              ? sql`(${s.spendCapMinor} IS NULL OR ${s.spendCapCurrency} IS NULL OR ${s.spendCapCurrency} = ${currency})`
+              : undefined,
           ),
         )
         .returning();
@@ -6624,6 +7190,170 @@ export function createPostgresRepositories(db: Db): Repositories {
         .where(and(eq(repairLogs.wardrobeItemId, wardrobeItemId), eq(repairLogs.userId, userId)))
         .orderBy(desc(repairLogs.createdAt));
       return rows.map(mapRepairLog);
+    },
+
+    // --- Closet state (S6-13) ---
+    async upsertMerchantAlias(userId, alias, canonical) {
+      const at = now();
+      const [row] = await db
+        .insert(merchantAliases)
+        .values({ userId, alias, canonical, createdAt: at, updatedAt: at })
+        .onConflictDoUpdate({ target: [merchantAliases.userId, merchantAliases.alias], set: { canonical, updatedAt: at } })
+        .returning();
+      return { alias: row!.alias, canonical: row!.canonical, createdAt: row!.createdAt, updatedAt: row!.updatedAt };
+    },
+    async listMerchantAliases(userId) {
+      const rows = await db
+        .select()
+        .from(merchantAliases)
+        .where(eq(merchantAliases.userId, userId))
+        .orderBy(sql`${merchantAliases.alias} COLLATE "C"`);
+      return rows.map((r) => ({ alias: r.alias, canonical: r.canonical, createdAt: r.createdAt, updatedAt: r.updatedAt }));
+    },
+    async setParserBreakFlag(flag) {
+      await db
+        .insert(parserBreakFlags)
+        .values(flag)
+        .onConflictDoUpdate({
+          target: parserBreakFlags.merchantKey,
+          set: { merchant: flag.merchant, reason: flag.reason, region: flag.region, setAt: flag.setAt },
+        });
+    },
+    async clearParserBreakFlag(merchantKey) {
+      await db.delete(parserBreakFlags).where(eq(parserBreakFlags.merchantKey, merchantKey));
+    },
+    async listParserBreakFlags() {
+      const rows = await db.select().from(parserBreakFlags).orderBy(asc(parserBreakFlags.setAt), asc(parserBreakFlags.merchantKey));
+      return rows.map((r) => ({
+        merchantKey: r.merchantKey,
+        merchant: r.merchant,
+        reason: r.reason,
+        region: r.region ?? null,
+        setAt: r.setAt,
+      }));
+    },
+    async upsertGiftBudgetLock(input) {
+      // Only the user's own recipient may carry a lock.
+      const owned = await db
+        .select({ id: recipients.id })
+        .from(recipients)
+        .where(and(eq(recipients.id, input.recipientId), eq(recipients.userId, input.userId)))
+        .limit(1);
+      if (owned.length === 0) return null;
+      const [row] = await db
+        .insert(giftBudgetLocks)
+        .values({ ...input, shortlistIds: [...input.shortlistIds] })
+        .onConflictDoUpdate({
+          target: [giftBudgetLocks.recipientId, giftBudgetLocks.occasion, giftBudgetLocks.occasionDay],
+          set: {
+            occasionDate: input.occasionDate,
+            budgetLockMinor: input.budgetLockMinor,
+            currency: input.currency,
+            shortlistIds: [...input.shortlistIds],
+            lockedAt: input.lockedAt,
+          },
+        })
+        .returning();
+      return mapGiftBudgetLock(row!);
+    },
+    async listGiftBudgetLocks(userId) {
+      const rows = await db.select().from(giftBudgetLocks).where(eq(giftBudgetLocks.userId, userId));
+      return rows.map(mapGiftBudgetLock);
+    },
+    async insertParserTrainingFixture(fixture) {
+      const [row] = await db.insert(parserTrainingFixtures).values(fixture).returning();
+      return mapParserTrainingFixture(row!);
+    },
+    async listParserTrainingFixtures(opts) {
+      const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 1000);
+      const rows = await db
+        .select()
+        .from(parserTrainingFixtures)
+        .where(opts?.exportStatus ? eq(parserTrainingFixtures.exportStatus, opts.exportStatus) : undefined)
+        .orderBy(desc(parserTrainingFixtures.createdAt), desc(parserTrainingFixtures.id))
+        .limit(limit);
+      return rows.map(mapParserTrainingFixture);
+    },
+    async appendLentWasteNote(input) {
+      const [row] = await db.insert(lentWasteNotes).values(input).returning();
+      return mapLentWasteNote(row!);
+    },
+    async listLentWasteNotes(userId) {
+      const rows = await db
+        .select()
+        .from(lentWasteNotes)
+        .where(eq(lentWasteNotes.userId, userId))
+        .orderBy(asc(lentWasteNotes.createdAt), asc(lentWasteNotes.id));
+      return rows.map(mapLentWasteNote);
+    },
+    async markMoneyAccountReconcileInvestigated(accountId, userId, at) {
+      const [row] = await db
+        .update(moneyAccounts)
+        .set({ reconcileInvestigatedAt: at })
+        .where(and(eq(moneyAccounts.id, accountId), eq(moneyAccounts.userId, userId)))
+        .returning({ at: moneyAccounts.reconcileInvestigatedAt });
+      return row?.at ?? null;
+    },
+    async listReconcileInvestigatedAccounts(userId) {
+      const rows = await db
+        .select({ accountId: moneyAccounts.id, investigatedAt: moneyAccounts.reconcileInvestigatedAt })
+        .from(moneyAccounts)
+        .where(and(eq(moneyAccounts.userId, userId), isNotNull(moneyAccounts.reconcileInvestigatedAt)));
+      return rows.map((r) => ({ accountId: r.accountId, investigatedAt: r.investigatedAt! }));
+    },
+    async setWardrobeItemMarks(id, userId, patch) {
+      const set: { keepSnoozedUntil?: Date | null; photoDumpTriagedAt?: Date | null } = {};
+      if (patch.keepSnoozedUntil !== undefined) set.keepSnoozedUntil = patch.keepSnoozedUntil;
+      if (patch.photoDumpTriagedAt !== undefined) set.photoDumpTriagedAt = patch.photoDumpTriagedAt;
+      const where = and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId));
+      if (Object.keys(set).length === 0) {
+        return (await db.select({ id: wardrobeItems.id }).from(wardrobeItems).where(where).limit(1)).length > 0;
+      }
+      // Not updatedAt: a mark is not an edit of the item.
+      const rows = await db.update(wardrobeItems).set(set).where(where).returning({ id: wardrobeItems.id });
+      return rows.length > 0;
+    },
+    async getWardrobeItemMarks(id, userId) {
+      const [row] = await db
+        .select({ keepSnoozedUntil: wardrobeItems.keepSnoozedUntil, photoDumpTriagedAt: wardrobeItems.photoDumpTriagedAt })
+        .from(wardrobeItems)
+        .where(and(eq(wardrobeItems.id, id), eq(wardrobeItems.userId, userId)))
+        .limit(1);
+      return row ? { keepSnoozedUntil: row.keepSnoozedUntil ?? null, photoDumpTriagedAt: row.photoDumpTriagedAt ?? null } : null;
+    },
+    async updateTailoringOrderPickup(id, userId, patch) {
+      const t = tailoringOrders;
+      const set: Record<string, unknown> = { updatedAt: now() };
+      if (patch.expectedPickupOn !== undefined) {
+        set.expectedPickupOn = patch.expectedPickupOn;
+        // A new pickup day needs its own nudge.
+        if (patch.pickupNudgeSentAt === undefined) {
+          set.pickupNudgeSentAt = sql`CASE WHEN ${t.expectedPickupOn} IS DISTINCT FROM ${patch.expectedPickupOn}::date THEN NULL ELSE ${t.pickupNudgeSentAt} END`;
+        }
+      }
+      if (patch.pickupNudgeSentAt !== undefined) set.pickupNudgeSentAt = patch.pickupNudgeSentAt;
+      const [row] = await db
+        .update(t)
+        .set(set)
+        .where(and(eq(t.id, id), eq(t.userId, userId)))
+        .returning();
+      return row ? mapTailoringOrder(row) : null;
+    },
+    async setDispositionPickupBooking(id, userId, booking) {
+      const rows = await db
+        .update(dispositionListings)
+        .set({ pickupBooking: { ...booking }, updatedAt: now() })
+        .where(and(eq(dispositionListings.id, id), eq(dispositionListings.userId, userId)))
+        .returning({ id: dispositionListings.id });
+      return rows.length > 0;
+    },
+    async getDispositionPickupBooking(id, userId) {
+      const [row] = await db
+        .select({ booking: dispositionListings.pickupBooking })
+        .from(dispositionListings)
+        .where(and(eq(dispositionListings.id, id), eq(dispositionListings.userId, userId)))
+        .limit(1);
+      return (row?.booking as DispositionPickupBooking | null | undefined) ?? null;
     },
 
   };

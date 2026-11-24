@@ -1,19 +1,21 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   annotateUserMismatches,
-  clearReconcileInvestigated,
   markReconcileInvestigated,
   reconcileMismatchActions,
 } from "./user-reconcile.js";
+import { createMemoryRepositories } from "./repositories/memory.js";
 
 describe("U046 user-reconcile", () => {
-  beforeEach(() => clearReconcileInvestigated());
-
-  it("lists mismatches with fix actions and mark investigated", () => {
+  it("lists mismatches with fix actions and mark investigated", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000321");
+    const { user: other } = await repos.createUser("+919800000322");
+    const account = await repos.createMoneyAccount({ userId: user.id, kind: "GIFT_CARD", merchant: "Myntra", currency: "INR", balanceCacheMinor: 100, expiresAt: null, status: "ACTIVE" });
     const mismatches = [
       {
-        accountId: "a1",
-        userId: "u1",
+        accountId: account.id,
+        userId: user.id,
         merchant: "Myntra",
         cachedMinor: 100,
         ledgerSumMinor: 80,
@@ -23,7 +25,7 @@ describe("U046 user-reconcile", () => {
       },
       {
         accountId: "a2",
-        userId: "u2",
+        userId: other.id,
         merchant: "Other",
         cachedMinor: 1,
         ledgerSumMinor: 1,
@@ -32,7 +34,7 @@ describe("U046 user-reconcile", () => {
         fixed: true,
       },
     ];
-    const rows = annotateUserMismatches("u1", mismatches);
+    const rows = await annotateUserMismatches(repos, user.id, mismatches);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.investigated).toBe(false);
     const actions = reconcileMismatchActions(rows[0]!);
@@ -41,7 +43,22 @@ describe("U046 user-reconcile", () => {
       "open_account",
       "investigate",
     ]);
-    markReconcileInvestigated("u1", "a1");
-    expect(annotateUserMismatches("u1", mismatches)[0]?.investigated).toBe(true);
+    const at = new Date("2026-11-10T08:00:00.000Z");
+    expect(await markReconcileInvestigated(repos, user.id, account.id, at)).toEqual({
+      accountId: account.id,
+      investigatedAt: at.toISOString(),
+    });
+    const after = await annotateUserMismatches(repos, user.id, mismatches);
+    expect(after[0]).toMatchObject({ investigated: true, investigatedAt: at.toISOString() });
+    expect(await repos.listReconcileInvestigatedAccounts(user.id)).toEqual([{ accountId: account.id, investigatedAt: at }]);
+  });
+
+  it("refuses another user's account", async () => {
+    const repos = createMemoryRepositories();
+    const { user } = await repos.createUser("+919800000323");
+    const { user: other } = await repos.createUser("+919800000324");
+    const theirs = await repos.createMoneyAccount({ userId: other.id, kind: "GIFT_CARD", merchant: "Ajio", currency: "INR", balanceCacheMinor: 0, expiresAt: null, status: "ACTIVE" });
+    expect(await markReconcileInvestigated(repos, user.id, theirs.id)).toBeNull();
+    expect(await repos.listReconcileInvestigatedAccounts(other.id)).toEqual([]);
   });
 });

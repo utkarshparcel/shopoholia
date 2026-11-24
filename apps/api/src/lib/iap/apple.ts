@@ -267,15 +267,20 @@ export function toAppleTransaction(payload: Record<string, unknown>): AppleTrans
   };
 }
 
-/** A transaction environment the server accepts: Production only in production. */
+/**
+ * A transaction environment the server accepts. Production always. Sandbox (TestFlight, sandbox
+ * testers, and App Review, which buys with a sandbox account against the production server) unless
+ * `acceptSandbox` is false; the purchase is recorded as `sandbox`. Xcode only outside production.
+ */
 export function appleEnvironment(
   environment: string,
   xcode: boolean,
   production: boolean,
+  acceptSandbox = true,
 ): "production" | "sandbox" | "xcode" | null {
   if (xcode) return environment === "Xcode" && !production ? "xcode" : null;
   if (environment === "Production") return "production";
-  if (environment === "Sandbox" && !production) return "sandbox";
+  if (environment === "Sandbox" && acceptSandbox) return "sandbox";
   return null;
 }
 
@@ -295,7 +300,7 @@ export type AppStoreNotification = {
  */
 export function decodeAppStoreNotification(
   signedPayload: string,
-  opts: { bundleId: string; production: boolean; trust: AppleJwsTrust },
+  opts: { bundleId: string; production: boolean; trust: AppleJwsTrust; acceptTestPurchases?: boolean },
 ): AppStoreNotification | null {
   const { payload, xcode } = verifyAppleJws(signedPayload, opts.trust);
   const notificationType = payload.notificationType;
@@ -305,7 +310,12 @@ export function decodeAppStoreNotification(
   }
   const data = (payload.data ?? payload.summary ?? {}) as Record<string, unknown>;
   if (data.bundleId !== opts.bundleId) return null;
-  const environment = appleEnvironment(String(data.environment ?? ""), xcode, opts.production);
+  const environment = appleEnvironment(
+    String(data.environment ?? ""),
+    xcode,
+    opts.production,
+    opts.acceptTestPurchases ?? true,
+  );
   if (!environment) return null;
 
   let transaction: AppleTransaction | null = null;

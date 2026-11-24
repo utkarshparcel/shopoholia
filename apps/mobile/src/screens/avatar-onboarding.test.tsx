@@ -55,6 +55,12 @@ describe('AvatarOnboardingScreen', () => {
     expect(screen.queryByText(/95 WORN coins/)).toBeNull();
   });
 
+  it('asks for the one photo the picker takes, not "1–3 photos"', async () => {
+    await renderScreen();
+    expect(screen.getByText('Upload a photo of yourself (full or upper body)')).toBeTruthy();
+    expect(screen.queryByText(/1–3/)).toBeNull();
+  });
+
   it('shows no grant to a returning user editing their avatar', async () => {
     await renderScreen();
     expect(screen.queryByText(/Welcome grant/)).toBeNull();

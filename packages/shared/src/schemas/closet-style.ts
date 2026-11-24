@@ -34,14 +34,14 @@ export const LikesSchema = z
   })
   .superRefine((likes, ctx) => {
     if (new Set(likes.define).size !== likes.define.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["define"], message: "Each zone at most once" });
+      ctx.addIssue({ code: "custom", path: ["define"], message: "Each zone at most once" });
     }
     if (new Set(likes.cover).size !== likes.cover.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cover"], message: "Each zone at most once" });
+      ctx.addIssue({ code: "custom", path: ["cover"], message: "Each zone at most once" });
     }
     const define: readonly string[] = likes.define;
     if (likes.cover.some((zone) => define.includes(zone))) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cover"], message: "A zone can't be in both define and cover" });
+      ctx.addIssue({ code: "custom", path: ["cover"], message: "A zone can't be in both define and cover" });
     }
   }) satisfies z.ZodType<Likes>;
 
@@ -90,7 +90,7 @@ export const StyleProfileInputSchema = z
     const seen = new Set<string>();
     profile.learned.forEach((pref, i) => {
       const key = prefKey(pref);
-      if (seen.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["learned", i], message: "Duplicate preference" });
+      if (seen.has(key)) ctx.addIssue({ code: "custom", path: ["learned", i], message: "Duplicate preference" });
       seen.add(key);
     });
   }) satisfies z.ZodType<StyleProfileInput>;
@@ -100,7 +100,7 @@ export const StyleProfileInputSchema = z
 /** `PUT /closet/style/likes`. */
 export const StyleLikesBodySchema = LikesSchema;
 
-const positive = z.number().finite().positive();
+const positive = z.number().positive();
 
 /** What the phone measured from the photo: ratios only are read, so any one unit. */
 export const PhotoMeasuresSchema = z.object({
@@ -120,7 +120,7 @@ export const MeasurementSourceSchema = z.enum(["TAPE", "PHOTO", "EDITED"]);
 export type MeasurementSource = z.infer<typeof MeasurementSourceSchema>;
 
 const cm = (point: MeasurementPoint) =>
-  z.number().finite().min(MEASUREMENT_RANGES_CM[point][0]).max(MEASUREMENT_RANGES_CM[point][1]).optional();
+  z.number().min(MEASUREMENT_RANGES_CM[point][0]).max(MEASUREMENT_RANGES_CM[point][1]).optional();
 
 const FIELD_OF: Readonly<Record<MeasurementPoint, "heightCm" | "bustCm" | "waistCm" | "hipCm" | "shoulderCm">> = {
   height: "heightCm",
@@ -142,14 +142,14 @@ export const StyleMeasurementsBodySchema = z
     hipCm: cm("hip"),
     shoulderCm: cm("shoulder"),
     photo: PhotoMeasuresSchema.optional(),
-    sources: z.record(MeasurementPointSchema, MeasurementSourceSchema),
+    sources: z.partialRecord(MeasurementPointSchema, MeasurementSourceSchema),
   })
   .superRefine((body, ctx) => {
     for (const point of MeasurementPointSchema.options) {
       const sent = body[FIELD_OF[point]] !== undefined;
       const sourced = body.sources[point] !== undefined;
-      if (sent && !sourced) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sources", point], message: "Missing source" });
-      if (!sent && sourced) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sources", point], message: "No such number" });
+      if (sent && !sourced) ctx.addIssue({ code: "custom", path: ["sources", point], message: "Missing source" });
+      if (!sent && sourced) ctx.addIssue({ code: "custom", path: ["sources", point], message: "No such number" });
     }
   });
 export type StyleMeasurementsBody = z.infer<typeof StyleMeasurementsBodySchema>;

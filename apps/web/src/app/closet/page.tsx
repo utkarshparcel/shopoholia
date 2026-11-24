@@ -19,6 +19,8 @@ export const metadata: Metadata = {
   // Its own title, share card and search data, so /closet never reads as Worn Play.
   title: { absolute: TITLE },
   description: DESCRIPTION,
+  // its own, not the layout's Play keywords ("shop with coins", "AI try on")
+  keywords: ['wardrobe app', 'outfit planner', 'cost per wear', 'gift card tracker', 'return reminder', 'closet organizer'],
   alternates: { canonical: '/closet' },
   openGraph: {
     type: 'website',
