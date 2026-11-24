@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const notifications = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
@@ -53,6 +53,13 @@ async function loadPush() {
   vi.resetModules();
   return import('./push-notifications');
 }
+
+// The first import compiles push-notifications and everything it pulls in; on a busy CI runner that
+// alone outran the 5 s test timeout. Pay it once here, so each test's fresh import only re-runs the
+// already-compiled modules.
+beforeAll(async () => {
+  await import('./push-notifications');
+}, 60_000);
 
 beforeEach(() => {
   vi.clearAllMocks();
