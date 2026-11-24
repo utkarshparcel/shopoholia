@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { DM_Sans, DM_Serif_Display, DM_Mono } from 'next/font/google';
+import localFont from 'next/font/local';
 import './globals.css';
 import { SmoothScroll } from '@/components/providers/SmoothScroll';
 import { MotionProvider } from '@/components/providers/MotionProvider';
@@ -7,26 +7,40 @@ import { ScrollProgress } from '@/components/ScrollProgress';
 import { GrainOverlay } from '@/components/GrainOverlay';
 import { SITE_URL } from '@/lib/site';
 
-const dmSans = DM_Sans({
-  subsets: ['latin'],
+/*
+ * The fonts ship with the site (src/app/_fonts: the Latin subsets of DM Sans, DM Serif Display and
+ * DM Mono from Fontsource 5.3.0, SIL Open Font License), so a build never waits on Google Fonts: a
+ * bad answer from it once failed CI, and the deploy runs the same build.
+ */
+const dmSans = localFont({
+  src: [
+    { path: './_fonts/dm-sans-latin-300-normal.woff2', weight: '300', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-500-normal.woff2', weight: '500', style: 'normal' },
+    { path: './_fonts/dm-sans-latin-600-normal.woff2', weight: '600', style: 'normal' },
+  ],
   display: 'swap',
   variable: '--font-sans',
-  weight: ['300', '400', '500', '600'],
 });
 
-const dmSerifDisplay = DM_Serif_Display({
-  subsets: ['latin'],
+const dmSerifDisplay = localFont({
+  src: [
+    { path: './_fonts/dm-serif-display-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-serif-display-latin-400-italic.woff2', weight: '400', style: 'italic' },
+  ],
   display: 'swap',
   variable: '--font-display',
-  weight: ['400'],
-  style: ['normal', 'italic'],
+  adjustFontFallback: 'Times New Roman',
 });
 
-const dmMono = DM_Mono({
-  subsets: ['latin'],
+const dmMono = localFont({
+  src: [
+    { path: './_fonts/dm-mono-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './_fonts/dm-mono-latin-500-normal.woff2', weight: '500', style: 'normal' },
+  ],
   display: 'swap',
   variable: '--font-mono',
-  weight: ['400', '500'],
+  adjustFontFallback: false,
 });
 
 const DESCRIPTION =
